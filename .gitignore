@@ -1,0 +1,31 @@
+# ---- OMC 运行时状态（每台机器各自生成，不入库）----
+.omc/
+**/.omc/
+
+# ---- 加密容器测试文件（几百 MB，可随时重建）----
+*.hc
+*.tc
+*.vc
+
+# ---- 编译产物 ----
+*.exe
+*.obj
+*.dll
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.res
+
+# ---- 第三方源码与安装包（体积大，按 README 自行下载）----
+spike/_vcref/
+spike/_setup/
+
+# ---- 系统/编辑器杂项 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*~
+*.swp

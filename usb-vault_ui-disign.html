@@ -1,0 +1,1895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>USBSecure - 加密盘管理系统</title>
+<style>
+:root {
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-light: #3b82f6;
+  --accent: #06b6d4;
+  --bg-dark: #0f172a;
+  --bg-card: #1e293b;
+  --bg-card-hover: #334155;
+  --bg-input: #1e293b;
+  --border: #334155;
+  --text: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.3);
+  --transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-dark);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+/* ===== Page Containers ===== */
+.page { display:none; min-height:100vh; }
+.page.active { display:flex; }
+/* ===== LOGIN PAGE ===== */
+#loginPage {
+  align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+  position: relative;
+}
+#loginPage::before {
+  content:''; position:absolute; inset:0;
+  background: radial-gradient(ellipse at 30% 20%, rgba(37,99,235,0.15) 0%, transparent 50%),
+              radial-gradient(ellipse at 70% 80%, rgba(6,182,212,0.1) 0%, transparent 50%);
+}
+.login-container {
+  position: relative; z-index:1;
+  width: 420px; padding: 40px;
+  background: rgba(30,41,59,0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(51,65,85,0.5);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.login-logo {
+  text-align:center; margin-bottom:32px;
+}
+.login-logo .icon {
+  width:64px; height:64px; margin:0 auto 16px;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  border-radius: 16px; display:flex; align-items:center; justify-content:center;
+  font-size:28px; box-shadow: 0 8px 32px rgba(37,99,235,0.3);
+}
+.login-logo h1 { font-size:22px; font-weight:700; letter-spacing:1px; }
+.login-logo p { font-size:13px; color:var(--text-secondary); margin-top:4px; }
+.login-tabs {
+  display:flex; gap:0; margin-bottom:28px;
+  background: rgba(15,23,42,0.5); border-radius:8px; padding:3px;
+}
+.login-tab {
+  flex:1; padding:10px; text-align:center; font-size:14px; font-weight:500;
+  color:var(--text-secondary); cursor:pointer; border-radius:6px;
+  transition: var(--transition);
+}
+.login-tab.active {
+  background: var(--primary); color:#fff;
+  box-shadow: 0 2px 8px rgba(37,99,235,0.3);
+}
+.login-tab:hover:not(.active) { color:var(--text); }
+.form-group { margin-bottom:18px; }
+.form-group label {
+  display:block; font-size:13px; font-weight:500;
+  color:var(--text-secondary); margin-bottom:6px;
+}
+.form-input {
+  width:100%; padding:12px 14px; font-size:14px;
+  background: var(--bg-input); border:1px solid var(--border);
+  border-radius: var(--radius-sm); color:var(--text);
+  transition: var(--transition); outline:none;
+}
+.form-input:focus { border-color:var(--primary); box-shadow:0 0 0 3px rgba(37,99,235,0.15); }
+.form-input::placeholder { color:var(--text-muted); }
+.usb-status-bar {
+  display:flex; align-items:center; gap:8px;
+  padding:10px 14px; margin-bottom:20px;
+  background: rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.2);
+  border-radius: var(--radius-sm); font-size:13px;
+}
+.usb-status-bar .dot {
+  width:8px; height:8px; border-radius:50%;
+  background: var(--success); animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity:1; } 50% { opacity:0.5; }
+}
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  padding:12px 24px; font-size:14px; font-weight:600;
+  border:none; border-radius: var(--radius-sm); cursor:pointer;
+  transition: var(--transition); outline:none;
+}
+.btn-primary {
+  width:100%; background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color:#fff; box-shadow: 0 4px 16px rgba(37,99,235,0.3);
+}
+.btn-primary:hover { transform:translateY(-1px); box-shadow: 0 6px 20px rgba(37,99,235,0.4); }
+.btn-secondary {
+  background: var(--bg-card); color:var(--text); border:1px solid var(--border);
+}
+.btn-secondary:hover { background:var(--bg-card-hover); }
+.btn-danger { background:var(--danger); color:#fff; }
+.btn-danger:hover { background:var(--danger-hover); }
+.btn-sm { padding:8px 16px; font-size:13px; }
+.btn-xs { padding:5px 10px; font-size:12px; border-radius:4px; }
+.login-footer {
+  text-align:center; margin-top:20px; font-size:12px; color:var(--text-muted);
+}
+.login-form { display:none; }
+.login-form.active { display:block; }
+/* ===== MAIN APP ===== */
+#mainPage { flex-direction:column; }
+/* Top Bar */
+.topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 24px; height:56px;
+  background: rgba(30,41,59,0.95); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+  position:sticky; top:0; z-index:100;
+}
+.topbar-left { display:flex; align-items:center; gap:16px; }
+.topbar-logo {
+  display:flex; align-items:center; gap:10px;
+  font-size:16px; font-weight:700;
+}
+.topbar-logo .icon {
+  width:32px; height:32px; border-radius:8px;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  display:flex; align-items:center; justify-content:center; font-size:16px;
+}
+.topbar-usb {
+  display:flex; align-items:center; gap:6px;
+  padding:5px 12px; border-radius:20px; font-size:12px; font-weight:500;
+  background: rgba(34,197,94,0.1); color:var(--success); border:1px solid rgba(34,197,94,0.2);
+}
+.topbar-usb .dot { width:6px; height:6px; border-radius:50%; background:var(--success); }
+.topbar-right { display:flex; align-items:center; gap:12px; }
+.topbar-user {
+  display:flex; align-items:center; gap:8px;
+  padding:6px 12px; border-radius:8px; cursor:pointer;
+  transition: var(--transition);
+}
+.topbar-user:hover { background:var(--bg-card-hover); }
+.topbar-avatar {
+  width:28px; height:28px; border-radius:50%;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; font-weight:700;
+}
+.topbar-username { font-size:13px; font-weight:500; }
+/* Layout */
+.app-layout { display:flex; flex:1; }
+/* Sidebar */
+.sidebar {
+  width:220px; padding:16px 12px;
+  background: rgba(15,23,42,0.5);
+  border-right:1px solid var(--border);
+  display:flex; flex-direction:column; gap:4px;
+}
+.sidebar-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 14px; border-radius:8px; cursor:pointer;
+  font-size:14px; color:var(--text-secondary);
+  transition: var(--transition);
+}
+.sidebar-item:hover { background:var(--bg-card-hover); color:var(--text); }
+.sidebar-item.active {
+  background: rgba(37,99,235,0.15); color:var(--primary-light);
+  font-weight:600;
+}
+.sidebar-item .icon { font-size:18px; width:22px; text-align:center; }
+.sidebar-divider {
+  height:1px; background:var(--border); margin:12px 0;
+}
+.sidebar-label {
+  padding:8px 14px 4px; font-size:11px; font-weight:600;
+  color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;
+}
+/* Content Area */
+.content { flex:1; padding:24px; overflow-y:auto; max-height:calc(100vh - 56px); }
+/* Section views */
+.section-view { display:none; }
+.section-view.active { display:block; }
+/* Dashboard Cards */
+.stats-row {
+  display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:24px;
+}
+.stat-card {
+  padding:20px; background:var(--bg-card); border:1px solid var(--border);
+  border-radius: var(--radius); transition: var(--transition);
+}
+.stat-card:hover { border-color:var(--primary); transform:translateY(-2px); }
+.stat-card .stat-icon {
+  width:40px; height:40px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:20px; margin-bottom:12px;
+}
+.stat-card .stat-value { font-size:24px; font-weight:700; }
+.stat-card .stat-label { font-size:13px; color:var(--text-secondary); margin-top:4px; }
+/* Drive Cards */
+.drive-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(320px,1fr));
+  gap:16px; margin-top:16px;
+}
+.drive-card {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius: var(--radius); overflow:hidden;
+  transition: var(--transition); cursor:pointer;
+}
+.drive-card:hover { border-color:var(--primary); transform:translateY(-2px); box-shadow:var(--shadow); }
+.drive-card-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:16px 20px; border-bottom:1px solid var(--border);
+}
+.drive-card-header .drive-name {
+  display:flex; align-items:center; gap:10px;
+  font-size:15px; font-weight:600;
+}
+.drive-card-header .drive-name .icon { font-size:22px; }
+.drive-card-body { padding:16px 20px; }
+.drive-info-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:6px 0; font-size:13px;
+}
+.drive-info-row .label { color:var(--text-secondary); }
+.drive-info-row .value { font-weight:500; }
+.drive-card-footer {
+  padding:12px 20px; border-top:1px solid var(--border);
+  display:flex; gap:8px; justify-content:flex-end;
+}
+.status-badge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600;
+}
+.status-badge.online { background:rgba(34,197,94,0.15); color:var(--success); }
+.status-badge.offline { background:rgba(100,116,139,0.15); color:var(--text-muted); }
+.status-badge.hidden { background:rgba(245,158,11,0.15); color:var(--warning); }
+/* Progress bar */
+.progress-bar {
+  width:100%; height:6px; background:var(--border); border-radius:3px;
+  overflow:hidden; margin-top:8px;
+}
+.progress-bar .fill {
+  height:100%; border-radius:3px;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  transition: width 0.5s ease;
+}
+/* Section header */
+.section-header {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:20px;
+}
+.section-header h2 { font-size:20px; font-weight:700; }
+.section-header .actions { display:flex; gap:8px; }
+/* Breadcrumb */
+.breadcrumb {
+  display:flex; align-items:center; gap:6px;
+  font-size:13px; color:var(--text-secondary); margin-bottom:16px;
+}
+.breadcrumb span { cursor:pointer; transition:var(--transition); }
+.breadcrumb span:hover { color:var(--primary-light); }
+.breadcrumb .sep { color:var(--text-muted); }
+/* Toolbar */
+.toolbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 16px; margin-bottom:12px;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.toolbar-left, .toolbar-right { display:flex; align-items:center; gap:8px; }
+.view-toggle {
+  display:flex; background:var(--bg-dark); border-radius:6px; padding:2px;
+}
+.view-toggle button {
+  padding:6px 10px; border:none; background:transparent;
+  color:var(--text-secondary); cursor:pointer; border-radius:4px;
+  font-size:14px; transition:var(--transition);
+}
+.view-toggle button.active {
+  background:var(--primary); color:#fff;
+}
+/* File List View */
+.file-table {
+  width:100%; border-collapse:collapse;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius: var(--radius); overflow:hidden;
+}
+.file-table th {
+  padding:12px 16px; text-align:left; font-size:12px;
+  font-weight:600; color:var(--text-secondary);
+  background:rgba(15,23,42,0.5); border-bottom:1px solid var(--border);
+  text-transform:uppercase; letter-spacing:0.5px;
+}
+.file-table td {
+  padding:10px 16px; font-size:13px;
+  border-bottom:1px solid rgba(51,65,85,0.3);
+}
+.file-table tr:hover td { background:rgba(37,99,235,0.05); }
+.file-table tr:last-child td { border-bottom:none; }
+.file-name-cell {
+  display:flex; align-items:center; gap:10px; cursor:pointer;
+}
+.file-name-cell .file-icon { font-size:20px; }
+.file-name-cell .name { font-weight:500; }
+.file-name-cell .name:hover { color:var(--primary-light); }
+.file-actions-cell { display:flex; gap:4px; }
+/* File Grid View */
+.file-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr));
+  gap:12px;
+}
+.file-grid-item {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius: var(--radius); padding:16px; text-align:center;
+  cursor:pointer; transition:var(--transition);
+}
+.file-grid-item:hover { border-color:var(--primary); transform:translateY(-2px); }
+.file-grid-item .file-icon { font-size:36px; margin-bottom:8px; }
+.file-grid-item .file-name {
+  font-size:12px; font-weight:500;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.file-grid-item .file-meta {
+  font-size:11px; color:var(--text-muted); margin-top:4px;
+}
+/* Backup Center */
+.backup-list { display:flex; flex-direction:column; gap:12px; margin-top:16px; }
+.backup-item {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:16px 20px; background:var(--bg-card);
+  border:1px solid var(--border); border-radius:var(--radius);
+  transition:var(--transition);
+}
+.backup-item:hover { border-color:var(--primary); }
+.backup-item-left { display:flex; align-items:center; gap:14px; }
+.backup-item-left .icon { font-size:28px; }
+.backup-item-info h4 { font-size:14px; font-weight:600; }
+.backup-item-info p { font-size:12px; color:var(--text-secondary); margin-top:2px; }
+.backup-item-right { display:flex; align-items:center; gap:12px; }
+/* Modal */
+.modal-overlay {
+  display:none; position:fixed; inset:0; z-index:1000;
+  background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);
+  align-items:center; justify-content:center;
+}
+.modal-overlay.active { display:flex; }
+.modal {
+  width:480px; max-height:80vh; overflow-y:auto;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.5);
+}
+.modal-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:20px 24px; border-bottom:1px solid var(--border);
+}
+.modal-header h3 { font-size:16px; font-weight:700; }
+.modal-close {
+  width:28px; height:28px; border:none; background:transparent;
+  color:var(--text-secondary); cursor:pointer; font-size:18px;
+  border-radius:6px; transition:var(--transition);
+}
+.modal-close:hover { background:var(--bg-card-hover); color:var(--text); }
+.modal-body { padding:24px; }
+.modal-footer {
+  display:flex; justify-content:flex-end; gap:8px;
+  padding:16px 24px; border-top:1px solid var(--border);
+}
+/* Context Menu */
+.context-menu {
+  display:none; position:fixed; z-index:2000;
+  min-width:180px; padding:6px;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,0.4);
+}
+.context-menu.active { display:block; }
+.context-menu-item {
+  display:flex; align-items:center; gap:10px;
+  padding:8px 12px; font-size:13px; border-radius:4px;
+  cursor:pointer; transition:var(--transition);
+}
+.context-menu-item:hover { background:rgba(37,99,235,0.15); color:var(--primary-light); }
+.context-menu-item.danger:hover { background:rgba(239,68,68,0.15); color:var(--danger); }
+.context-menu-divider { height:1px; background:var(--border); margin:4px 0; }
+/* Toast */
+.toast-container {
+  position:fixed; top:70px; right:24px; z-index:3000;
+  display:flex; flex-direction:column; gap:8px;
+}
+.toast {
+  display:flex; align-items:center; gap:10px;
+  padding:12px 20px; border-radius:8px;
+  background:var(--bg-card); border:1px solid var(--border);
+  box-shadow:0 8px 24px rgba(0,0,0,0.3);
+  font-size:13px; animation: slideIn 0.3s ease;
+  min-width:280px;
+}
+.toast.success { border-left:3px solid var(--success); }
+.toast.error { border-left:3px solid var(--danger); }
+.toast.info { border-left:3px solid var(--primary); }
+@keyframes slideIn {
+  from { transform:translateX(100%); opacity:0; }
+  to { transform:translateX(0); opacity:1; }
+}
+/* Checkbox */
+.checkbox-cell { width:40px; }
+.checkbox {
+  width:16px; height:16px; border:1px solid var(--border);
+  border-radius:3px; cursor:pointer; appearance:none;
+  background:var(--bg-dark); transition:var(--transition);
+}
+.checkbox:checked {
+  background:var(--primary); border-color:var(--primary);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3E%3C/svg%3E");
+  background-size:12px; background-position:center; background-repeat:no-repeat;
+}
+/* Empty state */
+.empty-state {
+  text-align:center; padding:60px 20px;
+  color:var(--text-muted);
+}
+.empty-state .icon { font-size:48px; margin-bottom:16px; }
+.empty-state h3 { font-size:16px; color:var(--text-secondary); margin-bottom:8px; }
+.empty-state p { font-size:13px; }
+/* Tag */
+.tag {
+  display:inline-flex; align-items:center;
+  padding:2px 8px; border-radius:4px;
+  font-size:11px; font-weight:600;
+}
+.tag.blue { background:rgba(37,99,235,0.15); color:var(--primary-light); }
+.tag.green { background:rgba(34,197,94,0.15); color:var(--success); }
+.tag.yellow { background:rgba(245,158,11,0.15); color:var(--warning); }
+.tag.red { background:rgba(239,68,68,0.15); color:var(--danger); }
+/* Select */
+.form-select {
+  width:100%; padding:10px 14px; font-size:14px;
+  background:var(--bg-input); border:1px solid var(--border);
+  border-radius:var(--radius-sm); color:var(--text);
+  outline:none; cursor:pointer; appearance:none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 12px center;
+}
+.form-select:focus { border-color:var(--primary); }
+/* Detail panel */
+.detail-panel {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:var(--radius); padding:20px; margin-top:16px;
+}
+.detail-row {
+  display:flex; justify-content:space-between; padding:8px 0;
+  border-bottom:1px solid rgba(51,65,85,0.3); font-size:13px;
+}
+.detail-row:last-child { border-bottom:none; }
+.detail-row .label { color:var(--text-secondary); }
+.detail-row .value { font-weight:500; text-align:right; }
+/* Search */
+.search-box {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 12px; background:var(--bg-dark);
+  border:1px solid var(--border); border-radius:6px;
+}
+.search-box input {
+  border:none; background:transparent; color:var(--text);
+  font-size:13px; outline:none; width:180px;
+}
+.search-box .icon { color:var(--text-muted); font-size:14px; }
+/* Backup source selector */
+.source-selector {
+  display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:16px 0;
+}
+.source-option {
+  padding:20px; text-align:center;
+  background:var(--bg-dark); border:2px solid var(--border);
+  border-radius:var(--radius); cursor:pointer;
+  transition:var(--transition);
+}
+.source-option:hover { border-color:var(--primary); }
+.source-option.selected { border-color:var(--primary); background:rgba(37,99,235,0.1); }
+.source-option .icon { font-size:32px; margin-bottom:8px; }
+.source-option .title { font-size:14px; font-weight:600; }
+.source-option .desc { font-size:12px; color:var(--text-secondary); margin-top:4px; }
+/* Tree */
+.tree-item {
+  display:flex; align-items:center; gap:8px;
+  padding:6px 12px; font-size:13px; cursor:pointer;
+  border-radius:4px; transition:var(--transition);
+}
+.tree-item:hover { background:rgba(37,99,235,0.1); }
+.tree-item.selected { background:rgba(37,99,235,0.15); color:var(--primary-light); }
+.tree-children { padding-left:20px; }
+</style>
+</head>
+<body>
+
+<!-- ==================== LOGIN PAGE ==================== -->
+<div id="loginPage" class="page active">
+  <div class="login-container">
+    <div class="login-logo">
+      <div class="icon">🔐</div>
+      <h1>USBSecure</h1>
+      <p>USB加密盘管理系统 v2.0</p>
+    </div>
+
+    <div class="usb-status-bar">
+      <div class="dot"></div>
+      <span>USB安全密钥已连接 · 设备ID: USB-8F3A2C</span>
+    </div>
+
+    <div class="login-tabs">
+      <div class="login-tab active" onclick="switchLoginTab('login')">登录</div>
+      <div class="login-tab" onclick="switchLoginTab('register')">注册</div>
+      <div class="login-tab" onclick="switchLoginTab('forgot')">忘记密码</div>
+    </div>
+
+    <!-- Login Form -->
+    <div id="loginForm" class="login-form active">
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" class="form-input" id="loginUser" placeholder="请输入用户名" value="admin">
+      </div>
+      <div class="form-group">
+        <label>登录密码</label>
+        <input type="password" class="form-input" id="loginPass" placeholder="请输入密码（存储在USB密钥中）">
+      </div>
+      <button class="btn btn-primary" onclick="doLogin()" style="margin-top:8px">
+        🔓 验证并登录
+      </button>
+      <div class="login-footer">
+        密码与加密密钥均存储于USB安全密钥中
+      </div>
+    </div>
+
+    <!-- Register Form -->
+    <div id="registerForm" class="login-form">
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" class="form-input" placeholder="请设置用户名">
+      </div>
+      <div class="form-group">
+        <label>登录密码</label>
+        <input type="password" class="form-input" placeholder="请设置登录密码">
+      </div>
+      <div class="form-group">
+        <label>确认密码</label>
+        <input type="password" class="form-input" placeholder="请再次输入密码">
+      </div>
+      <button class="btn btn-primary" onclick="showToast('注册成功，密钥信息已写入USB卡','success');setTimeout(()=>switchLoginTab('login'),1500)">
+        📝 注册并写入USB密钥
+      </button>
+      <div class="login-footer">
+        注册信息将加密存储于USB安全密钥中
+      </div>
+    </div>
+
+    <!-- Forgot Password Form -->
+    <div id="forgotForm" class="login-form">
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" class="form-input" placeholder="请输入注册时的用户名">
+      </div>
+      <div class="form-group">
+        <label>USB密钥验证</label>
+        <input type="password" class="form-input" placeholder="请插入USB密钥并输入管理密码">
+      </div>
+      <button class="btn btn-primary" onclick="showToast('身份验证成功，请设置新密码','success')">
+        🔑 验证USB密钥
+      </button>
+      <div class="login-footer">
+        忘记密码需通过USB安全密钥进行身份验证
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== MAIN PAGE ==================== -->
+<div id="mainPage" class="page">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="topbar-logo">
+        <div class="icon">🔐</div>
+        <span>USBSecure</span>
+      </div>
+      <div class="topbar-usb">
+        <div class="dot"></div>
+        <span>USB密钥已连接</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="topbar-user" onclick="doLogout()">
+        <div class="topbar-avatar">A</div>
+        <span class="topbar-username">admin</span>
+        <span style="font-size:12px;color:var(--text-muted)">▼</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-label">概览</div>
+      <div class="sidebar-item active" onclick="switchSection('dashboard',this)">
+        <span class="icon">📊</span> 仪表盘
+      </div>
+
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-label">磁盘管理</div>
+      <div class="sidebar-item" onclick="switchSection('encrypted',this)">
+        <span class="icon">🔒</span> 加密盘管理
+      </div>
+      <div class="sidebar-item" onclick="switchSection('hidden',this)">
+        <span class="icon">👁️</span> 隐藏盘管理
+      </div>
+
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-label">数据管理</div>
+      <div class="sidebar-item" onclick="switchSection('backup',this)">
+        <span class="icon">💾</span> 备份中心
+      </div>
+      <div class="sidebar-item" onclick="switchSection('history',this)">
+        <span class="icon">📋</span> 操作日志
+      </div>
+
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-label">系统</div>
+      <div class="sidebar-item" onclick="switchSection('settings',this)">
+        <span class="icon">⚙️</span> 系统设置
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ===== Dashboard ===== -->
+      <div id="sec-dashboard" class="section-view active">
+        <div class="section-header">
+          <h2>仪表盘</h2>
+          <div class="actions">
+            <span style="font-size:13px;color:var(--text-secondary)">最后刷新: 刚刚</span>
+          </div>
+        </div>
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(37,99,235,0.15)">🔒</div>
+            <div class="stat-value">2</div>
+            <div class="stat-label">加密盘（已挂载）</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(245,158,11,0.15)">👁️</div>
+            <div class="stat-value">1</div>
+            <div class="stat-label">隐藏盘（已挂载）</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(34,197,94,0.15)">💾</div>
+            <div class="stat-value">3</div>
+            <div class="stat-label">备份任务</div>
+          </div>
+        </div>
+
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:12px">加密盘概览</h3>
+        <div class="drive-grid" id="dashboardEncrypted"></div>
+
+        <h3 style="font-size:16px;font-weight:600;margin:24px 0 12px">隐藏盘概览</h3>
+        <div class="drive-grid" id="dashboardHidden"></div>
+      </div>
+
+      <!-- ===== Encrypted Drive Management ===== -->
+      <div id="sec-encrypted" class="section-view">
+        <div class="section-header">
+          <h2>加密盘管理</h2>
+          <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="openModal('createDriveModal')">➕ 新建加密盘</button>
+          </div>
+        </div>
+        <div class="drive-grid" id="encryptedDriveGrid"></div>
+      </div>
+
+      <!-- ===== Hidden Drive Management ===== -->
+      <div id="sec-hidden" class="section-view">
+        <div class="section-header">
+          <h2>隐藏盘管理</h2>
+          <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="openModal('createHiddenModal')">➕ 新建隐藏盘</button>
+          </div>
+        </div>
+        <div class="drive-grid" id="hiddenDriveGrid"></div>
+      </div>
+
+      <!-- ===== File Browser (inside a drive) ===== -->
+      <div id="sec-filebrowser" class="section-view">
+        <div class="section-header">
+          <h2 id="browserTitle">加密盘 - 工作文档</h2>
+          <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="openModal('importModal')">📥 导入</button>
+            <button class="btn btn-secondary btn-sm" onclick="openModal('newFolderModal')">📁 新建文件夹</button>
+            <button class="btn btn-secondary btn-sm" onclick="openModal('newFileModal')">📄 新建文件</button>
+            <button class="btn btn-secondary btn-sm" onclick="showToast('文件已加密保存','success')">💾 全部保存</button>
+          </div>
+        </div>
+        <div class="breadcrumb" id="browserBreadcrumb"></div>
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <div class="search-box">
+              <span class="icon">🔍</span>
+              <input type="text" placeholder="搜索文件..." id="fileSearchInput" oninput="filterFiles()">
+            </div>
+            <span style="font-size:12px;color:var(--text-muted)" id="fileCount"></span>
+          </div>
+          <div class="toolbar-right">
+            <div class="view-toggle">
+              <button class="active" id="listViewBtn" onclick="switchFileView('list')">☰</button>
+              <button id="gridViewBtn" onclick="switchFileView('grid')">⊞</button>
+            </div>
+          </div>
+        </div>
+        <div id="fileListContainer"></div>
+        <div id="fileGridContainer" style="display:none"></div>
+      </div>
+
+      <!-- ===== Backup Center ===== -->
+      <div id="sec-backup" class="section-view">
+        <div class="section-header">
+          <h2>备份中心</h2>
+          <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="openModal('newBackupModal')">➕ 新建备份</button>
+          </div>
+        </div>
+        <div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(37,99,235,0.15)">📦</div>
+            <div class="stat-value" id="backupTotal">3</div>
+            <div class="stat-label">备份任务总数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(34,197,94,0.15)">✅</div>
+            <div class="stat-value" id="backupSuccess">2</div>
+            <div class="stat-label">成功备份</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(245,158,11,0.15)">⏳</div>
+            <div class="stat-value" id="backupPending">1</div>
+            <div class="stat-label">待执行</div>
+          </div>
+        </div>
+        <div class="backup-list" id="backupList"></div>
+      </div>
+
+      <!-- ===== History ===== -->
+      <div id="sec-history" class="section-view">
+        <div class="section-header">
+          <h2>操作日志</h2>
+        </div>
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>时间</th><th>操作</th><th>目标</th><th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="historyTable"></tbody>
+        </table>
+      </div>
+
+      <!-- ===== Settings ===== -->
+      <div id="sec-settings" class="section-view">
+        <div class="section-header">
+          <h2>系统设置</h2>
+        </div>
+        <div class="detail-panel">
+          <div class="detail-row"><span class="label">软件版本</span><span class="value">v2.0.1 Build 20260727</span></div>
+          <div class="detail-row"><span class="label">USB密钥设备</span><span class="value">USB-8F3A2C (已连接)</span></div>
+          <div class="detail-row"><span class="label">加密算法</span><span class="value">AES-256-XTS</span></div>
+          <div class="detail-row"><span class="label">自动卸载</span><span class="value">USB拔出时自动卸载所有磁盘</span></div>
+          <div class="detail-row"><span class="label">签名状态</span><span class="value"><span class="tag green">已签名 · Microsoft认证</span></span></div>
+          <div class="detail-row"><span class="label">自动锁定</span><span class="value">应用退出时自动卸载</span></div>
+          <div class="detail-row"><span class="label">扫描保护</span><span class="value">实时扫描显示随机数据</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ==================== MODALS ==================== -->
+
+<!-- New Folder Modal -->
+<div class="modal-overlay" id="newFolderModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>📁 新建文件夹</h3>
+      <button class="modal-close" onclick="closeModal('newFolderModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>文件夹名称</label>
+        <input type="text" class="form-input" id="newFolderName" placeholder="请输入文件夹名称">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('newFolderModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="createFolder()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- New File Modal -->
+<div class="modal-overlay" id="newFileModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>📄 新建文件</h3>
+      <button class="modal-close" onclick="closeModal('newFileModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>文件名称</label>
+        <input type="text" class="form-input" id="newFileName" placeholder="请输入文件名称（如 report.docx）">
+      </div>
+      <div class="form-group">
+        <label>文件内容</label>
+        <textarea class="form-input" id="newFileContent" rows="5" placeholder="请输入文件内容（将以AES-256加密存储）" style="resize:vertical"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('newFileModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="createFile()">创建并加密保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Drive Modal -->
+<div class="modal-overlay" id="createDriveModal">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <h3>🔒 新建加密盘</h3>
+      <button class="modal-close" onclick="closeModal('createDriveModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>加密盘名称</label>
+        <input type="text" class="form-input" id="newDriveName" placeholder="如：工作文档、私人照片">
+      </div>
+      <div class="form-group">
+        <label>加密盘来源</label>
+        <div class="source-selector">
+          <div class="source-option selected" id="driveSrcFolder" onclick="selectDriveSource('folder','drive')">
+            <div class="icon">📁</div>
+            <div class="title">指定文件夹</div>
+            <div class="desc">选择本地文件夹作为加密盘</div>
+          </div>
+          <div class="source-option" id="driveSrcDisk" onclick="selectDriveSource('disk','drive')">
+            <div class="icon">💿</div>
+            <div class="title">指定磁盘盘符</div>
+            <div class="desc">将整个磁盘分区作为加密盘</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group" id="driveFolderGroup">
+        <label>文件夹路径</label>
+        <input type="text" class="form-input" id="newDrivePath" placeholder="如：D:\SecureData\WorkVault">
+      </div>
+      <div class="form-group" id="driveLetterGroup" style="display:none">
+        <label>磁盘盘符</label>
+        <select class="form-select" id="newDriveLetter">
+          <option>E:</option><option>F:</option><option>G:</option><option>H:</option><option>I:</option><option>J:</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>磁盘大小 (GB)</label>
+        <input type="number" class="form-input" id="newDriveSize" placeholder="如：50" value="50">
+      </div>
+      <div class="form-group">
+        <label>加密密码</label>
+        <input type="password" class="form-input" id="newDrivePass" placeholder="设置加密密码（存储于USB密钥）">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('createDriveModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="createDrive()">创建加密盘</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Hidden Drive Modal -->
+<div class="modal-overlay" id="createHiddenModal">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <h3>👁️ 新建隐藏盘</h3>
+      <button class="modal-close" onclick="closeModal('createHiddenModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>隐藏盘名称</label>
+        <input type="text" class="form-input" id="newHiddenName" placeholder="如：机密资料">
+      </div>
+      <div class="form-group">
+        <label>隐藏盘来源</label>
+        <div class="source-selector">
+          <div class="source-option selected" id="hiddenSrcFolder" onclick="selectDriveSource('folder','hidden')">
+            <div class="icon">📁</div>
+            <div class="title">指定文件夹</div>
+            <div class="desc">选择本地文件夹作为隐藏盘</div>
+          </div>
+          <div class="source-option" id="hiddenSrcDisk" onclick="selectDriveSource('disk','hidden')">
+            <div class="icon">💿</div>
+            <div class="title">指定磁盘盘符</div>
+            <div class="desc">将整个磁盘分区作为隐藏盘</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group" id="hiddenFolderGroup">
+        <label>文件夹路径</label>
+        <input type="text" class="form-input" id="newHiddenPath" placeholder="如：D:\SecureData\HiddenVault">
+      </div>
+      <div class="form-group" id="hiddenLetterGroup" style="display:none">
+        <label>磁盘盘符</label>
+        <select class="form-select" id="newHiddenLetter">
+          <option>K:</option><option>L:</option><option>M:</option><option>N:</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>磁盘大小 (GB)</label>
+        <input type="number" class="form-input" id="newHiddenSize" placeholder="如：20" value="20">
+      </div>
+      <div class="form-group">
+        <label>加密密码</label>
+        <input type="password" class="form-input" id="newHiddenPass" placeholder="设置加密密码（存储于USB密钥）">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('createHiddenModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="createHiddenDrive()">创建隐藏盘</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Backup Modal -->
+<div class="modal-overlay" id="newBackupModal">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <h3>💾 新建备份任务</h3>
+      <button class="modal-close" onclick="closeModal('newBackupModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>备份名称</label>
+        <input type="text" class="form-input" id="backupName" placeholder="如：每周工作文档备份">
+      </div>
+      <div class="form-group">
+        <label>备份来源</label>
+        <div class="source-selector">
+          <div class="source-option selected" id="srcFolder" onclick="selectBackupSource('folder')">
+            <div class="icon">📁</div>
+            <div class="title">指定文件夹</div>
+            <div class="desc">选择加密盘中的特定文件夹</div>
+          </div>
+          <div class="source-option" id="srcDisk" onclick="selectBackupSource('disk')">
+            <div class="icon">💿</div>
+            <div class="title">整个磁盘</div>
+            <div class="desc">备份整个加密盘或隐藏盘</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group" id="backupSourceGroup">
+        <label>选择来源</label>
+        <select class="form-select" id="backupSource">
+          <option>加密盘:工作文档 (E:) → 项目报告/</option>
+          <option>加密盘:私人照片 (F:) → 全部文件</option>
+          <option>隐藏盘:机密资料 (K:) → 全部文件</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>备份目标路径</label>
+        <input type="text" class="form-input" id="backupTarget" placeholder="如：D:\Backup\USBSecure\" value="D:\Backup\USBSecure\">
+      </div>
+      <div class="form-group">
+        <label>备份模式</label>
+        <select class="form-select">
+          <option>明文备份（用户可自行查看）</option>
+          <option>加密备份（需密钥解密）</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('newBackupModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="createBackup()">创建备份任务</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit File Modal -->
+<div class="modal-overlay" id="editFileModal">
+  <div class="modal" style="width:600px">
+    <div class="modal-header">
+      <h3>📝 编辑文件</h3>
+      <button class="modal-close" onclick="closeModal('editFileModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>文件名</label>
+        <input type="text" class="form-input" id="editFileName" readonly>
+      </div>
+      <div class="form-group">
+        <label>文件内容（解密编辑，保存时自动加密）</label>
+        <textarea class="form-input" id="editFileContent" rows="10" style="resize:vertical"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('editFileModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="saveFileEdit()">💾 加密保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Modal -->
+<div class="modal-overlay" id="importModal">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <h3>📥 导入到加密盘</h3>
+      <button class="modal-close" onclick="closeModal('importModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>导入方式</label>
+        <div class="source-selector">
+          <div class="source-option selected" id="importSrcFile" onclick="selectImportSource('file')">
+            <div class="icon">📄</div>
+            <div class="title">导入文件</div>
+            <div class="desc">选择一个或多个文件导入</div>
+          </div>
+          <div class="source-option" id="importSrcFolder" onclick="selectImportSource('folder')">
+            <div class="icon">📁</div>
+            <div class="title">导入文件夹</div>
+            <div class="desc">导入整个文件夹及其内容</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label id="importPathLabel">选择文件</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" class="form-input" id="importPath" placeholder="如：D:\Documents\report.docx" readonly style="flex:1;cursor:pointer" onclick="simulateFileSelect()">
+          <button class="btn btn-secondary btn-sm" style="white-space:nowrap" onclick="simulateFileSelect()">浏览...</button>
+        </div>
+      </div>
+      <div class="form-group" id="importFileList" style="display:none">
+        <label>待导入文件列表</label>
+        <div id="importFilesPreview" style="max-height:160px;overflow-y:auto"></div>
+      </div>
+      <div class="form-group">
+        <label>导入目标位置</label>
+        <div id="importTargetPath" style="padding:10px 14px;background:var(--bg-dark);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;color:var(--text-secondary)">
+          当前目录
+        </div>
+      </div>
+      <div style="padding:12px 14px;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.15);border-radius:var(--radius-sm);font-size:12px;color:var(--text-secondary);display:flex;align-items:flex-start;gap:8px">
+        <span style="font-size:16px">💡</span>
+        <span>导入的文件将以 AES-256-XTS 加密存储到当前磁盘。原始文件不会被修改或删除。</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('importModal')">取消</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" onclick="doImport()">🔒 加密导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context Menu -->
+<div class="context-menu" id="contextMenu">
+  <div class="context-menu-item" onclick="contextAction('open')">📂 打开</div>
+  <div class="context-menu-item" onclick="contextAction('edit')">📝 编辑</div>
+  <div class="context-menu-divider"></div>
+  <div class="context-menu-item" onclick="contextAction('rename')">✏️ 重命名</div>
+  <div class="context-menu-item" onclick="contextAction('copy')">📋 复制</div>
+  <div class="context-menu-divider"></div>
+  <div class="context-menu-item danger" onclick="contextAction('delete')">🗑️ 删除</div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ===== DATA =====
+const encryptedDrives = [
+  {
+    id:'enc1', name:'工作文档', letter:'E:', size:50, used:18.5,
+    path:'D:\\SecureData\\work_docs',
+    sourceMode:'folder', status:'online', type:'encrypted',
+    files: [
+      { name:'项目报告', type:'folder', size:'-', modified:'2026-07-25 14:30', children:[
+        { name:'Q2总结.docx', type:'file', size:'2.4 MB', modified:'2026-07-25 14:30', ext:'docx', content:'2026年第二季度项目总结报告\n\n一、项目进展\n本季度完成了核心模块的开发和测试工作...\n\n二、下季度计划\n1. 完成用户模块优化\n2. 启动性能测试' },
+        { name:'需求文档v3.pdf', type:'file', size:'5.1 MB', modified:'2026-07-20 09:15', ext:'pdf', content:'产品需求文档 v3.0\n\n功能需求：\n1. 用户管理模块\n2. 数据分析模块\n3. 报表生成模块' },
+        { name:'会议纪要', type:'folder', size:'-', modified:'2026-07-22 16:00', children:[
+          { name:'0715周会.txt', type:'file', size:'12 KB', modified:'2026-07-15 17:00', ext:'txt', content:'周会纪要 2026-07-15\n\n参会人：张三、李四、王五\n\n议题：\n1. 项目进度汇报\n2. 风险评估\n3. 资源调配' },
+          { name:'0722评审.txt', type:'file', size:'8 KB', modified:'2026-07-22 16:00', ext:'txt', content:'设计评审会议 2026-07-22\n\n评审内容：加密盘管理模块\n\n结论：通过评审，需优化UI交互' },
+        ]},
+      ]},
+      { name:'财务报表', type:'folder', size:'-', modified:'2026-07-18 11:20', children:[
+        { name:'2026年度预算.xlsx', type:'file', size:'1.8 MB', modified:'2026-07-18 11:20', ext:'xlsx', content:'年度预算表\n\n部门预算：\n研发部：500万\n市场部：300万\n运营部：200万' },
+        { name:'发票扫描件', type:'folder', size:'-', modified:'2026-07-10 09:00', children:[
+          { name:'发票001.jpg', type:'file', size:'3.2 MB', modified:'2026-07-10 09:00', ext:'jpg', content:'[图片文件 - 发票扫描件]' },
+        ]},
+      ]},
+      { name:'工作计划.txt', type:'file', size:'4 KB', modified:'2026-07-26 08:45', ext:'txt', content:'本周工作计划\n\n周一：完成需求文档\n周二：代码评审\n周三：功能测试\n周四：Bug修复\n周五：版本发布' },
+      { name:'客户资料.docx', type:'file', size:'890 KB', modified:'2026-07-24 15:30', ext:'docx', content:'客户资料清单\n\nA公司 - 联系人：张经理\nB公司 - 联系人：李总监\nC公司 - 联系人：王主管' },
+    ]
+  },
+  {
+    id:'enc2', name:'私人照片', letter:'F:', size:100, used:67.2,
+    path:'F:\\',
+    sourceMode:'disk', status:'online', type:'encrypted',
+    files: [
+      { name:'2026旅行', type:'folder', size:'-', modified:'2026-06-15 20:00', children:[
+        { name:'海边日落.jpg', type:'file', size:'8.5 MB', modified:'2026-06-15 18:30', ext:'jpg', content:'[图片文件]' },
+        { name:'山顶风景.jpg', type:'file', size:'12.1 MB', modified:'2026-06-14 10:20', ext:'jpg', content:'[图片文件]' },
+        { name:'旅行日记.txt', type:'file', size:'2 KB', modified:'2026-06-15 20:00', ext:'txt', content:'旅行日记\n\nDay 1: 到达目的地，天气晴朗\nDay 2: 海边游玩， sunset很美\nDay 3: 爬山，风景壮丽' },
+      ]},
+      { name:'家庭照片', type:'folder', size:'-', modified:'2026-07-01 12:00', children:[
+        { name:'春节合影.jpg', type:'file', size:'6.7 MB', modified:'2026-01-28 19:00', ext:'jpg', content:'[图片文件]' },
+        { name:'生日派对.jpg', type:'file', size:'5.3 MB', modified:'2026-05-15 20:00', ext:'jpg', content:'[图片文件]' },
+      ]},
+      { name:'头像.png', type:'file', size:'1.2 MB', modified:'2026-07-20 09:00', ext:'png', content:'[图片文件]' },
+    ]
+  }
+];
+
+const hiddenDrives = [
+  {
+    id:'hid1', name:'机密资料', letter:'K:', size:30, used:8.4,
+    path:'E:\\SecureData\\hidden_vault',
+    sourceMode:'folder', status:'online', type:'hidden',
+    files: [
+      { name:'核心算法', type:'folder', size:'-', modified:'2026-07-26 10:00', children:[
+        { name:'加密模块v2.py', type:'file', size:'45 KB', modified:'2026-07-26 10:00', ext:'py', content:'#!/usr/bin/env python3\n# 核心加密模块 v2.0\nimport hashlib\nimport os\n\nclass AES256Encryptor:\n    def __init__(self, key):\n        self.key = hashlib.sha256(key).digest()\n    \n    def encrypt(self, data):\n        # AES-256-XTS encryption\n        pass' },
+        { name:'密钥管理.json', type:'file', size:'2 KB', modified:'2026-07-25 16:30', ext:'json', content:'{\n  "version": "2.0",\n  "algorithm": "AES-256-XTS",\n  "keyLength": 256,\n  "rotation": "90days"\n}' },
+      ]},
+      { name:'合同模板.docx', type:'file', size:'156 KB', modified:'2026-07-20 14:00', ext:'docx', content:'保密合同模板\n\n甲方：\n乙方：\n\n第一条 保密义务\n...' },
+      { name:'服务器密码.txt', type:'file', size:'1 KB', modified:'2026-07-24 09:30', ext:'txt', content:'生产环境：\nDB: 192.168.1.100\nAPI: 192.168.1.101\n\n（此文件已加密存储）' },
+    ]
+  }
+];
+
+const backupTasks = [
+  { id:'bk1', name:'工作文档周备份', source:'加密盘:工作文档 (E:)', sourceType:'disk', target:'D:\\Backup\\USBSecure\\work_docs', mode:'明文', status:'success', lastRun:'2026-07-26 02:00', size:'18.5 GB' },
+  { id:'bk2', name:'照片月度备份', source:'加密盘:私人照片 (F:)', sourceType:'disk', target:'E:\\Backup\\photos', mode:'明文', status:'success', lastRun:'2026-07-01 03:00', size:'67.2 GB' },
+  { id:'bk3', name:'机密资料备份', source:'隐藏盘:机密资料 (K:) → 核心算法/', sourceType:'folder', target:'D:\\Backup\\USBSecure\\secret', mode:'加密', status:'pending', lastRun:'待执行', size:'-' },
+];
+
+const historyLogs = [
+  { time:'2026-07-27 09:15:32', action:'登录', target:'用户 admin', status:'success' },
+  { time:'2026-07-27 09:15:33', action:'挂载加密盘', target:'工作文档 (E:)', status:'success' },
+  { time:'2026-07-27 09:15:33', action:'挂载加密盘', target:'私人照片 (F:)', status:'success' },
+  { time:'2026-07-27 09:15:34', action:'挂载隐藏盘', target:'机密资料 (K:)', status:'success' },
+  { time:'2026-07-26 18:30:00', action:'退出应用', target:'自动卸载所有磁盘', status:'success' },
+  { time:'2026-07-26 14:22:10', action:'新建文件', target:'E:/项目报告/Q3计划.txt', status:'success' },
+  { time:'2026-07-26 14:20:05', action:'编辑文件', target:'E:/工作计划.txt', status:'success' },
+  { time:'2026-07-26 02:00:00', action:'备份完成', target:'工作文档周备份 → D:\\Backup', status:'success' },
+  { time:'2026-07-25 16:45:00', action:'删除文件', target:'F:/旧照片/temp.jpg', status:'success' },
+  { time:'2026-07-25 10:00:00', action:'新建文件夹', target:'E:/项目报告/会议纪要/', status:'success' },
+];
+
+// ===== STATE =====
+let currentDrive = null;
+let currentPath = [];
+let currentFiles = [];
+let fileViewMode = 'list';
+let contextTarget = null;
+let backupSourceMode = 'folder';
+
+// ===== LOGIN =====
+function switchLoginTab(tab) {
+  document.querySelectorAll('.login-tab').forEach((t,i) => {
+    t.classList.toggle('active', ['login','register','forgot'][i]===tab);
+  });
+  document.querySelectorAll('.login-form').forEach(f => f.classList.remove('active'));
+  document.getElementById(tab+'Form').classList.add('active');
+}
+
+function doLogin() {
+  document.getElementById('loginPage').classList.remove('active');
+  document.getElementById('mainPage').classList.add('active');
+  renderDashboard();
+  renderEncryptedDrives();
+  renderHiddenDrives();
+  renderBackupList();
+  renderHistory();
+  showToast('登录成功，已自动加载2个加密盘和1个隐藏盘','success');
+}
+
+function doLogout() {
+  if(confirm('退出应用将自动卸载所有加密盘和隐藏盘，确定退出？')) {
+    showToast('已卸载所有磁盘，应用已退出','info');
+    setTimeout(() => {
+      document.getElementById('mainPage').classList.remove('active');
+      document.getElementById('loginPage').classList.add('active');
+    }, 1000);
+  }
+}
+
+// ===== NAVIGATION =====
+function switchSection(sec, el) {
+  document.querySelectorAll('.section-view').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+  document.getElementById('sec-'+sec).classList.add('active');
+  if(el) el.classList.add('active');
+}
+
+function switchToBrowser(drive) {
+  currentDrive = drive;
+  currentPath = [];
+  currentFiles = drive.files;
+  document.querySelectorAll('.section-view').forEach(s => s.classList.remove('active'));
+  document.getElementById('sec-filebrowser').classList.add('active');
+  document.getElementById('browserTitle').textContent =
+    (drive.type==='encrypted'?'🔒 加密盘':'👁️ 隐藏盘') + ' - ' + drive.name + ' (' + drive.letter + ')';
+  renderBreadcrumb();
+  renderFiles();
+}
+
+// ===== RENDER DASHBOARD =====
+function sourceLabel(d) {
+  return d.sourceMode === 'folder'
+    ? `<span class="tag blue">📁 文件夹</span> <span style="font-size:11px;color:var(--text-secondary)">${d.path}</span>`
+    : `<span class="tag green">💿 磁盘</span> <span style="font-size:11px;color:var(--text-secondary)">${d.letter}</span>`;
+}
+
+function renderDashboard() {
+  let encHtml = '';
+  encryptedDrives.forEach(d => {
+    const pct = ((d.used/d.size)*100).toFixed(1);
+    encHtml += `
+    <div class="drive-card" onclick='switchToBrowser(${JSON.stringify(driveSummary(d))})'>
+      <div class="drive-card-header">
+        <div class="drive-name"><span class="icon">🔒</span>${d.name}</div>
+        <span class="status-badge online">● 已挂载</span>
+      </div>
+      <div class="drive-card-body">
+        <div class="drive-info-row"><span class="label">来源</span><span class="value">${sourceLabel(d)}</span></div>
+        <div class="drive-info-row"><span class="label">容量</span><span class="value">${d.used} GB / ${d.size} GB</span></div>
+        <div class="progress-bar"><div class="fill" style="width:${pct}%"></div></div>
+        <div class="drive-info-row" style="margin-top:8px"><span class="label">加密算法</span><span class="value">AES-256-XTS</span></div>
+      </div>
+    </div>`;
+  });
+  document.getElementById('dashboardEncrypted').innerHTML = encHtml;
+
+  let hidHtml = '';
+  hiddenDrives.forEach(d => {
+    const pct = ((d.used/d.size)*100).toFixed(1);
+    hidHtml += `
+    <div class="drive-card" onclick='switchToBrowser(${JSON.stringify(driveSummary(d))})'>
+      <div class="drive-card-header">
+        <div class="drive-name"><span class="icon">👁️</span>${d.name}</div>
+        <span class="status-badge hidden">● 隐藏中</span>
+      </div>
+      <div class="drive-card-body">
+        <div class="drive-info-row"><span class="label">来源</span><span class="value">${sourceLabel(d)}</span></div>
+        <div class="drive-info-row"><span class="label">容量</span><span class="value">${d.used} GB / ${d.size} GB</span></div>
+        <div class="progress-bar"><div class="fill" style="width:${pct}%"></div></div>
+        <div class="drive-info-row" style="margin-top:8px"><span class="label">隐藏模式</span><span class="value">系统级隐藏</span></div>
+      </div>
+    </div>`;
+  });
+  document.getElementById('dashboardHidden').innerHTML = hidHtml;
+}
+
+function driveSummary(d) {
+  return { id:d.id, name:d.name, letter:d.letter, size:d.size, used:d.used, path:d.path, status:d.status, type:d.type };
+}
+
+// ===== RENDER DRIVE GRIDS =====
+function renderEncryptedDrives() {
+  let html = '';
+  encryptedDrives.forEach(d => {
+    const pct = ((d.used/d.size)*100).toFixed(1);
+    const srcTag = d.sourceMode === 'folder'
+      ? `<span class="tag blue">📁 文件夹</span>`
+      : `<span class="tag green">💿 磁盘</span>`;
+    const srcDetail = d.sourceMode === 'folder'
+      ? `<div class="drive-info-row"><span class="label">文件夹路径</span><span class="value" style="font-size:11px;word-break:break-all">${d.path}</span></div>`
+      : `<div class="drive-info-row"><span class="label">磁盘盘符</span><span class="value">${d.letter}</span></div>`;
+    html += `
+    <div class="drive-card">
+      <div class="drive-card-header">
+        <div class="drive-name"><span class="icon">🔒</span>${d.name}</div>
+        <span class="status-badge online">● 已挂载</span>
+      </div>
+      <div class="drive-card-body">
+        <div class="drive-info-row"><span class="label">来源类型</span><span class="value">${srcTag}</span></div>
+        ${srcDetail}
+        <div class="drive-info-row"><span class="label">已用/总容量</span><span class="value">${d.used} GB / ${d.size} GB</span></div>
+        <div class="progress-bar"><div class="fill" style="width:${pct}%"></div></div>
+        <div class="drive-info-row" style="margin-top:8px"><span class="label">加密算法</span><span class="value">AES-256-XTS</span></div>
+        <div class="drive-info-row"><span class="label">密码存储</span><span class="value">USB密钥</span></div>
+      </div>
+      <div class="drive-card-footer">
+        <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();showToast('磁盘已卸载','info')">卸载</button>
+        <button class="btn btn-primary btn-xs" style="width:auto;padding:5px 14px" onclick="event.stopPropagation();switchToBrowser(encryptedDrives[${encryptedDrives.indexOf(d)}])">浏览文件 →</button>
+      </div>
+    </div>`;
+  });
+  document.getElementById('encryptedDriveGrid').innerHTML = html;
+}
+
+function renderHiddenDrives() {
+  let html = '';
+  hiddenDrives.forEach(d => {
+    const pct = ((d.used/d.size)*100).toFixed(1);
+    const srcTag = d.sourceMode === 'folder'
+      ? `<span class="tag blue">📁 文件夹</span>`
+      : `<span class="tag green">💿 磁盘</span>`;
+    const srcDetail = d.sourceMode === 'folder'
+      ? `<div class="drive-info-row"><span class="label">文件夹路径</span><span class="value" style="font-size:11px;word-break:break-all">${d.path}</span></div>`
+      : `<div class="drive-info-row"><span class="label">磁盘盘符</span><span class="value">${d.letter}</span></div>`;
+    html += `
+    <div class="drive-card">
+      <div class="drive-card-header">
+        <div class="drive-name"><span class="icon">👁️</span>${d.name}</div>
+        <span class="status-badge hidden">● 隐藏中</span>
+      </div>
+      <div class="drive-card-body">
+        <div class="drive-info-row"><span class="label">来源类型</span><span class="value">${srcTag}</span></div>
+        ${srcDetail}
+        <div class="drive-info-row"><span class="label">已用/总容量</span><span class="value">${d.used} GB / ${d.size} GB</span></div>
+        <div class="progress-bar"><div class="fill" style="width:${pct}%"></div></div>
+        <div class="drive-info-row" style="margin-top:8px"><span class="label">隐藏模式</span><span class="value">系统级隐藏</span></div>
+        <div class="drive-info-row"><span class="label">密码存储</span><span class="value">USB密钥</span></div>
+      </div>
+      <div class="drive-card-footer">
+        <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();showToast('磁盘已卸载','info')">卸载</button>
+        <button class="btn btn-primary btn-xs" style="width:auto;padding:5px 14px" onclick="event.stopPropagation();switchToBrowser(hiddenDrives[${hiddenDrives.indexOf(d)}])">浏览文件 →</button>
+      </div>
+    </div>`;
+  });
+  document.getElementById('hiddenDriveGrid').innerHTML = html;
+}
+
+// ===== FILE BROWSER =====
+function renderBreadcrumb() {
+  let html = `<span onclick="navigateToRoot()">${currentDrive.name} (${currentDrive.letter})</span>`;
+  currentPath.forEach((p, i) => {
+    html += `<span class="sep">/</span><span onclick="navigateToPath(${i})">${p}</span>`;
+  });
+  document.getElementById('browserBreadcrumb').innerHTML = html;
+}
+
+function navigateToRoot() {
+  currentPath = [];
+  currentFiles = currentDrive.files;
+  renderBreadcrumb();
+  renderFiles();
+}
+
+function navigateToPath(index) {
+  currentPath = currentPath.slice(0, index + 1);
+  let files = currentDrive.files;
+  for (const p of currentPath) {
+    const folder = files.find(f => f.name === p && f.type === 'folder');
+    if (folder) files = folder.children;
+  }
+  currentFiles = files;
+  renderBreadcrumb();
+  renderFiles();
+}
+
+function openFolder(folderName) {
+  currentPath.push(folderName);
+  const folder = currentFiles.find(f => f.name === folderName && f.type === 'folder');
+  if (folder) currentFiles = folder.children;
+  renderBreadcrumb();
+  renderFiles();
+}
+
+function getFileIcon(file) {
+  if (file.type === 'folder') return '📁';
+  const ext = (file.ext || '').toLowerCase();
+  const icons = { docx:'📄', doc:'📄', pdf:'📕', xlsx:'📊', xls:'📊', txt:'📝', jpg:'🖼️', jpeg:'🖼️', png:'🖼️', gif:'🖼️', bmp:'🖼️', svg:'🖼️', py:'🐍', js:'📜', json:'📋', html:'🌐', css:'🎨', mp3:'🎵', wav:'🎵', mp4:'🎬', avi:'🎬', mov:'🎬', zip:'📦', rar:'📦', '7z':'📦', psd:'🎨', ai:'🎨', pptx:'📙', ppt:'📙', exe:'⚙️' };
+  return icons[ext] || '📄';
+}
+
+function renderFiles() {
+  const search = (document.getElementById('fileSearchInput')?.value || '').toLowerCase();
+  let filtered = currentFiles;
+  if (search) {
+    filtered = currentFiles.filter(f => f.name.toLowerCase().includes(search));
+  }
+  document.getElementById('fileCount').textContent = `共 ${filtered.length} 项`;
+
+  // List view
+  let listHtml = `<table class="file-table"><thead><tr>
+    <th style="width:40px"><input type="checkbox" class="checkbox" onclick="toggleAllCheckboxes(this)"></th>
+    <th>名称</th><th>大小</th><th>修改时间</th><th>类型</th><th style="width:120px">操作</th>
+  </tr></thead><tbody>`;
+  filtered.forEach(f => {
+    const isFolder = f.type === 'folder';
+    listHtml += `<tr oncontextmenu="showContext(event, '${f.name}')">
+      <td class="checkbox-cell"><input type="checkbox" class="checkbox"></td>
+      <td><div class="file-name-cell" ${isFolder ? `onclick="openFolder('${f.name}')"` : ''}>
+        <span class="file-icon">${getFileIcon(f)}</span>
+        <span class="name">${f.name}</span>
+      </div></td>
+      <td>${f.size}</td>
+      <td>${f.modified}</td>
+      <td>${isFolder ? '<span class="tag blue">文件夹</span>' : '<span class="tag green">文件</span>'}</td>
+      <td><div class="file-actions-cell">
+        ${isFolder ? `<button class="btn btn-secondary btn-xs" onclick="openFolder('${f.name}')">打开</button>` :
+        `<button class="btn btn-secondary btn-xs" onclick="editFile('${f.name}')">编辑</button>`}
+        <button class="btn btn-danger btn-xs" onclick="deleteItem('${f.name}')">删除</button>
+      </div></td>
+    </tr>`;
+  });
+  listHtml += '</tbody></table>';
+  document.getElementById('fileListContainer').innerHTML = listHtml;
+
+  // Grid view
+  let gridHtml = '<div class="file-grid">';
+  filtered.forEach(f => {
+    const isFolder = f.type === 'folder';
+    gridHtml += `<div class="file-grid-item" oncontextmenu="showContext(event, '${f.name}')"
+      ${isFolder ? `onclick="openFolder('${f.name}')"` : `onclick="editFile('${f.name}')"`}>
+      <div class="file-icon">${getFileIcon(f)}</div>
+      <div class="file-name" title="${f.name}">${f.name}</div>
+      <div class="file-meta">${f.size !== '-' ? f.size : ''}</div>
+    </div>`;
+  });
+  gridHtml += '</div>';
+  document.getElementById('fileGridContainer').innerHTML = gridHtml;
+}
+
+function switchFileView(mode) {
+  fileViewMode = mode;
+  document.getElementById('listViewBtn').classList.toggle('active', mode==='list');
+  document.getElementById('gridViewBtn').classList.toggle('active', mode==='grid');
+  document.getElementById('fileListContainer').style.display = mode==='list' ? '' : 'none';
+  document.getElementById('fileGridContainer').style.display = mode==='grid' ? '' : 'none';
+}
+
+function filterFiles() { renderFiles(); }
+
+function toggleAllCheckboxes(master) {
+  document.querySelectorAll('.file-table .checkbox:not(:first-child)').forEach(cb => {
+    cb.checked = master.checked;
+  });
+}
+
+// ===== FILE OPERATIONS =====
+function findFileInTree(name, files) {
+  return files.find(f => f.name === name);
+}
+
+function editFile(name) {
+  const file = findFileInTree(name, currentFiles);
+  if (!file || file.type !== 'file') return;
+  document.getElementById('editFileName').value = file.name;
+  document.getElementById('editFileContent').value = file.content || '';
+  contextTarget = name;
+  openModal('editFileModal');
+}
+
+function saveFileEdit() {
+  const name = document.getElementById('editFileName').value;
+  const content = document.getElementById('editFileContent').value;
+  const file = findFileInTree(name, currentFiles);
+  if (file) {
+    file.content = content;
+    showToast(`文件 "${name}" 已加密保存`, 'success');
+  }
+  closeModal('editFileModal');
+}
+
+function createFolder() {
+  const name = document.getElementById('newFolderName').value.trim();
+  if (!name) { showToast('请输入文件夹名称','error'); return; }
+  if (findFileInTree(name, currentFiles)) { showToast('同名项已存在','error'); return; }
+  currentFiles.push({ name, type:'folder', size:'-', modified:new Date().toLocaleString('zh-CN'), children:[] });
+  showToast(`文件夹 "${name}" 创建成功`, 'success');
+  closeModal('newFolderModal');
+  document.getElementById('newFolderName').value = '';
+  renderFiles();
+}
+
+function createFile() {
+  const name = document.getElementById('newFileName').value.trim();
+  const content = document.getElementById('newFileContent').value;
+  if (!name) { showToast('请输入文件名称','error'); return; }
+  if (findFileInTree(name, currentFiles)) { showToast('同名项已存在','error'); return; }
+  const ext = name.split('.').pop() || 'txt';
+  currentFiles.push({ name, type:'file', size:'1 KB', modified:new Date().toLocaleString('zh-CN'), ext, content });
+  showToast(`文件 "${name}" 已创建并加密保存`, 'success');
+  closeModal('newFileModal');
+  document.getElementById('newFileName').value = '';
+  document.getElementById('newFileContent').value = '';
+  renderFiles();
+}
+
+function deleteItem(name) {
+  if (!confirm(`确定删除 "${name}" 吗？此操作不可恢复。`)) return;
+  const idx = currentFiles.findIndex(f => f.name === name);
+  if (idx > -1) {
+    currentFiles.splice(idx, 1);
+    showToast(`"${name}" 已删除`, 'success');
+    renderFiles();
+  }
+}
+
+// ===== CONTEXT MENU =====
+function showContext(e, name) {
+  e.preventDefault();
+  e.stopPropagation();
+  contextTarget = name;
+  const menu = document.getElementById('contextMenu');
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.classList.add('active');
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('contextMenu').classList.remove('active');
+});
+
+function contextAction(action) {
+  const file = findFileInTree(contextTarget, currentFiles);
+  if (!file) return;
+  switch(action) {
+    case 'open':
+      if (file.type === 'folder') openFolder(file.name);
+      else editFile(file.name);
+      break;
+    case 'edit': editFile(file.name); break;
+    case 'rename':
+      const newName = prompt('重命名为:', file.name);
+      if (newName && newName !== file.name) {
+        file.name = newName;
+        showToast('重命名成功','success');
+        renderFiles();
+      }
+      break;
+    case 'copy': showToast(`"${file.name}" 已复制到剪贴板`,'info'); break;
+    case 'delete': deleteItem(file.name); break;
+  }
+}
+
+// ===== IMPORT =====
+let importMode = 'file';
+const importSimulateFiles = [
+  { name:'年度总结报告.docx', size:'3.2 MB', ext:'docx' },
+  { name:'数据分析表.xlsx', size:'1.5 MB', ext:'xlsx' },
+  { name:'项目截图.png', size:'4.8 MB', ext:'png' },
+  { name:'会议录音.mp3', size:'12.6 MB', ext:'mp3' },
+  { name:'合同扫描件.pdf', size:'6.1 MB', ext:'pdf' },
+];
+const importSimulateFolders = [
+  { name:'项目资料', files:[
+    { name:'需求文档.docx', size:'2.1 MB', ext:'docx' },
+    { name:'设计稿.psd', size:'18.5 MB', ext:'psd' },
+    { name:'测试报告.pdf', size:'890 KB', ext:'pdf' },
+  ]},
+  { name:'财务报表', files:[
+    { name:'Q1报表.xlsx', size:'1.2 MB', ext:'xlsx' },
+    { name:'Q2报表.xlsx', size:'1.4 MB', ext:'xlsx' },
+    { name:'发票汇总.pdf', size:'5.6 MB', ext:'pdf' },
+  ]},
+];
+
+function selectImportSource(mode) {
+  importMode = mode;
+  document.getElementById('importSrcFile').classList.toggle('selected', mode==='file');
+  document.getElementById('importSrcFolder').classList.toggle('selected', mode==='folder');
+  document.getElementById('importPathLabel').textContent = mode==='file' ? '选择文件' : '选择文件夹';
+  document.getElementById('importPath').placeholder = mode==='file'
+    ? '如：D:\\Documents\\report.docx'
+    : '如：D:\\Projects\\项目资料';
+  document.getElementById('importPath').value = '';
+  document.getElementById('importFileList').style.display = 'none';
+}
+
+function simulateFileSelect() {
+  const input = document.getElementById('importPath');
+  if (importMode === 'file') {
+    const picked = importSimulateFiles[Math.floor(Math.random() * importSimulateFiles.length)];
+    input.value = 'D:\\Documents\\' + picked.name;
+    // Show preview of selected files (simulate multi-select)
+    const count = Math.floor(Math.random() * 3) + 1;
+    const selected = [];
+    const used = new Set();
+    for (let i = 0; i < count; i++) {
+      let idx;
+      do { idx = Math.floor(Math.random() * importSimulateFiles.length); } while (used.has(idx));
+      used.add(idx);
+      selected.push(importSimulateFiles[idx]);
+    }
+    let previewHtml = '';
+    selected.forEach(f => {
+      previewHtml += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(51,65,85,0.3);font-size:13px">
+        <span>${getFileIcon(f)}</span>
+        <span style="flex:1;font-weight:500">${f.name}</span>
+        <span style="color:var(--text-muted)">${f.size}</span>
+      </div>`;
+    });
+    document.getElementById('importFilesPreview').innerHTML = previewHtml;
+    document.getElementById('importFileList').style.display = '';
+  } else {
+    const picked = importSimulateFolders[Math.floor(Math.random() * importSimulateFolders.length)];
+    input.value = 'D:\\Documents\\' + picked.name;
+    let previewHtml = `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">文件夹包含 ${picked.files.length} 个文件：</div>`;
+    picked.files.forEach(f => {
+      previewHtml += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(51,65,85,0.3);font-size:13px">
+        <span>${getFileIcon(f)}</span>
+        <span style="flex:1;font-weight:500">${f.name}</span>
+        <span style="color:var(--text-muted)">${f.size}</span>
+      </div>`;
+    });
+    document.getElementById('importFilesPreview').innerHTML = previewHtml;
+    document.getElementById('importFileList').style.display = '';
+  }
+  // Update target path
+  const target = currentDrive.name + ' (' + currentDrive.letter + ')' + (currentPath.length ? ' → ' + currentPath.join(' → ') : '');
+  document.getElementById('importTargetPath').textContent = target;
+}
+
+function doImport() {
+  const path = document.getElementById('importPath').value;
+  if (!path) { showToast('请先选择要导入的文件或文件夹','error'); return; }
+
+  if (importMode === 'file') {
+    // Import files into current directory
+    const previewItems = document.getElementById('importFilesPreview').children;
+    let count = 0;
+    for (const item of previewItems) {
+      const nameEl = item.querySelector('[style*="flex:1"]');
+      const sizeEl = item.querySelector('[style*="color:var(--text-muted)"]');
+      if (nameEl && sizeEl) {
+        const fname = nameEl.textContent.trim();
+        const fsize = sizeEl.textContent.trim();
+        const ext = fname.split('.').pop() || 'txt';
+        if (!findFileInTree(fname, currentFiles)) {
+          currentFiles.push({ name:fname, type:'file', size:fsize, modified:new Date().toLocaleString('zh-CN'), ext, content:'[从外部导入的文件 - 已加密存储]' });
+          count++;
+        }
+      }
+    }
+    showToast(`成功导入 ${count} 个文件，已加密存储`, 'success');
+  } else {
+    // Import folder
+    const folderPath = document.getElementById('importPath').value;
+    const folderName = folderPath.split('\\').pop();
+    const picked = importSimulateFolders.find(f => f.name === folderName) || importSimulateFolders[0];
+    const importFolderName = folderName || picked.name;
+    if (!findFileInTree(importFolderName, currentFiles)) {
+      const children = picked.files.map(f => ({
+        name: f.name, type:'file', size:f.size,
+        modified: new Date().toLocaleString('zh-CN'),
+        ext: f.ext, content:'[从外部导入的文件 - 已加密存储]'
+      }));
+      currentFiles.push({ name:importFolderName, type:'folder', size:'-', modified:new Date().toLocaleString('zh-CN'), children });
+      showToast(`文件夹 "${importFolderName}" 导入成功，已加密存储`, 'success');
+    } else {
+      showToast(`同名文件夹 "${importFolderName}" 已存在`, 'error');
+      return;
+    }
+  }
+
+  closeModal('importModal');
+  document.getElementById('importPath').value = '';
+  document.getElementById('importFileList').style.display = 'none';
+  renderFiles();
+}
+
+// ===== DRIVE CREATION =====
+function selectDriveSource(mode, target) {
+  if (target === 'drive') {
+    document.getElementById('driveSrcFolder').classList.toggle('selected', mode==='folder');
+    document.getElementById('driveSrcDisk').classList.toggle('selected', mode==='disk');
+    document.getElementById('driveFolderGroup').style.display = mode==='folder' ? '' : 'none';
+    document.getElementById('driveLetterGroup').style.display = mode==='disk' ? '' : 'none';
+  } else {
+    document.getElementById('hiddenSrcFolder').classList.toggle('selected', mode==='folder');
+    document.getElementById('hiddenSrcDisk').classList.toggle('selected', mode==='disk');
+    document.getElementById('hiddenFolderGroup').style.display = mode==='folder' ? '' : 'none';
+    document.getElementById('hiddenLetterGroup').style.display = mode==='disk' ? '' : 'none';
+  }
+}
+
+function createDrive() {
+  const name = document.getElementById('newDriveName').value.trim();
+  const size = parseInt(document.getElementById('newDriveSize').value);
+  if (!name) { showToast('请输入加密盘名称','error'); return; }
+  const isFolderMode = document.getElementById('driveSrcFolder').classList.contains('selected');
+  let path, letter;
+  if (isFolderMode) {
+    path = document.getElementById('newDrivePath').value.trim();
+    if (!path) { showToast('请输入文件夹路径','error'); return; }
+    letter = '-';
+  } else {
+    letter = document.getElementById('newDriveLetter').value;
+    path = letter + '\\';
+  }
+  encryptedDrives.push({
+    id:'enc'+(encryptedDrives.length+1), name, letter, size, used:0,
+    path: isFolderMode ? path : path,
+    sourceMode: isFolderMode ? 'folder' : 'disk',
+    status:'online', type:'encrypted', files:[]
+  });
+  const sourceDesc = isFolderMode ? `文件夹 ${path}` : `盘符 ${letter}`;
+  showToast(`加密盘 "${name}" 创建成功 (${sourceDesc})`,'success');
+  closeModal('createDriveModal');
+  document.getElementById('newDriveName').value = '';
+  document.getElementById('newDrivePath').value = '';
+  renderEncryptedDrives();
+  renderDashboard();
+}
+
+function createHiddenDrive() {
+  const name = document.getElementById('newHiddenName').value.trim();
+  const size = parseInt(document.getElementById('newHiddenSize').value);
+  if (!name) { showToast('请输入隐藏盘名称','error'); return; }
+  const isFolderMode = document.getElementById('hiddenSrcFolder').classList.contains('selected');
+  let path, letter;
+  if (isFolderMode) {
+    path = document.getElementById('newHiddenPath').value.trim();
+    if (!path) { showToast('请输入文件夹路径','error'); return; }
+    letter = '-';
+  } else {
+    letter = document.getElementById('newHiddenLetter').value;
+    path = letter + '\\';
+  }
+  hiddenDrives.push({
+    id:'hid'+(hiddenDrives.length+1), name, letter, size, used:0,
+    path: isFolderMode ? path : path,
+    sourceMode: isFolderMode ? 'folder' : 'disk',
+    status:'online', type:'hidden', files:[]
+  });
+  const sourceDesc = isFolderMode ? `文件夹 ${path}` : `盘符 ${letter}`;
+  showToast(`隐藏盘 "${name}" 创建成功 (${sourceDesc})，在系统中不可见`,'success');
+  closeModal('createHiddenModal');
+  document.getElementById('newHiddenName').value = '';
+  document.getElementById('newHiddenPath').value = '';
+  renderHiddenDrives();
+  renderDashboard();
+}
+
+// ===== BACKUP =====
+function renderBackupList() {
+  let html = '';
+  backupTasks.forEach(b => {
+    const statusClass = b.status==='success' ? 'online' : 'hidden';
+    const statusText = b.status==='success' ? '已完成' : '待执行';
+    html += `
+    <div class="backup-item">
+      <div class="backup-item-left">
+        <div class="icon">${b.sourceType==='disk'?'💿':'📁'}</div>
+        <div class="backup-item-info">
+          <h4>${b.name}</h4>
+          <p>来源: ${b.source} → 目标: ${b.target}</p>
+          <p>模式: <span class="tag ${b.mode==='明文'?'blue':'yellow'}">${b.mode}备份</span> · 上次: ${b.lastRun} · 大小: ${b.size}</p>
+        </div>
+      </div>
+      <div class="backup-item-right">
+        <span class="status-badge ${statusClass}">● ${statusText}</span>
+        <button class="btn btn-secondary btn-xs" onclick="runBackup('${b.id}')">立即执行</button>
+        <button class="btn btn-danger btn-xs" onclick="deleteBackup('${b.id}')">删除</button>
+      </div>
+    </div>`;
+  });
+  document.getElementById('backupList').innerHTML = html;
+}
+
+function selectBackupSource(mode) {
+  backupSourceMode = mode;
+  document.getElementById('srcFolder').classList.toggle('selected', mode==='folder');
+  document.getElementById('srcDisk').classList.toggle('selected', mode==='disk');
+  const sel = document.getElementById('backupSource');
+  if (mode === 'disk') {
+    sel.innerHTML = `
+      <option>加密盘:工作文档 (E:) - 全部文件</option>
+      <option>加密盘:私人照片 (F:) - 全部文件</option>
+      <option>隐藏盘:机密资料 (K:) - 全部文件</option>`;
+  } else {
+    sel.innerHTML = `
+      <option>加密盘:工作文档 (E:) → 项目报告/</option>
+      <option>加密盘:工作文档 (E:) → 财务报表/</option>
+      <option>加密盘:私人照片 (F:) → 2026旅行/</option>
+      <option>隐藏盘:机密资料 (K:) → 核心算法/</option>`;
+  }
+}
+
+function createBackup() {
+  const name = document.getElementById('backupName').value.trim();
+  const source = document.getElementById('backupSource').value;
+  const target = document.getElementById('backupTarget').value.trim();
+  if (!name) { showToast('请输入备份名称','error'); return; }
+  backupTasks.push({
+    id:'bk'+(backupTasks.length+1), name, source, sourceType:backupSourceMode,
+    target, mode:'明文', status:'pending', lastRun:'待执行', size:'-'
+  });
+  showToast(`备份任务 "${name}" 创建成功`,'success');
+  closeModal('newBackupModal');
+  document.getElementById('backupName').value = '';
+  renderBackupList();
+  document.getElementById('backupTotal').textContent = backupTasks.length;
+  document.getElementById('backupPending').textContent = backupTasks.filter(b=>b.status==='pending').length;
+}
+
+function runBackup(id) {
+  const b = backupTasks.find(t => t.id === id);
+  if (b) {
+    b.status = 'success';
+    b.lastRun = new Date().toLocaleString('zh-CN');
+    b.size = '1.2 GB';
+    showToast(`备份 "${b.name}" 执行完成`,'success');
+    renderBackupList();
+    document.getElementById('backupSuccess').textContent = backupTasks.filter(b=>b.status==='success').length;
+    document.getElementById('backupPending').textContent = backupTasks.filter(b=>b.status==='pending').length;
+  }
+}
+
+function deleteBackup(id) {
+  if (!confirm('确定删除此备份任务？')) return;
+  const idx = backupTasks.findIndex(t => t.id === id);
+  if (idx > -1) backupTasks.splice(idx, 1);
+  showToast('备份任务已删除','success');
+  renderBackupList();
+  document.getElementById('backupTotal').textContent = backupTasks.length;
+  document.getElementById('backupSuccess').textContent = backupTasks.filter(b=>b.status==='success').length;
+  document.getElementById('backupPending').textContent = backupTasks.filter(b=>b.status==='pending').length;
+}
+
+// ===== HISTORY =====
+function renderHistory() {
+  let html = '';
+  historyLogs.forEach(h => {
+    html += `<tr>
+      <td style="white-space:nowrap">${h.time}</td>
+      <td>${h.action}</td>
+      <td>${h.target}</td>
+      <td><span class="status-badge online">✓ 成功</span></td>
+    </tr>`;
+  });
+  document.getElementById('historyTable').innerHTML = html;
+}
+
+// ===== MODAL =====
+function openModal(id) {
+  document.getElementById(id).classList.add('active');
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove('active');
+}
+
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.classList.remove('active');
+  });
+});
+
+// ===== TOAST =====
+function showToast(msg, type='info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  const icons = { success:'✅', error:'❌', info:'ℹ️' };
+  toast.innerHTML = `<span>${icons[type]||'ℹ️'}</span><span>${msg}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity='0'; toast.style.transform='translateX(100%)'; setTimeout(()=>toast.remove(),300); }, 3000);
+}
+</script>
+</body>
+</html>
