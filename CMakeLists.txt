@@ -1,0 +1,57 @@
+cmake_minimum_required(VERSION 3.25)
+
+project(usb_vault LANGUAGES CXX)
+
+if(NOT WIN32)
+  message(FATAL_ERROR "usb-vault currently supports Windows only")
+endif()
+
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "usb-vault requires a 64-bit toolchain")
+endif()
+
+option(USB_VAULT_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(USB_VAULT_ENABLE_CODE_ANALYSIS "Enable MSVC code analysis" OFF)
+
+function(usb_vault_configure_target target)
+  target_compile_features(${target} PUBLIC cxx_std_20)
+  target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+
+  if(MSVC)
+    target_compile_options(${target} PRIVATE
+      /W4
+      /WX
+      /permissive-
+      /Zc:__cplusplus
+      /utf-8
+      /sdl
+    )
+
+    if(USB_VAULT_ENABLE_ASAN)
+      target_compile_options(${target} PRIVATE /fsanitize=address)
+      target_link_options(${target} PRIVATE /fsanitize=address /INCREMENTAL:NO)
+    endif()
+
+    if(USB_VAULT_ENABLE_CODE_ANALYSIS)
+      target_compile_options(${target} PRIVATE /analyze)
+    endif()
+  else()
+    message(FATAL_ERROR "P1.0 requires the MSVC toolchain")
+  endif()
+endfunction()
+
+add_library(usb_vault_core STATIC
+  src/security/secure_buffer.cpp
+)
+
+target_include_directories(usb_vault_core
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+usb_vault_configure_target(usb_vault_core)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

@@ -1,3 +1,6 @@
+# ---- 本地 Agent 工作约定（不入库）----
+/AGENTS.md
+
 # ---- OMC 运行时状态（每台机器各自生成，不入库）----
 .omc/
 **/.omc/
@@ -16,6 +19,11 @@
 *.lib
 *.exp
 *.res
+
+# ---- 正式工程构建目录 ----
+out/
+build/
+CMakeUserPresets.json
 
 # ---- 第三方源码与安装包（体积大，按 README 自行下载）----
 spike/_vcref/
