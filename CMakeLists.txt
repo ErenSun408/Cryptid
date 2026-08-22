@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(usb_vault LANGUAGES CXX)
+project(usb_vault LANGUAGES C CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "usb-vault currently supports Windows only")
@@ -30,6 +30,26 @@ function(usb_vault_configure_target target)
     if(USB_VAULT_ENABLE_ASAN)
       target_compile_options(${target} PRIVATE /fsanitize=address)
       target_link_options(${target} PRIVATE /fsanitize=address /INCREMENTAL:NO)
+
+      get_target_property(target_type ${target} TYPE)
+      if(target_type STREQUAL "EXECUTABLE")
+        get_filename_component(msvc_tool_directory "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+          set(asan_runtime_name clang_rt.asan_dbg_dynamic-x86_64.dll)
+        else()
+          set(asan_runtime_name clang_rt.asan_dynamic-x86_64.dll)
+        endif()
+        set(asan_runtime "${msvc_tool_directory}/${asan_runtime_name}")
+        if(NOT EXISTS "${asan_runtime}")
+          message(FATAL_ERROR "MSVC AddressSanitizer runtime not found: ${asan_runtime}")
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                  "${asan_runtime}"
+                  "$<TARGET_FILE_DIR:${target}>"
+          VERBATIM
+        )
+      endif()
     endif()
 
     if(USB_VAULT_ENABLE_CODE_ANALYSIS)
@@ -40,7 +60,38 @@ function(usb_vault_configure_target target)
   endif()
 endfunction()
 
+add_library(argon2_ref STATIC
+  third_party/argon2/src/argon2.c
+  third_party/argon2/src/blake2/blake2b.c
+  third_party/argon2/src/core.c
+  third_party/argon2/src/encoding.c
+  third_party/argon2/src/ref.c
+  third_party/argon2/src/thread.c
+)
+
+target_include_directories(argon2_ref
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/argon2/include
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/argon2/src
+)
+
+target_compile_definitions(argon2_ref PRIVATE ARGON2_NO_THREADS)
+set_target_properties(argon2_ref PROPERTIES
+  C_STANDARD 90
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF
+)
+
+if(MSVC)
+  target_compile_options(argon2_ref PRIVATE /utf-8)
+  if(USB_VAULT_ENABLE_ASAN)
+    target_compile_options(argon2_ref PRIVATE /fsanitize=address)
+  endif()
+endif()
+
 add_library(usb_vault_core STATIC
+  src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
 )
 
@@ -48,6 +99,8 @@ target_include_directories(usb_vault_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+target_link_libraries(usb_vault_core PRIVATE argon2_ref)
 
 usb_vault_configure_target(usb_vault_core)
 

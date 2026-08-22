@@ -11,6 +11,19 @@ usb_vault_configure_target(secure_buffer_tests)
 
 add_test(NAME secure_buffer_tests COMMAND secure_buffer_tests)
 
+add_executable(kdf_v1_tests
+  kdf_v1_tests.cpp
+)
+
+target_link_libraries(kdf_v1_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(kdf_v1_tests)
+
+add_test(NAME kdf_v1_tests COMMAND kdf_v1_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
