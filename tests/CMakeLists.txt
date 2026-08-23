@@ -100,4 +100,26 @@ if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
     SKIP_RETURN_CODE 77
     RUN_SERIAL TRUE
   )
+
+  add_executable(mount_orchestrator_integration_tests
+    mount_orchestrator_integration_tests.cpp
+  )
+
+  target_link_libraries(mount_orchestrator_integration_tests
+    PRIVATE
+      usb_vault_core
+  )
+
+  usb_vault_configure_target(mount_orchestrator_integration_tests)
+
+  add_test(
+    NAME mount_orchestrator_integration_tests
+    COMMAND mount_orchestrator_integration_tests
+            ${PROJECT_SOURCE_DIR}/out/vendor/p1_3_a.hc
+            ${PROJECT_SOURCE_DIR}/out/vendor/p1_3_b.hc
+  )
+  set_tests_properties(mount_orchestrator_integration_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    RUN_SERIAL TRUE
+  )
 endif()
