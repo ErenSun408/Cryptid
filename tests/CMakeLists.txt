@@ -135,6 +135,18 @@ usb_vault_configure_target(ui_session_controller_tests)
 
 add_test(NAME ui_session_controller_tests COMMAND ui_session_controller_tests)
 
+add_executable(ui_page_contract_tests
+  ui_page_contract_tests.cpp
+)
+
+target_compile_definitions(ui_page_contract_tests PRIVATE
+  USB_VAULT_UI_PAGE="${PROJECT_SOURCE_DIR}/ui/index.html"
+)
+
+usb_vault_configure_target(ui_page_contract_tests)
+
+add_test(NAME ui_page_contract_tests COMMAND ui_page_contract_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
