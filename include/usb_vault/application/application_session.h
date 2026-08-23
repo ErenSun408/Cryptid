@@ -9,26 +9,37 @@
 
 namespace usb_vault::application {
 
+class IApplicationSessionActions {
+ public:
+  virtual ~IApplicationSessionActions() noexcept = default;
+
+  virtual void authenticate_and_mount(
+      security::SecureBuffer password_utf8) = 0;
+  virtual void unmount_active() = 0;
+  [[nodiscard]] virtual bool mounted() const noexcept = 0;
+};
+
 // Owns only the volatile state needed to actively unmount drives created by the
 // current process. Passwords and card material are consumed for one mount
 // attempt and are never retained. The session does not classify mounted
 // volumes or persist any state.
-class ApplicationSession final {
+class ApplicationSession final : public IApplicationSessionActions {
  public:
   ApplicationSession(card::ICardStore& card_store,
                      const volume::VolumeProvider& provider,
                      ContainerLayout layout);
-  ~ApplicationSession() noexcept;
+  ~ApplicationSession() noexcept override;
 
   ApplicationSession(const ApplicationSession&) = delete;
   ApplicationSession& operator=(const ApplicationSession&) = delete;
   ApplicationSession(ApplicationSession&&) = delete;
   ApplicationSession& operator=(ApplicationSession&&) = delete;
 
-  void authenticate_and_mount(security::SecureBuffer password_utf8);
-  void unmount_active();
+  void authenticate_and_mount(
+      security::SecureBuffer password_utf8) override;
+  void unmount_active() override;
 
-  [[nodiscard]] bool mounted() const noexcept;
+  [[nodiscard]] bool mounted() const noexcept override;
 
  private:
   struct Impl;
