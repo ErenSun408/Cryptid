@@ -3,8 +3,14 @@
 #include <WebView2.h>
 #include <wrl.h>
 
+#include "usb_vault/application/application_session.h"
+#include "usb_vault/card/fixed_blob_card_store.h"
 #include "usb_vault/ui/webview_host_object.h"
+#include "usb_vault/volume/volume_provider.h"
 
+#include <array>
+#include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -18,33 +24,33 @@ using Microsoft::WRL::ComPtr;
 constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
 constexpr wchar_t kWindowTitle[] = L"USB Vault";
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
-
-class BridgeUnavailableSession final
-    : public usb_vault::application::IApplicationSessionActions {
- public:
-  void authenticate_and_mount(
-      usb_vault::security::SecureBuffer password_utf8) override {
-    password_utf8.clear();
-    throw std::runtime_error("application session is not configured");
-  }
-
-  void unmount_active() override {}
-  [[nodiscard]] bool mounted() const noexcept override { return false; }
-};
+constexpr usb_vault::security::KdfV1Salt kContainerASalt{
+    std::byte{0x30}, std::byte{0x31}, std::byte{0x32}, std::byte{0x33},
+    std::byte{0x34}, std::byte{0x35}, std::byte{0x36}, std::byte{0x37},
+    std::byte{0x38}, std::byte{0x39}, std::byte{0x3A}, std::byte{0x3B},
+    std::byte{0x3C}, std::byte{0x3D}, std::byte{0x3E}, std::byte{0x3F}};
+constexpr usb_vault::security::KdfV1Salt kContainerBSalt{
+    std::byte{0x20}, std::byte{0x21}, std::byte{0x22}, std::byte{0x23},
+    std::byte{0x24}, std::byte{0x25}, std::byte{0x26}, std::byte{0x27},
+    std::byte{0x28}, std::byte{0x29}, std::byte{0x2A}, std::byte{0x2B},
+    std::byte{0x2C}, std::byte{0x2D}, std::byte{0x2E}, std::byte{0x2F}};
 
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
 std::wstring g_page_uri;
-BridgeUnavailableSession g_unavailable_session;
-usb_vault::ui::UiSessionController g_ui_session(g_unavailable_session);
+usb_vault::card::FixedBlobCardStore g_card_store;
+std::unique_ptr<usb_vault::volume::VolumeProvider> g_volume_provider;
+std::unique_ptr<usb_vault::application::IApplicationSessionActions>
+    g_application_session;
+std::unique_ptr<usb_vault::ui::UiSessionController> g_ui_session;
 
 void show_failure(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
                                   MB_OK | MB_ICONERROR));
 }
 
-[[nodiscard]] std::wstring local_page_uri() {
+[[nodiscard]] std::wstring executable_directory() {
   std::vector<wchar_t> executable_path(32768);
   const DWORD length = ::GetModuleFileNameW(
       nullptr, executable_path.data(),
@@ -55,21 +61,70 @@ void show_failure(const wchar_t* const message) noexcept {
   if (!::PathRemoveFileSpecW(executable_path.data())) {
     throw std::runtime_error("cannot resolve application directory");
   }
+  return executable_path.data();
+}
 
+[[nodiscard]] std::wstring child_path(const std::wstring& directory,
+                                      const wchar_t* const name) {
   std::vector<wchar_t> page_path(32768);
-  if (!::PathCombineW(page_path.data(), executable_path.data(),
-                      L"index.html")) {
-    throw std::runtime_error("cannot resolve local UI page");
+  if (!::PathCombineW(page_path.data(), directory.c_str(), name)) {
+    throw std::runtime_error("cannot resolve application child path");
   }
+  return page_path.data();
+}
+
+[[nodiscard]] std::wstring local_page_uri() {
+  const std::wstring page_path =
+      child_path(executable_directory(), L"index.html");
 
   std::vector<wchar_t> uri(32768);
   DWORD uri_size = static_cast<DWORD>(uri.size());
   const HRESULT result =
-      ::UrlCreateFromPathW(page_path.data(), uri.data(), &uri_size, 0);
+      ::UrlCreateFromPathW(page_path.c_str(), uri.data(), &uri_size, 0);
   if (FAILED(result)) {
     throw std::runtime_error("cannot create local UI URI");
   }
   return std::wstring(uri.data(), uri_size);
+}
+
+[[nodiscard]] std::array<wchar_t, 2> unused_drive_letters() {
+  const DWORD drives = ::GetLogicalDrives();
+  if (drives == 0) {
+    throw std::runtime_error("cannot inspect available drive letters");
+  }
+  std::array<wchar_t, 2> result{};
+  std::size_t count = 0;
+  for (wchar_t letter = L'Z'; letter >= L'D' && count < result.size();
+       --letter) {
+    const DWORD mask = 1UL << static_cast<DWORD>(letter - L'A');
+    if ((drives & mask) == 0) {
+      result[count++] = letter;
+    }
+  }
+  if (count != result.size()) {
+    throw std::runtime_error("two unused drive letters are required");
+  }
+  return result;
+}
+
+void initialize_application_session() {
+  const std::wstring directory = executable_directory();
+  const auto drives = unused_drive_letters();
+  usb_vault::application::ContainerLayout layout{
+      .container_a = {.path = child_path(directory, L"container_a.hc"),
+                      .salt = kContainerASalt,
+                      .drive_letter = drives[0]},
+      .container_b = {.path = child_path(directory, L"container_b.hc"),
+                      .salt = kContainerBSalt,
+                      .drive_letter = drives[1]},
+  };
+  g_volume_provider =
+      std::make_unique<usb_vault::volume::VolumeProvider>();
+  g_application_session =
+      std::make_unique<usb_vault::application::ApplicationSession>(
+          g_card_store, *g_volume_provider, std::move(layout));
+  g_ui_session = std::make_unique<usb_vault::ui::UiSessionController>(
+      *g_application_session);
 }
 
 void resize_webview(const HWND window) noexcept {
@@ -120,7 +175,7 @@ void initialize_webview(const HWND window) {
 
                       ComPtr<IDispatch> host_object;
                       current = usb_vault::ui::create_webview_host_object(
-                          g_ui_session, &host_object);
+                          *g_ui_session, &host_object);
                       if (FAILED(current)) {
                         return current;
                       }
@@ -219,10 +274,14 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   }
 
   try {
+    initialize_application_session();
     initialize_webview(window);
   } catch (...) {
     show_failure(L"本地界面初始化失败。");
     ::DestroyWindow(window);
+    g_ui_session.reset();
+    g_application_session.reset();
+    g_volume_provider.reset();
     ::CoUninitialize();
     return 1;
   }
@@ -235,6 +294,9 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     ::DispatchMessageW(&message);
   }
 
+  g_ui_session.reset();
+  g_application_session.reset();
+  g_volume_provider.reset();
   ::CoUninitialize();
   return static_cast<int>(message.wParam);
 }

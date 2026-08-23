@@ -98,6 +98,7 @@ endif()
 add_library(usb_vault_core STATIC
   src/application/application_session.cpp
   src/application/mount_orchestrator.cpp
+  src/card/fixed_blob_card_store.cpp
   src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
   src/ui/password_ingress.cpp

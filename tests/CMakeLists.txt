@@ -91,6 +91,19 @@ usb_vault_configure_target(card_store_contract_tests)
 
 add_test(NAME card_store_contract_tests COMMAND card_store_contract_tests)
 
+add_executable(fixed_blob_card_store_tests
+  fixed_blob_card_store_tests.cpp
+)
+
+target_link_libraries(fixed_blob_card_store_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(fixed_blob_card_store_tests)
+
+add_test(NAME fixed_blob_card_store_tests COMMAND fixed_blob_card_store_tests)
+
 add_executable(application_session_tests
   application_session_tests.cpp
 )
