@@ -109,6 +109,19 @@ usb_vault_configure_target(application_session_tests)
 
 add_test(NAME application_session_tests COMMAND application_session_tests)
 
+add_executable(password_ingress_tests
+  password_ingress_tests.cpp
+)
+
+target_link_libraries(password_ingress_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(password_ingress_tests)
+
+add_test(NAME password_ingress_tests COMMAND password_ingress_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
