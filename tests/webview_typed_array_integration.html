@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'unsafe-inline';">
+  <title>WebView2 typed array integration</title>
+</head>
+<body>
+  <script>
+    (async () => {
+      const bytes = new Uint8Array([0x70, 0x00, 0xC3, 0xA4]);
+      let submitted = false;
+      try {
+        chrome.webview.hostObjects.options.shouldPassTypedArraysAsArrays = true;
+        await chrome.webview.hostObjects.nativeBridge.submitPasswordBytes(bytes);
+        submitted = true;
+      } catch (_) {
+        submitted = false;
+      } finally {
+        bytes.fill(0);
+        const wiped = bytes.every((value) => value === 0);
+        chrome.webview.postMessage(submitted && wiped ? "pass" : "fail");
+      }
+    })();
+  </script>
+</body>
+</html>

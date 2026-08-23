@@ -524,7 +524,7 @@
 
 ## 2026-08-23 — P1.5 最小 UI 与应用闭环
 
-**状态：** 小切片 1~10 已提交；小切片 11 窗口关闭主动卸载守卫已实现并完成审查，等待用户决定是否提交
+**状态：** 小切片 1~11 已提交；小切片 12 WebView2 typed array 真实 Runtime 验证已实现并完成审查，等待用户决定是否提交
 
 ### 计划与需求审计
 
@@ -820,5 +820,32 @@
   关闭，主进程在 5 秒内自行退出。500ms 后尚有 2 个本次 WebView2 子进程处于退出尾声，
   测试随后按 PID 清理，未触碰既有 WebView2 进程。
 - 安全复核未发现卸载异常泄露分类状态、窗口在失败时错误退出或活动状态被吞掉。系统强杀
-  仍可绕过 `WM_CLOSE`，这是桌面进程无法完全消除的剩余风险。小切片 11 尚未提交、
-  未执行 push，等待用户决定。
+  仍可绕过 `WM_CLOSE`，这是桌面进程无法完全消除的剩余风险。用户复核并批准提交
+  小切片 11，提交为 `a7d328f`；只创建本地提交，未执行 push。
+
+### 小切片 12：WebView2 typed array 真实 Runtime 验证
+
+- 依据微软 WebView2 host objects 契约，测试页面在调用前显式设置
+  `chrome.webview.hostObjects.options.shouldPassTypedArraysAsArrays = true`，再把固定的
+  `Uint8Array` 直接传给既有 `submitPasswordBytes`；没有改动产品页面，密码框和按钮仍禁用。
+- 新增隐藏 Win32 集成测试目标，在严格的单一本地页面 URI 导航白名单内注册既有
+  `nativeBridge`。原生探针验证包含内嵌 NUL 和多字节 UTF-8 的 4 个固定非秘密字节逐字节
+  到达；页面在 `finally` 中清零 typed array，只有原生收到原值且 JavaScript 数组确认全零
+  才报告成功。
+- 测试目标标记为 `EXCLUDE_FROM_ALL` 且不注册到 CTest，避免日常构建和单元测试依赖本机
+  WebView2 Runtime；测试 HTML 只复制到该测试可执行文件目录，不进入产品资源。
+
+### 小切片 12 测试、安全审查与风险
+
+- 首次专项链接因测试目标仍是 console subsystem、源码入口为 `wWinMain` 而失败；把目标明确
+  声明为 `WIN32` 后恢复，该问题只涉及测试目标类型，与 typed array 封送行为无关。
+- MSVC Debug `/W4 /WX` 完整构建与 CTest 15/15 通过；专项目标在 Debug、`/analyze` 和
+  AddressSanitizer 配置下均构建通过，`/analyze` 无发现。Debug 与 ASan 专项可执行文件均在
+  本机 WebView2 Runtime `151.0.4129.101` 上退出 0，证明当前 Runtime 会把该 `Uint8Array`
+  投影为既有适配器要求的一维 `VT_UI1` SAFEARRAY，并保持字节值不变；ASan 无发现。
+- 测试页面 CSP 的 `unsafe-inline` 仅用于固定的测试内联脚本，页面没有输入、网络能力或产品
+  打包路径；宿主同时拒绝除该测试文件外的导航。测试字节不是口令，不写日志、不持久化、
+  不触发真实挂载。既有单元测试继续覆盖 COM SAFEARRAY 在成功和失败路径的清零。
+- JavaScript 引擎、WebView2 和 COM 内部仍可能制造测试无法逐字节追踪或主动擦除的短期副本；
+  本切片只验证可控 typed array 与原生消费链路，不把它表述为浏览器进程全内存清零保证。
+  `git diff --check` 通过。小切片 12 尚未提交、未执行 push，等待用户决定。

@@ -199,6 +199,32 @@ usb_vault_configure_target(webview_host_object_tests)
 
 add_test(NAME webview_host_object_tests COMMAND webview_host_object_tests)
 
+if(USB_VAULT_BUILD_UI)
+  add_executable(webview_typed_array_integration_tests WIN32 EXCLUDE_FROM_ALL
+    webview_typed_array_integration_tests.cpp
+  )
+
+  target_include_directories(webview_typed_array_integration_tests PRIVATE
+    "${webview2_sdk_SOURCE_DIR}/build/native/include"
+  )
+
+  target_link_libraries(webview_typed_array_integration_tests PRIVATE
+    usb_vault_core
+    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+    Ole32
+    Shlwapi
+  )
+
+  usb_vault_configure_target(webview_typed_array_integration_tests)
+
+  add_custom_command(TARGET webview_typed_array_integration_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/webview_typed_array_integration.html"
+            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/webview_typed_array_integration.html"
+    VERBATIM
+  )
+endif()
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )

@@ -220,5 +220,7 @@ blob 合约、应用会话控制器、可擦除的 UI 口令入口和 UI 会话�
 `submitPasswordBytes` 且不提供任何分类状态的原生 `IDispatch` host object 已提交；该对象
 已在严格本地导航边界内完成真实 WebView2 Runtime 注册并提交；按需生成固定 32 字节
 锁页 blob 的只读桩卡已与正式 `ApplicationSession`、动态空闲盘符和 exe 同目录容器布局
-完成组合并提交；窗口关闭前的主动卸载、失败阻止退出和可重试状态守卫已完成验证，等待
-提交。页面仍无脚本且密码控件保持禁用。
+完成组合并提交；窗口关闭前的主动卸载、失败阻止退出和可重试状态守卫已提交；显式启用
+`shouldPassTypedArraysAsArrays` 后，固定非秘密 `Uint8Array` 已在真实 WebView2 Runtime 中
+逐字节通过既有 SAFEARRAY 适配器，Debug 与 ASan 集成验证均通过，等待提交。产品页面仍无
+脚本且密码控件保持禁用。
