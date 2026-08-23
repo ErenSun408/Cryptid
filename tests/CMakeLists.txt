@@ -91,6 +91,24 @@ usb_vault_configure_target(card_store_contract_tests)
 
 add_test(NAME card_store_contract_tests COMMAND card_store_contract_tests)
 
+add_executable(application_session_tests
+  application_session_tests.cpp
+)
+
+target_include_directories(application_session_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(application_session_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(application_session_tests)
+
+add_test(NAME application_session_tests COMMAND application_session_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
