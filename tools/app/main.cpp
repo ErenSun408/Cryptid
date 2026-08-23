@@ -5,6 +5,7 @@
 
 #include "usb_vault/application/application_session.h"
 #include "usb_vault/card/fixed_blob_card_store.h"
+#include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/webview_host_object.h"
 #include "usb_vault/volume/volume_provider.h"
 
@@ -231,6 +232,14 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
   switch (message) {
     case WM_SIZE:
       resize_webview(window);
+      return 0;
+    case WM_CLOSE:
+      if (g_ui_session != nullptr &&
+          !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
+        show_failure(L"无法安全卸载当前磁盘，请关闭占用文件后重试。");
+        return 0;
+      }
+      static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
       g_webview.Reset();

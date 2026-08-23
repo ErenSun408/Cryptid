@@ -148,6 +148,19 @@ usb_vault_configure_target(ui_session_controller_tests)
 
 add_test(NAME ui_session_controller_tests COMMAND ui_session_controller_tests)
 
+add_executable(ui_close_guard_tests
+  ui_close_guard_tests.cpp
+)
+
+target_link_libraries(ui_close_guard_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(ui_close_guard_tests)
+
+add_test(NAME ui_close_guard_tests COMMAND ui_close_guard_tests)
+
 add_executable(ui_page_contract_tests
   ui_page_contract_tests.cpp
 )

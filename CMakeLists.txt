@@ -102,6 +102,7 @@ add_library(usb_vault_core STATIC
   src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
   src/ui/password_ingress.cpp
+  src/ui/ui_close_guard.cpp
   src/ui/ui_session_controller.cpp
   src/ui/webview_host_object.cpp
   src/ui/webview_password_array.cpp
