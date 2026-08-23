@@ -102,6 +102,7 @@ add_library(usb_vault_core STATIC
   src/security/secure_buffer.cpp
   src/ui/password_ingress.cpp
   src/ui/ui_session_controller.cpp
+  src/ui/webview_password_array.cpp
   src/volume/mount_request.cpp
   src/volume/unmount_retry.cpp
   src/volume/volume_provider.cpp
@@ -116,7 +117,13 @@ target_include_directories(usb_vault_core
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(usb_vault_core PRIVATE argon2_ref Advapi32 Bcrypt Shell32)
+target_link_libraries(usb_vault_core PRIVATE
+  argon2_ref
+  Advapi32
+  Bcrypt
+  OleAut32
+  Shell32
+)
 
 usb_vault_configure_target(usb_vault_core)
 
