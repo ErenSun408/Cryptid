@@ -60,3 +60,26 @@ add_test(
 )
 
 set_tests_properties(secure_buffer_copy_is_rejected PROPERTIES WILL_FAIL TRUE)
+
+if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
+  add_executable(volume_provider_integration_tests
+    volume_provider_integration_tests.cpp
+  )
+
+  target_link_libraries(volume_provider_integration_tests
+    PRIVATE
+      usb_vault_core
+  )
+
+  usb_vault_configure_target(volume_provider_integration_tests)
+
+  add_test(
+    NAME volume_provider_integration_tests
+    COMMAND volume_provider_integration_tests
+            ${PROJECT_SOURCE_DIR}/out/vendor/kdf_v1_fixture.hc
+  )
+  set_tests_properties(volume_provider_integration_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    RUN_SERIAL TRUE
+  )
+endif()

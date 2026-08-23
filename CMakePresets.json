@@ -39,6 +39,26 @@
         "USB_VAULT_ENABLE_ASAN": "OFF",
         "USB_VAULT_ENABLE_CODE_ANALYSIS": "ON"
       }
+    },
+    {
+      "name": "integration",
+      "displayName": "Local VeraCrypt Integration",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USB_VAULT_ENABLE_ASAN": "OFF",
+        "USB_VAULT_ENABLE_INTEGRATION_TESTS": "ON"
+      }
+    },
+    {
+      "name": "integration-release",
+      "displayName": "Optimized Local VeraCrypt Integration",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USB_VAULT_ENABLE_ASAN": "OFF",
+        "USB_VAULT_ENABLE_INTEGRATION_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -53,6 +73,14 @@
     {
       "name": "analyze",
       "configurePreset": "analyze"
+    },
+    {
+      "name": "integration",
+      "configurePreset": "integration"
+    },
+    {
+      "name": "integration-release",
+      "configurePreset": "integration-release"
     }
   ],
   "testPresets": [
@@ -73,6 +101,20 @@
     {
       "name": "analyze",
       "configurePreset": "analyze",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "integration",
+      "configurePreset": "integration",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "integration-release",
+      "configurePreset": "integration-release",
       "output": {
         "outputOnFailure": true
       }

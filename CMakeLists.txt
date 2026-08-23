@@ -12,6 +12,8 @@ endif()
 
 option(USB_VAULT_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(USB_VAULT_ENABLE_CODE_ANALYSIS "Enable MSVC code analysis" OFF)
+option(USB_VAULT_ENABLE_INTEGRATION_TESTS
+       "Enable tests that mount a local VeraCrypt fixture" OFF)
 
 function(usb_vault_configure_target target)
   target_compile_features(${target} PUBLIC cxx_std_20)
