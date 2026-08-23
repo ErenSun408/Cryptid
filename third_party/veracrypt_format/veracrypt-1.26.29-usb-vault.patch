@@ -1,0 +1,223 @@
+diff --git a/src/FormatDLL/VeraCryptFormatSDK.cpp b/src/FormatDLL/VeraCryptFormatSDK.cpp
+index 23b0533..f5f064f 100644
+--- a/src/FormatDLL/VeraCryptFormatSDK.cpp
++++ b/src/FormatDLL/VeraCryptFormatSDK.cpp
+@@ -153,7 +153,7 @@ static BOOL __cdecl SdkProgressCallback(unsigned __int64 bytesProcessed, void* c
+ }
+ 
+ // The core implementation of the volume creation logic. Not exported.
+-static int CreateVolumeInternal(const VeraCryptFormatOptions* options)
++static int CreateVolumeInternal(const VeraCryptFormatOptions* options, size_t passwordLength)
+ {
+ 	// --- Parameter validation ---
+ 	if (!options || !options->path || wcslen(options->path) == 0) return VCF_ERROR_INVALID_PARAMETER;
+@@ -208,12 +208,14 @@ static int CreateVolumeInternal(const VeraCryptFormatOptions* options)
+ 
+ 	if (options->password)
+ 	{
+-		if (!CheckPasswordLength(NULL, (int)strlen(options->password), options->pim, FALSE, hash_algo, TRUE, TRUE))
++		if (passwordLength > MAX_PASSWORD
++			|| !CheckPasswordLength(NULL, (unsigned __int32) passwordLength, options->pim, FALSE, hash_algo, TRUE, TRUE))
+ 		{
+ 			return VCF_ERROR_PASSWORD_POLICY;
+ 		}
+-		strcpy_s((char*)volumePassword.Text, sizeof(volumePassword.Text), options->password);
+-		volumePassword.Length = (unsigned __int32)strlen(options->password);
++		memcpy(volumePassword.Text, options->password, passwordLength);
++		volumePassword.Text[passwordLength] = 0;
++		volumePassword.Length = (unsigned __int32) passwordLength;
+ 	}
+ 	else
+ 	{
+@@ -256,8 +258,11 @@ static int CreateVolumeInternal(const VeraCryptFormatOptions* options)
+ 	{
+ 		if (nVolumeSize % TC_SECTOR_SIZE_FILE_HOSTED_VOLUME != 0) return VCF_ERROR_INVALID_VOLUME_SIZE;
+ 		if (nVolumeSize < TC_MIN_VOLUME_SIZE) return VCF_ERROR_VOLUME_SIZE_TOO_SMALL;
+-		
+-		if (!dynamicFormat)
++
++		// Spike 3b: for a hidden volume the host container already exists on disk and
++		// 'nVolumeSize' is the size of the hidden volume, not of the file to be created.
++		// The host free-space check therefore does not apply.
++		if (!dynamicFormat && !options->hiddenVol)
+ 		{
+ 			wchar_t root[TC_MAX_PATH];
+ 			ULARGE_INTEGER freeSpace;
+@@ -267,9 +272,18 @@ static int CreateVolumeInternal(const VeraCryptFormatOptions* options)
+ 			}
+ 		}
+ 	}
+-    
++
++	// Spike 3b: sanity-check the hidden volume geometry before handing it to the core,
++	// mirroring the guard in TCFormatVolume() (Format.c:127-129).
++	if (options->hiddenVol)
++	{
++		if (options->hiddenVolHostSize <= TC_TOTAL_VOLUME_HEADERS_SIZE
++			|| nVolumeSize > options->hiddenVolHostSize - TC_TOTAL_VOLUME_HEADERS_SIZE)
++			return VCF_ERROR_INVALID_VOLUME_SIZE;
++	}
++
+     // Validate filesystem choice against volume size
+-	uint64_t dataAreaSize = GetVolumeDataAreaSize(FALSE, nVolumeSize);
++	uint64_t dataAreaSize = GetVolumeDataAreaSize(options->hiddenVol, nVolumeSize);
+ 	DWORD sectorSize = bDevice ? GetFormatSectorSize() : TC_SECTOR_SIZE_FILE_HOSTED_VOLUME;
+ 	if (fileSystem == FILESYS_NTFS && (dataAreaSize < TC_MIN_NTFS_FS_SIZE || dataAreaSize > TC_MAX_NTFS_FS_SIZE))
+ 		return VCF_ERROR_FILESYSTEM_INVALID_FOR_SIZE;
+@@ -284,7 +298,8 @@ static int CreateVolumeInternal(const VeraCryptFormatOptions* options)
+ 	// --- Prepare parameters for the core formatting function ---
+ 	FORMAT_VOL_PARAMETERS volParams = { 0 };
+ 	volParams.bDevice = bDevice;
+-	volParams.hiddenVol = FALSE; // SDK does not support hidden volumes
++	volParams.hiddenVol = options->hiddenVol;              // Spike 3b: was hardcoded FALSE
++	volParams.hiddenVolHostSize = options->hiddenVolHostSize;
+ 	volParams.volumePath = szDiskFile;
+ 	volParams.size = nVolumeSize;
+ 	volParams.ea = nVolumeEA;
+@@ -307,7 +322,7 @@ static int CreateVolumeInternal(const VeraCryptFormatOptions* options)
+ 	{
+ 		progressCtx.UserCallback = options->progressCallback;
+ 		progressCtx.UserData = options->progressUserData;
+-		progressCtx.TotalSize = GetVolumeDataAreaSize(FALSE, nVolumeSize);
++		progressCtx.TotalSize = GetVolumeDataAreaSize(options->hiddenVol, nVolumeSize);
+ 
+ 		volParams.progress_callback = SdkProgressCallback;
+ 		volParams.progress_callback_user_data = &progressCtx;
+@@ -378,7 +393,81 @@ extern "C"
+ 		}
+ 
+ 		// The internal function handles all logic and thread safety.
+-		return CreateVolumeInternal(options);
++		return CreateVolumeInternal(options, options && options->password ? strlen(options->password) : 0);
++	}
++
++	VCF_API int __cdecl VeraCryptFormatBinary(const VeraCryptFormatOptions* options, uint32_t passwordLength)
++	{
++		if (!g_isInitialized)
++		{
++			return VCF_ERROR_NOT_INITIALIZED;
++		}
++		if (!options || !options->password || passwordLength == 0)
++		{
++			return VCF_ERROR_INVALID_PARAMETER;
++		}
++
++		return CreateVolumeInternal(options, passwordLength);
++	}
++
++	/* ---- Added by usb-vault Spike 3b (not part of the official SDK) ----
++	 *
++	 * Headless wrapper around ChangePwd() (Common/Password.c:190).
++	 * Needed by main-doc N-06 when container A's password must be re-keyed
++	 * from KDF(S, user input)
++	 * to KDF(S, "diskA").
++	 *
++	 * Two things are required to keep this GUI-free:
++	 *   1. Silent == TRUE, already set by VeraCryptFormat_Initialize(), makes
++	 *      handleError() a no-op (Dlgcode.c: "if (Silent) return;").
++	 *   2. SetRandomPoolEnrichedByUserStatus(TRUE) — otherwise
++	 *      UserEnrichRandomPool() (Dlgcode.c:7421) pops the "move your mouse"
++	 *      DialogBoxParamW. Silent does NOT cover this one.
++	 *
++	 * Passing a non-zero newPrf also short-circuits the CheckPasswordLength()
++	 * branch, which is a further GUI path. We want an explicit PRF anyway
++	 * (Spike 6: mounting must not use PRF auto-detection).
++	 */
++	VCF_API int __cdecl VeraCryptFormat_ChangePassword(
++		const wchar_t* path,
++		const char* oldPassword, int oldPim, const wchar_t* oldHash,
++		const char* newPassword, int newPim, const wchar_t* newHash)
++	{
++		if (!g_isInitialized) return VCF_ERROR_NOT_INITIALIZED;
++		if (!path || !oldPassword || !newPassword) return VCF_ERROR_INVALID_PARAMETER;
++
++		size_t oldLen = strlen(oldPassword);
++		size_t newLen = strlen(newPassword);
++		if (oldLen == 0 || oldLen > VC_MAX_PASSWORD) return VCF_ERROR_PASSWORD_POLICY;
++		if (newLen == 0 || newLen > VC_MAX_PASSWORD) return VCF_ERROR_PASSWORD_POLICY;
++
++		std::lock_guard<std::mutex> lock(g_sdkMutex);
++
++		Password oldPwd = { 0 };
++		Password newPwd = { 0 };
++		memcpy(oldPwd.Text, oldPassword, oldLen);
++		oldPwd.Length = (unsigned __int32)oldLen;
++		memcpy(newPwd.Text, newPassword, newLen);
++		newPwd.Length = (unsigned __int32)newLen;
++
++		int oldPrf = MapHashAlgorithm(oldHash);   // 0 == auto-detect on open
++		int newPrf = MapHashAlgorithm(newHash);
++		if (newHash && newPrf == 0) return VCF_ERROR_INVALID_HASH_ALGORITHM;
++
++		// Suppress the random-pool enrichment dialog; Silent does not cover it.
++		SetRandomPoolEnrichedByUserStatus(TRUE);
++
++		int status = ChangePwd(path, &oldPwd, oldPrf, oldPim,
++		                             &newPwd, newPrf, newPim,
++		                             1 /* wipePassCount */, NULL /* hwndDlg */);
++
++		burn(&oldPwd, sizeof(oldPwd));
++		burn(&newPwd, sizeof(newPwd));
++
++		// ChangePwd returns 0 on success, otherwise a VeraCrypt ERR_* code.
++		// The spike only needs success/failure plus the raw code for diagnosis,
++		// so the raw code is returned shifted out of the VCF_* range.
++		return (status == 0) ? VCF_SUCCESS : (1000 + status);
+ 	}
+ 
+ 	BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+diff --git a/src/FormatDLL/VeraCryptFormatSDK.h b/src/FormatDLL/VeraCryptFormatSDK.h
+index a8be7a0..e32c303 100644
+--- a/src/FormatDLL/VeraCryptFormatSDK.h
++++ b/src/FormatDLL/VeraCryptFormatSDK.h
+@@ -90,6 +90,17 @@ typedef struct _VeraCryptFormatOptions
+ 	/** User-defined data to be passed to the progress callback. */
+ 	void* progressUserData;
+ 
++	/* ---- Added by usb-vault Spike 3b milestone 2 (not part of the official SDK) ---- */
++
++	/** Set to TRUE to create a hidden volume inside an existing host (outer) volume.
++	 *  The host container must already exist and be formatted; 'path' must point to it,
++	 *  and 'size' is then the size of the HIDDEN volume, not of the container. */
++	BOOL hiddenVol;
++
++	/** When hiddenVol is TRUE, the total size in bytes of the host (outer) container.
++	 *  Ignored when hiddenVol is FALSE. */
++	uint64_t hiddenVolHostSize;
++
+ } VeraCryptFormatOptions;
+ 
+ /**
+@@ -157,6 +168,32 @@ VCF_API void __cdecl VeraCryptFormat_Shutdown();
+  */
+ VCF_API int __cdecl VeraCryptFormat(const VeraCryptFormatOptions* options);
+ 
++/** Binary-safe variant used by usb-vault's out-of-process creator. Unlike the
++ *  official string API, this preserves embedded NUL bytes in derived volume
++ *  passwords. */
++VCF_API int __cdecl VeraCryptFormatBinary(
++	const VeraCryptFormatOptions* options, uint32_t passwordLength);
++
++/* ---- Added by usb-vault Spike 3b (not part of the official SDK) ----
++ *
++ * Changes the password of an existing volume, headlessly.
++ * Needed by main-doc N-06 when container A is re-keyed.
++ *
++ * @param path         Full path to the container.
++ * @param oldPassword  Current password, UTF-8.
++ * @param oldPim       Current PIM, 0 for default.
++ * @param oldHash      Current PRF name (e.g. L"SHA-512"); NULL = auto-detect.
++ * @param newPassword  New password, UTF-8.
++ * @param newPim       New PIM, 0 for default.
++ * @param newHash      New PRF name; must be non-NULL to stay GUI-free and to
++ *                     satisfy the Spike 6 rule of locking a single PRF.
++ * @return VCF_SUCCESS (0), a VCF_ERROR_* code, or (1000 + VeraCrypt ERR_* code).
++ */
++VCF_API int __cdecl VeraCryptFormat_ChangePassword(
++	const wchar_t* path,
++	const char* oldPassword, int oldPim, const wchar_t* oldHash,
++	const char* newPassword, int newPim, const wchar_t* newHash);
++
+ #ifdef __cplusplus
+ }
+ #endif

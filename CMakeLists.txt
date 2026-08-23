@@ -14,6 +14,8 @@ option(USB_VAULT_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(USB_VAULT_ENABLE_CODE_ANALYSIS "Enable MSVC code analysis" OFF)
 option(USB_VAULT_ENABLE_INTEGRATION_TESTS
        "Enable tests that mount a local VeraCrypt fixture" OFF)
+set(USB_VAULT_FORMAT_DLL "" CACHE FILEPATH
+    "Optional patched VeraCryptFormat.dll copied beside the helper")
 
 function(usb_vault_configure_target target)
   target_compile_features(${target} PUBLIC cxx_std_20)
@@ -113,6 +115,35 @@ target_include_directories(usb_vault_core
 target_link_libraries(usb_vault_core PRIVATE argon2_ref Advapi32 Bcrypt Shell32)
 
 usb_vault_configure_target(usb_vault_core)
+
+add_executable(usb_vault_volume_creator WIN32
+  tools/volume_creator/main.cpp
+  src/volume_creation/creator_helper_engine.cpp
+)
+
+target_include_directories(usb_vault_volume_creator
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(usb_vault_volume_creator PRIVATE UNICODE _UNICODE)
+target_link_libraries(usb_vault_volume_creator PRIVATE usb_vault_core Advapi32)
+target_link_options(usb_vault_volume_creator PRIVATE
+  "/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
+)
+usb_vault_configure_target(usb_vault_volume_creator)
+
+if(USB_VAULT_FORMAT_DLL)
+  if(NOT EXISTS "${USB_VAULT_FORMAT_DLL}")
+    message(FATAL_ERROR "USB_VAULT_FORMAT_DLL does not exist: ${USB_VAULT_FORMAT_DLL}")
+  endif()
+  add_custom_command(TARGET usb_vault_volume_creator POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${USB_VAULT_FORMAT_DLL}"
+            "$<TARGET_FILE_DIR:usb_vault_volume_creator>/VeraCryptFormat.dll"
+    VERBATIM
+  )
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
