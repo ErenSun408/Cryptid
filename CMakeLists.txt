@@ -93,6 +93,7 @@ if(MSVC)
 endif()
 
 add_library(usb_vault_core STATIC
+  src/application/mount_orchestrator.cpp
   src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
   src/volume/mount_request.cpp

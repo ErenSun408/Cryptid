@@ -42,6 +42,24 @@ usb_vault_configure_target(volume_provider_tests)
 
 add_test(NAME volume_provider_tests COMMAND volume_provider_tests)
 
+add_executable(mount_orchestrator_tests
+  mount_orchestrator_tests.cpp
+)
+
+target_include_directories(mount_orchestrator_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(mount_orchestrator_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(mount_orchestrator_tests)
+
+add_test(NAME mount_orchestrator_tests COMMAND mount_orchestrator_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
