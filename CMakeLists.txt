@@ -93,11 +93,14 @@ endif()
 add_library(usb_vault_core STATIC
   src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
+  src/volume/mount_request.cpp
 )
 
 target_include_directories(usb_vault_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_link_libraries(usb_vault_core PRIVATE argon2_ref)
