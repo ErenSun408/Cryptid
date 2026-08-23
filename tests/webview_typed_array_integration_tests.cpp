@@ -42,12 +42,21 @@ class ProbeSession final : public IApplicationSessionActions {
     }
     password.clear();
     received = true;
+    is_mounted = true;
   }
 
-  void unmount_active() override {}
-  [[nodiscard]] bool mounted() const noexcept override { return false; }
+  void unmount_active() override {
+    if (!is_mounted) {
+      throw std::runtime_error("unmount called without active session");
+    }
+    is_mounted = false;
+    unmounted = true;
+  }
+  [[nodiscard]] bool mounted() const noexcept override { return is_mounted; }
 
   bool received{false};
+  bool is_mounted{false};
+  bool unmounted{false};
 };
 
 ComPtr<ICoreWebView2Controller> g_controller;
@@ -172,7 +181,8 @@ void initialize_webview(const HWND window) {
                                 if (SUCCEEDED(message_result) &&
                                     raw_message != nullptr &&
                                     std::wcscmp(raw_message, L"pass") == 0 &&
-                                    g_probe_session.received) {
+                                    g_probe_session.received &&
+                                    g_probe_session.unmounted) {
                                   g_exit_code = 0;
                                 }
                                 ::CoTaskMemFree(raw_message);

@@ -10,17 +10,18 @@
   <script>
     (async () => {
       const bytes = new Uint8Array([0x70, 0x00, 0xC3, 0xA4]);
-      let submitted = false;
+      let completed = false;
       try {
         chrome.webview.hostObjects.options.shouldPassTypedArraysAsArrays = true;
         await chrome.webview.hostObjects.nativeBridge.submitPasswordBytes(bytes);
-        submitted = true;
+        await chrome.webview.hostObjects.nativeBridge.unmount();
+        completed = true;
       } catch (_) {
-        submitted = false;
+        completed = false;
       } finally {
         bytes.fill(0);
         const wiped = bytes.every((value) => value === 0);
-        chrome.webview.postMessage(submitted && wiped ? "pass" : "fail");
+        chrome.webview.postMessage(completed && wiped ? "pass" : "fail");
       }
     })();
   </script>

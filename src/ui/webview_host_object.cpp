@@ -12,7 +12,9 @@ namespace usb_vault::ui {
 namespace {
 
 constexpr DISPID kSubmitPasswordBytesId = 1;
+constexpr DISPID kUnmountId = 2;
 constexpr wchar_t kSubmitPasswordBytesName[] = L"submitPasswordBytes";
+constexpr wchar_t kUnmountName[] = L"unmount";
 
 class WebViewHostObject final : public IDispatch {
  public:
@@ -65,16 +67,24 @@ class WebViewHostObject final : public IDispatch {
     if (names == nullptr || ids == nullptr) {
       return E_POINTER;
     }
-    if (name_count != 1 || names[0] == nullptr ||
-        ::CompareStringOrdinal(names[0], -1, kSubmitPasswordBytesName, -1,
-                               FALSE) != CSTR_EQUAL) {
+    if (name_count != 1 || names[0] == nullptr) {
       if (name_count > 0) {
         ids[0] = DISPID_UNKNOWN;
       }
       return DISP_E_UNKNOWNNAME;
     }
-    ids[0] = kSubmitPasswordBytesId;
-    return S_OK;
+    if (::CompareStringOrdinal(names[0], -1, kSubmitPasswordBytesName, -1,
+                               FALSE) == CSTR_EQUAL) {
+      ids[0] = kSubmitPasswordBytesId;
+      return S_OK;
+    }
+    if (::CompareStringOrdinal(names[0], -1, kUnmountName, -1, FALSE) ==
+        CSTR_EQUAL) {
+      ids[0] = kUnmountId;
+      return S_OK;
+    }
+    ids[0] = DISPID_UNKNOWN;
+    return DISP_E_UNKNOWNNAME;
   }
 
   HRESULT STDMETHODCALLTYPE Invoke(DISPID member, REFIID iid, LCID, WORD flags,
@@ -83,12 +93,26 @@ class WebViewHostObject final : public IDispatch {
     if (iid != IID_NULL) {
       return DISP_E_UNKNOWNINTERFACE;
     }
-    if (member != kSubmitPasswordBytesId) {
+    if (member != kSubmitPasswordBytesId && member != kUnmountId) {
       return DISP_E_MEMBERNOTFOUND;
     }
     if ((flags & DISPATCH_METHOD) == 0) {
       return DISP_E_MEMBERNOTFOUND;
     }
+
+    if (member == kUnmountId) {
+      if (parameters == nullptr || parameters->cArgs != 0 ||
+          parameters->cNamedArgs != 0) {
+        return DISP_E_BADPARAMCOUNT;
+      }
+      try {
+        controller_.unmount();
+        return S_OK;
+      } catch (...) {
+        return E_FAIL;
+      }
+    }
+
     if (parameters == nullptr || parameters->cArgs != 1 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       return DISP_E_BADPARAMCOUNT;

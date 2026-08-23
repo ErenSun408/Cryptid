@@ -37,14 +37,22 @@ class FakeSession final : public IApplicationSessionActions {
     }
     is_mounted = true;
   }
-  void unmount_active() override { is_mounted = false; }
+  void unmount_active() override {
+    ++unmount_calls;
+    if (reject_unmount) {
+      throw std::runtime_error("unmount rejected");
+    }
+    is_mounted = false;
+  }
   [[nodiscard]] bool mounted() const noexcept override { return is_mounted; }
 
   std::array<std::byte, 4> expected{
       std::byte{'p'}, std::byte{0}, std::byte{0xC3}, std::byte{0xA4}};
   bool reject{false};
+  bool reject_unmount{false};
   bool is_mounted{false};
   int calls{0};
+  int unmount_calls{0};
 };
 
 class ByteArray final {
@@ -104,9 +112,24 @@ DISPID submit_id(IDispatch& host) {
   return id;
 }
 
+DISPID unmount_id(IDispatch& host) {
+  LPOLESTR name = const_cast<LPOLESTR>(L"unmount");
+  DISPID id = DISPID_UNKNOWN;
+  require(SUCCEEDED(host.GetIDsOfNames(IID_NULL, &name, 1, LOCALE_INVARIANT,
+                                      &id)),
+          "unmount method was not exposed");
+  return id;
+}
+
 HRESULT invoke_submit(IDispatch& host, VARIANTARG& password) {
   DISPPARAMS parameters{&password, nullptr, 1, 0};
   return host.Invoke(submit_id(host), IID_NULL, LOCALE_INVARIANT,
+                     DISPATCH_METHOD, &parameters, nullptr, nullptr, nullptr);
+}
+
+HRESULT invoke_unmount(IDispatch& host) {
+  DISPPARAMS parameters{};
+  return host.Invoke(unmount_id(host), IID_NULL, LOCALE_INVARIANT,
                      DISPATCH_METHOD, &parameters, nullptr, nullptr, nullptr);
 }
 
@@ -160,6 +183,42 @@ void test_wrong_argument_is_rejected() {
   require(session.calls == 0, "wrong argument reached the session");
 }
 
+void test_unmount_success_and_failure() {
+  for (const bool reject : {false, true}) {
+    FakeSession session;
+    session.is_mounted = true;
+    session.reject_unmount = reject;
+    UiSessionController controller(session);
+    ComPtr<IDispatch> host = make_host(controller);
+
+    const HRESULT result = invoke_unmount(*host.Get());
+    require(session.unmount_calls == 1, "host did not forward unmount");
+    require(reject ? result == E_FAIL : result == S_OK,
+            "host returned the wrong unmount result");
+    require(session.is_mounted == reject,
+            "host reported the wrong unmount state through the fake session");
+  }
+}
+
+void test_unmount_argument_is_rejected() {
+  FakeSession session;
+  session.is_mounted = true;
+  UiSessionController controller(session);
+  ComPtr<IDispatch> host = make_host(controller);
+  VARIANTARG argument{};
+  ::VariantInit(&argument);
+  argument.vt = VT_UI1;
+  argument.bVal = 1;
+  DISPPARAMS parameters{&argument, nullptr, 1, 0};
+
+  require(host->Invoke(unmount_id(*host.Get()), IID_NULL, LOCALE_INVARIANT,
+                       DISPATCH_METHOD, &parameters, nullptr, nullptr,
+                       nullptr) == DISP_E_BADPARAMCOUNT,
+          "unmount accepted an argument");
+  require(session.unmount_calls == 0,
+          "invalid unmount invocation reached the session");
+}
+
 void test_property_access_is_rejected() {
   FakeSession session;
   UiSessionController controller(session);
@@ -169,6 +228,10 @@ void test_property_access_is_rejected() {
                        DISPATCH_PROPERTYGET, &parameters, nullptr, nullptr,
                        nullptr) == DISP_E_MEMBERNOTFOUND,
           "submit method was exposed as a property");
+  require(host->Invoke(unmount_id(*host.Get()), IID_NULL, LOCALE_INVARIANT,
+                       DISPATCH_PROPERTYGET, &parameters, nullptr, nullptr,
+                       nullptr) == DISP_E_MEMBERNOTFOUND,
+          "unmount method was exposed as a property");
 }
 
 }  // namespace
@@ -177,6 +240,8 @@ int main() {
   test_narrow_automation_surface();
   test_submit_and_failure_wipe();
   test_wrong_argument_is_rejected();
+  test_unmount_success_and_failure();
+  test_unmount_argument_is_rejected();
   test_property_access_is_rejected();
   std::cout << "webview_host_object_tests: PASS\n";
   return 0;
