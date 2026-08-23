@@ -50,6 +50,10 @@ void validate_options(const MountOptions& options) {
 
 }  // namespace
 
+void validate_volume_path(const std::wstring_view volume_path) {
+  validate_path(volume_path);
+}
+
 std::int32_t drive_number(const wchar_t drive_letter) {
   const wchar_t normalized = uppercase_ascii(drive_letter);
   if (normalized < L'A' || normalized > L'Z') {
@@ -63,7 +67,7 @@ void populate_mount_request(
     const std::wstring_view volume_path,
     const security::SecureBuffer& volume_password,
     const MountOptions& options) {
-  validate_path(volume_path);
+  validate_volume_path(volume_path);
   validate_password(volume_password);
   validate_options(options);
 

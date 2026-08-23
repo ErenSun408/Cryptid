@@ -258,17 +258,20 @@ MountResult VolumeProvider::mount_file(
   const std::int32_t drive_number = request.drive_number;
   locked_request.clear();
 
-  notify_shell(SHCNE_DRIVEADD, drive_number);
+  if (options.notify_shell) {
+    notify_shell(SHCNE_DRIVEADD, drive_number);
+  }
   return result;
 }
 
-UnmountResult VolumeProvider::unmount(const wchar_t drive_letter,
-                                      const bool force) const {
+UnmountResult VolumeProvider::unmount(
+    const wchar_t drive_letter,
+    const UnmountOptions& options) const {
   require_active(impl_);
   detail::LockedDriverBuffer<detail::abi::UnmountRequest> locked_request;
   detail::abi::UnmountRequest& request = locked_request.get();
   request.drive_number = detail::drive_number(drive_letter);
-  request.ignore_open_files = force ? 1 : 0;
+  request.ignore_open_files = options.force ? 1 : 0;
 
   const auto start = std::chrono::steady_clock::now();
   const DriverHandle driver = open_driver();
@@ -286,8 +289,15 @@ UnmountResult VolumeProvider::unmount(const wchar_t drive_letter,
           std::chrono::steady_clock::now() - start),
       .attempts = 1,
   };
-  notify_shell(SHCNE_DRIVEREMOVED, request.drive_number);
+  if (options.notify_shell) {
+    notify_shell(SHCNE_DRIVEREMOVED, request.drive_number);
+  }
   return result;
+}
+
+void VolumeProvider::notify_mounted(const wchar_t drive_letter) const {
+  require_active(impl_);
+  notify_shell(SHCNE_DRIVEADD, detail::drive_number(drive_letter));
 }
 
 std::vector<MountedVolume> VolumeProvider::mounted_volumes() const {

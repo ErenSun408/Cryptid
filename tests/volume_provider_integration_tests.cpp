@@ -232,7 +232,7 @@ int wmain(const int argc, wchar_t** const argv) {
   } catch (const std::exception& error) {
     if (mounted) {
       try {
-        static_cast<void>(provider.unmount(drive_letter, true));
+        static_cast<void>(provider.unmount(drive_letter, {.force = true}));
       } catch (...) {
       }
     }

@@ -14,7 +14,8 @@ constexpr auto kRetryInterval = std::chrono::milliseconds(100);
 }  // namespace
 
 UnmountResult unmount_with_retry(const VolumeProvider& provider,
-                                 const wchar_t drive_letter) {
+                                 const wchar_t drive_letter,
+                                 const UnmountRetryOptions& options) {
   const auto start = std::chrono::steady_clock::now();
   const auto deadline = start + kRetryWindow;
   std::uint32_t attempts = 0;
@@ -22,7 +23,8 @@ UnmountResult unmount_with_retry(const VolumeProvider& provider,
   for (;;) {
     ++attempts;
     try {
-      UnmountResult result = provider.unmount(drive_letter);
+      UnmountResult result = provider.unmount(
+          drive_letter, {.force = false, .notify_shell = options.notify_shell});
       result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - start);
       result.attempts = attempts;

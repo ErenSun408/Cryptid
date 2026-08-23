@@ -49,6 +49,12 @@ struct MountOptions final {
   Pkcs5Prf prf{Pkcs5Prf::sha512};
   std::int32_t pim{0};
   bool read_only{false};
+  bool notify_shell{true};
+};
+
+struct UnmountOptions final {
+  bool force{false};
+  bool notify_shell{true};
 };
 
 struct MountResult final {
@@ -96,8 +102,13 @@ class VolumeProvider final {
       const security::SecureBuffer& volume_password,
       const MountOptions& options) const;
 
-  [[nodiscard]] UnmountResult unmount(wchar_t drive_letter,
-                                      bool force = false) const;
+  [[nodiscard]] UnmountResult unmount(
+      wchar_t drive_letter,
+      const UnmountOptions& options = {}) const;
+
+  // Publishes a drive that was mounted with notify_shell=false. Higher-level
+  // orchestration calls this only after every mount in a session succeeds.
+  void notify_mounted(wchar_t drive_letter) const;
 
   [[nodiscard]] std::vector<MountedVolume> mounted_volumes() const;
 
