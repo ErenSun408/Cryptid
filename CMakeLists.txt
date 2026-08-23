@@ -99,6 +99,8 @@ add_library(usb_vault_core STATIC
   src/volume/mount_request.cpp
   src/volume/unmount_retry.cpp
   src/volume/volume_provider.cpp
+  src/volume_creation/creator_protocol.cpp
+  src/volume_creation/volume_creator.cpp
 )
 
 target_include_directories(usb_vault_core
@@ -108,7 +110,7 @@ target_include_directories(usb_vault_core
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(usb_vault_core PRIVATE argon2_ref Shell32)
+target_link_libraries(usb_vault_core PRIVATE argon2_ref Advapi32 Bcrypt Shell32)
 
 usb_vault_configure_target(usb_vault_core)
 
