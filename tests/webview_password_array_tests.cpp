@@ -95,6 +95,79 @@ class ByteArrayVariant final {
   VARIANT value_{};
 };
 
+class IntegerVariantArray final {
+ public:
+  explicit IntegerVariantArray(const std::array<std::byte, 4>& bytes,
+                               const LONG lower_bound = 0) {
+    ::VariantInit(&value_);
+    SAFEARRAY* const array = ::SafeArrayCreateVector(
+        VT_VARIANT, lower_bound, static_cast<ULONG>(bytes.size()));
+    if (array == nullptr) {
+      throw std::runtime_error("could not allocate variant test SAFEARRAY");
+    }
+    value_.vt = VT_ARRAY | VT_VARIANT;
+    value_.parray = array;
+    lower_bound_ = lower_bound;
+
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+      set_integer(index, static_cast<LONG>(
+                             std::to_integer<unsigned char>(bytes[index])));
+    }
+  }
+
+  ~IntegerVariantArray() noexcept {
+    static_cast<void>(::VariantClear(&value_));
+  }
+
+  IntegerVariantArray(const IntegerVariantArray&) = delete;
+  IntegerVariantArray& operator=(const IntegerVariantArray&) = delete;
+
+  [[nodiscard]] VARIANT& get() noexcept { return value_; }
+
+  void set_integer(const std::size_t index, const LONG value) {
+    VARIANT element{};
+    ::VariantInit(&element);
+    element.vt = VT_I4;
+    element.lVal = value;
+    put(index, element);
+  }
+
+  void set_unsigned_byte(const std::size_t index, const BYTE value) {
+    VARIANT element{};
+    ::VariantInit(&element);
+    element.vt = VT_UI1;
+    element.bVal = value;
+    put(index, element);
+  }
+
+  void require_i4_values_wiped() const {
+    for (std::size_t index = 0; index < 4; ++index) {
+      VARIANT element{};
+      ::VariantInit(&element);
+      LONG array_index = lower_bound_ + static_cast<LONG>(index);
+      require(SUCCEEDED(
+                  ::SafeArrayGetElement(value_.parray, &array_index, &element)),
+              "could not inspect variant test SAFEARRAY");
+      if (element.vt == VT_I4) {
+        require(element.lVal == 0,
+                "variant SAFEARRAY integer was not wiped");
+      }
+      static_cast<void>(::VariantClear(&element));
+    }
+  }
+
+ private:
+  void put(const std::size_t index, VARIANT& element) {
+    LONG array_index = lower_bound_ + static_cast<LONG>(index);
+    require(SUCCEEDED(
+                ::SafeArrayPutElement(value_.parray, &array_index, &element)),
+            "could not populate variant test SAFEARRAY");
+  }
+
+  VARIANT value_{};
+  LONG lower_bound_{0};
+};
+
 void test_array_is_forwarded_and_wiped() {
   FakeSession session;
   UiSessionController controller(session);
@@ -123,6 +196,95 @@ void test_session_failure_still_wipes_array() {
   throw std::runtime_error("session failure was not propagated");
 }
 
+void test_variant_integer_array_is_forwarded_and_wiped() {
+  FakeSession session;
+  UiSessionController controller(session);
+  IntegerVariantArray password(session.expected, 11);
+
+  submit_webview_password_array(password.get(), controller);
+
+  password.require_i4_values_wiped();
+  require(session.submit_calls == 1,
+          "variant SAFEARRAY submit was not forwarded");
+  require(controller.mounted(),
+          "successful variant SAFEARRAY submit was not mounted");
+}
+
+void test_variant_session_failure_still_wipes_array() {
+  FakeSession session;
+  session.reject = true;
+  UiSessionController controller(session);
+  IntegerVariantArray password(session.expected);
+
+  try {
+    submit_webview_password_array(password.get(), controller);
+  } catch (const std::runtime_error&) {
+    password.require_i4_values_wiped();
+    require(!controller.mounted(),
+            "failed variant SAFEARRAY submit reported mounted");
+    return;
+  }
+  throw std::runtime_error("variant SAFEARRAY session failure was not propagated");
+}
+
+void test_variant_element_type_is_rejected_and_i4_values_are_wiped() {
+  FakeSession session;
+  UiSessionController controller(session);
+  IntegerVariantArray password(session.expected);
+  password.set_unsigned_byte(2, 0xC3);
+
+  try {
+    submit_webview_password_array(password.get(), controller);
+  } catch (const std::invalid_argument&) {
+    password.require_i4_values_wiped();
+    require(session.submit_calls == 0,
+            "mixed variant SAFEARRAY reached the session");
+    return;
+  }
+  throw std::runtime_error("mixed variant SAFEARRAY was accepted");
+}
+
+void test_variant_integer_range_is_enforced_and_wiped() {
+  for (const LONG invalid_value : {-1L, 256L}) {
+    FakeSession session;
+    UiSessionController controller(session);
+    IntegerVariantArray password(session.expected);
+    password.set_integer(1, invalid_value);
+
+    try {
+      submit_webview_password_array(password.get(), controller);
+    } catch (const std::invalid_argument&) {
+      password.require_i4_values_wiped();
+      require(session.submit_calls == 0,
+              "out-of-range variant SAFEARRAY reached the session");
+      continue;
+    }
+    throw std::runtime_error("out-of-range variant integer was accepted");
+  }
+}
+
+void test_direct_integer_safearray_is_rejected() {
+  FakeSession session;
+  UiSessionController controller(session);
+  VARIANT invalid{};
+  ::VariantInit(&invalid);
+  invalid.vt = VT_ARRAY | VT_I4;
+  invalid.parray = ::SafeArrayCreateVector(VT_I4, 0, 1);
+  require(invalid.parray != nullptr,
+          "could not allocate direct integer SAFEARRAY");
+
+  bool rejected = false;
+  try {
+    submit_webview_password_array(invalid, controller);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  static_cast<void>(::VariantClear(&invalid));
+  require(rejected, "direct integer SAFEARRAY was accepted");
+  require(session.submit_calls == 0,
+          "direct integer SAFEARRAY reached the session");
+}
+
 void test_non_array_variant_is_rejected() {
   FakeSession session;
   UiSessionController controller(session);
@@ -145,6 +307,11 @@ void test_non_array_variant_is_rejected() {
 int main() {
   test_array_is_forwarded_and_wiped();
   test_session_failure_still_wipes_array();
+  test_variant_integer_array_is_forwarded_and_wiped();
+  test_variant_session_failure_still_wipes_array();
+  test_variant_element_type_is_rejected_and_i4_values_are_wiped();
+  test_variant_integer_range_is_enforced_and_wiped();
+  test_direct_integer_safearray_is_rejected();
   test_non_array_variant_is_rejected();
 
   std::cout << "webview_password_array_tests: PASS\n";
