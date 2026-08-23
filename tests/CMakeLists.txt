@@ -78,6 +78,19 @@ usb_vault_configure_target(creator_protocol_tests)
 
 add_test(NAME creator_protocol_tests COMMAND creator_protocol_tests)
 
+add_executable(card_store_contract_tests
+  card_store_contract_tests.cpp
+)
+
+target_link_libraries(card_store_contract_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(card_store_contract_tests)
+
+add_test(NAME card_store_contract_tests COMMAND card_store_contract_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
