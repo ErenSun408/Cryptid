@@ -160,6 +160,19 @@ usb_vault_configure_target(webview_password_array_tests)
 
 add_test(NAME webview_password_array_tests COMMAND webview_password_array_tests)
 
+add_executable(webview_host_object_tests
+  webview_host_object_tests.cpp
+)
+
+target_link_libraries(webview_host_object_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(webview_host_object_tests)
+
+add_test(NAME webview_host_object_tests COMMAND webview_host_object_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )

@@ -216,5 +216,6 @@ P1 的内部顺序不是自由选择，而是五条既有约束的结果：`Secu
 没有遗留容器或挂载。P1.4 已按可审查边界拆分提交；P1.5 已启动，`ICardStore` 单
 blob 合约、应用会话控制器、可擦除的 UI 口令入口和 UI 会话适配器已分别提交；固定 SDK
 版本且仅加载本地页面的 WebView2 宿主骨架、桥前保持禁用的单密码框页面契约均已提交；
-只接受一维 `VT_UI1` SAFEARRAY 并沿用既有清零入口的 COM 字节数组适配器已完成验证，
-等待提交，尚未注册 host object 或启用页面口令提交。
+只接受一维 `VT_UI1` SAFEARRAY 并沿用既有清零入口的 COM 字节数组适配器已提交；只暴露
+`submitPasswordBytes` 且不提供任何分类状态的原生 `IDispatch` host object 已完成验证，
+等待提交，尚未注册到 WebView2 或启用页面口令提交。
