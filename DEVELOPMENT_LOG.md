@@ -100,7 +100,7 @@
 ### 提交决定
 
 - 用户已于 2026-08-22 批准提交；本条记录随 P1.0 提交落库。
-- 提交哈希：`045ac38e8b471cece1b98da94216d83eda644271`。
+- 提交哈希：`e0909a2fe0c048bcd316c2062377a9b3de7df54f`。
 - 未执行 push。
 
 ---
@@ -219,7 +219,7 @@
 - 新边界将密码学供应链、驱动 ABI、失败回滚、提权、卡秘密和设备移除响应拆开，
   降低单次审计与回退的耦合风险。
 - 计划修改未触碰运行时代码；编号一致性和 `git diff --check` 均通过。
-- 用户于 2026-08-22 批准提交；计划文档提交为 `2b385b3`。
+- 用户于 2026-08-22 批准提交；计划文档提交为 `f691745`。
 - 未执行 push。
 
 ---
@@ -415,3 +415,107 @@
   仅靠词法比较识别；P1.4 必须继续保证 A/B 由产品创建为两个独立文件。
 - 用户于 2026-08-23 审阅阶段报告后批准提交 P1.3；本次只创建本地提交，
   不执行 push。
+
+---
+
+## 2026-08-23 — P1.4 独立建卷工具
+
+**状态：** 已完成安全审查并获准按拆分边界提交
+
+### 计划与需求审计
+
+- `MILESTONES.md` 将 P1.4 固定为独立 exe、IPC 协议、错误码映射与 UAC 提权；
+  出口条件直接复用 Spike 3b：无界面创建普通容器 A 和带隐藏卷容器 B，并由真实
+  驱动验证挂载 `type=1/0/2`。
+- N-01 与 Spike 3b 已证明 VeraCrypt 1.26.29 FormatDLL 只需透传既有
+  `hiddenVol`/`hiddenVolHostSize` 字段即可创建隐藏卷；正式实现不得扩展 spike harness，
+  只复用结论并在产品目录重写编排与边界。
+- N-08 要求所有建卷操作无条件进入 UAC，不能只在带隐藏卷的路径提权，否则 UAC
+  行为本身会泄露创建选择。helper 另嵌入 `requireAdministrator` manifest 并在运行时
+  复核 token elevation。
+- 8.6 要求创建选择用完即焚。正式 API/IPC 只有单次 `create_standard` 与
+  `create_with_hidden` 操作，没有档位、模式或持久形态字段，不写配置、注册表、日志、
+  最近使用记录或临时状态。
+- L-01 要求 VeraCrypt 派生代码与主产品保持进程/许可证边界；主程序仅与独立 helper
+  通信，只有 helper 动态加载同目录的 patched FormatDLL。补丁与构建说明存入
+  `third_party/veracrypt_format/`，最终分发仍需既定法律审查。
+
+### 已检查的现有实现与 Spike 证据
+
+- 检查了 P1.2 的 `VolumeProvider`、驱动 ABI、静默挂载/卸载及 busy 重试，可直接用于
+  helper 内部临时挂载外层卷，不需要复制 spike 的 `vcspike` 进程编排。
+- 检查了 Spike 3b 的两阶段流程、`FSCTL_GET_VOLUME_BITMAP` 分块扫描、0.5%/10MB
+  自留余量、碎片化反例及 `type=1/0/2` 验收脚本；正式代码只使用真实尾部连续空闲簇，
+  任何位图失败均关闭，不退化为空闲簇总数。
+- 审查 FormatDLL 后发现 Spike 的 `const char*` 接口内部使用 `strlen`/`strcpy_s`。
+  产品 KDF 输出是任意 64 字节，可能含 NUL；若照搬会静默截断并建出无法按既定密码
+  挂载的卷。因此正式补丁新增显式长度的 `VeraCryptFormatBinary`，保留原字符串 API
+  兼容路径，并由含 NUL 的集成夹具专门验收。
+
+### 实现决策
+
+- 新增 `VolumeCreator` 客户端 API。每次调用都用 `ShellExecuteExW(..., "runas")`
+  启动独立 `usb_vault_volume_creator.exe`，不允许条件提权；UAC 取消映射为稳定的
+  `CreationError::elevation_cancelled`。
+- IPC 是版本化的固定宽度二进制协议：严格校验 magic/version/header size、操作、长度、
+  保留字段和进度 stage；路径上限 32767 个 UTF-16 字符，密码上限 128 字节。
+  密码不进入命令行、环境变量或普通堆序列化缓冲，而是从调用方锁页 `SecureBuffer`
+  直接写入本地命名管道，在 helper 中直接读入新的 `SecureBuffer`。
+- 每次调用使用 BCrypt 生成的 128 位随机管道名/nonce；helper 以 first-instance、
+  reject-remote 和仅 SYSTEM/对象所有者可访问的 DACL 创建单实例管道，并要求 nonce
+  与命令行随机值一致，未知协议版本、操作、stage 或错误码全部失败关闭。
+- 为避免 elevated helper 成为可覆盖管理员文件的 confused deputy，所有目标路径创建、
+  VeraCrypt 格式化和按路径临时挂载都通过 `ImpersonateNamedPipeClient` 降回原调用者
+  token；只有无需目标路径的卷设备簇位图扫描和清理卸载使用提升后的 token。
+  目标必须以调用者权限 `CREATE_NEW`，既有文件绝不覆盖。
+- 普通卷和带隐藏卷创建均为失败事务：失败时删除本次新建容器；隐藏卷流程若临时挂载
+  仍在，先普通 retry、再仅对未发布事务强制卸载。卸载或删除失败映射为
+  `cleanup_failed`，不得把残留误报为普通格式错误。
+- helper 固定 AES、SHA-512、FAT、PIM=0、快速格式化；隐藏卷前静默挂载外层卷，
+  用管理员句柄读取真实 `FSCTL_GET_VOLUME_BITMAP`，按 Spike 3b 公式得到最大安全尺寸，
+  用户请求值须簇对齐且不超过该上限。
+- CMake 可通过 `USB_VAULT_FORMAT_DLL` 把按固定补丁重建的 DLL 复制到 helper 同目录；
+  普通构建不依赖或链接第三方源码，缺失或未含 `VeraCryptFormatBinary` 导出时明确失败。
+
+### 测试与验证
+
+- `creator_protocol_tests` 覆盖含 NUL/0xff 的二进制密码逐字节往返、标准/隐藏请求字段
+  约束、nonce 不匹配、未知协议版本、未知进度 stage、响应往返和 FormatDLL 错误映射。
+- `volume_creator_integration_tests` 已编译并接入串行真实测试：创建 20MB 普通容器 A
+  （64 字节密码首字节为 NUL）和 100MB 外层+隐藏容器 B，检查位图扫描进度，再分别
+  验证普通 A `type=0`、B 隐藏层 `type=1`、B 外层未保护 `type=0`、保护挂载
+  `type=2`；析构清理测试盘符与两个容器。
+- patched VeraCrypt 1.26.29 FormatDLL x64 Release 已成功重建；正式补丁对本地固定源码
+  执行 `git apply --check --reverse` 通过，证明补丁文件与实测二进制对应。
+- 最终自动化结果：`dev` 6/6、`asan` 6/6、`analyze` 6/6；Debug `integration`
+  （排除需前台 UAC 的新建卷验收）8/8，Release `integration-release` 同范围 8/8。
+  AddressSanitizer 无异常，MSVC 静态分析修正一次 `wWinMain` SAL 签名后无发现，
+  `/W4 /WX` 与 `git diff --check` 通过。
+- 提取 Release helper 的嵌入 manifest，确认 `requestedExecutionLevel` 为
+  `requireAdministrator`。两次后台真实验收尝试均在创建前由 Windows 安全桌面取消，
+  正确返回 `elevation_cancelled`；未生成 `p1_4_*.hc`，驱动挂载位图为零。
+
+### 安全审查与遗留风险
+
+- 未发现密码进入命令行、环境变量、日志、异常文本或普通堆聚合缓冲；IPC request 中的
+  密码在 helper 异常路径也由 `SecureBuffer` 析构清零。测试固定明文密码只存在于
+  不入产品的真实验收代码，用于调用既有 Spike `mount-outer` 验证 `type=2`。
+- helper DLL 使用绝对的同目录路径和 `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | SYSTEM32`，
+  不从当前目录或 PATH 搜索；客户端拒绝 reparse helper 文件，目标拒绝 UNC、ADS、
+  相对路径、内嵌 NUL 和既有文件。
+- 位图返回长度、空响应、簇大小和乘法溢出均失败关闭；不会使用会在碎片场景高估
+  40.9% 的空闲簇降级算法。临时挂载不通知 Shell，成功和失败均要求零残留。
+- 用户于 2026-08-23 在前台接受 UAC 后，Release `volume_creator_integration_tests`
+  退出码为 0：真实创建并验证了普通容器 A、容器 B 隐藏卷、未保护外层卷和受保护
+  外层卷，对应 `type=0/1/0/2`，满足阶段要求的 `type=1/0/2` 全路径出口。
+- 验收完成后复核无 `p1_4_*.hc` 临时容器，驱动挂载位图为 0；真实建卷路径没有遗留
+  文件、盘符或驱动挂载。
+- 许可证边界是工程设计而非法律意见；patched FormatDLL/helper 的最终分发义务仍须律师
+  确认。P2 若要在隐藏卷创建前引导用户填充诱饵，需要在本协议上增加“对既有外层卷
+  添加隐藏卷”的独立瞬时操作，不能把创建选择持久化；该向导能力不属于 P1.4 出口。
+
+### 提交决定
+
+- 用户于 2026-08-23 审阅阶段报告后批准提交 P1.4；本次只创建本地提交，不执行 push。
+  实现按协议与客户端 `a1bde93`、提权 helper 与 FormatDLL 边界 `0b964d0`、验证
+  `d951ba8` 分开提交，阶段记录另行提交。
