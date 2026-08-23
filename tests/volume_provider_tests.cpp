@@ -169,12 +169,24 @@ void test_invalid_mount_requests() {
       "out-of-range PIM was accepted");
 }
 
+void test_driver_error_codes() {
+  const std::error_code busy =
+      usb_vault::volume::make_error_code(
+          usb_vault::volume::DriverError::volume_busy);
+  require(busy.value() == 6, "busy driver error value changed");
+  require(busy.category() == usb_vault::volume::driver_error_category(),
+          "busy driver error category changed");
+  require(busy.message() == "volume still has open files",
+          "busy driver error message changed");
+}
+
 }  // namespace
 
 int main() {
   try {
     test_valid_mount_request();
     test_invalid_mount_requests();
+    test_driver_error_codes();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

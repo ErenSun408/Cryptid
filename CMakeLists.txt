@@ -94,6 +94,8 @@ add_library(usb_vault_core STATIC
   src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
   src/volume/mount_request.cpp
+  src/volume/unmount_retry.cpp
+  src/volume/volume_provider.cpp
 )
 
 target_include_directories(usb_vault_core
@@ -103,7 +105,7 @@ target_include_directories(usb_vault_core
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(usb_vault_core PRIVATE argon2_ref)
+target_link_libraries(usb_vault_core PRIVATE argon2_ref Shell32)
 
 usb_vault_configure_target(usb_vault_core)
 
