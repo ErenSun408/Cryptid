@@ -14,6 +14,7 @@ option(USB_VAULT_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(USB_VAULT_ENABLE_CODE_ANALYSIS "Enable MSVC code analysis" OFF)
 option(USB_VAULT_ENABLE_INTEGRATION_TESTS
        "Enable tests that mount a local VeraCrypt fixture" OFF)
+option(USB_VAULT_BUILD_UI "Build the minimal WebView2 application" ON)
 set(USB_VAULT_FORMAT_DLL "" CACHE FILEPATH
     "Optional patched VeraCryptFormat.dll copied beside the helper")
 
@@ -135,6 +136,39 @@ target_link_options(usb_vault_volume_creator PRIVATE
   "/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
 )
 usb_vault_configure_target(usb_vault_volume_creator)
+
+if(USB_VAULT_BUILD_UI)
+  include(FetchContent)
+  set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/out/dependencies")
+  FetchContent_Declare(webview2_sdk
+    URL https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4129.50/microsoft.web.webview2.1.0.4129.50.nupkg
+    URL_HASH SHA256=D3934F482D484B89FB4825DF720C710664E1143A1E90F7B3A60794EF33F473D2
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+  FetchContent_MakeAvailable(webview2_sdk)
+
+  add_executable(usb_vault_app WIN32
+    tools/app/main.cpp
+  )
+  target_include_directories(usb_vault_app PRIVATE
+    "${webview2_sdk_SOURCE_DIR}/build/native/include"
+  )
+  target_link_libraries(usb_vault_app PRIVATE
+    usb_vault_core
+    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+    Ole32
+    Shlwapi
+  )
+  target_compile_definitions(usb_vault_app PRIVATE UNICODE _UNICODE)
+  usb_vault_configure_target(usb_vault_app)
+
+  add_custom_command(TARGET usb_vault_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/ui/index.html"
+            "$<TARGET_FILE_DIR:usb_vault_app>/index.html"
+    VERBATIM
+  )
+endif()
 
 if(USB_VAULT_FORMAT_DLL)
   if(NOT EXISTS "${USB_VAULT_FORMAT_DLL}")
