@@ -23,13 +23,20 @@ using usb_vault::ui::UiSessionController;
 
 constexpr wchar_t kWindowClass[] = L"UsbVaultTypedArrayIntegration";
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
-constexpr wchar_t kPageName[] = L"webview_typed_array_integration.html";
+constexpr wchar_t kPageName[] = L"webview_session_integration.html";
 constexpr UINT_PTR kTimeoutTimer = 1;
 constexpr UINT kTimeoutMilliseconds = 15000;
+constexpr int kInitializationFailure = 11;
+constexpr int kSubmissionFailure = 12;
+constexpr int kUnmountFailure = 13;
+constexpr int kDriverLoadedWithoutResult = 14;
+constexpr int kSubmissionPayloadMismatch = 15;
+constexpr int kSubmissionStateMismatch = 16;
 
 class ProbeSession final : public IApplicationSessionActions {
  public:
   void authenticate_and_mount(SecureBuffer password) override {
+    submission_observed = true;
     constexpr std::array<std::byte, 4> expected{
         std::byte{0x70}, std::byte{0x00}, std::byte{0xC3}, std::byte{0xA4}};
     if (password.size() != expected.size()) {
@@ -41,6 +48,7 @@ class ProbeSession final : public IApplicationSessionActions {
       }
     }
     password.clear();
+    payload_matched = true;
     received = true;
     is_mounted = true;
   }
@@ -55,6 +63,8 @@ class ProbeSession final : public IApplicationSessionActions {
   [[nodiscard]] bool mounted() const noexcept override { return is_mounted; }
 
   bool received{false};
+  bool submission_observed{false};
+  bool payload_matched{false};
   bool is_mounted{false};
   bool unmounted{false};
 };
@@ -179,11 +189,33 @@ void initialize_webview(const HWND window) {
                                 const HRESULT message_result =
                                     args->TryGetWebMessageAsString(&raw_message);
                                 if (SUCCEEDED(message_result) &&
-                                    raw_message != nullptr &&
-                                    std::wcscmp(raw_message, L"pass") == 0 &&
-                                    g_probe_session.received &&
-                                    g_probe_session.unmounted) {
-                                  g_exit_code = 0;
+                                    raw_message != nullptr) {
+                                  if (std::wcscmp(raw_message,
+                                                 L"driver-loaded") == 0) {
+                                    g_exit_code = kDriverLoadedWithoutResult;
+                                    ::CoTaskMemFree(raw_message);
+                                    return S_OK;
+                                  }
+                                  if (std::wcscmp(raw_message, L"pass") == 0 &&
+                                      g_probe_session.received &&
+                                      g_probe_session.unmounted) {
+                                    g_exit_code = 0;
+                                  } else if (std::wcscmp(
+                                                 raw_message,
+                                                 L"fail-initialize") == 0) {
+                                    g_exit_code = kInitializationFailure;
+                                  } else if (std::wcscmp(raw_message,
+                                                        L"fail-submit") == 0) {
+                                    g_exit_code =
+                                        !g_probe_session.submission_observed
+                                            ? kSubmissionFailure
+                                            : !g_probe_session.payload_matched
+                                                  ? kSubmissionPayloadMismatch
+                                                  : kSubmissionStateMismatch;
+                                  } else if (std::wcscmp(raw_message,
+                                                        L"fail-unmount") == 0) {
+                                    g_exit_code = kUnmountFailure;
+                                  }
                                 }
                                 ::CoTaskMemFree(raw_message);
                                 static_cast<void>(::DestroyWindow(window));
@@ -210,7 +242,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
   switch (message) {
     case WM_TIMER:
       if (wparam == kTimeoutTimer) {
-        fail_and_close(window);
+        if (g_exit_code == kDriverLoadedWithoutResult) {
+          static_cast<void>(::DestroyWindow(window));
+        } else {
+          fail_and_close(window);
+        }
         return 0;
       }
       break;

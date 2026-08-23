@@ -170,9 +170,50 @@ void initialize_webview(const HWND window) {
                       if (FAILED(current)) {
                         return current;
                       }
-                      static_cast<void>(settings->put_AreDevToolsEnabled(FALSE));
-                      static_cast<void>(settings->put_AreDefaultContextMenusEnabled(FALSE));
-                      static_cast<void>(settings->put_IsStatusBarEnabled(FALSE));
+                      current = settings->put_AreDevToolsEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current =
+                          settings->put_AreDefaultContextMenusEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current =
+                          settings->put_AreDefaultScriptDialogsEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current = settings->put_IsWebMessageEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current = settings->put_IsStatusBarEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+
+                      ComPtr<ICoreWebView2Settings4> restricted_settings;
+                      current = settings.As(&restricted_settings);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current = restricted_settings
+                                    ->put_AreBrowserAcceleratorKeysEnabled(
+                                        FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current = restricted_settings
+                                    ->put_IsPasswordAutosaveEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current = restricted_settings
+                                    ->put_IsGeneralAutofillEnabled(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
 
                       ComPtr<IDispatch> host_object;
                       current = usb_vault::ui::create_webview_host_object(

@@ -898,4 +898,57 @@
 - 该布尔值会向严格本地页面表明当前应用会话是否仍有活动挂载，这是实现状态反馈和恢复
   所需的最小可观察面；真实与胁迫路径、一个与两个容器均只得到同一个 `true`，不能据此
   分类。未发现口令副本、日志或持久化行为。产品页面仍无脚本且控件禁用。
-  `git diff --check` 通过。小切片 14 尚未提交、未执行 push，等待用户决定。
+  `git diff --check` 通过。用户复核并批准提交小切片 14，提交为 `c37db3d`；只创建本地
+  提交，未执行 push。
+
+### 小切片 15（2026-08-24）：产品页面最小会话状态机
+
+- 复核 `MILESTONES.md` 的 P1.5 出口、`需求梳理清单_v2.md` 的 R-03 与 8.6，以及已提交的
+  `UiSessionController`、窄化 host object、本地页面、导航白名单和关闭守卫后，本切片只启用
+  页面侧“输入密码—打开—统一状态反馈—主动卸载”状态机，不扩大到真卡、插拔监听或新模式。
+- 新增独立打包的 `ui/session.js`；产品 CSP 只允许同目录 `self` 脚本且继续禁止表单提交和
+  其他默认资源，不使用内联脚本。CMake 同时复制 `index.html` 与 `session.js`，并把两者纳入
+  链接依赖，避免只修改资源后正式包仍保留旧文件。
+- 页面初始化时显式启用 `shouldPassTypedArraysAsArrays`，取得异步 `nativeBridge` 并查询统一
+  活动状态，以便渲染进程重载后恢复。打开、卸载和状态查询期间用单一 `busy` 标志串行化，
+  防止重复点击、回车重入或打开/卸载交错。
+- 密码只从 DOM 编码为 `Uint8Array`：编码后立即清空输入框。真实 Runtime 调查确认异步
+  host-object 代理可能在返回 Promise 后才编组 typed array；若在 `await` 前清零，原生端会收到
+  已清零内容。因此数组保留到 `await bridge.submitPasswordBytes(...)` 结算，并在其紧邻的
+  `finally` 中立即清零，外层 `finally` 再次兜底清零。这是既保证参数完整性又不无故延长
+  JavaScript 可控副本寿命的最早安全边界。
+- 打开失败后重新查询统一活动状态；若回滚留下活动挂载，页面保留“安全卸载”入口。查询本身
+  失败时按失败关闭原则视为可能仍活动，不重新开放密码输入。所有提示保持中性，不显示密码、
+  盘符、容器数量、真实/胁迫路径、卷类型或底层异常。
+- 正式宿主逐项检查所有 WebView2 安全设置的 HRESULT；关闭 DevTools、默认右键菜单、脚本
+  对话框、WebMessage、状态栏和浏览器快捷键。通过 `ICoreWebView2Settings4` 关闭密码自动保存
+  与通用自动填充；任一设置或接口查询失败都会在注册 host object 和首次导航前停止初始化。
+
+### 小切片 15 测试、安全审查与风险
+
+- 当前 Runtime `151.0.4129.101` 的逐层诊断确认：即使启用
+  `shouldPassTypedArraysAsArrays`，同一个 `Uint8Array` 也可能投影为一维
+  `SAFEARRAY(VARIANT)`，每项为 `VT_I4`，而不是先前观察到的 `SAFEARRAY(UI1)`。适配器现仅
+  接受这两种窄格式；variant 路径逐项要求 `VT_I4` 且值域为 0~255，使用锁页
+  `SecureBuffer` 归一化，并在转交既有密码入口前清零 COM 整数槽。混合类型、越界整数、直接
+  `SAFEARRAY(I4)`、非数组和会话失败均有拒绝/清零测试，不接受字符串或任意自动类型转换。
+- 集成页与产品页一致，只允许 `script-src 'self'`，测试驱动也拆为外部脚本；隐藏 WebView 的
+  状态等待改用 `MutationObserver`，避免 25ms 轮询定时器被后台限流后超过原生 15 秒超时。
+  测试退出码只区分初始化、提交、卸载、负载不匹配等非秘密阶段，不输出密码内容或异常文本。
+- MSVC Debug `/W4 /WX` 完整构建与 CTest 15/15 通过；真实 Runtime 闭环连续三次退出 0：
+  含内嵌 NUL 和多字节 UTF-8 的固定非秘密输入逐字节到达原生探针，DOM 输入已清空，页面进入
+  统一活动状态，随后主动卸载并恢复 ready。加固后的正式宿主经 UAC 隐藏启动 4 秒保持运行并
+  创建 6 个 WebView2 子进程，随后只停止本次主进程；未点击输入、未访问容器、未产生挂载，
+  子进程已退出。
+- MSVC `/analyze` 全量构建无发现；新增 SAFEARRAY 测试夹具使用
+  `SafeArrayPutElement/GetElement` 后同样通过分析。正式 RelWithDebInfo ASan 预设下页面契约、
+  SAFEARRAY 适配器、host-object 单元测试和真实 WebView2 闭环均退出 0，未报告
+  AddressSanitizer 错误。调查中临时 ASan-Debug 组合曾因复制 `_dbg_` 运行库而缺少程序实际
+  导入的非 `_dbg_` DLL；该非预设组合未用于结论，正式 `asan` 预设运行库与程序匹配。
+- 安全复核未发现页面日志、持久化、用户名、模式/档位实体或分类反馈。产品禁用 WebMessage，
+  测试页的 WebMessage 仅存在于不打包、不可日常运行的专项测试宿主，测试 CSP 不允许内联脚本。
+  WebView2、JavaScript 引擎和 COM 内部仍可能产生应用无法主动擦除的短期秘密副本；当前实现
+  会立即清空 DOM，在异步编组结算后清空 typed array，并清空已识别的 COM/原生受控缓冲区，
+  但不能承诺浏览器全内存清零。异步代理挂起期间 typed array 必须保留原值，否则会破坏提交；
+  本地 `session.js` 的替换防护仍依赖后续安装包与签名完整性阶段。
+- `git diff --check` 通过。小切片 15 尚未提交、未执行 push，等待用户决定。

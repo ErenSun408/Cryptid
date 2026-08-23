@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'none'; base-uri 'none'">
   <title>USB Vault</title>
   <style>
     :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
@@ -23,7 +23,7 @@
   </style>
 </head>
 <body>
-  <main>
+  <main id="session-surface" data-session-state="initializing">
     <h1>USB Vault</h1>
     <p class="intro">输入密码以打开安全会话</p>
     <label for="session-password">密码</label>
@@ -32,5 +32,6 @@
     <button id="session-action" type="button" disabled>正在初始化</button>
     <output id="session-status" aria-live="polite">正在连接安全组件</output>
   </main>
+  <script src="session.js"></script>
 </body>
 </html>

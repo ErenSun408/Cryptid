@@ -176,7 +176,14 @@ if(USB_VAULT_BUILD_UI)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/ui/index.html"
             "$<TARGET_FILE_DIR:usb_vault_app>/index.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/ui/session.js"
+            "$<TARGET_FILE_DIR:usb_vault_app>/session.js"
     VERBATIM
+  )
+  set_property(TARGET usb_vault_app APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_SOURCE_DIR}/ui/index.html"
+    "${CMAKE_SOURCE_DIR}/ui/session.js"
   )
 endif()
 

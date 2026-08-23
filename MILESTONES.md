@@ -224,4 +224,8 @@ blob 合约、应用会话控制器、可擦除的 UI 口令入口和 UI 会话�
 `shouldPassTypedArraysAsArrays` 后，固定非秘密 `Uint8Array` 已在真实 WebView2 Runtime 中
 逐字节通过既有 SAFEARRAY 适配器并提交；不暴露分类状态的零参数 `unmount` 已通过单元
 测试及 Debug、ASan 真实 Runtime 验证并提交；仅返回统一易失布尔值的
-`hasActiveSession` 已完成相同验证，等待提交。产品页面仍无脚本且密码控件保持禁用。
+`hasActiveSession` 已完成相同验证并提交；产品页面最小会话状态机、密码可控副本及时清理、
+统一状态恢复、主动卸载和 WebView2 密码保存/自动填充加固已实现并通过 Debug 真实 Runtime
+闭环。当前 Runtime 还会把 typed array 投影为 `SAFEARRAY(VARIANT)`/`VT_I4`，窄化兼容适配、
+异步编组结算后清零、无内联脚本的专项驱动及后台限流稳定化均已实现；Debug 连续三次和正式
+ASan 真实 Runtime 闭环均退出 0，当前无遗留动态验证缺口，等待提交。详情见开发日志。

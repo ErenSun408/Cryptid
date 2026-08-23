@@ -167,6 +167,7 @@ add_executable(ui_page_contract_tests
 
 target_compile_definitions(ui_page_contract_tests PRIVATE
   USB_VAULT_UI_PAGE="${PROJECT_SOURCE_DIR}/ui/index.html"
+  USB_VAULT_UI_SCRIPT="${PROJECT_SOURCE_DIR}/ui/session.js"
 )
 
 usb_vault_configure_target(ui_page_contract_tests)
@@ -219,9 +220,21 @@ if(USB_VAULT_BUILD_UI)
 
   add_custom_command(TARGET webview_typed_array_integration_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/webview_typed_array_integration.html"
-            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/webview_typed_array_integration.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/webview_session_integration.html"
+            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/webview_session_integration.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/ui/session.js"
+            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/session.js"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/webview_typed_array_integration.js"
+            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/webview_typed_array_integration.js"
     VERBATIM
+  )
+  set_property(TARGET webview_typed_array_integration_tests APPEND PROPERTY
+    LINK_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/webview_session_integration.html"
+      "${CMAKE_CURRENT_SOURCE_DIR}/webview_typed_array_integration.js"
+      "${PROJECT_SOURCE_DIR}/ui/session.js"
   )
 endif()
 
