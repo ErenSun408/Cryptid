@@ -60,6 +60,24 @@ usb_vault_configure_target(mount_orchestrator_tests)
 
 add_test(NAME mount_orchestrator_tests COMMAND mount_orchestrator_tests)
 
+add_executable(creator_protocol_tests
+  creator_protocol_tests.cpp
+)
+
+target_include_directories(creator_protocol_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(creator_protocol_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(creator_protocol_tests)
+
+add_test(NAME creator_protocol_tests COMMAND creator_protocol_tests)
+
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL
   secure_buffer_copy_compile_fail.cpp
 )
@@ -119,6 +137,30 @@ if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
             ${PROJECT_SOURCE_DIR}/out/vendor/p1_3_b.hc
   )
   set_tests_properties(mount_orchestrator_integration_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    RUN_SERIAL TRUE
+  )
+
+  add_executable(volume_creator_integration_tests
+    volume_creator_integration_tests.cpp
+  )
+
+  target_link_libraries(volume_creator_integration_tests
+    PRIVATE
+      usb_vault_core
+  )
+
+  usb_vault_configure_target(volume_creator_integration_tests)
+
+  add_test(
+    NAME volume_creator_integration_tests
+    COMMAND volume_creator_integration_tests
+            $<TARGET_FILE:usb_vault_volume_creator>
+            ${PROJECT_SOURCE_DIR}/out/vendor/p1_4_a.hc
+            ${PROJECT_SOURCE_DIR}/out/vendor/p1_4_b.hc
+            ${PROJECT_SOURCE_DIR}/spike/vcspike.exe
+  )
+  set_tests_properties(volume_creator_integration_tests PROPERTIES
     SKIP_RETURN_CODE 77
     RUN_SERIAL TRUE
   )
