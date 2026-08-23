@@ -14,8 +14,12 @@
       try {
         chrome.webview.hostObjects.options.shouldPassTypedArraysAsArrays = true;
         await chrome.webview.hostObjects.nativeBridge.submitPasswordBytes(bytes);
+        const activeAfterSubmit =
+          await chrome.webview.hostObjects.nativeBridge.hasActiveSession();
         await chrome.webview.hostObjects.nativeBridge.unmount();
-        completed = true;
+        const activeAfterUnmount =
+          await chrome.webview.hostObjects.nativeBridge.hasActiveSession();
+        completed = activeAfterSubmit === true && activeAfterUnmount === false;
       } catch (_) {
         completed = false;
       } finally {

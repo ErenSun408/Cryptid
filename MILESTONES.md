@@ -222,5 +222,6 @@ blob 合约、应用会话控制器、可擦除的 UI 口令入口和 UI 会话�
 锁页 blob 的只读桩卡已与正式 `ApplicationSession`、动态空闲盘符和 exe 同目录容器布局
 完成组合并提交；窗口关闭前的主动卸载、失败阻止退出和可重试状态守卫已提交；显式启用
 `shouldPassTypedArraysAsArrays` 后，固定非秘密 `Uint8Array` 已在真实 WebView2 Runtime 中
-逐字节通过既有 SAFEARRAY 适配器并提交；不暴露状态的零参数 `unmount` 已通过单元测试及
-Debug、ASan 真实 Runtime 调用验证，等待提交。产品页面仍无脚本且密码控件保持禁用。
+逐字节通过既有 SAFEARRAY 适配器并提交；不暴露分类状态的零参数 `unmount` 已通过单元
+测试及 Debug、ASan 真实 Runtime 验证并提交；仅返回统一易失布尔值的
+`hasActiveSession` 已完成相同验证，等待提交。产品页面仍无脚本且密码控件保持禁用。

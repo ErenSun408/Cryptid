@@ -13,8 +13,10 @@ namespace {
 
 constexpr DISPID kSubmitPasswordBytesId = 1;
 constexpr DISPID kUnmountId = 2;
+constexpr DISPID kHasActiveSessionId = 3;
 constexpr wchar_t kSubmitPasswordBytesName[] = L"submitPasswordBytes";
 constexpr wchar_t kUnmountName[] = L"unmount";
+constexpr wchar_t kHasActiveSessionName[] = L"hasActiveSession";
 
 class WebViewHostObject final : public IDispatch {
  public:
@@ -83,21 +85,42 @@ class WebViewHostObject final : public IDispatch {
       ids[0] = kUnmountId;
       return S_OK;
     }
+    if (::CompareStringOrdinal(names[0], -1, kHasActiveSessionName, -1,
+                               FALSE) == CSTR_EQUAL) {
+      ids[0] = kHasActiveSessionId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
 
   HRESULT STDMETHODCALLTYPE Invoke(DISPID member, REFIID iid, LCID, WORD flags,
-                                   DISPPARAMS* parameters, VARIANT*, EXCEPINFO*,
-                                   UINT* argument_error) noexcept override {
+                                   DISPPARAMS* parameters, VARIANT* result,
+                                   EXCEPINFO*, UINT* argument_error) noexcept
+      override {
     if (iid != IID_NULL) {
       return DISP_E_UNKNOWNINTERFACE;
     }
-    if (member != kSubmitPasswordBytesId && member != kUnmountId) {
+    if (member != kSubmitPasswordBytesId && member != kUnmountId &&
+        member != kHasActiveSessionId) {
       return DISP_E_MEMBERNOTFOUND;
     }
     if ((flags & DISPATCH_METHOD) == 0) {
       return DISP_E_MEMBERNOTFOUND;
+    }
+
+    if (member == kHasActiveSessionId) {
+      if (parameters == nullptr || parameters->cArgs != 0 ||
+          parameters->cNamedArgs != 0) {
+        return DISP_E_BADPARAMCOUNT;
+      }
+      if (result != nullptr) {
+        ::VariantInit(result);
+        result->vt = VT_BOOL;
+        result->boolVal =
+            controller_.mounted() ? VARIANT_TRUE : VARIANT_FALSE;
+      }
+      return S_OK;
     }
 
     if (member == kUnmountId) {

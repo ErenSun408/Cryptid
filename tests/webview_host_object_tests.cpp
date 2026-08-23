@@ -121,6 +121,15 @@ DISPID unmount_id(IDispatch& host) {
   return id;
 }
 
+DISPID has_active_session_id(IDispatch& host) {
+  LPOLESTR name = const_cast<LPOLESTR>(L"hasActiveSession");
+  DISPID id = DISPID_UNKNOWN;
+  require(SUCCEEDED(host.GetIDsOfNames(IID_NULL, &name, 1, LOCALE_INVARIANT,
+                                      &id)),
+          "active-session method was not exposed");
+  return id;
+}
+
 HRESULT invoke_submit(IDispatch& host, VARIANTARG& password) {
   DISPPARAMS parameters{&password, nullptr, 1, 0};
   return host.Invoke(submit_id(host), IID_NULL, LOCALE_INVARIANT,
@@ -131,6 +140,21 @@ HRESULT invoke_unmount(IDispatch& host) {
   DISPPARAMS parameters{};
   return host.Invoke(unmount_id(host), IID_NULL, LOCALE_INVARIANT,
                      DISPATCH_METHOD, &parameters, nullptr, nullptr, nullptr);
+}
+
+bool invoke_has_active_session(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(has_active_session_id(host), IID_NULL,
+                                LOCALE_INVARIANT, DISPATCH_METHOD, &parameters,
+                                &result, nullptr, nullptr)),
+          "active-session query failed");
+  require(result.vt == VT_BOOL,
+          "active-session query returned the wrong type");
+  const bool active = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return active;
 }
 
 void test_narrow_automation_surface() {
@@ -219,6 +243,34 @@ void test_unmount_argument_is_rejected() {
           "invalid unmount invocation reached the session");
 }
 
+void test_unified_active_session_query() {
+  FakeSession session;
+  UiSessionController controller(session);
+  ComPtr<IDispatch> host = make_host(controller);
+
+  require(!invoke_has_active_session(*host.Get()),
+          "inactive session was reported active");
+  session.is_mounted = true;
+  require(invoke_has_active_session(*host.Get()),
+          "active session was reported inactive");
+}
+
+void test_active_session_query_argument_is_rejected() {
+  FakeSession session;
+  UiSessionController controller(session);
+  ComPtr<IDispatch> host = make_host(controller);
+  VARIANTARG argument{};
+  ::VariantInit(&argument);
+  argument.vt = VT_UI1;
+  argument.bVal = 1;
+  DISPPARAMS parameters{&argument, nullptr, 1, 0};
+
+  require(host->Invoke(has_active_session_id(*host.Get()), IID_NULL,
+                       LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
+                       nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "active-session query accepted an argument");
+}
+
 void test_property_access_is_rejected() {
   FakeSession session;
   UiSessionController controller(session);
@@ -232,6 +284,10 @@ void test_property_access_is_rejected() {
                        DISPATCH_PROPERTYGET, &parameters, nullptr, nullptr,
                        nullptr) == DISP_E_MEMBERNOTFOUND,
           "unmount method was exposed as a property");
+  require(host->Invoke(has_active_session_id(*host.Get()), IID_NULL,
+                       LOCALE_INVARIANT, DISPATCH_PROPERTYGET, &parameters,
+                       nullptr, nullptr, nullptr) == DISP_E_MEMBERNOTFOUND,
+          "active-session method was exposed as a property");
 }
 
 }  // namespace
@@ -242,6 +298,8 @@ int main() {
   test_wrong_argument_is_rejected();
   test_unmount_success_and_failure();
   test_unmount_argument_is_rejected();
+  test_unified_active_session_query();
+  test_active_session_query_argument_is_rejected();
   test_property_access_is_rejected();
   std::cout << "webview_host_object_tests: PASS\n";
   return 0;

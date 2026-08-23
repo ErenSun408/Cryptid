@@ -8,8 +8,8 @@ namespace usb_vault::ui {
 
 // Creates the narrow COM automation surface exposed to the local WebView2
 // page. The returned interface owns one reference and exposes only password
-// submission and active-session unmounting; it does not expose application or
-// volume classification state.
+// submission, active-session unmounting, and a unified volatile active-session
+// check. It does not expose volume classification state.
 HRESULT create_webview_host_object(UiSessionController& controller,
                                    IDispatch** result) noexcept;
 
