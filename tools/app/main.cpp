@@ -3,8 +3,11 @@
 #include <WebView2.h>
 #include <wrl.h>
 
+#include "usb_vault/ui/webview_host_object.h"
+
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -14,10 +17,27 @@ using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
 constexpr wchar_t kWindowTitle[] = L"USB Vault";
+constexpr wchar_t kHostObjectName[] = L"nativeBridge";
+
+class BridgeUnavailableSession final
+    : public usb_vault::application::IApplicationSessionActions {
+ public:
+  void authenticate_and_mount(
+      usb_vault::security::SecureBuffer password_utf8) override {
+    password_utf8.clear();
+    throw std::runtime_error("application session is not configured");
+  }
+
+  void unmount_active() override {}
+  [[nodiscard]] bool mounted() const noexcept override { return false; }
+};
 
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
+ComPtr<IDispatch> g_host_object;
 std::wstring g_page_uri;
+BridgeUnavailableSession g_unavailable_session;
+usb_vault::ui::UiSessionController g_ui_session(g_unavailable_session);
 
 void show_failure(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
@@ -98,6 +118,25 @@ void initialize_webview(const HWND window) {
                       static_cast<void>(settings->put_AreDefaultContextMenusEnabled(FALSE));
                       static_cast<void>(settings->put_IsStatusBarEnabled(FALSE));
 
+                      ComPtr<IDispatch> host_object;
+                      current = usb_vault::ui::create_webview_host_object(
+                          g_ui_session, &host_object);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      VARIANT host_value{};
+                      ::VariantInit(&host_value);
+                      host_value.vt = VT_DISPATCH;
+                      host_value.pdispVal = host_object.Get();
+                      host_value.pdispVal->AddRef();
+                      current = g_webview->AddHostObjectToScript(kHostObjectName,
+                                                                 &host_value);
+                      static_cast<void>(::VariantClear(&host_value));
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      g_host_object = std::move(host_object);
+
                       EventRegistrationToken navigation_token{};
                       current = g_webview->add_NavigationStarting(
                           Callback<ICoreWebView2NavigationStartingEventHandler>(
@@ -141,6 +180,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     case WM_DESTROY:
       g_webview.Reset();
       g_controller.Reset();
+      g_host_object.Reset();
       ::PostQuitMessage(0);
       return 0;
     default:

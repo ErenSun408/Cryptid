@@ -217,5 +217,6 @@ P1 的内部顺序不是自由选择，而是五条既有约束的结果：`Secu
 blob 合约、应用会话控制器、可擦除的 UI 口令入口和 UI 会话适配器已分别提交；固定 SDK
 版本且仅加载本地页面的 WebView2 宿主骨架、桥前保持禁用的单密码框页面契约均已提交；
 只接受一维 `VT_UI1` SAFEARRAY 并沿用既有清零入口的 COM 字节数组适配器已提交；只暴露
-`submitPasswordBytes` 且不提供任何分类状态的原生 `IDispatch` host object 已完成验证，
-等待提交，尚未注册到 WebView2 或启用页面口令提交。
+`submitPasswordBytes` 且不提供任何分类状态的原生 `IDispatch` host object 已提交；该对象
+已在严格本地导航边界内完成真实 WebView2 Runtime 注册验证，等待提交。页面仍无脚本且
+密码控件保持禁用，桩卡应用会话尚未组合。
