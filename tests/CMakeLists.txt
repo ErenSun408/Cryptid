@@ -140,6 +140,64 @@ usb_vault_configure_target(vikey_artifact_tests)
 
 add_test(NAME vikey_artifact_tests COMMAND vikey_artifact_tests)
 
+add_executable(vikey_helper_protocol_tests
+  vikey_helper_protocol_tests.cpp
+)
+
+target_include_directories(vikey_helper_protocol_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_helper_protocol_tests PRIVATE
+  usb_vault_vikey_helper_protocol
+)
+
+usb_vault_configure_target(vikey_helper_protocol_tests)
+
+add_test(NAME vikey_helper_protocol_tests COMMAND vikey_helper_protocol_tests)
+
+add_executable(vikey_helper_stall_fixture WIN32
+  vikey_helper_stall_fixture.cpp
+)
+
+set_property(TARGET vikey_helper_stall_fixture PROPERTY MSVC_RUNTIME_LIBRARY
+  "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+usb_vault_configure_target(vikey_helper_stall_fixture)
+
+add_executable(vikey_helper_process_tests
+  vikey_helper_process_tests.cpp
+)
+
+add_dependencies(vikey_helper_process_tests
+  usb_vault_vikey_helper
+  vikey_helper_stall_fixture
+)
+
+target_include_directories(vikey_helper_process_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_helper_process_tests PRIVATE
+  usb_vault_vikey_helper_client
+)
+
+usb_vault_configure_target(vikey_helper_process_tests)
+
+add_test(
+  NAME vikey_helper_process_tests
+  COMMAND vikey_helper_process_tests
+          $<TARGET_FILE:usb_vault_vikey_helper>
+          $<TARGET_FILE:vikey_helper_stall_fixture>
+)
+set_tests_properties(vikey_helper_process_tests PROPERTIES
+  RUN_SERIAL TRUE
+  SKIP_RETURN_CODE 77
+)
+
 add_executable(application_session_tests
   application_session_tests.cpp
 )

@@ -1254,3 +1254,69 @@
   量产可信部署。供应商升级还必须显式更新摘要白名单并重跑 ABI、导出和安全审计。
 - 真卡登录、独立 8 字符设备 PIN 注入、32 字节 blob 读写、计数器和拔卡处理均未开始，本切片
   未改变安全卡状态。当前提交状态：尚未提交，等待用户审阅决定；未执行 push。
+
+### 小切片 4：受限 ViKey helper 与最小 IPC 空外壳
+
+#### 计划、资料与既有实现复核
+
+- 重新核对 P1.6 出口、R-03、N-02、8.6 以及前三个小切片的 `ICardStore`、ViKey 私有 ABI、
+  动态加载和 DLL 固定身份门。结论是供应商代码必须停留在独立非提权进程中，主程序和公共卡
+  接口均不能链接 helper 客户端或 ViKey SDK；本切片只验证进程/IPC 边界，不加载 SDK、不登录、
+  不读取 UserSN/API Key/PIN、不读写卡片、计数器或根密钥。
+- 依据 Microsoft 官方文档复核 `CreateRestrictedToken`、`CreateProcessAsUserW`、
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`、进程缓解策略和 job object：显式句柄清单要求目标句柄可继承
+  且 `bInheritHandles=TRUE`；受限主令牌可直接用于 `CreateProcessAsUserW`；`KILL_ON_JOB_CLOSE` 可
+  收口异常/超时路径，`ACTIVE_PROCESS=1` 与子进程策略共同阻止 helper 扩张进程树。参考资料：
+  <https://learn.microsoft.com/en-us/windows/win32/secauthz/restricted-tokens>、
+  <https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessasuserw>、
+  <https://learn.microsoft.com/en-us/windows/desktop/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute>、
+  <https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects>、
+  <https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-setinformationjobobject>。
+
+#### 实现
+
+- 新增固定布局的 IPC v1：32 字节 `Request`、36 字节 `Response`、固定 magic/版本/头长、唯一
+  `probe` 操作、全零保留字段和 16 字节 CSPRNG nonce。未知操作、状态码、安全属性、版本、
+  nonce、短消息和尾随字节均失败关闭；协议目前不承载 PIN、API Key、blob 或任何秘密。
+- 新增独立 `usb_vault_vikey_helper` GUI 子系统空外壳和未接入产品目标的 helper client。client
+  只接受绝对非 UNC、末级非重解析普通文件路径；用 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)`
+  创建主令牌，并枚举令牌特权确认除 `SeChangeNotifyPrivilege` 外没有启用项，同时要求非提升令牌。
+  已带 restricting SID 的父令牌会失败关闭，避免在不确定的嵌套沙箱中误判边界。
+- helper 以 `CREATE_SUSPENDED` 启动；只有请求/响应两根匿名管道进入
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，stdin 读取请求，stdout/stderr 共用响应管道，父端句柄显式
+  不可继承。命令行不携带句柄或秘密，Unicode 环境块为空。父进程先把 helper 加入
+  `ACTIVE_PROCESS=1 | KILL_ON_JOB_CLOSE` 的 job，再核验 job 成员关系及所有必需缓解策略，全部
+  通过后才恢复线程。
+- 启动策略强制 DEP、SEHOP、堆损坏终止、bottom-up/high-entropy ASLR、严格句柄检查、禁用扩展点、
+  禁止远程/低完整性映像加载和创建子进程；父进程逐项读取实际进程策略并要求完整匹配。helper
+  自检环境为空、核对标准句柄均为预期管道并回显 nonce；失败、协议异常、非零退出或截止时间
+  到期时均由 RAII 关闭 job 并终止残留进程。
+- 受限令牌下，控制台子系统或动态 CRT 产物在进入程序前即以 `0xC0000142` 失败；最小对照夹具
+  证明 GUI 子系统 + 静态 CRT 可在相同令牌下启动，因此 helper 与卡死测试夹具固定采用该组合。
+  这只是运行期兼容选择，不改变产品主程序 CRT，也没有引入厂商依赖。
+
+#### 验证与安全复核
+
+- 新增协议测试，覆盖请求/响应往返、未知版本/操作/安全属性/状态、非零保留字段、错误响应约束
+  和 nonce 不匹配拒绝；新增进程测试覆盖完整安全属性、相对路径拒绝及 150 ms 卡死超时。普通
+  桌面令牌下真实 helper/fixture 测试通过；Codex/CI 这类父令牌已受限的环境返回 77 并由 CTest
+  明确标记跳过，不能把沙箱假失败冒充真实进程验证。
+- MSVC Debug 全量 CTest **18 项通过、1 项因已受限父令牌跳过**；同一进程测试在普通桌面令牌下
+  单独通过。MSVC AddressSanitizer 全量同为 **18 项通过、1 项明确跳过**，无内存错误；helper、
+  协议、客户端和测试目标在 MSVC `/analyze` 下无诊断构建通过。
+- PE 复核确认 helper 为 Windows GUI，启用 high-entropy ASLR、动态基址和 NX，嵌入清单为
+  `asInvoker`/`uiAccess=false`；helper 仅导入 Windows `ADVAPI32.dll` 与 `KERNEL32.dll`，不导入
+  `ViKey.dll`。`usb_vault_app.exe` 导入表同样不含 ViKey。敏感信息扫描和 `git diff --check`
+  在本切片最终复核中执行；本测试过程没有加载厂商 DLL、访问安全卡或改变卡片状态。
+
+#### 剩余风险与下一步
+
+- 当前 helper 路径门只拒绝相对路径、UNC 语法和末级重解析点，尚未像供应商 DLL 一样持有并
+  校验 helper 自身身份，也尚未依赖安装器保护目录 ACL；开发构建目录可由当前用户写入，不能
+  作为量产可信部署。接入根密钥前必须固化 helper 摘要/签名或等价身份门，并验证安装 ACL。
+- 受限令牌和映像加载策略不等于禁网。当前 helper 没有网络代码、没有 SDK、也没有秘密，所以
+  本切片可安全验收；在装载未签名供应商 DLL 前必须增加可验证的网络隔离，否则不能把卡内
+  根密钥交给该进程。
+- 真卡会话 RAII、独立 8 字符设备 PIN 注入、32 字节 blob get/put、首次写入恢复、持久计数器和
+  P1.7 拔卡处理仍未实现。用户已审阅并批准以
+  `[P1.6]add restricted ViKey helper boundary` 提交；只创建本地提交，未执行 push。

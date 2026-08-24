@@ -150,6 +150,58 @@ target_link_libraries(usb_vault_vikey_sdk PRIVATE usb_vault_core Bcrypt)
 
 usb_vault_configure_target(usb_vault_vikey_sdk)
 
+# Versioned IPC is shared by the launcher and the helper, while the launcher
+# remains separate from both the product executable and the vendor SDK target.
+add_library(usb_vault_vikey_helper_protocol STATIC
+  src/card/vikey/vikey_helper_protocol.cpp
+)
+
+target_include_directories(usb_vault_vikey_helper_protocol
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_vikey_helper_protocol PRIVATE usb_vault_core)
+usb_vault_configure_target(usb_vault_vikey_helper_protocol)
+
+add_library(usb_vault_vikey_helper_client STATIC
+  src/card/vikey/vikey_helper_client.cpp
+)
+
+target_include_directories(usb_vault_vikey_helper_client
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_vikey_helper_client PRIVATE
+  usb_vault_core
+  usb_vault_vikey_helper_protocol
+  Advapi32
+  Bcrypt
+)
+usb_vault_configure_target(usb_vault_vikey_helper_client)
+
+add_executable(usb_vault_vikey_helper WIN32
+  tools/vikey_helper/main.cpp
+  src/card/vikey/vikey_helper_protocol.cpp
+  src/card/card_error.cpp
+)
+
+target_include_directories(usb_vault_vikey_helper PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(usb_vault_vikey_helper PRIVATE UNICODE _UNICODE)
+set_property(TARGET usb_vault_vikey_helper PROPERTY MSVC_RUNTIME_LIBRARY
+  "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+target_link_options(usb_vault_vikey_helper PRIVATE
+  "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+)
+usb_vault_configure_target(usb_vault_vikey_helper)
+
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp
   src/volume_creation/creator_helper_engine.cpp
