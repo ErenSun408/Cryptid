@@ -1,14 +1,13 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
+#include "card/verified_local_artifact.h"
+
 #include <filesystem>
 
 namespace usb_vault::card::vikey {
 
-using Sha256Digest = std::array<std::byte, 32>;
+using usb_vault::card::Sha256Digest;
 
-// Proves that a local ViKey.dll matched the configured digest while holding
 // A fixed-name ViKey.dll whose bytes matched the configured digest. The token
 // holds its deployment directory and file open to deny replacement, write, and
 // delete. Production must place that directory below an installer-protected
@@ -30,12 +29,9 @@ class VerifiedVikeyDll final {
       const std::filesystem::path& deployment_directory,
       const Sha256Digest& expected_digest);
 
-  VerifiedVikeyDll(std::filesystem::path path, void* directory_handle,
-                   void* file_handle) noexcept;
+  explicit VerifiedVikeyDll(VerifiedLocalArtifact&& artifact) noexcept;
 
-  std::filesystem::path path_;
-  void* directory_handle_{};
-  void* file_handle_{};
+  VerifiedLocalArtifact artifact_;
 };
 
 [[nodiscard]] VerifiedVikeyDll verify_vikey_dll(

@@ -14,7 +14,9 @@
 namespace {
 
 using usb_vault::card::CardError;
+using usb_vault::card::VerifiedLocalArtifact;
 using usb_vault::card::make_error_code;
+using usb_vault::card::verify_local_artifact;
 using usb_vault::card::vikey::Sha256Digest;
 using usb_vault::card::vikey::VerifiedVikeyDll;
 using usb_vault::card::vikey::verify_vikey_dll;
@@ -25,6 +27,10 @@ static_assert(!std::is_copy_constructible_v<VerifiedVikeyDll>);
 static_assert(!std::is_copy_assignable_v<VerifiedVikeyDll>);
 static_assert(std::is_move_constructible_v<VerifiedVikeyDll>);
 static_assert(!std::is_move_assignable_v<VerifiedVikeyDll>);
+static_assert(!std::is_copy_constructible_v<VerifiedLocalArtifact>);
+static_assert(!std::is_copy_assignable_v<VerifiedLocalArtifact>);
+static_assert(std::is_move_constructible_v<VerifiedLocalArtifact>);
+static_assert(!std::is_move_assignable_v<VerifiedLocalArtifact>);
 
 void require(const bool condition, const char* const message) {
   if (!condition) {
@@ -97,6 +103,19 @@ void test_relative_path_is_rejected() {
       "relative ViKey path was not rejected");
 }
 
+void test_alternate_data_stream_path_is_rejected() {
+  TemporaryVikeyArtifact artifact;
+  std::filesystem::path alternate_stream = artifact.path();
+  alternate_stream += L":payload";
+  require_card_error(
+      [&] {
+        static_cast<void>(verify_local_artifact(
+            alternate_stream, kFixtureDigest, 16U * 1024U * 1024U));
+      },
+      CardError::invalid_configuration,
+      "alternate data stream artifact path was not rejected");
+}
+
 void test_empty_and_oversized_artifacts_are_rejected() {
   TemporaryVikeyArtifact artifact;
   artifact.resize(0);
@@ -125,6 +144,7 @@ int main() {
     test_matching_digest_returns_locked_identity_token();
     test_digest_mismatch_fails_closed_and_releases_locks();
     test_relative_path_is_rejected();
+    test_alternate_data_stream_path_is_rejected();
     test_empty_and_oversized_artifacts_are_rejected();
   } catch (const std::exception& error) {
     std::cerr << "vikey_artifact_tests: FAIL: " << error.what() << '\n';

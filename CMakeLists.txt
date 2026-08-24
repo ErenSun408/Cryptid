@@ -131,6 +131,24 @@ target_link_libraries(usb_vault_core PRIVATE
 
 usb_vault_configure_target(usb_vault_core)
 
+# Local artifact identity and replacement locks are shared by the vendor DLL
+# verifier and the isolated helper launcher without linking either consumer to
+# the other.
+add_library(usb_vault_verified_local_artifact STATIC
+  src/card/verified_local_artifact.cpp
+)
+
+target_include_directories(usb_vault_verified_local_artifact
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_verified_local_artifact PRIVATE
+  usb_vault_core
+  Bcrypt
+)
+usb_vault_configure_target(usb_vault_verified_local_artifact)
+
 # The product executable intentionally does not link this target. The unsigned
 # vendor SDK is confined to a future isolated card helper; current unit tests
 # use injected module operations and never load ViKey.dll.
@@ -146,7 +164,10 @@ target_include_directories(usb_vault_vikey_sdk
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(usb_vault_vikey_sdk PRIVATE usb_vault_core Bcrypt)
+target_link_libraries(usb_vault_vikey_sdk PRIVATE
+  usb_vault_core
+  usb_vault_verified_local_artifact
+)
 
 usb_vault_configure_target(usb_vault_vikey_sdk)
 
@@ -178,6 +199,7 @@ target_include_directories(usb_vault_vikey_helper_client
 target_link_libraries(usb_vault_vikey_helper_client PRIVATE
   usb_vault_core
   usb_vault_vikey_helper_protocol
+  usb_vault_verified_local_artifact
   Advapi32
   Bcrypt
 )

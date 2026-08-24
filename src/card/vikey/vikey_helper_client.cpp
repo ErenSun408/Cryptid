@@ -22,6 +22,8 @@
 namespace usb_vault::card::vikey {
 namespace {
 
+constexpr std::uint64_t kMaximumHelperBytes = 16ULL * 1024ULL * 1024ULL;
+
 constexpr DWORD64 kHelperMitigations =
     PROCESS_CREATION_MITIGATION_POLICY_DEP_ENABLE |
     PROCESS_CREATION_MITIGATION_POLICY_SEHOP_ENABLE |
@@ -125,29 +127,6 @@ class AttributeList final {
   throw std::system_error(make_error_code(error), context);
 }
 
-[[nodiscard]] std::filesystem::path validated_helper_path(
-    const std::filesystem::path& input) {
-  if (input.empty() || !input.is_absolute()) {
-    throw_card(CardError::invalid_configuration,
-               "ViKey helper path must be absolute");
-  }
-  const std::filesystem::path path = input.lexically_normal();
-  const std::wstring native = path.native();
-  if (path.root_name().empty() || native.starts_with(L"\\\\") ||
-      native.find(L':', 2) != std::wstring::npos) {
-    throw_card(CardError::invalid_configuration,
-               "ViKey helper must be a local file");
-  }
-  const DWORD attributes = ::GetFileAttributesW(path.c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES ||
-      (attributes & (FILE_ATTRIBUTE_DIRECTORY |
-                     FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
-    throw_card(CardError::invalid_configuration,
-               "ViKey helper file is unavailable");
-  }
-  return path;
-}
-
 [[nodiscard]] Pipe create_pipe(const bool child_reads) {
   SECURITY_ATTRIBUTES security{};
   security.nLength = sizeof(security);
@@ -172,6 +151,17 @@ class AttributeList final {
   }
   return {.parent_end = std::move(read_handle),
           .child_end = std::move(write_handle)};
+}
+
+[[nodiscard]] Handle duplicate_inheritable_handle(const HANDLE source) {
+  HANDLE duplicate = INVALID_HANDLE_VALUE;
+  if (::DuplicateHandle(::GetCurrentProcess(), source,
+                        ::GetCurrentProcess(), &duplicate, 0, TRUE,
+                        DUPLICATE_SAME_ACCESS) == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "duplicate ViKey helper IPC handle");
+  }
+  return Handle(duplicate);
 }
 
 [[nodiscard]] Handle create_restricted_token() {
@@ -427,9 +417,15 @@ void require_clean_exit(const HANDLE process, const HANDLE response_pipe,
                "ViKey helper did not exit cleanly");
   }
   DWORD exit_code = 0;
-  if (::GetExitCodeProcess(process, &exit_code) == FALSE || exit_code != 0) {
+  if (::GetExitCodeProcess(process, &exit_code) == FALSE) {
     throw_card(CardError::communication_failed,
-               "ViKey helper returned a failure exit code");
+               "read ViKey helper exit code");
+  }
+  if (exit_code != 0) {
+    throw std::system_error(
+        make_error_code(CardError::communication_failed),
+        std::format("ViKey helper returned failure exit code 0x{:08X}",
+                    exit_code));
   }
   DWORD trailing = 0;
   if (::PeekNamedPipe(response_pipe, nullptr, 0, nullptr, &trailing,
@@ -448,20 +444,25 @@ void require_clean_exit(const HANDLE process, const HANDLE response_pipe,
 
 VikeyHelperProbe probe_vikey_helper(
     const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
     const std::chrono::milliseconds timeout) {
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");
   }
-  const std::filesystem::path executable =
-      validated_helper_path(helper_path);
+  VerifiedLocalArtifact executable_artifact = verify_local_artifact(
+      helper_path, expected_digest, kMaximumHelperBytes);
+  const std::filesystem::path& executable = executable_artifact.path();
   Pipe request_pipe = create_pipe(true);
   Pipe response_pipe = create_pipe(false);
+  Handle error_pipe =
+      duplicate_inheritable_handle(response_pipe.child_end.get());
   Handle token = create_restricted_token();
   Handle job = create_single_process_job();
 
-  std::array<HANDLE, 2> inherited_handles{request_pipe.child_end.get(),
-                                          response_pipe.child_end.get()};
+  std::array<HANDLE, 3> inherited_handles{
+      request_pipe.child_end.get(), response_pipe.child_end.get(),
+      error_pipe.get()};
   DWORD child_policy = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
   DWORD64 mitigations = kHelperMitigations;
   AttributeList attributes(3);
@@ -477,7 +478,7 @@ VikeyHelperProbe probe_vikey_helper(
   startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   startup.StartupInfo.hStdInput = request_pipe.child_end.get();
   startup.StartupInfo.hStdOutput = response_pipe.child_end.get();
-  startup.StartupInfo.hStdError = response_pipe.child_end.get();
+  startup.StartupInfo.hStdError = error_pipe.get();
   startup.lpAttributeList = attributes.get();
   PROCESS_INFORMATION process_info{};
   std::wstring command = std::format(L"\"{}\"", executable.native());
@@ -496,6 +497,7 @@ VikeyHelperProbe probe_vikey_helper(
   Handle thread(process_info.hThread);
   request_pipe.child_end.reset();
   response_pipe.child_end.reset();
+  error_pipe.reset();
 
   if (::AssignProcessToJobObject(job.get(), process.get()) == FALSE) {
     static_cast<void>(::TerminateProcess(process.get(), 1));

@@ -11,23 +11,6 @@ namespace {
 using usb_vault::card::CardError;
 using namespace usb_vault::card::vikey::helper;
 
-class Handle final {
- public:
-  explicit Handle(const HANDLE value = INVALID_HANDLE_VALUE) noexcept
-      : value_(value) {}
-  ~Handle() noexcept {
-    if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) {
-      static_cast<void>(::CloseHandle(value_));
-    }
-  }
-  Handle(const Handle&) = delete;
-  Handle& operator=(const Handle&) = delete;
-  [[nodiscard]] HANDLE get() const noexcept { return value_; }
-
- private:
-  HANDLE value_;
-};
-
 [[nodiscard]] HANDLE inherited_pipe(const DWORD standard_handle) {
   const HANDLE handle = ::GetStdHandle(standard_handle);
   DWORD flags = 0;
@@ -58,13 +41,15 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
   try {
     const HANDLE request_handle = inherited_pipe(STD_INPUT_HANDLE);
     const HANDLE response_handle = inherited_pipe(STD_OUTPUT_HANDLE);
-    if (request_handle == response_handle ||
-        inherited_pipe(STD_ERROR_HANDLE) != response_handle) {
+    const HANDLE error_handle = inherited_pipe(STD_ERROR_HANDLE);
+    if (request_handle == response_handle || request_handle == error_handle ||
+        response_handle == error_handle) {
       throw std::invalid_argument("invalid inherited ViKey helper pipes");
     }
-    const Handle request_pipe(request_handle);
-    const Handle response_pipe(response_handle);
-    const Request request = read_request(request_pipe.get());
+    // These are the process standard handles. Leave them valid through CRT
+    // teardown and let process termination reclaim them; closing them here can
+    // make an optimized static CRT touch already-closed standard streams.
+    const Request request = read_request(request_handle);
     Response response{};
     response.nonce = request.nonce;
     try {
@@ -80,7 +65,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
           static_cast<std::int32_t>(CardError::backend_unavailable);
       response.security_properties = 0;
     }
-    write_response(response_pipe.get(), response);
+    write_response(response_handle, response);
     return 0;
   } catch (...) {
     return 2;
