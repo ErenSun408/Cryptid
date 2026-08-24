@@ -1199,4 +1199,58 @@
 - 真卡 `ICardStore`、8 字符设备 PIN 的独立凭据注入、32 字节 blob 地址/版本/首次写入恢复、
   持久计数器实测和拔卡处理均未实现。本切片没有改变卡片状态。当前提交状态：尚未提交，等待
   用户审阅决定；用户随后批准以 `[P1.6]add isolated ViKey SDK loading boundary` 提交，未执行
-  push。
+  push；提交号为 `00b3319`。
+
+### 小切片 3：ViKey DLL 固定身份与加载期防替换门
+
+#### 计划、资料与既有实现复核
+
+- 重新核对 P1.6 的真卡出口、R-03 与 8.6，并复查小切片 2 的 `VikeyModule`、构建隔离及测试。
+  本切片仍不实现 helper、IPC、卡登录或 `ICardStore`，只完成任何供应商代码执行之前都必须经过
+  的本地二进制身份门；产品主程序继续不链接 ViKey 目标。
+- 依据 Microsoft `CreateFileW` 文档确认：不授予 `FILE_SHARE_WRITE` 可在句柄存续期拒绝后续写入，
+  不授予 `FILE_SHARE_DELETE` 可拒绝后续删除/改名；依据 `GetFileInformationByHandleEx` /
+  `FileAttributeTagInfo` 检查目录、普通文件与重解析点；SHA-256 使用 Windows CNG 的
+  `BCryptCreateHash` → `BCryptHashData` → `BCryptFinishHash` 生命周期。对应官方资料：
+  <https://learn.microsoft.com/th-th/windows/win32/api/fileapi/nf-fileapi-createfilew>、
+  <https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex>、
+  <https://learn.microsoft.com/en-us/windows/win32/api/Bcrypt/nf-bcrypt-bcryptfinishhash>。
+
+#### 实现
+
+- 新增私有 `VerifiedVikeyDll` 移动令牌与 `verify_vikey_dll`。调用方只提供绝对、固定本地盘上的
+  部署目录，文件名由实现固定拼为 `ViKey.dll`，不能向模块装载器传任意文件路径。目录和文件
+  都以 `FILE_FLAG_OPEN_REPARSE_POINT` 打开，拒绝末级重解析点，并用句柄解析出的最终 DOS 路径
+  反查原配置，防止既有 junction/symlink 把验证落到其他位置。
+- 校验器把 DLL 大小限制为 1 字节至 16 MiB，通过持有的只读文件句柄分块计算 SHA-256；读取
+  总量、文件大小或白名单摘要不一致均失败关闭为通用 `backend_unavailable`，不向上泄漏底层
+  文件或 CNG 错误细节。64 KiB 读取缓冲改为有界堆内存，避免受限 helper 小栈压力。
+- 校验成功后令牌继续持有部署目录和 DLL 句柄：文件句柄只共享读，目录句柄不共享删除；
+  `VikeyModule::load_from` 已删除裸路径入口，只接受该令牌，并把它持有到 `FreeLibrary` 完成后
+  才释放。哈希失败、模块装载失败或导出解析失败的所有路径都由 RAII 释放句柄。
+- `usb_vault_vikey_sdk` 显式纳入校验实现并私有链接 `Bcrypt`。生产 exe 仍不链接该静态库；
+  测试只使用固定 ASCII fixture 与假模块操作，不加载真实 `ViKey.dll`。
+
+#### 验证与安全复核
+
+- 新增 `vikey_artifact_tests`，覆盖固定目录/文件名构造、相对目录拒绝、正确摘要、摘要不匹配、
+  空文件、超过 16 MiB、失败后句柄释放，以及令牌存续期间文件写入/删除和部署目录/上一层测试
+  目录改名被拒绝。模块测试进一步证明锁句柄随模块生命周期持有，并为两支测试增加顶层异常
+  输出，避免 Debug 失败被 Windows 错误报告对话框掩盖。
+- MSVC Debug 全量 CTest **17/17** 通过；两支 ViKey 测试的 MSVC AddressSanitizer 运行通过；
+  `usb_vault_vikey_sdk` 与两支测试在 MSVC `/analyze` 下无诊断构建通过；`git diff --check` 通过。
+- 对仓库外 x64 `ViKey.dll` 再做静态复核：既有 SHA-256 白名单匹配，15 个运行期必需导出仍
+  全部存在；`usb_vault_app.exe` 导入表仍不含 ViKey。该复核没有加载供应商 DLL、没有访问安全
+  卡，也没有读取 UserSN、API Key、PIN 或根密钥明文。
+
+#### 剩余风险与下一步
+
+- 该门只证明“准备加载的文件与显式摘要一致”，不能证明未签名供应商 DLL 本身安全。独立
+  helper、最小 IPC、禁网/低权限进程令牌、显式继承句柄清单和进程缓解策略仍未实现，所以真实
+  DLL 仍不得加载进产品主进程；下一小切片先建立 helper 进程与 IPC 外壳，并由 ViKey 适配构建
+  注入不可由运行时用户配置改写的当前版本摘要。
+- 句柄锁在当前 NTFS 实测中同时阻止了部署目录及其上一层改名，但量产仍必须把部署目录放在
+  安装器保护的父目录并设置只读 ACL；开发机用户可写的 SDK 目录只允许用于受控跑通，不能作为
+  量产可信部署。供应商升级还必须显式更新摘要白名单并重跑 ABI、导出和安全审计。
+- 真卡登录、独立 8 字符设备 PIN 注入、32 字节 blob 读写、计数器和拔卡处理均未开始，本切片
+  未改变安全卡状态。当前提交状态：尚未提交，等待用户审阅决定；未执行 push。

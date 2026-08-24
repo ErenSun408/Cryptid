@@ -4,9 +4,6 @@
 
 #include <Windows.h>
 
-#include <array>
-#include <cstddef>
-#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -33,12 +30,7 @@ void windows_unload(void*, void* const module) noexcept {
   throw std::system_error(make_error_code(error), context);
 }
 
-void validate(const std::filesystem::path& path,
-              const DynamicModuleApi& module_api) {
-  if (path.empty() || !path.is_absolute()) {
-    fail(CardError::invalid_configuration,
-         "ViKey DLL path must be absolute");
-  }
+void validate(const DynamicModuleApi& module_api) {
   if (module_api.load == nullptr || module_api.resolve == nullptr ||
       module_api.unload == nullptr) {
     fail(CardError::invalid_configuration,
@@ -167,10 +159,12 @@ std::error_code map_status(const sdk::Status status) noexcept {
   }
 }
 
-VikeyModule::VikeyModule(void* const module,
+VikeyModule::VikeyModule(VerifiedVikeyDll&& verified_dll,
+                         void* const module,
                          const DynamicModuleApi module_api,
                          sdk::Functions functions) noexcept
-    : module_(module),
+    : verified_dll_(std::move(verified_dll)),
+      module_(module),
       module_api_(module_api),
       functions_(std::move(functions)) {}
 
@@ -180,17 +174,19 @@ VikeyModule::~VikeyModule() noexcept {
   }
 }
 
-VikeyModule VikeyModule::load_from(const std::filesystem::path& absolute_path,
+VikeyModule VikeyModule::load_from(VerifiedVikeyDll&& verified_dll,
                                    const DynamicModuleApi module_api) {
-  validate(absolute_path, module_api);
+  validate(module_api);
   PendingModule pending(
-      module_api.load(module_api.context, absolute_path.c_str()), module_api);
+      module_api.load(module_api.context, verified_dll.path().c_str()),
+      module_api);
   if (pending.get() == nullptr) {
     fail(CardError::backend_unavailable, "load ViKey DLL");
   }
 
   sdk::Functions functions = resolve_functions(module_api, pending.get());
-  return VikeyModule(pending.release(), module_api, functions);
+  return VikeyModule(std::move(verified_dll), pending.release(), module_api,
+                     functions);
 }
 
 const sdk::Functions& VikeyModule::functions() const noexcept {

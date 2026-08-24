@@ -135,6 +135,7 @@ usb_vault_configure_target(usb_vault_core)
 # vendor SDK is confined to a future isolated card helper; current unit tests
 # use injected module operations and never load ViKey.dll.
 add_library(usb_vault_vikey_sdk STATIC
+  src/card/vikey/vikey_artifact.cpp
   src/card/vikey/vikey_module.cpp
 )
 
@@ -145,7 +146,7 @@ target_include_directories(usb_vault_vikey_sdk
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(usb_vault_vikey_sdk PRIVATE usb_vault_core)
+target_link_libraries(usb_vault_vikey_sdk PRIVATE usb_vault_core Bcrypt)
 
 usb_vault_configure_target(usb_vault_vikey_sdk)
 

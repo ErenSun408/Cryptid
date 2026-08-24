@@ -1,9 +1,9 @@
 #pragma once
 
+#include "card/vikey/vikey_artifact.h"
 #include "card/vikey/vikey_sdk_abi.h"
 
 #include <cstdint>
-#include <filesystem>
 #include <system_error>
 
 namespace usb_vault::card::vikey {
@@ -31,15 +31,17 @@ class VikeyModule final {
   VikeyModule& operator=(VikeyModule&&) = delete;
 
   [[nodiscard]] static VikeyModule load_from(
-      const std::filesystem::path& absolute_path,
+      VerifiedVikeyDll&& verified_dll,
       DynamicModuleApi module_api = windows_dynamic_module_api());
 
   [[nodiscard]] const sdk::Functions& functions() const noexcept;
 
  private:
-  VikeyModule(void* module, DynamicModuleApi module_api,
+  VikeyModule(VerifiedVikeyDll&& verified_dll, void* module,
+              DynamicModuleApi module_api,
               sdk::Functions functions) noexcept;
 
+  VerifiedVikeyDll verified_dll_;
   void* module_{};
   DynamicModuleApi module_api_{};
   sdk::Functions functions_{};

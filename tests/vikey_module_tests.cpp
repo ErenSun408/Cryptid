@@ -1,10 +1,10 @@
 #include "card/vikey/vikey_module.h"
+#include "vikey_test_artifact.h"
 
 #include "usb_vault/card/card_error.h"
 
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -18,6 +18,7 @@ using usb_vault::card::CardError;
 using usb_vault::card::make_error_code;
 using usb_vault::card::vikey::DynamicModuleApi;
 using usb_vault::card::vikey::VikeyModule;
+using usb_vault::card::vikey::test::TemporaryVikeyArtifact;
 
 static_assert(!std::is_copy_constructible_v<VikeyModule>);
 static_assert(!std::is_move_constructible_v<VikeyModule>);
@@ -83,29 +84,15 @@ void require_card_error(Operation&& operation, const CardError expected,
   throw std::runtime_error(message);
 }
 
-void test_relative_paths_are_rejected_before_loading() {
-  FakeModule context;
-  require_card_error(
-      [&] {
-        static_cast<void>(
-            VikeyModule::load_from(L"ViKey.dll", fake_api(context)));
-      },
-      CardError::invalid_configuration,
-      "relative ViKey path was not rejected");
-  require(context.load_calls == 0,
-          "relative ViKey path reached the module loader");
-  require(context.unload_calls == 0,
-          "unloaded a module that was never loaded");
-}
-
 void test_incomplete_module_api_is_rejected_before_loading() {
+  TemporaryVikeyArtifact artifact;
   FakeModule context;
   DynamicModuleApi incomplete = fake_api(context);
   incomplete.resolve = nullptr;
   require_card_error(
       [&] {
-        static_cast<void>(VikeyModule::load_from(
-            L"C:\\vendor\\ViKey.dll", incomplete));
+        static_cast<void>(VikeyModule::load_from(artifact.verified(),
+                                                 incomplete));
       },
       CardError::invalid_configuration,
       "incomplete dynamic-module API was not rejected");
@@ -114,11 +101,12 @@ void test_incomplete_module_api_is_rejected_before_loading() {
 }
 
 void test_load_failure_uses_generic_error_domain() {
+  TemporaryVikeyArtifact artifact;
   FakeModule context{.load_succeeds = false};
   require_card_error(
       [&] {
-        static_cast<void>(VikeyModule::load_from(
-            L"C:\\vendor\\ViKey.dll", fake_api(context)));
+        static_cast<void>(VikeyModule::load_from(artifact.verified(),
+                                                 fake_api(context)));
       },
       CardError::backend_unavailable,
       "module load failure escaped the generic card error domain");
@@ -130,11 +118,12 @@ void test_load_failure_uses_generic_error_domain() {
 }
 
 void test_missing_export_fails_closed_and_unloads() {
+  TemporaryVikeyArtifact artifact;
   FakeModule context{.missing_symbol = "VikeyWriteData"};
   require_card_error(
       [&] {
-        static_cast<void>(VikeyModule::load_from(
-            L"C:\\vendor\\ViKey.dll", fake_api(context)));
+        static_cast<void>(VikeyModule::load_from(artifact.verified(),
+                                                 fake_api(context)));
       },
       CardError::backend_unavailable,
       "missing ViKey export did not fail closed");
@@ -144,10 +133,11 @@ void test_missing_export_fails_closed_and_unloads() {
 }
 
 void test_complete_export_table_owns_one_module_lifetime() {
+  TemporaryVikeyArtifact artifact;
   FakeModule context;
   {
-    VikeyModule module = VikeyModule::load_from(
-        L"C:\\vendor\\ViKey.dll", fake_api(context));
+    VikeyModule module =
+        VikeyModule::load_from(artifact.verified(), fake_api(context));
     const auto& functions = module.functions();
     require(functions.set_user_sn != nullptr && functions.find_ex != nullptr &&
                 functions.set_api_key != nullptr &&
@@ -168,9 +158,25 @@ void test_complete_export_table_owns_one_module_lifetime() {
 
     require(context.unload_calls == 0,
             "ViKey module unloaded before leaving scope");
+    require(!artifact.can_open_for_write(),
+            "ViKey write lock did not follow the module lifetime");
+    require(!artifact.can_open_for_delete(),
+            "ViKey delete lock did not follow the module lifetime");
+    require(!artifact.can_round_trip_rename_directory(),
+            "ViKey directory lock did not follow the module lifetime");
+    require(!artifact.can_round_trip_rename_ancestor(),
+            "ViKey ancestor lock did not follow the module lifetime");
   }
   require(context.unload_calls == 1,
           "ViKey module lifetime did not unload exactly once");
+  require(artifact.can_open_for_write(),
+          "ViKey write lock outlived the module lifetime");
+  require(artifact.can_open_for_delete(),
+          "ViKey delete lock outlived the module lifetime");
+  require(artifact.can_round_trip_rename_directory(),
+          "ViKey directory lock outlived the module lifetime");
+  require(artifact.can_round_trip_rename_ancestor(),
+          "ViKey ancestor lock outlived the module lifetime");
 }
 
 void test_vendor_statuses_map_to_generic_card_errors() {
@@ -210,12 +216,16 @@ void test_vendor_statuses_map_to_generic_card_errors() {
 }  // namespace
 
 int main() {
-  test_relative_paths_are_rejected_before_loading();
-  test_incomplete_module_api_is_rejected_before_loading();
-  test_load_failure_uses_generic_error_domain();
-  test_missing_export_fails_closed_and_unloads();
-  test_complete_export_table_owns_one_module_lifetime();
-  test_vendor_statuses_map_to_generic_card_errors();
+  try {
+    test_incomplete_module_api_is_rejected_before_loading();
+    test_load_failure_uses_generic_error_domain();
+    test_missing_export_fails_closed_and_unloads();
+    test_complete_export_table_owns_one_module_lifetime();
+    test_vendor_statuses_map_to_generic_card_errors();
+  } catch (const std::exception& error) {
+    std::cerr << "vikey_module_tests: FAIL: " << error.what() << '\n';
+    return 1;
+  }
 
   std::cout << "vikey_module_tests: PASS\n";
   return 0;
