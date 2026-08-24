@@ -98,6 +98,7 @@ endif()
 add_library(usb_vault_core STATIC
   src/application/application_session.cpp
   src/application/mount_orchestrator.cpp
+  src/card/card_error.cpp
   src/card/fixed_blob_card_store.cpp
   src/security/kdf_v1.cpp
   src/security/secure_buffer.cpp
@@ -129,6 +130,24 @@ target_link_libraries(usb_vault_core PRIVATE
 )
 
 usb_vault_configure_target(usb_vault_core)
+
+# The product executable intentionally does not link this target. The unsigned
+# vendor SDK is confined to a future isolated card helper; current unit tests
+# use injected module operations and never load ViKey.dll.
+add_library(usb_vault_vikey_sdk STATIC
+  src/card/vikey/vikey_module.cpp
+)
+
+target_include_directories(usb_vault_vikey_sdk
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_vikey_sdk PRIVATE usb_vault_core)
+
+usb_vault_configure_target(usb_vault_vikey_sdk)
 
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp
