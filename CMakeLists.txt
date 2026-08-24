@@ -202,6 +202,8 @@ target_link_libraries(usb_vault_vikey_helper_client PRIVATE
   usb_vault_verified_local_artifact
   Advapi32
   Bcrypt
+  Ole32
+  Userenv
 )
 usb_vault_configure_target(usb_vault_vikey_helper_client)
 

@@ -28,7 +28,10 @@ enum class SecurityProperty : std::uint32_t {
   extension_points_disabled = 1U << 8,
   remote_image_load_blocked = 1U << 9,
   low_label_image_load_blocked = 1U << 10,
-  empty_environment = 1U << 11,
+  sanitized_environment = 1U << 11,
+  app_container = 1U << 12,
+  no_capabilities = 1U << 13,
+  low_integrity = 1U << 14,
 };
 
 [[nodiscard]] constexpr std::uint32_t property_bit(
@@ -48,7 +51,10 @@ constexpr std::uint32_t kKnownSecurityProperties =
     property_bit(SecurityProperty::extension_points_disabled) |
     property_bit(SecurityProperty::remote_image_load_blocked) |
     property_bit(SecurityProperty::low_label_image_load_blocked) |
-    property_bit(SecurityProperty::empty_environment);
+    property_bit(SecurityProperty::sanitized_environment) |
+    property_bit(SecurityProperty::app_container) |
+    property_bit(SecurityProperty::no_capabilities) |
+    property_bit(SecurityProperty::low_integrity);
 
 // All properties are mandatory before a helper may be used for a card session.
 constexpr std::uint32_t kRequiredSecurityProperties =

@@ -5,12 +5,15 @@
 
 #include <Windows.h>
 #include <bcrypt.h>
+#include <sddl.h>
+#include <userenv.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <limits>
@@ -66,6 +69,37 @@ class Handle final {
 
  private:
   HANDLE value_{INVALID_HANDLE_VALUE};
+};
+
+class LocalSid final {
+ public:
+  LocalSid() noexcept = default;
+  explicit LocalSid(PSID value) noexcept : value_(value) {}
+  ~LocalSid() noexcept { reset(); }
+
+  LocalSid(const LocalSid&) = delete;
+  LocalSid& operator=(const LocalSid&) = delete;
+  LocalSid(LocalSid&& other) noexcept
+      : value_(std::exchange(other.value_, nullptr)) {}
+  LocalSid& operator=(LocalSid&& other) noexcept {
+    if (this != &other) {
+      reset();
+      value_ = std::exchange(other.value_, nullptr);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] PSID get() const noexcept { return value_; }
+
+ private:
+  void reset() noexcept {
+    if (value_ != nullptr) {
+      static_cast<void>(::FreeSid(value_));
+      value_ = nullptr;
+    }
+  }
+
+  PSID value_{};
 };
 
 struct Pipe final {
@@ -228,7 +262,8 @@ class AttributeList final {
 }
 
 [[nodiscard]] std::uint32_t inspect_process_security(
-    const HANDLE token, const HANDLE process, const HANDLE job) {
+    const HANDLE token, const HANDLE process, const HANDLE job,
+    const PSID expected_app_container_sid) {
   std::uint32_t properties = 0;
   LUID change_notify{};
   if (::LookupPrivilegeValueW(nullptr, L"SeChangeNotifyPrivilege",
@@ -279,6 +314,99 @@ class AttributeList final {
     properties |=
         helper::property_bit(helper::SecurityProperty::not_elevated);
   }
+
+  BOOL is_app_container = FALSE;
+  returned = 0;
+  if (::GetTokenInformation(token, TokenIsAppContainer, &is_app_container,
+                            sizeof(is_app_container), &returned) == FALSE ||
+      returned != sizeof(is_app_container) || is_app_container == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "ViKey helper is not in an AppContainer");
+  }
+  properties |=
+      helper::property_bit(helper::SecurityProperty::app_container);
+
+  DWORD app_container_bytes = 0;
+  static_cast<void>(::GetTokenInformation(token, TokenAppContainerSid,
+                                          nullptr, 0, &app_container_bytes));
+  if (app_container_bytes < sizeof(TOKEN_APPCONTAINER_INFORMATION) ||
+      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw_card(CardError::backend_unavailable,
+               "size ViKey helper AppContainer identity");
+  }
+  std::vector<std::byte> app_container_storage(app_container_bytes);
+  if (::GetTokenInformation(token, TokenAppContainerSid,
+                            app_container_storage.data(), app_container_bytes,
+                            &app_container_bytes) == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "inspect ViKey helper AppContainer identity");
+  }
+  const auto* const app_container =
+      reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(
+          app_container_storage.data());
+  if (app_container->TokenAppContainer == nullptr ||
+      ::EqualSid(app_container->TokenAppContainer,
+                 expected_app_container_sid) == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "ViKey helper AppContainer identity is invalid");
+  }
+
+  DWORD capability_bytes = 0;
+  static_cast<void>(::GetTokenInformation(token, TokenCapabilities, nullptr,
+                                          0, &capability_bytes));
+  if (capability_bytes < sizeof(DWORD) ||
+      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw_card(CardError::backend_unavailable,
+               "size ViKey helper capabilities");
+  }
+  std::vector<std::byte> capability_storage(capability_bytes);
+  if (::GetTokenInformation(token, TokenCapabilities,
+                            capability_storage.data(), capability_bytes,
+                            &capability_bytes) == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "inspect ViKey helper capabilities");
+  }
+  const auto* const capabilities =
+      reinterpret_cast<const TOKEN_GROUPS*>(capability_storage.data());
+  if (capabilities->GroupCount != 0) {
+    throw_card(CardError::backend_unavailable,
+               "ViKey helper retained an AppContainer capability");
+  }
+  properties |=
+      helper::property_bit(helper::SecurityProperty::no_capabilities);
+
+  DWORD integrity_bytes = 0;
+  static_cast<void>(::GetTokenInformation(token, TokenIntegrityLevel, nullptr,
+                                          0, &integrity_bytes));
+  if (integrity_bytes < sizeof(TOKEN_MANDATORY_LABEL) ||
+      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw_card(CardError::backend_unavailable,
+               "size ViKey helper integrity level");
+  }
+  std::vector<std::byte> integrity_storage(integrity_bytes);
+  if (::GetTokenInformation(token, TokenIntegrityLevel,
+                            integrity_storage.data(), integrity_bytes,
+                            &integrity_bytes) == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "inspect ViKey helper integrity level");
+  }
+  const auto* const integrity =
+      reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(integrity_storage.data());
+  if (integrity->Label.Sid == nullptr ||
+      ::IsValidSid(integrity->Label.Sid) == FALSE) {
+    throw_card(CardError::backend_unavailable,
+               "ViKey helper integrity SID is invalid");
+  }
+  const UCHAR subauthority_count =
+      *::GetSidSubAuthorityCount(integrity->Label.Sid);
+  if (subauthority_count == 0 ||
+      *::GetSidSubAuthority(integrity->Label.Sid,
+                            subauthority_count - 1) >
+          SECURITY_MANDATORY_LOW_RID) {
+    throw_card(CardError::backend_unavailable,
+               "ViKey helper integrity level is too high");
+  }
+  properties |= helper::property_bit(helper::SecurityProperty::low_integrity);
 
   BOOL in_job = FALSE;
   if (::IsProcessInJob(process, job, &in_job) == FALSE) {
@@ -358,6 +486,102 @@ class AttributeList final {
                "generate ViKey helper IPC nonce");
   }
   return nonce;
+}
+
+struct EphemeralAppContainer final {
+  EphemeralAppContainer(std::wstring profile_moniker, PSID profile_sid)
+      : moniker(std::move(profile_moniker)), sid(profile_sid) {}
+
+  std::wstring moniker;
+  LocalSid sid;
+  bool profile_exists{true};
+
+  EphemeralAppContainer(const EphemeralAppContainer&) = delete;
+  EphemeralAppContainer& operator=(const EphemeralAppContainer&) = delete;
+  EphemeralAppContainer(EphemeralAppContainer&&) = delete;
+  EphemeralAppContainer& operator=(EphemeralAppContainer&&) = delete;
+
+  ~EphemeralAppContainer() noexcept {
+    if (profile_exists) {
+      static_cast<void>(::DeleteAppContainerProfile(moniker.c_str()));
+    }
+  }
+
+  void remove_profile() {
+    const HRESULT result = ::DeleteAppContainerProfile(moniker.c_str());
+    if (FAILED(result)) {
+      throw std::system_error(
+          make_error_code(CardError::backend_unavailable),
+          std::format("remove ephemeral ViKey helper AppContainer profile "
+                      "(HRESULT 0x{:08X})",
+                      static_cast<std::uint32_t>(result)));
+    }
+    profile_exists = false;
+  }
+};
+
+[[nodiscard]] EphemeralAppContainer create_ephemeral_app_container() {
+  constexpr wchar_t kHexDigits[] = L"0123456789abcdef";
+  const auto random = random_nonce();
+  std::wstring moniker = L"usb-vault-vikey-helper-";
+  moniker.reserve(moniker.size() + random.size() * 2);
+  for (const std::byte value : random) {
+    const unsigned int byte = std::to_integer<unsigned int>(value);
+    moniker.push_back(kHexDigits[(byte >> 4U) & 0x0fU]);
+    moniker.push_back(kHexDigits[byte & 0x0fU]);
+  }
+  PSID sid = nullptr;
+  const HRESULT result = ::CreateAppContainerProfile(
+      moniker.c_str(), L"usb-vault ViKey helper",
+      L"Ephemeral zero-network ViKey helper boundary", nullptr, 0, &sid);
+  if (FAILED(result) || sid == nullptr || ::IsValidSid(sid) == FALSE) {
+    if (sid != nullptr) static_cast<void>(::FreeSid(sid));
+    if (SUCCEEDED(result)) {
+      static_cast<void>(::DeleteAppContainerProfile(moniker.c_str()));
+    }
+    throw_card(CardError::backend_unavailable,
+               "create ephemeral ViKey helper AppContainer profile");
+  }
+  return EphemeralAppContainer(std::move(moniker), sid);
+}
+
+struct AppContainerLaunchContext final {
+  std::vector<wchar_t> environment;
+  std::wstring working_directory;
+};
+
+[[nodiscard]] AppContainerLaunchContext app_container_launch_context(
+    const PSID app_container_sid) {
+  wchar_t* sid_string = nullptr;
+  if (::ConvertSidToStringSidW(app_container_sid, &sid_string) == FALSE ||
+      sid_string == nullptr) {
+    throw_card(CardError::backend_unavailable,
+               "format ViKey helper AppContainer identity");
+  }
+  wchar_t* folder = nullptr;
+  const HRESULT folder_result =
+      ::GetAppContainerFolderPath(sid_string, &folder);
+  static_cast<void>(::LocalFree(sid_string));
+  if (FAILED(folder_result) || folder == nullptr) {
+    if (folder != nullptr) ::CoTaskMemFree(folder);
+    throw_card(CardError::backend_unavailable,
+               "resolve ViKey helper AppContainer folder");
+  }
+  const std::wstring local_app_data(folder);
+  ::CoTaskMemFree(folder);
+  const std::wstring temp = local_app_data + L"\\Temp";
+
+  std::vector<wchar_t> environment;
+  const auto append = [&environment](const std::wstring& entry) {
+    environment.insert(environment.end(), entry.begin(), entry.end());
+    environment.push_back(L'\0');
+  };
+  append(L"LOCALAPPDATA=" + local_app_data);
+  append(L"TEMP=" + temp);
+  append(L"TMP=" + temp);
+  environment.push_back(L'\0');
+  return {.environment = std::move(environment),
+          .working_directory = local_app_data};
 }
 
 [[nodiscard]] helper::Response read_response_until(
@@ -459,19 +683,33 @@ VikeyHelperProbe probe_vikey_helper(
       duplicate_inheritable_handle(response_pipe.child_end.get());
   Handle token = create_restricted_token();
   Handle job = create_single_process_job();
-
   std::array<HANDLE, 3> inherited_handles{
       request_pipe.child_end.get(), response_pipe.child_end.get(),
       error_pipe.get()};
   DWORD child_policy = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
   DWORD64 mitigations = kHelperMitigations;
-  AttributeList attributes(3);
+  AttributeList attributes(4);
   attributes.add(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited_handles.data(),
                  sizeof(inherited_handles));
   attributes.add(PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations,
                  sizeof(mitigations));
   attributes.add(PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, &child_policy,
                  sizeof(child_policy));
+
+  EphemeralAppContainer app_container = create_ephemeral_app_container();
+  SECURITY_CAPABILITIES security_capabilities{};
+  security_capabilities.AppContainerSid = app_container.sid.get();
+  AppContainerLaunchContext launch_context;
+  try {
+    launch_context = app_container_launch_context(app_container.sid.get());
+    attributes.add(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                   &security_capabilities, sizeof(security_capabilities));
+  } catch (...) {
+    // This is still before process creation, so profile removal can be
+    // required synchronously and any cleanup failure remains observable.
+    app_container.remove_profile();
+    throw;
+  }
 
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
@@ -482,16 +720,23 @@ VikeyHelperProbe probe_vikey_helper(
   startup.lpAttributeList = attributes.get();
   PROCESS_INFORMATION process_info{};
   std::wstring command = std::format(L"\"{}\"", executable.native());
-  std::array<wchar_t, 2> empty_environment{};
   constexpr DWORD creation_flags = EXTENDED_STARTUPINFO_PRESENT |
                                    CREATE_SUSPENDED | CREATE_NO_WINDOW |
                                    CREATE_UNICODE_ENVIRONMENT;
   if (::CreateProcessAsUserW(
           token.get(), executable.c_str(), command.data(), nullptr, nullptr,
-          TRUE, creation_flags, empty_environment.data(), nullptr,
+          TRUE, creation_flags, launch_context.environment.data(),
+          launch_context.working_directory.c_str(),
           &startup.StartupInfo, &process_info) == FALSE) {
-    throw_card(CardError::backend_unavailable,
-               "launch restricted ViKey helper");
+    const DWORD error = ::GetLastError();
+    // Do not leave even an empty AppContainer profile behind when the
+    // verified artifact cannot be started. A cleanup failure is more urgent
+    // than the launch error and therefore supersedes it.
+    app_container.remove_profile();
+    throw std::system_error(
+        make_error_code(CardError::backend_unavailable),
+        std::format("launch restricted ViKey helper (Windows error {})",
+                    error));
   }
   Handle process(process_info.hProcess);
   Handle thread(process_info.hThread);
@@ -499,56 +744,74 @@ VikeyHelperProbe probe_vikey_helper(
   response_pipe.child_end.reset();
   error_pipe.reset();
 
-  if (::AssignProcessToJobObject(job.get(), process.get()) == FALSE) {
-    static_cast<void>(::TerminateProcess(process.get(), 1));
-    throw_card(CardError::backend_unavailable,
-               "assign ViKey helper to job object");
-  }
   constexpr std::uint32_t kParentRequiredSecurityProperties =
       helper::kRequiredSecurityProperties &
-      ~helper::property_bit(helper::SecurityProperty::empty_environment);
+      ~helper::property_bit(
+          helper::SecurityProperty::sanitized_environment);
   std::uint32_t parent_security_properties = 0;
+  VikeyHelperProbe result{};
   try {
+    HANDLE raw_process_token = INVALID_HANDLE_VALUE;
+    if (::OpenProcessToken(process.get(), TOKEN_QUERY, &raw_process_token) ==
+        FALSE) {
+      throw_card(CardError::backend_unavailable,
+                 "open ViKey helper process token");
+    }
+    Handle process_token(raw_process_token);
+
+    if (::AssignProcessToJobObject(job.get(), process.get()) == FALSE) {
+      throw_card(CardError::backend_unavailable,
+                 "assign ViKey helper to job object");
+    }
     parent_security_properties =
-        inspect_process_security(token.get(), process.get(), job.get());
+        inspect_process_security(process_token.get(), process.get(), job.get(),
+                                 app_container.sid.get());
+    if ((parent_security_properties & kParentRequiredSecurityProperties) !=
+        kParentRequiredSecurityProperties) {
+      throw_card(CardError::backend_unavailable,
+                 "ViKey helper security boundary is incomplete");
+    }
+    if (::ResumeThread(thread.get()) == std::numeric_limits<DWORD>::max()) {
+      throw_card(CardError::backend_unavailable,
+                 "resume restricted ViKey helper");
+    }
+    thread.reset();
+
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    helper::Request request{};
+    request.nonce = random_nonce();
+    helper::write_request(request_pipe.parent_end.get(), request);
+    request_pipe.parent_end.reset();
+
+    const helper::Response response = read_response_until(
+        response_pipe.parent_end.get(), process.get(), request.nonce,
+        deadline);
+    if (response.status != 0) {
+      throw_card(static_cast<CardError>(response.status),
+                 "ViKey helper rejected its security boundary");
+    }
+    const std::uint32_t security_properties =
+        parent_security_properties | response.security_properties;
+    if ((security_properties & helper::kRequiredSecurityProperties) !=
+        helper::kRequiredSecurityProperties) {
+      throw_card(CardError::backend_unavailable,
+                 "ViKey helper security boundary is incomplete");
+    }
+    require_clean_exit(process.get(), response_pipe.parent_end.get(),
+                       deadline);
+    result.security_properties = security_properties;
   } catch (...) {
+    const std::exception_ptr failure = std::current_exception();
     static_cast<void>(::TerminateProcess(process.get(), 1));
-    throw;
+    static_cast<void>(::WaitForSingleObject(process.get(), 1000));
+    // The profile is zero-capability and randomly named, but it must still be
+    // removed on every observed failure path. Cleanup failure supersedes the
+    // original error so a persistent profile cannot go unnoticed.
+    app_container.remove_profile();
+    std::rethrow_exception(failure);
   }
-  if ((parent_security_properties & kParentRequiredSecurityProperties) !=
-      kParentRequiredSecurityProperties) {
-    static_cast<void>(::TerminateProcess(process.get(), 1));
-    throw_card(CardError::backend_unavailable,
-               "ViKey helper security boundary is incomplete");
-  }
-  if (::ResumeThread(thread.get()) == std::numeric_limits<DWORD>::max()) {
-    static_cast<void>(::TerminateProcess(process.get(), 1));
-    throw_card(CardError::backend_unavailable,
-               "resume restricted ViKey helper");
-  }
-  thread.reset();
-
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  helper::Request request{};
-  request.nonce = random_nonce();
-  helper::write_request(request_pipe.parent_end.get(), request);
-  request_pipe.parent_end.reset();
-
-  const helper::Response response = read_response_until(
-      response_pipe.parent_end.get(), process.get(), request.nonce, deadline);
-  if (response.status != 0) {
-    throw_card(static_cast<CardError>(response.status),
-               "ViKey helper rejected its security boundary");
-  }
-  const std::uint32_t security_properties =
-      parent_security_properties | response.security_properties;
-  if ((security_properties & helper::kRequiredSecurityProperties) !=
-      helper::kRequiredSecurityProperties) {
-    throw_card(CardError::backend_unavailable,
-               "ViKey helper security boundary is incomplete");
-  }
-  require_clean_exit(process.get(), response_pipe.parent_end.get(), deadline);
-  return {.security_properties = security_properties};
+  app_container.remove_profile();
+  return result;
 }
 
 }  // namespace usb_vault::card::vikey

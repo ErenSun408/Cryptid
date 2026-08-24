@@ -167,12 +167,36 @@ set_property(TARGET vikey_helper_stall_fixture PROPERTY MSVC_RUNTIME_LIBRARY
 
 usb_vault_configure_target(vikey_helper_stall_fixture)
 
+add_executable(vikey_helper_network_fixture WIN32
+  vikey_helper_network_fixture.cpp
+  vikey_network_probe.cpp
+  ${PROJECT_SOURCE_DIR}/src/card/vikey/vikey_helper_protocol.cpp
+  ${PROJECT_SOURCE_DIR}/src/card/card_error.cpp
+)
+
+target_include_directories(vikey_helper_network_fixture PRIVATE
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(vikey_helper_network_fixture PRIVATE
+  UNICODE
+  _UNICODE
+)
+set_property(TARGET vikey_helper_network_fixture PROPERTY
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+target_link_libraries(vikey_helper_network_fixture PRIVATE Ws2_32)
+usb_vault_configure_target(vikey_helper_network_fixture)
+
 add_executable(vikey_helper_process_tests
   vikey_helper_process_tests.cpp
+  vikey_network_probe.cpp
 )
 
 add_dependencies(vikey_helper_process_tests
   usb_vault_vikey_helper
+  vikey_helper_network_fixture
   vikey_helper_stall_fixture
 )
 
@@ -183,6 +207,7 @@ target_include_directories(vikey_helper_process_tests
 
 target_link_libraries(vikey_helper_process_tests PRIVATE
   usb_vault_vikey_helper_client
+  Ws2_32
 )
 
 usb_vault_configure_target(vikey_helper_process_tests)
@@ -191,6 +216,7 @@ add_test(
   NAME vikey_helper_process_tests
   COMMAND vikey_helper_process_tests
           $<TARGET_FILE:usb_vault_vikey_helper>
+          $<TARGET_FILE:vikey_helper_network_fixture>
           $<TARGET_FILE:vikey_helper_stall_fixture>
 )
 set_tests_properties(vikey_helper_process_tests PROPERTIES

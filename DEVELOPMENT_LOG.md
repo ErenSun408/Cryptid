@@ -1373,3 +1373,74 @@
   隔离；在该门通过前继续禁止装载真实 `ViKey.dll`、注入卡凭据或读取卡内 blob。之后才可接入
   真卡会话 RAII、独立 8 字符设备 PIN、32 字节 blob 和持久计数器。
 - 当前提交状态：尚未提交，等待用户审阅决定；未执行 push。
+
+### 小切片 6：ViKey helper 可验证网络隔离门
+
+#### 计划、需求与既有实现复核
+
+- 重新核对 P1.6 出口、R-03、N-02、8.6 以及小切片 4~5 的受限进程、IPC 和 helper 身份门。
+  本切片只建立供应商代码接触卡内 blob 前的独立禁网门，不装载 `ViKey.dll`，不调用 SDK，
+  不访问安全卡，也不读取或注入设备 PIN、API Key、UserSN、根密钥或其他凭据。
+- 对照 Windows 官方 AppContainer 启动与 capability 文档后，选择不声明任何 capability 的
+  AppContainer：网络能力默认拒绝，且可与现有受限主令牌、显式句柄清单、单进程 job 和进程
+  缓解同时使用。未选择 Windows 防火墙/WFP 作为运行时证明，因为其规则创建通常需要管理员、
+  修改全局状态并依赖部署配置，不能替代每次启动前可回读的子进程令牌属性。参考：
+  <https://learn.microsoft.com/en-us/windows/win32/secauthz/implementing-an-appcontainer>、
+  <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations>。
+- AppContainer 同时默认隔离文件和设备，因此“禁网成立”不等于“供应商 DLL 及 ViKey USB/HID
+  仍可用”。该兼容性不属于本切片，必须在任何卡材料进入 helper 前作为下一独立安全门验证。
+
+#### 实现
+
+- helper client 每次用 BCrypt CSPRNG 生成 128 位随机后缀，创建仅在本次调用期间存在的
+  AppContainer profile，并通过 `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` 传入该 SID，
+  capability 数组严格为空；原受限令牌、句柄白名单、缓解策略和禁止子进程属性继续同时生效。
+- 子进程保持 suspended 时，父端打开**实际子进程令牌**并要求 `TokenIsAppContainer=true`、
+  `TokenAppContainerSid` 与本次随机 SID 完全相等、`TokenCapabilities.GroupCount=0`、完整性不高于
+  Low；这些属性与既有非提权、特权过滤、job 归属及所有缓解位全部满足后才允许恢复线程。
+  IPC 安全属性新增 `app_container`、`no_capabilities`、`low_integrity` 三个强制位。
+- 空 Unicode 环境会使 AppContainer 创建进程返回 Windows 错误 203，因此改为只传
+  `LOCALAPPDATA`、`TEMP`、`TMP` 三项非秘密随机 profile 路径，且 helper 自检环境恰好只有三项、
+  `TEMP=TMP=LOCALAPPDATA\\Temp`。父端同时把工作目录显式固定到该随机 profile 目录，不再继承
+  产品工作目录；helper 不接受宿主环境中的 PATH、代理、用户配置或凭据。
+- profile 在标准 AppContainer 生命周期内保留到 helper 退出；正常退出后显式删除。创建进程
+  失败、令牌/策略校验失败、协议错误和超时路径都会先终止并有界等待子进程，再显式删除 profile；
+  清理失败会覆盖原错误并向上可见，析构只作为最后的尽力兜底。该顺序避免使用行为不稳定的
+  “profile-less AppContainer”，也为下一步文件/设备兼容性审计保留标准 Windows 语义。
+- 新增独立静态 CRT GUI 网络夹具及共享 probe。probe 对 TCP/UDP 分别测试 IPv4/IPv6 的回环
+  地址和 RFC 文档地址，共八条路径；只发送固定单 NUL 测试字节，不含秘密。非隔离父进程先作
+  正向控制，证明测试主机网络栈并未整体失效；隔离子进程只有在所有受支持路径均返回拒绝时才
+  成功。测试目标单独链接 `Ws2_32`，产品与正式 helper 不包含网络代码或网络库。
+
+#### 验证与安全复核
+
+- 扩展进程测试覆盖：完整安全属性精确匹配、非隔离网络正向控制、八条隔离网络路径、相对路径
+  拒绝、错误摘要启动前拒绝、非 PE 制品创建进程失败、150 ms 卡死超时，以及正常 helper、网络
+  夹具、创建失败和超时四类路径的 profile 前后计数不变。所有普通桌面测试结束后再次枚举，
+  `usb-vault-vikey-helper-*` 残留目录为 0。
+- 最终 MSVC Debug、AddressSanitizer 与 `/analyze` 三套全量 CTest 均为 **18 项通过、1 项因
+  Codex 沙箱父令牌已经受限而明确跳过**。普通桌面令牌下 Debug 与独立 Release 优化版进程测试
+  均通过；ASan 插桩父测试进程启动未插桩 helper/fixture 也通过，未报告内存错误。MSVC
+  `/analyze` 全量构建零项目诊断；仅对 Windows SDK `WS2tcpip.h` 自身的 C6101 误报作头文件范围
+  内的窄抑制，项目代码仍保持 `/WX`。
+- 完全 ASan 插桩的子 helper 需要额外动态 ASan 运行库，在 AppContainer 内握手前退出；改用
+  ASan 父进程 + 未插桩静态 CRT 子进程可验证 launcher 生命周期。该现象不是产品构建失败，
+  但它提供了明确证据：未来 `ViKey.dll` 及其依赖的文件访问必须单独证明或设计安全复制/ACL，
+  不能因网络门通过就直接假定可加载。
+- PE 复核确认 Release 正式 helper 仍为 `asInvoker`/`uiAccess=false`，启用 high-entropy ASLR、
+  dynamic base 和 NX，只导入 `KERNEL32.dll`，不导入 `Ws2_32` 或供应商库；产品 exe 也未出现
+  ViKey、`Ws2_32`、WinHTTP、WinINet 或 Userenv 导入。本切片改动扫描未发现卡标识、API Key 或
+  其他凭据，`git diff --check` 通过。本切片没有加载 SDK、访问安全卡或改变卡片状态。
+
+#### 剩余风险与下一步
+
+- 下一小切片必须先验证零 capability AppContainer 对供应商 DLL/依赖文件和 ViKeyPRO USB/HID
+  设备的最小访问方案。候选方案需要保持禁网、低完整性、固定摘要和启动期防替换属性，且不得
+  让主程序提权或依赖用户临时配置；在该门通过前禁止注入设备 PIN/API Key 或读取卡内 blob。
+- 父进程异常崩溃或被强杀时无法执行用户态清理，可能留下随机命名、零 capability、无秘密的
+  空 profile；正常、已观察错误和超时路径均已验证清理。若后续采用固定 AppContainer 身份以
+  配合部署 ACL，必须另行审计 profile 防篡改、升级和卸载清理，不能直接沿用本切片结论。
+- 发布时仍须把 helper/DLL 固定 SHA-256 注入不可由普通用户修改的配置，并由安装器落实受保护
+  目录 ACL。本切片未改变该部署门，也未完成真卡会话 RAII、独立设备 PIN、32 字节 blob、首次
+  写入恢复、持久计数器或 P1.7 拔卡处理。
+- 当前提交状态：尚未提交，等待用户审阅决定；未执行 push。

@@ -4,7 +4,9 @@
 
 #include <Windows.h>
 
+#include <iterator>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -22,16 +24,38 @@ using namespace usb_vault::card::vikey::helper;
   return handle;
 }
 
-[[nodiscard]] bool empty_environment() {
+[[nodiscard]] bool sanitized_environment() {
   wchar_t* const environment = ::GetEnvironmentStringsW();
   if (environment == nullptr) {
     throw std::runtime_error("cannot inspect helper environment");
   }
-  const bool empty = *environment == L'\0';
+  std::wstring local_app_data;
+  std::wstring temp;
+  std::wstring tmp;
+  std::size_t count = 0;
+  for (const wchar_t* entry = environment; *entry != L'\0';) {
+    const std::wstring value(entry);
+    entry += value.size() + 1;
+    ++count;
+    constexpr wchar_t kLocalAppData[] = L"LOCALAPPDATA=";
+    constexpr wchar_t kTemp[] = L"TEMP=";
+    constexpr wchar_t kTmp[] = L"TMP=";
+    if (value.starts_with(kLocalAppData)) {
+      local_app_data = value.substr(std::size(kLocalAppData) - 1);
+    } else if (value.starts_with(kTemp)) {
+      temp = value.substr(std::size(kTemp) - 1);
+    } else if (value.starts_with(kTmp)) {
+      tmp = value.substr(std::size(kTmp) - 1);
+    } else {
+      count = 0;
+      break;
+    }
+  }
   if (::FreeEnvironmentStringsW(environment) == FALSE) {
     throw std::runtime_error("cannot release helper environment");
   }
-  return empty;
+  return count == 3 && !local_app_data.empty() && temp == tmp &&
+         temp == local_app_data + L"\\Temp";
 }
 
 }  // namespace
@@ -53,9 +77,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     Response response{};
     response.nonce = request.nonce;
     try {
-      if (empty_environment()) {
+      if (sanitized_environment()) {
         response.security_properties =
-            property_bit(SecurityProperty::empty_environment);
+            property_bit(SecurityProperty::sanitized_environment);
       } else {
         response.status =
             static_cast<std::int32_t>(CardError::backend_unavailable);
