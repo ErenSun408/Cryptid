@@ -190,6 +190,7 @@ add_executable(vikey_helper_network_fixture WIN32
   vikey_network_probe.cpp
   ${PROJECT_SOURCE_DIR}/src/card/vikey/vikey_helper_protocol.cpp
   ${PROJECT_SOURCE_DIR}/src/card/card_error.cpp
+  ${PROJECT_SOURCE_DIR}/src/security/secure_buffer.cpp
 )
 
 target_include_directories(vikey_helper_network_fixture PRIVATE
@@ -212,6 +213,7 @@ add_executable(vikey_helper_network_enabled_fixture WIN32
   vikey_network_probe.cpp
   ${PROJECT_SOURCE_DIR}/src/card/vikey/vikey_helper_protocol.cpp
   ${PROJECT_SOURCE_DIR}/src/card/card_error.cpp
+  ${PROJECT_SOURCE_DIR}/src/security/secure_buffer.cpp
 )
 
 target_include_directories(vikey_helper_network_enabled_fixture PRIVATE

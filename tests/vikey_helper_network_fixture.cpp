@@ -77,6 +77,7 @@ using namespace usb_vault::card::vikey::helper;
 
 int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                     _In_ int) {
+  int stage = 1;
   try {
     const HANDLE request_handle = inherited_pipe(STD_INPUT_HANDLE);
     const HANDLE response_handle = inherited_pipe(STD_OUTPUT_HANDLE);
@@ -85,7 +86,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         response_handle == error_handle) {
       throw std::invalid_argument("invalid inherited fixture pipes");
     }
+    stage = 2;
     const Request request = read_request(request_handle);
+    stage = 3;
     Response response{};
     response.nonce = request.nonce;
     try {
@@ -101,8 +104,10 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
           static_cast<std::int32_t>(CardError::backend_unavailable);
       response.security_properties = 0;
     }
+    stage = 4;
     write_response(response_handle, response);
     if (response.status != 0) return 3;
+    stage = 5;
     const std::uint32_t diagnostic =
         usb_vault::card::vikey::test::network_probe_diagnostic();
 #if defined(USB_VAULT_EXPECT_NETWORK_ACCESS)
@@ -111,6 +116,6 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     return static_cast<int>(diagnostic);
 #endif
   } catch (...) {
-    return 2;
+    return 100 + stage;
   }
 }

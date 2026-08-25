@@ -26,9 +26,12 @@ using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::
     probe_vikey_development_helper_with_network_access;
 using usb_vault::card::vikey::
+    probe_vikey_development_session_with_network_access;
+using usb_vault::card::vikey::
     probe_vikey_development_vendor_runtime_with_network_access;
 using usb_vault::card::vikey::probe_vikey_helper;
 using usb_vault::card::vikey::probe_vikey_vendor_runtime;
+using usb_vault::security::SecureBuffer;
 
 [[noreturn]] void fail(const char* const message) {
   throw std::runtime_error(message);
@@ -36,6 +39,14 @@ using usb_vault::card::vikey::probe_vikey_vendor_runtime;
 
 void expect(const bool condition, const char* const message) {
   if (!condition) fail(message);
+}
+
+void run_test(const char* const name, const auto& test) {
+  try {
+    test();
+  } catch (const std::exception& error) {
+    throw std::runtime_error(std::string(name) + ": " + error.what());
+  }
 }
 
 class Algorithm final {
@@ -321,6 +332,90 @@ void test_development_vendor_runtime_staging(
          "development vendor probe left a staging directory behind");
 }
 
+[[nodiscard]] SecureBuffer fixed_secret(const std::size_t size,
+                                        const std::byte value) {
+  SecureBuffer result(size);
+  for (std::byte& byte : result.bytes()) byte = value;
+  return result;
+}
+
+void expect_fixed_secret(const SecureBuffer& secret, const std::byte value,
+                         const char* const message) {
+  for (const std::byte byte : secret.bytes()) {
+    if (byte != value) fail(message);
+  }
+}
+
+void test_development_session_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
+  const auto result = probe_vikey_development_session_with_network_access(
+      helper, file_digest(helper), vendor.parent_path(), file_digest(vendor),
+      user_sn, api_key, user_pin, 5s);
+  expect(result.security_properties ==
+             usb_vault::card::vikey::helper::
+                 kDevelopmentCompatibilitySecurityProperties,
+         "development session lost a restricted-process property");
+  expect_fixed_secret(user_sn, std::byte{'A'},
+                      "development session changed the caller UserSN");
+  expect_fixed_secret(api_key, std::byte{'B'},
+                      "development session changed the caller API key");
+  expect_fixed_secret(user_pin, std::byte{'P'},
+                      "development session changed the caller PIN");
+  expect(development_helper_directory_count() == directories_before,
+         "development session left a staging directory behind");
+}
+
+void test_development_session_rejects_invalid_credentials(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
+  api_key.bytes()[3] = std::byte{'G'};
+  try {
+    static_cast<void>(probe_vikey_development_session_with_network_access(
+        helper, file_digest(helper), vendor.parent_path(), file_digest(vendor),
+        user_sn, api_key, user_pin, 5s));
+    fail("invalid development API key was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "invalid development API key returned the wrong generic error");
+  }
+  expect(development_helper_directory_count() == directories_before,
+         "invalid development session left a staging directory behind");
+
+  const auto short_user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes - 1, std::byte{'A'});
+  api_key.bytes()[3] = std::byte{'B'};
+  try {
+    static_cast<void>(probe_vikey_development_session_with_network_access(
+        helper, file_digest(helper), vendor.parent_path(), file_digest(vendor),
+        short_user_sn, api_key, user_pin, 5s));
+    fail("short development UserSN was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "short development UserSN returned the wrong generic error");
+  }
+  expect(development_helper_directory_count() == directories_before,
+         "short development session created a staging directory");
+}
+
 void test_development_vendor_digest_mismatch_fails_before_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -506,21 +601,44 @@ int wmain(const int argc, wchar_t** const argv) {
         std::filesystem::absolute(argv[4]).lexically_normal();
     const std::filesystem::path vendor =
         std::filesystem::absolute(argv[5]).lexically_normal();
-    test_restricted_helper_probe(helper);
-    test_vendor_runtime_staging(helper, vendor);
-    test_vendor_digest_mismatch_fails_before_launch(helper, vendor);
-    test_network_isolation(network);
-    test_development_network_access(helper, network_enabled);
-    test_development_vendor_runtime_staging(helper, vendor);
-    test_development_vendor_digest_mismatch_fails_before_staging(helper,
-                                                                 vendor);
-    test_development_helper_digest_mismatch_fails_before_staging(stalled);
-    test_development_launch_failure_removes_directory(helper.parent_path());
-    test_development_stalled_helper_times_out(stalled);
-    test_relative_path_fails_closed();
-    test_digest_mismatch_fails_before_launch(stalled);
-    test_launch_failure_removes_profile(helper.parent_path());
-    test_stalled_helper_times_out(stalled);
+    run_test("restricted helper probe",
+             [&] { test_restricted_helper_probe(helper); });
+    run_test("vendor runtime staging",
+             [&] { test_vendor_runtime_staging(helper, vendor); });
+    run_test("vendor digest mismatch", [&] {
+      test_vendor_digest_mismatch_fails_before_launch(helper, vendor);
+    });
+    run_test("network isolation", [&] { test_network_isolation(network); });
+    run_test("development network access",
+             [&] { test_development_network_access(helper, network_enabled); });
+    run_test("development vendor runtime staging", [&] {
+      test_development_vendor_runtime_staging(helper, vendor);
+    });
+    run_test("development session staging",
+             [&] { test_development_session_staging(helper, vendor); });
+    run_test("development invalid credentials", [&] {
+      test_development_session_rejects_invalid_credentials(helper, vendor);
+    });
+    run_test("development vendor digest mismatch", [&] {
+      test_development_vendor_digest_mismatch_fails_before_staging(helper,
+                                                                   vendor);
+    });
+    run_test("development helper digest mismatch", [&] {
+      test_development_helper_digest_mismatch_fails_before_staging(stalled);
+    });
+    run_test("development launch cleanup", [&] {
+      test_development_launch_failure_removes_directory(helper.parent_path());
+    });
+    run_test("development timeout cleanup",
+             [&] { test_development_stalled_helper_times_out(stalled); });
+    run_test("relative path rejection", test_relative_path_fails_closed);
+    run_test("helper digest mismatch",
+             [&] { test_digest_mismatch_fails_before_launch(stalled); });
+    run_test("isolated launch cleanup", [&] {
+      test_launch_failure_removes_profile(helper.parent_path());
+    });
+    run_test("isolated timeout cleanup",
+             [&] { test_stalled_helper_times_out(stalled); });
     std::cout << "vikey_helper_process_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

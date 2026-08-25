@@ -1,5 +1,9 @@
 #pragma once
 
+#include "card/verified_local_artifact.h"
+#include "card/vikey/vikey_session.h"
+#include "usb_vault/security/secure_buffer.h"
+
 #include <Windows.h>
 
 #include <array>
@@ -9,13 +13,17 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;
 constexpr std::size_t kNonceSize = 16;
+constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
+    static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
+                               kVikeyApiKeyBytes + kVikeyUserPinBytes);
 
 enum class Operation : std::uint32_t {
   probe = 1,
   vendor_runtime_probe = 2,
   hid_access_probe = 3,
+  development_session_probe = 4,
 };
 
 enum class SecurityProperty : std::uint32_t {
@@ -76,8 +84,26 @@ struct Request final {
   std::uint16_t version{kVersion};
   std::uint16_t header_bytes{sizeof(Request)};
   Operation operation{Operation::probe};
-  std::uint32_t reserved{};
+  std::uint32_t payload_bytes{};
   std::array<std::byte, kNonceSize> nonce{};
+};
+
+// The non-secret digest remains ordinary fixed storage. All credentials are
+// allocated as locked buffers and are wiped by their destructors.
+struct DevelopmentSessionRequest final {
+  DevelopmentSessionRequest();
+
+  DevelopmentSessionRequest(const DevelopmentSessionRequest&) = delete;
+  DevelopmentSessionRequest& operator=(const DevelopmentSessionRequest&) =
+      delete;
+  DevelopmentSessionRequest(DevelopmentSessionRequest&&) noexcept = default;
+  DevelopmentSessionRequest& operator=(DevelopmentSessionRequest&&) noexcept =
+      default;
+
+  Sha256Digest vendor_digest{};
+  security::SecureBuffer user_sn;
+  security::SecureBuffer api_key;
+  security::SecureBuffer user_pin;
 };
 
 struct Response final {
@@ -100,6 +126,13 @@ static_assert(sizeof(Response) == 36);
 
 void write_request(HANDLE pipe, const Request& request);
 [[nodiscard]] Request read_request(HANDLE pipe);
+void write_development_session_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] DevelopmentSessionRequest read_development_session_request(
+    HANDLE pipe, const Request& request);
 void write_response(HANDLE pipe, const Response& response);
 [[nodiscard]] Response read_response(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce);

@@ -66,10 +66,15 @@ bool valid_request(const Request& request) noexcept {
   const bool known_operation =
       request.operation == Operation::probe ||
       request.operation == Operation::vendor_runtime_probe ||
-      request.operation == Operation::hid_access_probe;
+      request.operation == Operation::hid_access_probe ||
+      request.operation == Operation::development_session_probe;
+  const std::uint32_t required_payload =
+      request.operation == Operation::development_session_probe
+          ? kDevelopmentSessionPayloadBytes
+          : 0;
   return request.magic == kMagic && request.version == kVersion &&
          request.header_bytes == sizeof(Request) &&
-         known_operation && request.reserved == 0;
+         known_operation && request.payload_bytes == required_payload;
 }
 
 bool valid_response(const Response& response) noexcept {
@@ -88,7 +93,7 @@ bool valid_response(const Response& response) noexcept {
 }
 
 void write_request(const HANDLE pipe, const Request& request) {
-  if (!valid_request(request)) {
+  if (!valid_request(request) || request.payload_bytes != 0) {
     throw_protocol("refuse invalid ViKey helper request");
   }
   write_exact(pipe, message_bytes(request));
@@ -101,6 +106,45 @@ Request read_request(const HANDLE pipe) {
     throw_protocol("reject invalid ViKey helper request");
   }
   return request;
+}
+
+DevelopmentSessionRequest::DevelopmentSessionRequest()
+    : user_sn(kVikeyUserSnBytes),
+      api_key(kVikeyApiKeyBytes),
+      user_pin(kVikeyUserPinBytes) {}
+
+void write_development_session_request(
+    const HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin) {
+  if (!valid_request(request) ||
+      request.operation != Operation::development_session_probe ||
+      user_sn.size() != kVikeyUserSnBytes ||
+      api_key.size() != kVikeyApiKeyBytes ||
+      user_pin.size() != kVikeyUserPinBytes) {
+    throw_protocol("refuse invalid ViKey development session request");
+  }
+  write_exact(pipe, message_bytes(request));
+  write_exact(pipe, vendor_digest);
+  write_exact(pipe, user_sn.bytes());
+  write_exact(pipe, api_key.bytes());
+  write_exact(pipe, user_pin.bytes());
+}
+
+DevelopmentSessionRequest read_development_session_request(
+    const HANDLE pipe, const Request& request) {
+  if (!valid_request(request) ||
+      request.operation != Operation::development_session_probe) {
+    throw_protocol("reject invalid ViKey development session request");
+  }
+  DevelopmentSessionRequest result;
+  read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, result.user_sn.bytes());
+  read_exact(pipe, result.api_key.bytes());
+  read_exact(pipe, result.user_pin.bytes());
+  return result;
 }
 
 void write_response(const HANDLE pipe, const Response& response) {

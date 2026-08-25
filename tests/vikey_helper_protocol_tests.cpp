@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <system_error>
@@ -13,6 +14,10 @@
 namespace {
 
 using usb_vault::card::CardError;
+using usb_vault::card::Sha256Digest;
+using usb_vault::card::vikey::kVikeyApiKeyBytes;
+using usb_vault::card::vikey::kVikeyUserPinBytes;
+using usb_vault::card::vikey::kVikeyUserSnBytes;
 using namespace usb_vault::card::vikey::helper;
 
 class Handle final {
@@ -85,14 +90,87 @@ void test_request_validation() {
   expect(valid_request(request), "vendor runtime probe was rejected");
   request.operation = Operation::hid_access_probe;
   expect(valid_request(request), "HID access probe was rejected");
-  request.version = 2;
+  request.operation = Operation::development_session_probe;
+  request.payload_bytes = kDevelopmentSessionPayloadBytes;
+  expect(valid_request(request), "development session request was rejected");
+  request.version = static_cast<std::uint16_t>(kVersion + 1);
   expect(!valid_request(request), "unknown request version was accepted");
   request = Request{};
   request.operation = static_cast<Operation>(99);
   expect(!valid_request(request), "unknown request operation was accepted");
   request = Request{};
-  request.reserved = 1;
-  expect(!valid_request(request), "nonzero request reserve was accepted");
+  request.payload_bytes = 1;
+  expect(!valid_request(request), "probe request payload was accepted");
+  request = Request{};
+  request.operation = Operation::development_session_probe;
+  expect(!valid_request(request), "missing session payload was accepted");
+}
+
+[[nodiscard]] usb_vault::security::SecureBuffer fixed_secret(
+    const std::size_t size, const std::byte value) {
+  usb_vault::security::SecureBuffer result(size);
+  for (std::byte& byte : result.bytes()) byte = value;
+  return result;
+}
+
+void expect_fixed_secret(const usb_vault::security::SecureBuffer& secret,
+                         const std::byte value,
+                         const char* const message) {
+  for (const std::byte byte : secret.bytes()) {
+    if (byte != value) fail(message);
+  }
+}
+
+void test_development_session_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  Request sent{};
+  sent.operation = Operation::development_session_probe;
+  sent.payload_bytes = kDevelopmentSessionPayloadBytes;
+  sent.nonce[2] = std::byte{0x6c};
+  Sha256Digest digest{};
+  digest.front() = std::byte{0xd1};
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+
+  write_development_session_request(pipe.write.get(), sent, digest, user_sn,
+                                    api_key, user_pin);
+  const Request received = read_request(pipe.read.get());
+  DevelopmentSessionRequest body =
+      read_development_session_request(pipe.read.get(), received);
+  expect(received.nonce == sent.nonce, "session nonce did not round-trip");
+  expect(body.vendor_digest == digest,
+         "session vendor digest did not round-trip");
+  expect_fixed_secret(body.user_sn, std::byte{'A'},
+                      "session UserSN did not round-trip");
+  expect_fixed_secret(body.api_key, std::byte{'B'},
+                      "session API key did not round-trip");
+  expect_fixed_secret(body.user_pin, std::byte{'P'},
+                      "session PIN did not round-trip");
+  expect_fixed_secret(user_sn, std::byte{'A'},
+                      "session write changed the caller UserSN");
+  expect_fixed_secret(api_key, std::byte{'B'},
+                      "session write changed the caller API key");
+  expect_fixed_secret(user_pin, std::byte{'P'},
+                      "session write changed the caller PIN");
+}
+
+void test_development_session_request_rejects_wrong_sizes() {
+  const Pipe pipe = make_pipe();
+  Request request{};
+  request.operation = Operation::development_session_probe;
+  request.payload_bytes = kDevelopmentSessionPayloadBytes;
+  const Sha256Digest digest{};
+  const auto short_user_sn =
+      fixed_secret(kVikeyUserSnBytes - 1, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  expect_protocol_error(
+      [&] {
+        write_development_session_request(pipe.write.get(), request, digest,
+                                          short_user_sn, api_key, user_pin);
+      },
+      "short session UserSN was accepted");
 }
 
 void test_response_round_trip() {
@@ -148,6 +226,8 @@ int main() {
   try {
     test_request_round_trip();
     test_request_validation();
+    test_development_session_request_round_trip();
+    test_development_session_request_rejects_wrong_sizes();
     test_response_round_trip();
     test_response_validation();
     test_nonce_mismatch_is_rejected();

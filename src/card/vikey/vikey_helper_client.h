@@ -1,6 +1,7 @@
 #pragma once
 
 #include "card/verified_local_artifact.h"
+#include "usb_vault/security/secure_buffer.h"
 
 #include <chrono>
 #include <cstdint>
@@ -61,6 +62,22 @@ probe_vikey_development_vendor_runtime_with_network_access(
 probe_vikey_development_hid_access_with_network_access(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_digest,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+// Development-only one-shot authentication. Credentials travel only through
+// the authenticated helper pipe into locked helper buffers; the helper loads
+// the verified staged SDK, opens and closes one user session, then exits.
+// This boundary has ordinary network access and must never receive production
+// credentials or material.
+[[nodiscard]] VikeyHelperProbe
+probe_vikey_development_session_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
     std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
 }  // namespace usb_vault::card::vikey

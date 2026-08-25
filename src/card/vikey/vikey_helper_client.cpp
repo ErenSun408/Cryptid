@@ -40,6 +40,12 @@ enum class HelperBoundary {
   network_enabled_development,
 };
 
+struct DevelopmentSessionInputs final {
+  const security::SecureBuffer& user_sn;
+  const security::SecureBuffer& api_key;
+  const security::SecureBuffer& user_pin;
+};
+
 constexpr DWORD64 kHelperMitigations =
     PROCESS_CREATION_MITIGATION_POLICY_DEP_ENABLE |
     PROCESS_CREATION_MITIGATION_POLICY_SEHOP_ENABLE |
@@ -932,6 +938,14 @@ void cleanup_development_directory(
           available >= sizeof(helper::Response)) {
         return helper::read_response(pipe, nonce);
       }
+      DWORD exit_code = 0;
+      if (::GetExitCodeProcess(process, &exit_code) != FALSE) {
+        throw std::system_error(
+            make_error_code(CardError::communication_failed),
+            std::format("ViKey helper exited without a complete response "
+                        "(exit code 0x{:08X})",
+                        exit_code));
+      }
       throw_card(CardError::communication_failed,
                  "ViKey helper exited without a complete response");
     }
@@ -988,18 +1002,35 @@ namespace {
     const helper::Operation operation,
     const std::filesystem::path* const vendor_path,
     const Sha256Digest* const vendor_digest,
+    const DevelopmentSessionInputs* const session_inputs,
     const HelperBoundary boundary,
     const std::chrono::milliseconds timeout) {
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");
   }
+  const bool session_required =
+      operation == helper::Operation::development_session_probe;
   const bool vendor_required =
-      operation == helper::Operation::vendor_runtime_probe;
+      operation == helper::Operation::vendor_runtime_probe ||
+      session_required;
   if (vendor_required !=
       (vendor_path != nullptr && vendor_digest != nullptr)) {
     throw_card(CardError::invalid_configuration,
                "ViKey vendor probe configuration is incomplete");
+  }
+  if (session_required != (session_inputs != nullptr) ||
+      (session_required &&
+       boundary != HelperBoundary::network_enabled_development)) {
+    throw_card(CardError::invalid_configuration,
+               "ViKey development session configuration is incomplete");
+  }
+  if (session_inputs != nullptr &&
+      (session_inputs->user_sn.size() != kVikeyUserSnBytes ||
+       session_inputs->api_key.size() != kVikeyApiKeyBytes ||
+       session_inputs->user_pin.size() != kVikeyUserPinBytes)) {
+    throw_card(CardError::invalid_configuration,
+               "ViKey development session credential size is invalid");
   }
   VerifiedLocalArtifact executable_artifact = verify_local_artifact(
       helper_path, expected_digest, kMaximumHelperBytes);
@@ -1168,7 +1199,15 @@ namespace {
     helper::Request request{};
     request.operation = operation;
     request.nonce = random_nonce();
-    helper::write_request(request_pipe.parent_end.get(), request);
+    if (session_inputs != nullptr && vendor_digest != nullptr) {
+      request.payload_bytes = helper::kDevelopmentSessionPayloadBytes;
+      helper::write_development_session_request(
+          request_pipe.parent_end.get(), request, *vendor_digest,
+          session_inputs->user_sn, session_inputs->api_key,
+          session_inputs->user_pin);
+    } else {
+      helper::write_request(request_pipe.parent_end.get(), request);
+    }
     request_pipe.parent_end.reset();
 
     const helper::Response response = read_response_until(
@@ -1212,7 +1251,7 @@ VikeyHelperProbe probe_vikey_helper(
     const std::chrono::milliseconds timeout) {
   return probe_vikey_helper_operation(
       helper_path, expected_digest, helper::Operation::probe, nullptr,
-      nullptr, HelperBoundary::zero_network_app_container, timeout);
+      nullptr, nullptr, HelperBoundary::zero_network_app_container, timeout);
 }
 
 VikeyHelperProbe probe_vikey_vendor_runtime(
@@ -1226,8 +1265,8 @@ VikeyHelperProbe probe_vikey_vendor_runtime(
   return probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
       helper::Operation::vendor_runtime_probe, &vendor_path,
-      &expected_vendor_digest, HelperBoundary::zero_network_app_container,
-      timeout);
+      &expected_vendor_digest, nullptr,
+      HelperBoundary::zero_network_app_container, timeout);
 }
 
 VikeyHelperProbe probe_vikey_hid_access(
@@ -1236,7 +1275,7 @@ VikeyHelperProbe probe_vikey_hid_access(
     const std::chrono::milliseconds timeout) {
   return probe_vikey_helper_operation(
       helper_path, expected_digest, helper::Operation::hid_access_probe,
-      nullptr, nullptr, HelperBoundary::zero_network_app_container,
+      nullptr, nullptr, nullptr, HelperBoundary::zero_network_app_container,
       timeout);
 }
 
@@ -1246,7 +1285,7 @@ VikeyHelperProbe probe_vikey_development_helper_with_network_access(
     const std::chrono::milliseconds timeout) {
   return probe_vikey_helper_operation(
       helper_path, expected_digest, helper::Operation::probe, nullptr,
-      nullptr, HelperBoundary::network_enabled_development, timeout);
+      nullptr, nullptr, HelperBoundary::network_enabled_development, timeout);
 }
 
 VikeyHelperProbe
@@ -1261,8 +1300,8 @@ probe_vikey_development_vendor_runtime_with_network_access(
   return probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
       helper::Operation::vendor_runtime_probe, &vendor_path,
-      &expected_vendor_digest, HelperBoundary::network_enabled_development,
-      timeout);
+      &expected_vendor_digest, nullptr,
+      HelperBoundary::network_enabled_development, timeout);
 }
 
 VikeyHelperProbe
@@ -1272,8 +1311,28 @@ probe_vikey_development_hid_access_with_network_access(
     const std::chrono::milliseconds timeout) {
   return probe_vikey_helper_operation(
       helper_path, expected_digest, helper::Operation::hid_access_probe,
-      nullptr, nullptr, HelperBoundary::network_enabled_development,
+      nullptr, nullptr, nullptr, HelperBoundary::network_enabled_development,
       timeout);
+}
+
+VikeyHelperProbe probe_vikey_development_session_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn, .api_key = api_key, .user_pin = user_pin};
+  return probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::development_session_probe, &vendor_path,
+      &expected_vendor_digest, &inputs,
+      HelperBoundary::network_enabled_development, timeout);
 }
 
 }  // namespace usb_vault::card::vikey

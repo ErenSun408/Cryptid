@@ -1,5 +1,8 @@
 #include "card/vikey/vikey_helper_protocol.h"
 #include "card/vikey/vikey_hid_probe.h"
+#include "card/vikey/vikey_artifact.h"
+#include "card/vikey/vikey_module.h"
+#include "card/vikey/vikey_session.h"
 
 #include "usb_vault/card/card_error.h"
 
@@ -7,16 +10,25 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace {
 
 using usb_vault::card::CardError;
+using usb_vault::card::card_error_category;
 using namespace usb_vault::card::vikey::helper;
+
+enum class EnvironmentBoundary {
+  invalid,
+  zero_network_app_container,
+  network_enabled_development,
+};
 
 class Module final {
  public:
@@ -61,7 +73,7 @@ class File final {
   return handle;
 }
 
-[[nodiscard]] bool sanitized_environment() {
+[[nodiscard]] EnvironmentBoundary sanitized_environment() {
   wchar_t* const environment = ::GetEnvironmentStringsW();
   if (environment == nullptr) {
     throw std::runtime_error("cannot inspect helper environment");
@@ -105,8 +117,14 @@ class File final {
       count == 3 && system_root.empty() && windir.empty();
   const bool development_environment =
       count == 5 && !system_root.empty() && windir == system_root;
-  return base_valid &&
-         (isolated_environment || development_environment);
+  if (!base_valid) return EnvironmentBoundary::invalid;
+  if (isolated_environment) {
+    return EnvironmentBoundary::zero_network_app_container;
+  }
+  if (development_environment) {
+    return EnvironmentBoundary::network_enabled_development;
+  }
+  return EnvironmentBoundary::invalid;
 }
 
 [[nodiscard]] std::filesystem::path staged_vendor_dll() {
@@ -176,7 +194,37 @@ struct OperationResult final {
   return {};
 }
 
-[[nodiscard]] OperationResult operation_result(const Operation operation) {
+[[nodiscard]] OperationResult development_session(
+    const DevelopmentSessionRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+    const std::error_code close_error = session.close();
+    if (close_error) {
+      return {.status = close_error.value()};
+    }
+    return {};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
+[[nodiscard]] OperationResult operation_result(
+    const Operation operation,
+    const DevelopmentSessionRequest* const session_request = nullptr) {
   switch (operation) {
     case Operation::probe:
       return {};
@@ -199,6 +247,12 @@ struct OperationResult final {
                                : CardError::device_failure),
                        .detail = probe.open_error};
     }
+    case Operation::development_session_probe:
+      return session_request != nullptr
+                 ? development_session(*session_request)
+                 : OperationResult{
+                       .status = static_cast<std::int32_t>(
+                           CardError::invalid_operation)};
   }
   return {.status =
               static_cast<std::int32_t>(CardError::invalid_operation),
@@ -224,8 +278,26 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     Response response{};
     response.nonce = request.nonce;
     try {
-      if (sanitized_environment()) {
-        const OperationResult result = operation_result(request.operation);
+      const EnvironmentBoundary environment = sanitized_environment();
+      if (environment != EnvironmentBoundary::invalid) {
+        OperationResult result{};
+        if (request.operation == Operation::development_session_probe) {
+          if (environment !=
+              EnvironmentBoundary::network_enabled_development) {
+            result.status =
+                static_cast<std::int32_t>(CardError::invalid_operation);
+          } else {
+            {
+              DevelopmentSessionRequest session_request =
+                  read_development_session_request(request_handle, request);
+              result = operation_result(request.operation, &session_request);
+            }
+            // The scoped request above wipes all helper-side credential
+            // buffers before any response is emitted.
+          }
+        } else {
+          result = operation_result(request.operation);
+        }
         response.status = result.status;
         response.detail = result.detail;
       } else {
