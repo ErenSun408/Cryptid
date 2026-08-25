@@ -149,12 +149,13 @@ target_link_libraries(usb_vault_verified_local_artifact PRIVATE
 )
 usb_vault_configure_target(usb_vault_verified_local_artifact)
 
-# The product executable intentionally does not link this target. The unsigned
-# vendor SDK is confined to a future isolated card helper; current unit tests
-# use injected module operations and never load ViKey.dll.
+# The product executable intentionally does not link this target. SDK-bound
+# session code remains private to the ViKey adapter/helper boundary; unit tests
+# use injected function tables and never load ViKey.dll.
 add_library(usb_vault_vikey_sdk STATIC
   src/card/vikey/vikey_artifact.cpp
   src/card/vikey/vikey_module.cpp
+  src/card/vikey/vikey_session.cpp
 )
 
 target_include_directories(usb_vault_vikey_sdk

@@ -152,6 +152,8 @@ std::error_code map_status(const sdk::Status status) noexcept {
     case sdk::kUserSn:
     case sdk::kNotActive:
     case sdk::kUnsetApiKey:
+    case sdk::kApiKeyCalculate1:
+    case sdk::kApiKeyCalculate2:
     case sdk::kCheckApiKey:
       return make_error_code(CardError::invalid_configuration);
     default:

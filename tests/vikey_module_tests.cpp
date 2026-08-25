@@ -208,6 +208,11 @@ void test_vendor_statuses_map_to_generic_card_errors() {
   require(map_status(sdk::kApiKey) ==
               make_error_code(CardError::invalid_configuration),
           "API-key status mapping differed");
+  require(map_status(sdk::kApiKeyCalculate1) ==
+                  make_error_code(CardError::invalid_configuration) &&
+              map_status(sdk::kApiKeyCalculate2) ==
+                  make_error_code(CardError::invalid_configuration),
+          "API-key calculation status mapping differed");
   require(map_status(0x81234567U) ==
               make_error_code(CardError::device_failure),
           "unknown vendor status did not fail closed");

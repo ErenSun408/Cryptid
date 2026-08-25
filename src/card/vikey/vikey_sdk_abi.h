@@ -30,6 +30,8 @@ constexpr Status kApiKey = 0x80000021U;
 constexpr Status kUserSn = 0x80000023U;
 constexpr Status kNotActive = 0x80000024U;
 constexpr Status kUnsetApiKey = 0x80000025U;
+constexpr Status kApiKeyCalculate1 = 0x80000026U;
+constexpr Status kApiKeyCalculate2 = 0x80000027U;
 constexpr Status kCheckApiKey = 0x80000028U;
 
 #if defined(_MSC_VER)

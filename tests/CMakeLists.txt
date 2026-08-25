@@ -122,6 +122,24 @@ usb_vault_configure_target(vikey_module_tests)
 
 add_test(NAME vikey_module_tests COMMAND vikey_module_tests)
 
+add_executable(vikey_session_tests
+  vikey_session_tests.cpp
+)
+
+target_include_directories(vikey_session_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_session_tests
+  PRIVATE
+    usb_vault_vikey_sdk
+)
+
+usb_vault_configure_target(vikey_session_tests)
+
+add_test(NAME vikey_session_tests COMMAND vikey_session_tests)
+
 add_executable(vikey_artifact_tests
   vikey_artifact_tests.cpp
 )
