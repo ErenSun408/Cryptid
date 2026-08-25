@@ -62,6 +62,15 @@ constexpr std::uint32_t kKnownSecurityProperties =
 constexpr std::uint32_t kRequiredSecurityProperties =
     kKnownSecurityProperties;
 
+// Development compatibility deliberately omits the AppContainer boundary so
+// the vendor runtime can use ordinary network and HID access. It is not a
+// production card-session boundary.
+constexpr std::uint32_t kDevelopmentCompatibilitySecurityProperties =
+    kRequiredSecurityProperties &
+    ~property_bit(SecurityProperty::app_container) &
+    ~property_bit(SecurityProperty::no_capabilities) &
+    ~property_bit(SecurityProperty::low_integrity);
+
 struct Request final {
   std::uint32_t magic{kMagic};
   std::uint16_t version{kVersion};

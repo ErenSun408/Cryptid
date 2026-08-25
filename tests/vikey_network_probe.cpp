@@ -207,4 +207,8 @@ bool all_network_paths_denied() {
   return network_probe_diagnostic() == 0;
 }
 
+bool ordinary_network_path_available() {
+  return (network_probe_diagnostic() & 0xf0000000U) == 0x40000000U;
+}
+
 }  // namespace usb_vault::card::vikey::test

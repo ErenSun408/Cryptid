@@ -38,4 +38,29 @@ struct VikeyHelperProbe final {
     const Sha256Digest& expected_digest,
     std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
+// Development-only compatibility entry points. These retain a privilege-
+// filtered, non-elevated process token, artifact locks, handle allowlist, job,
+// mitigations, sanitized environment, IPC validation, and timeout, but
+// deliberately do not create an AppContainer. The helper therefore has
+// ordinary network and HID access and must never receive production material.
+[[nodiscard]] VikeyHelperProbe
+probe_vikey_development_helper_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+[[nodiscard]] VikeyHelperProbe
+probe_vikey_development_vendor_runtime_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+[[nodiscard]] VikeyHelperProbe
+probe_vikey_development_hid_access_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
 }  // namespace usb_vault::card::vikey

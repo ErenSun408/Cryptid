@@ -92,6 +92,31 @@ void expect(const bool condition, const char* const message) {
   return count;
 }
 
+[[nodiscard]] std::size_t development_helper_directory_count() {
+  const DWORD required = ::GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  expect(required > 1,
+         "could not resolve LOCALAPPDATA for development cleanup test");
+  std::wstring local_app_data(required, L'\0');
+  const DWORD written = ::GetEnvironmentVariableW(
+      L"LOCALAPPDATA", local_app_data.data(), required);
+  expect(written > 0 && written < required,
+         "could not read LOCALAPPDATA for development cleanup test");
+  local_app_data.resize(written);
+
+  std::error_code error;
+  std::size_t count = 0;
+  for (std::filesystem::directory_iterator entry(local_app_data, error), end;
+       !error && entry != end; entry.increment(error)) {
+    if (entry->path().filename().native().starts_with(
+            L"usb-vault-vikey-development-helper-")) {
+      ++count;
+    }
+  }
+  expect(!error,
+         "could not enumerate development helper directories for cleanup test");
+  return count;
+}
+
 }  // namespace
 
 int wmain(const int argc, wchar_t** const argv) {
@@ -119,6 +144,8 @@ int wmain(const int argc, wchar_t** const argv) {
     const std::filesystem::path helper =
         std::filesystem::absolute(argv[1]).lexically_normal();
     const std::size_t profiles_before = helper_profile_count();
+    const std::size_t directories_before =
+        development_helper_directory_count();
     usb_vault::card::vikey::VikeyHelperProbe result{};
     try {
       result = usb_vault::card::vikey::probe_vikey_hid_access(
@@ -128,19 +155,42 @@ int wmain(const int argc, wchar_t** const argv) {
              "denied HID probe left an AppContainer profile behind");
       if (error.code() == usb_vault::card::make_error_code(
                               CardError::permission_denied)) {
-        std::cout << "vikey_helper_hid_compatibility_tests skipped: "
-                     "zero-capability AppContainer cannot open ViKeyPRO "
-                     "(Windows ERROR_ACCESS_DENIED)\n";
-        return 77;
+        std::cout << "zero-capability AppContainer could not open ViKeyPRO "
+                     "as expected (Windows ERROR_ACCESS_DENIED)\n";
+      } else {
+        throw;
       }
-      throw;
     }
-    expect(result.security_properties ==
-               usb_vault::card::vikey::helper::
-                   kRequiredSecurityProperties,
-           "isolated HID probe lost a required security property");
+    if (result.security_properties != 0) {
+      expect(result.security_properties ==
+                 usb_vault::card::vikey::helper::
+                     kRequiredSecurityProperties,
+             "isolated HID probe lost a required security property");
+    }
     expect(helper_profile_count() == profiles_before,
-           "successful HID probe left an AppContainer profile behind");
+           "HID probe left an AppContainer profile behind");
+
+    const auto development_result =
+        usb_vault::card::vikey::
+            probe_vikey_development_hid_access_with_network_access(
+                helper, file_digest(helper), 5s);
+    // Development omits only the three AppContainer-specific assertions.
+    if (development_result.security_properties !=
+        usb_vault::card::vikey::helper::
+            kDevelopmentCompatibilitySecurityProperties) {
+      std::cerr << "development HID security properties: actual=0x"
+                << std::hex << development_result.security_properties
+                << " expected=0x"
+                << usb_vault::card::vikey::helper::
+                       kDevelopmentCompatibilitySecurityProperties
+                << std::dec << '\n';
+    }
+    expect(development_result.security_properties ==
+               usb_vault::card::vikey::helper::
+                   kDevelopmentCompatibilitySecurityProperties,
+           "development HID probe lost a restricted-process property");
+    expect(development_helper_directory_count() == directories_before,
+           "development HID probe left a staging directory behind");
     std::cout << "vikey_helper_hid_compatibility_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

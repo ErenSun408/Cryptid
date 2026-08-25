@@ -69,6 +69,8 @@ class File final {
   std::wstring local_app_data;
   std::wstring temp;
   std::wstring tmp;
+  std::wstring system_root;
+  std::wstring windir;
   std::size_t count = 0;
   for (const wchar_t* entry = environment; *entry != L'\0';) {
     const std::wstring value(entry);
@@ -77,12 +79,18 @@ class File final {
     constexpr wchar_t kLocalAppData[] = L"LOCALAPPDATA=";
     constexpr wchar_t kTemp[] = L"TEMP=";
     constexpr wchar_t kTmp[] = L"TMP=";
+    constexpr wchar_t kSystemRoot[] = L"SystemRoot=";
+    constexpr wchar_t kWindowsDirectory[] = L"WINDIR=";
     if (value.starts_with(kLocalAppData)) {
       local_app_data = value.substr(std::size(kLocalAppData) - 1);
     } else if (value.starts_with(kTemp)) {
       temp = value.substr(std::size(kTemp) - 1);
     } else if (value.starts_with(kTmp)) {
       tmp = value.substr(std::size(kTmp) - 1);
+    } else if (value.starts_with(kSystemRoot)) {
+      system_root = value.substr(std::size(kSystemRoot) - 1);
+    } else if (value.starts_with(kWindowsDirectory)) {
+      windir = value.substr(std::size(kWindowsDirectory) - 1);
     } else {
       count = 0;
       break;
@@ -91,8 +99,14 @@ class File final {
   if (::FreeEnvironmentStringsW(environment) == FALSE) {
     throw std::runtime_error("cannot release helper environment");
   }
-  return count == 3 && !local_app_data.empty() && temp == tmp &&
-         temp == local_app_data + L"\\Temp";
+  const bool base_valid = !local_app_data.empty() && temp == tmp &&
+                          temp == local_app_data + L"\\Temp";
+  const bool isolated_environment =
+      count == 3 && system_root.empty() && windir.empty();
+  const bool development_environment =
+      count == 5 && !system_root.empty() && windir == system_root;
+  return base_valid &&
+         (isolated_environment || development_environment);
 }
 
 [[nodiscard]] std::filesystem::path staged_vendor_dll() {
