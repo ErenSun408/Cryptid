@@ -81,6 +81,10 @@ void test_request_round_trip() {
 void test_request_validation() {
   Request request{};
   expect(valid_request(request), "valid request was rejected");
+  request.operation = Operation::vendor_runtime_probe;
+  expect(valid_request(request), "vendor runtime probe was rejected");
+  request.operation = Operation::hid_access_probe;
+  expect(valid_request(request), "HID access probe was rejected");
   request.version = 2;
   expect(!valid_request(request), "unknown request version was accepted");
   request = Request{};
@@ -110,7 +114,12 @@ void test_response_validation() {
   response.security_properties = kKnownSecurityProperties | (1U << 31);
   expect(!valid_response(response), "unknown security property was accepted");
   response = Response{};
+  response.security_properties = kRequiredSecurityProperties;
+  response.detail = ERROR_ACCESS_DENIED;
+  expect(!valid_response(response), "successful response retained a detail");
+  response = Response{};
   response.status = static_cast<std::int32_t>(CardError::backend_unavailable);
+  response.detail = ERROR_ACCESS_DENIED;
   expect(valid_response(response), "known helper error was rejected");
   response.security_properties =
       property_bit(SecurityProperty::filtered_token);

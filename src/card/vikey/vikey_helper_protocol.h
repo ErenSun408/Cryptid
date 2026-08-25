@@ -14,6 +14,8 @@ constexpr std::size_t kNonceSize = 16;
 
 enum class Operation : std::uint32_t {
   probe = 1,
+  vendor_runtime_probe = 2,
+  hid_access_probe = 3,
 };
 
 enum class SecurityProperty : std::uint32_t {
@@ -75,7 +77,9 @@ struct Response final {
   std::uint16_t header_bytes{sizeof(Response)};
   std::int32_t status{};
   std::uint32_t security_properties{};
-  std::uint32_t reserved{};
+  // Non-secret Win32 or vendor status for compatibility diagnostics. It is
+  // zero on success and never carries paths, identifiers, or credentials.
+  std::uint32_t detail{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 

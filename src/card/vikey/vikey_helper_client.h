@@ -20,4 +20,22 @@ struct VikeyHelperProbe final {
     const Sha256Digest& expected_digest,
     std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
+// Copies a verified, fixed-name ViKey.dll into the ephemeral AppContainer
+// profile, locks the staged bytes against replacement, and verifies that the
+// helper can load it using only its own directory and System32 dependencies.
+// No SDK call other than VikeyGetLibraryVersion is made.
+[[nodiscard]] VikeyHelperProbe probe_vikey_vendor_runtime(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+// Verifies that the isolated helper can enumerate the fixed ViKeyPRO HID and
+// obtain a read/write handle without sending any HID report or SDK command.
+[[nodiscard]] VikeyHelperProbe probe_vikey_hid_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
 }  // namespace usb_vault::card::vikey

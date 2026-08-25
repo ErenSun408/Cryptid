@@ -1444,3 +1444,94 @@
   目录 ACL。本切片未改变该部署门，也未完成真卡会话 RAII、独立设备 PIN、32 字节 blob、首次
   写入恢复、持久计数器或 P1.7 拔卡处理。
 - 当前提交状态：尚未提交，等待用户审阅决定；未执行 push。
+
+### 小切片 7：ViKey helper 供应商运行库与零能力 HID 兼容性门
+
+#### 计划、需求与既有实现复核
+
+- 重新核对 P1.6 出口、R-03、8.6、小切片 3 的供应商 DLL 身份门，以及小切片 4~6 的受限
+  helper、启动期防替换和零 capability AppContainer 禁网门。本切片只验证供应商运行库和
+  ViKeyPRO HID 能否在既有边界内工作；不注入 UserSN、API Key 或设备 PIN，不建立 SDK 卡会话，
+  不发送 HID input/output/feature report，也不读取或写入卡内 blob。
+- 对照 Windows 官方 AppContainer、HID device capability、custom capability 和设备安装安全
+  文档。普通 HID 的受管应用访问要求 `humanInterfaceDevice` 设备 capability；Windows 10 1809
+  起清单中的 VID/PID/Function 限制会被忽略。更精确的 custom capability 需要 capability 所有者、
+  应用包/SCCD，并由驱动 INF 或驱动代码把 capability 绑定到设备接口；设备 ACL 同样属于驱动/
+  部署安全描述符，不是无管理员、每次随机 profile 的运行时开关。参考：
+  <https://learn.microsoft.com/en-us/windows/win32/secauthz/implementing-an-appcontainer>、
+  <https://learn.microsoft.com/en-us/uwp/api/windows.devices.humaninterfacedevice>、
+  <https://learn.microsoft.com/en-us/windows-hardware/drivers/devapps/hardware-support-app--hsa--steps-for-driver-developers>、
+  <https://learn.microsoft.com/en-us/windows-hardware/drivers/install/creating-secure-device-installations>。
+
+#### 实现
+
+- IPC v1 增加 `vendor_runtime_probe` 与 `hid_access_probe` 两个固定操作；响应原保留字段改为仅承载
+  非秘密 Win32/供应商状态的 `detail`。成功响应要求 `detail=0`，错误状态仍必须位于统一
+  `CardError` 范围，字段不允许承载路径、设备标识、凭据或卡数据。
+- helper client 在创建任何 AppContainer 前同时验证并锁定固定名 `ViKey.dll` 的来源摘要；随后
+  复制到随机 profile，设置 Medium + No-Write-Up 强制完整性标签，再对暂存字节重算同一摘要并
+  持锁到子进程结束。摘要不匹配在创建 profile/进程前失败；正常、启动失败、协议错误、超时和
+  操作拒绝路径均先释放锁、删除暂存 DLL，再删除 profile，任何清理失败保持可见。
+- AppContainer 文件虚拟化实测表明，子进程直接使用宿主 `GetAppContainerFolderPath` 绝对路径会
+  被再次重定向并得到 `ERROR_PATH_NOT_FOUND`。启动环境因此只携带由
+  `SHGetKnownFolderPath(FOLDERID_LocalAppData)` 取得的常规虚拟路径，宿主仍把工作目录和暂存文件
+  绑定到随机 profile；子进程通过虚拟 `LOCALAPPDATA\\ViKey.dll` 访问同一文件。该路径不是继承
+  用户环境变量，环境仍恰好只有 `LOCALAPPDATA/TEMP/TMP` 三项且不包含 PATH、代理或凭据。
+- helper 在加载前先确认固定文件可读，再用 `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`
+  将依赖搜索锁到 System32，加载已验证暂存文件，并只解析、调用无卡参数的
+  `VikeyGetLibraryVersion`。产品目标继续不链接 helper client 或供应商 SDK；供应商 DLL 不进入
+  仓库，测试默认使用只导出同名版本函数的静态 CRT 无害夹具。
+- 新增固定 ViKeyPRO HID probe，只枚举 HID class 中路径匹配 `VID_1987/PID_0331` 的接口；打开后
+  还要用 `HidD_GetAttributes` 与 `HidP_GetCaps` 核验 Usage `FF00/0001`。probe 只申请并关闭
+  `GENERIC_READ|GENERIC_WRITE` 句柄，不调用任何报告 I/O。硬件测试先要求宿主阳性对照成功，再
+  运行相同 AppContainer helper；精确的 `ERROR_ACCESS_DENIED` 被记录为兼容门 skipped，其他设备
+  错误仍失败，将来隔离句柄真正成功才可标记 passed。
+
+#### 验证与安全复核
+
+- 无害 `ViKey.dll` 夹具在普通桌面令牌下通过完整进程测试：来源/暂存双重摘要、启动期文件锁、
+  固定导出调用、完整安全属性、禁网回归、错误摘要启动前拒绝、超时和 profile 清理均成立。
+  官方 x64 `ViKey.dll` 的 SHA-256 复核为
+  `735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E`，在相同零网络
+  AppContainer 内加载并完成版本查询；未关闭 Defender，也未调用任何卡 API。
+- 用户明确授权后执行真实 HID 门：宿主对同一 ViKeyPRO 的读写句柄阳性对照成功，零 capability
+  AppContainer 返回 Windows `ERROR_ACCESS_DENIED (5)`。测试确认拒绝路径的 profile 计数前后
+  不变，并由 CTest 明确标记 skipped；该结果是未满足的门，不计作兼容通过。
+- 最终 MSVC Debug 与 AddressSanitizer 全量 CTest 均为 **18 项通过、2 项在 Codex 受限父令牌下
+  明确跳过**，无失败、无 ASan 报告；普通桌面令牌下供应商运行库进程测试单独通过，真实 HID
+  测试单独得到上述精确 skipped。MSVC `/analyze` 首轮指出 vendor 摘要指针的不变量无法静态
+  推导，补充显式非空条件后全量零诊断构建通过；Analyze CTest 同为 18 通过、2 跳过。
+- 安全复核确认：没有把 `humanInterfaceDevice`、网络或其他 capability 加入 helper；没有删除
+  AppContainer、低完整性、受限令牌、job、句柄白名单、映像限制、摘要或防替换门；没有向 IPC、
+  环境或日志写入卡标识/凭据。`VikeyGetLibraryVersion` 运行在无秘密、无网络的临时进程内；真实
+  HID 测试没有发送报告，卡片状态和存储未改变。
+
+#### 剩余风险与下一步
+
+- 零 capability AppContainer 已被实机证明确实无法打开 ViKeyPRO HID，因此 P1.6 不能直接进入
+  真卡会话。下一小切片应先做“设备授权边界选择”：评估打包 Win32 helper +
+  `humanInterfaceDevice` 后是否仍能逐项证明禁网和既有进程属性，并接受或拒绝其在 Windows 10
+  1809+ 上无法按 VID/PID/Usage 收窄的攻击面。
+- 更窄的优先方案是由硬件/驱动方提供 custom capability 或设备接口 ACL，但这要求驱动 INF/
+  代码、包身份/SCCD、签名和部署协作；当前通用 HID 设备与随机临时 AppContainer 没有这条绑定。
+  运行时修改设备 ACL、防火墙/WFP 全局规则或让产品提权都不属于本切片可接受的替代方案。
+- 在设备授权门通过前继续禁止注入设备 PIN/API Key、建立真实 SDK 卡会话或访问 blob。之后仍需
+  完成真卡会话 RAII、32 字节单 blob get/put、首次写入恢复、持久计数器和 P1.7 拔卡处理。
+
+#### 用户决策：开发阶段采用明确联网的兼容模式
+
+- 用户于 2026-08-25 决定不让零 capability HID 不兼容继续阻塞 P1.6。下一小切片建立独立的
+  **开发兼容模式**：ViKey helper 不使用 AppContainer，因而允许系统默认网络访问并可直接打开
+  测试卡；这表示“没有出站隔离保证”，不表示产品或 SDK 会主动建立网络连接，也不新增网络代码。
+- 开发兼容模式仍必须保留 helper 独立进程、非提权受限令牌、固定 SHA-256、启动期防替换、净化
+  环境、显式继承句柄清单、单进程 job、现有进程缓解、版本化 nonce IPC、截止时间和失败关闭。
+  该模式只使用当前开发卡、开发凭据和非生产 blob；不得承载量产根材料、生产 API Key/PIN 或被
+  记作生产安全验收结果。
+- 生产/交付阶段继续保留独立安全门：供应商代码接触真实根材料前必须重新证明出站隔离。候选为
+  安装期防火墙/WFP、经威胁审计且与 HID 兼容的 capability，或驱动方提供的 custom capability/
+  设备 ACL。若最终决定长期允许供应商 SDK 联网，必须显式降低安全定位并重新记录用户决策，
+  不能沿用小切片 6 的“可验证禁网”结论。
+- 因当前小切片 7 尚未提交，以上决策先并入同一审阅边界；下一代码切片须在本切片提交决定后
+  开始，不把历史零网络启动函数静默改义，应为开发兼容启动提供显式、不可误认的入口与测试。
+- 当前提交状态：用户已批准以
+  `[P1.6]verify ViKey helper runtime compatibility` 创建本地提交；不执行 push。

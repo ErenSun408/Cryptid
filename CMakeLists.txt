@@ -203,6 +203,7 @@ target_link_libraries(usb_vault_vikey_helper_client PRIVATE
   Advapi32
   Bcrypt
   Ole32
+  Shell32
   Userenv
 )
 usb_vault_configure_target(usb_vault_vikey_helper_client)
@@ -210,6 +211,7 @@ usb_vault_configure_target(usb_vault_vikey_helper_client)
 add_executable(usb_vault_vikey_helper WIN32
   tools/vikey_helper/main.cpp
   src/card/vikey/vikey_helper_protocol.cpp
+  src/card/vikey/vikey_hid_probe.cpp
   src/card/card_error.cpp
 )
 
@@ -224,6 +226,7 @@ set_property(TARGET usb_vault_vikey_helper PROPERTY MSVC_RUNTIME_LIBRARY
 target_link_options(usb_vault_vikey_helper PRIVATE
   "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
 )
+target_link_libraries(usb_vault_vikey_helper PRIVATE Hid Setupapi)
 usb_vault_configure_target(usb_vault_vikey_helper)
 
 add_executable(usb_vault_volume_creator WIN32

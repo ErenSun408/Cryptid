@@ -24,6 +24,7 @@ using namespace std::chrono_literals;
 using usb_vault::card::CardError;
 using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::probe_vikey_helper;
+using usb_vault::card::vikey::probe_vikey_vendor_runtime;
 
 [[noreturn]] void fail(const char* const message) {
   throw std::runtime_error(message);
@@ -177,6 +178,38 @@ void test_network_isolation(const std::filesystem::path& fixture) {
          "network fixture left an AppContainer profile behind");
 }
 
+void test_vendor_runtime_staging(const std::filesystem::path& helper,
+                                 const std::filesystem::path& vendor) {
+  const std::size_t profiles_before = helper_profile_count();
+  const auto result = probe_vikey_vendor_runtime(
+      helper, file_digest(helper), vendor.parent_path(), file_digest(vendor),
+      5s);
+  expect(result.security_properties ==
+             usb_vault::card::vikey::helper::kRequiredSecurityProperties,
+         "vendor runtime probe lost a required security property");
+  expect(helper_profile_count() == profiles_before,
+         "vendor runtime probe left an AppContainer profile behind");
+}
+
+void test_vendor_digest_mismatch_fails_before_launch(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  Sha256Digest wrong = file_digest(vendor);
+  wrong.front() ^= std::byte{1};
+  const std::size_t profiles_before = helper_profile_count();
+  try {
+    static_cast<void>(probe_vikey_vendor_runtime(
+        helper, file_digest(helper), vendor.parent_path(), wrong, 500ms));
+    fail("vendor digest mismatch was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::backend_unavailable),
+           "vendor digest mismatch returned the wrong error");
+  }
+  expect(helper_profile_count() == profiles_before,
+         "vendor digest mismatch created an AppContainer profile");
+}
+
 void test_relative_path_fails_closed() {
   try {
     static_cast<void>(probe_vikey_helper(L"usb_vault_vikey_helper.exe",
@@ -243,8 +276,8 @@ void test_launch_failure_removes_profile(
 
 int wmain(const int argc, wchar_t** const argv) {
   try {
-    if (argc != 4) {
-      fail("expected helper, network fixture, and stalled fixture paths");
+    if (argc != 5) {
+      fail("expected helper, network, stalled, and vendor fixture paths");
     }
     if (current_process_token_is_restricted()) {
       std::cout << "vikey_helper_process_tests skipped: parent token is "
@@ -257,7 +290,11 @@ int wmain(const int argc, wchar_t** const argv) {
         std::filesystem::absolute(argv[2]).lexically_normal();
     const std::filesystem::path stalled =
         std::filesystem::absolute(argv[3]).lexically_normal();
+    const std::filesystem::path vendor =
+        std::filesystem::absolute(argv[4]).lexically_normal();
     test_restricted_helper_probe(helper);
+    test_vendor_runtime_staging(helper, vendor);
+    test_vendor_digest_mismatch_fails_before_launch(helper, vendor);
     test_network_isolation(network);
     test_relative_path_fails_closed();
     test_digest_mismatch_fails_before_launch(stalled);

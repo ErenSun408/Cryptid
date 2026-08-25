@@ -189,6 +189,15 @@ set_property(TARGET vikey_helper_network_fixture PROPERTY
 target_link_libraries(vikey_helper_network_fixture PRIVATE Ws2_32)
 usb_vault_configure_target(vikey_helper_network_fixture)
 
+add_library(vikey_vendor_runtime_fixture SHARED
+  vikey_vendor_runtime_fixture.cpp
+)
+set_target_properties(vikey_vendor_runtime_fixture PROPERTIES
+  OUTPUT_NAME ViKey
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+usb_vault_configure_target(vikey_vendor_runtime_fixture)
+
 add_executable(vikey_helper_process_tests
   vikey_helper_process_tests.cpp
   vikey_network_probe.cpp
@@ -198,6 +207,7 @@ add_dependencies(vikey_helper_process_tests
   usb_vault_vikey_helper
   vikey_helper_network_fixture
   vikey_helper_stall_fixture
+  vikey_vendor_runtime_fixture
 )
 
 target_include_directories(vikey_helper_process_tests
@@ -218,8 +228,41 @@ add_test(
           $<TARGET_FILE:usb_vault_vikey_helper>
           $<TARGET_FILE:vikey_helper_network_fixture>
           $<TARGET_FILE:vikey_helper_stall_fixture>
+          $<TARGET_FILE:vikey_vendor_runtime_fixture>
 )
 set_tests_properties(vikey_helper_process_tests PROPERTIES
+  RUN_SERIAL TRUE
+  SKIP_RETURN_CODE 77
+)
+
+add_executable(vikey_helper_hid_compatibility_tests
+  vikey_helper_hid_compatibility_tests.cpp
+  ${PROJECT_SOURCE_DIR}/src/card/vikey/vikey_hid_probe.cpp
+)
+
+add_dependencies(vikey_helper_hid_compatibility_tests
+  usb_vault_vikey_helper
+)
+
+target_include_directories(vikey_helper_hid_compatibility_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_helper_hid_compatibility_tests PRIVATE
+  usb_vault_vikey_helper_client
+  Bcrypt
+  Hid
+  Setupapi
+)
+
+usb_vault_configure_target(vikey_helper_hid_compatibility_tests)
+
+add_test(
+  NAME vikey_helper_hid_compatibility_tests
+  COMMAND vikey_helper_hid_compatibility_tests
+          $<TARGET_FILE:usb_vault_vikey_helper>
+)
+set_tests_properties(vikey_helper_hid_compatibility_tests PROPERTIES
   RUN_SERIAL TRUE
   SKIP_RETURN_CODE 77
 )

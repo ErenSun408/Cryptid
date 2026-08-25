@@ -63,19 +63,23 @@ template <typename Message>
 }  // namespace
 
 bool valid_request(const Request& request) noexcept {
+  const bool known_operation =
+      request.operation == Operation::probe ||
+      request.operation == Operation::vendor_runtime_probe ||
+      request.operation == Operation::hid_access_probe;
   return request.magic == kMagic && request.version == kVersion &&
          request.header_bytes == sizeof(Request) &&
-         request.operation == Operation::probe && request.reserved == 0;
+         known_operation && request.reserved == 0;
 }
 
 bool valid_response(const Response& response) noexcept {
   if (response.magic != kMagic || response.version != kVersion ||
-      response.header_bytes != sizeof(Response) || response.reserved != 0 ||
+      response.header_bytes != sizeof(Response) ||
       (response.security_properties & ~kKnownSecurityProperties) != 0) {
     return false;
   }
   if (response.status == 0) {
-    return response.security_properties != 0;
+    return response.security_properties != 0 && response.detail == 0;
   }
   const auto first = static_cast<std::int32_t>(CardError::backend_unavailable);
   const auto last = static_cast<std::int32_t>(CardError::device_failure);

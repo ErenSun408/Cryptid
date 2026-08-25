@@ -4,8 +4,10 @@
 #include "usb_vault/card/card_error.h"
 
 #include <Windows.h>
+#include <aclapi.h>
 #include <bcrypt.h>
 #include <sddl.h>
+#include <shlobj.h>
 #include <userenv.h>
 
 #include <algorithm>
@@ -17,6 +19,7 @@
 #include <filesystem>
 #include <format>
 #include <limits>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -26,6 +29,8 @@ namespace usb_vault::card::vikey {
 namespace {
 
 constexpr std::uint64_t kMaximumHelperBytes = 16ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaximumVendorBytes = 16ULL * 1024ULL * 1024ULL;
+constexpr wchar_t kVendorDllName[] = L"ViKey.dll";
 
 constexpr DWORD64 kHelperMitigations =
     PROCESS_CREATION_MITIGATION_POLICY_DEP_ENABLE |
@@ -567,21 +572,116 @@ struct AppContainerLaunchContext final {
     throw_card(CardError::backend_unavailable,
                "resolve ViKey helper AppContainer folder");
   }
-  const std::wstring local_app_data(folder);
+  const std::wstring profile_folder(folder);
   ::CoTaskMemFree(folder);
-  const std::wstring temp = local_app_data + L"\\Temp";
+
+  wchar_t* raw_virtual_local_app_data = nullptr;
+  const HRESULT local_result = ::SHGetKnownFolderPath(
+      FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, nullptr,
+      &raw_virtual_local_app_data);
+  if (FAILED(local_result) || raw_virtual_local_app_data == nullptr) {
+    if (raw_virtual_local_app_data != nullptr) {
+      ::CoTaskMemFree(raw_virtual_local_app_data);
+    }
+    throw_card(CardError::backend_unavailable,
+               "resolve AppContainer virtual LocalAppData path");
+  }
+  const std::wstring virtual_local_app_data(raw_virtual_local_app_data);
+  ::CoTaskMemFree(raw_virtual_local_app_data);
+  const std::wstring temp = virtual_local_app_data + L"\\Temp";
 
   std::vector<wchar_t> environment;
   const auto append = [&environment](const std::wstring& entry) {
     environment.insert(environment.end(), entry.begin(), entry.end());
     environment.push_back(L'\0');
   };
-  append(L"LOCALAPPDATA=" + local_app_data);
+  // AppContainer filesystem virtualization maps this conventional path into
+  // profile_folder.  Passing profile_folder itself would be redirected a
+  // second time when the child opens or maps an image by absolute path.
+  append(L"LOCALAPPDATA=" + virtual_local_app_data);
   append(L"TEMP=" + temp);
   append(L"TMP=" + temp);
   environment.push_back(L'\0');
   return {.environment = std::move(environment),
-          .working_directory = local_app_data};
+          .working_directory = profile_folder};
+}
+
+[[nodiscard]] VerifiedLocalArtifact stage_vendor_dll(
+    const VerifiedLocalArtifact& source,
+    const Sha256Digest& expected_digest,
+    const std::filesystem::path& profile_folder) {
+  const std::filesystem::path staged = profile_folder / kVendorDllName;
+  if (::CopyFileW(source.path().c_str(), staged.c_str(), TRUE) == FALSE) {
+    throw std::system_error(
+        make_error_code(CardError::backend_unavailable),
+        std::format("stage verified ViKey DLL (Windows error {})",
+                    ::GetLastError()));
+  }
+
+  PSECURITY_DESCRIPTOR raw_descriptor = nullptr;
+  if (::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          L"S:(ML;;NW;;;ME)", SDDL_REVISION_1, &raw_descriptor,
+          nullptr) == FALSE ||
+      raw_descriptor == nullptr) {
+    if (raw_descriptor != nullptr) ::LocalFree(raw_descriptor);
+    throw std::system_error(
+        make_error_code(CardError::backend_unavailable),
+        "create medium-integrity label for staged ViKey DLL");
+  }
+  BOOL sacl_present = FALSE;
+  BOOL sacl_defaulted = FALSE;
+  PACL mandatory_label = nullptr;
+  const BOOL read_label = ::GetSecurityDescriptorSacl(
+      raw_descriptor, &sacl_present, &mandatory_label, &sacl_defaulted);
+  const DWORD label_result =
+      read_label != FALSE && sacl_present != FALSE &&
+              mandatory_label != nullptr
+          ? ::SetNamedSecurityInfoW(
+                const_cast<wchar_t*>(staged.c_str()), SE_FILE_OBJECT,
+                LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr,
+                mandatory_label)
+          : ERROR_INVALID_SECURITY_DESCR;
+  ::LocalFree(raw_descriptor);
+  if (label_result != ERROR_SUCCESS) {
+    throw std::system_error(
+        make_error_code(CardError::backend_unavailable),
+        std::format("label staged ViKey DLL as medium integrity "
+                    "(Windows error {})",
+                    label_result));
+  }
+  return verify_local_artifact(staged, expected_digest, kMaximumVendorBytes);
+}
+
+void remove_staged_vendor(
+    std::optional<VerifiedLocalArtifact>& staged_vendor,
+    const std::filesystem::path& staged_path) {
+  staged_vendor.reset();
+  if (staged_path.empty()) return;
+  if (::DeleteFileW(staged_path.c_str()) == FALSE) {
+    const DWORD error = ::GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND) {
+      throw std::system_error(
+          make_error_code(CardError::backend_unavailable),
+          std::format("remove staged ViKey DLL (Windows error {})", error));
+    }
+  }
+}
+
+void cleanup_app_container(
+    EphemeralAppContainer& app_container,
+    std::optional<VerifiedLocalArtifact>& staged_vendor,
+    const std::filesystem::path& staged_path) {
+  std::exception_ptr staged_failure;
+  try {
+    remove_staged_vendor(staged_vendor, staged_path);
+  } catch (...) {
+    staged_failure = std::current_exception();
+  }
+  // Always attempt profile removal even if the staged file cleanup failed.
+  // A profile cleanup failure is the more persistent condition and therefore
+  // supersedes a staged-file error.
+  app_container.remove_profile();
+  if (staged_failure) std::rethrow_exception(staged_failure);
 }
 
 [[nodiscard]] helper::Response read_response_until(
@@ -666,16 +766,33 @@ void require_clean_exit(const HANDLE process, const HANDLE response_pipe,
 
 }  // namespace
 
-VikeyHelperProbe probe_vikey_helper(
+namespace {
+
+[[nodiscard]] VikeyHelperProbe probe_vikey_helper_operation(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_digest,
+    const helper::Operation operation,
+    const std::filesystem::path* const vendor_path,
+    const Sha256Digest* const vendor_digest,
     const std::chrono::milliseconds timeout) {
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");
   }
+  const bool vendor_required =
+      operation == helper::Operation::vendor_runtime_probe;
+  if (vendor_required !=
+      (vendor_path != nullptr && vendor_digest != nullptr)) {
+    throw_card(CardError::invalid_configuration,
+               "ViKey vendor probe configuration is incomplete");
+  }
   VerifiedLocalArtifact executable_artifact = verify_local_artifact(
       helper_path, expected_digest, kMaximumHelperBytes);
+  std::optional<VerifiedLocalArtifact> vendor_source;
+  if (vendor_required) {
+    vendor_source.emplace(verify_local_artifact(
+        *vendor_path, *vendor_digest, kMaximumVendorBytes));
+  }
   const std::filesystem::path& executable = executable_artifact.path();
   Pipe request_pipe = create_pipe(true);
   Pipe response_pipe = create_pipe(false);
@@ -700,14 +817,24 @@ VikeyHelperProbe probe_vikey_helper(
   SECURITY_CAPABILITIES security_capabilities{};
   security_capabilities.AppContainerSid = app_container.sid.get();
   AppContainerLaunchContext launch_context;
+  std::filesystem::path staged_vendor_path;
+  std::optional<VerifiedLocalArtifact> staged_vendor;
   try {
     launch_context = app_container_launch_context(app_container.sid.get());
+    if (vendor_source && vendor_digest != nullptr) {
+      staged_vendor_path =
+          std::filesystem::path(launch_context.working_directory) /
+          kVendorDllName;
+      staged_vendor.emplace(stage_vendor_dll(
+          *vendor_source, *vendor_digest,
+          launch_context.working_directory));
+    }
     attributes.add(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
                    &security_capabilities, sizeof(security_capabilities));
   } catch (...) {
     // This is still before process creation, so profile removal can be
     // required synchronously and any cleanup failure remains observable.
-    app_container.remove_profile();
+    cleanup_app_container(app_container, staged_vendor, staged_vendor_path);
     throw;
   }
 
@@ -732,7 +859,7 @@ VikeyHelperProbe probe_vikey_helper(
     // Do not leave even an empty AppContainer profile behind when the
     // verified artifact cannot be started. A cleanup failure is more urgent
     // than the launch error and therefore supersedes it.
-    app_container.remove_profile();
+    cleanup_app_container(app_container, staged_vendor, staged_vendor_path);
     throw std::system_error(
         make_error_code(CardError::backend_unavailable),
         std::format("launch restricted ViKey helper (Windows error {})",
@@ -779,6 +906,7 @@ VikeyHelperProbe probe_vikey_helper(
 
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     helper::Request request{};
+    request.operation = operation;
     request.nonce = random_nonce();
     helper::write_request(request_pipe.parent_end.get(), request);
     request_pipe.parent_end.reset();
@@ -787,8 +915,11 @@ VikeyHelperProbe probe_vikey_helper(
         response_pipe.parent_end.get(), process.get(), request.nonce,
         deadline);
     if (response.status != 0) {
-      throw_card(static_cast<CardError>(response.status),
-                 "ViKey helper rejected its security boundary");
+      throw std::system_error(
+          make_error_code(static_cast<CardError>(response.status)),
+          std::format("ViKey helper rejected the requested operation "
+                      "(detail {})",
+                      response.detail));
     }
     const std::uint32_t security_properties =
         parent_security_properties | response.security_properties;
@@ -807,11 +938,45 @@ VikeyHelperProbe probe_vikey_helper(
     // The profile is zero-capability and randomly named, but it must still be
     // removed on every observed failure path. Cleanup failure supersedes the
     // original error so a persistent profile cannot go unnoticed.
-    app_container.remove_profile();
+    cleanup_app_container(app_container, staged_vendor, staged_vendor_path);
     std::rethrow_exception(failure);
   }
-  app_container.remove_profile();
+  cleanup_app_container(app_container, staged_vendor, staged_vendor_path);
   return result;
+}
+
+}  // namespace
+
+VikeyHelperProbe probe_vikey_helper(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    const std::chrono::milliseconds timeout) {
+  return probe_vikey_helper_operation(
+      helper_path, expected_digest, helper::Operation::probe, nullptr,
+      nullptr, timeout);
+}
+
+VikeyHelperProbe probe_vikey_vendor_runtime(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  return probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::vendor_runtime_probe, &vendor_path,
+      &expected_vendor_digest, timeout);
+}
+
+VikeyHelperProbe probe_vikey_hid_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    const std::chrono::milliseconds timeout) {
+  return probe_vikey_helper_operation(
+      helper_path, expected_digest, helper::Operation::hid_access_probe,
+      nullptr, nullptr, timeout);
 }
 
 }  // namespace usb_vault::card::vikey
