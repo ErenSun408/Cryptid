@@ -235,6 +235,22 @@ target_link_options(usb_vault_vikey_helper PRIVATE
 target_link_libraries(usb_vault_vikey_helper PRIVATE Bcrypt Hid Setupapi)
 usb_vault_configure_target(usb_vault_vikey_helper)
 
+# Explicitly built manual verifier for the development card. It reads all
+# development credentials from Windows Credential Manager; it is never part of
+# the product or default build.
+add_executable(usb_vault_vikey_development_session_probe EXCLUDE_FROM_ALL
+  tools/vikey_development_session_probe/main.cpp
+)
+target_include_directories(usb_vault_vikey_development_session_probe PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(usb_vault_vikey_development_session_probe PRIVATE
+  usb_vault_vikey_helper_client
+  Advapi32
+)
+usb_vault_configure_target(usb_vault_vikey_development_session_probe)
+
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp
   src/volume_creation/creator_helper_engine.cpp

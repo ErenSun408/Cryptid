@@ -178,8 +178,9 @@ void test_response_round_trip() {
   Response sent{};
   sent.security_properties = kRequiredSecurityProperties;
   sent.nonce[1] = std::byte{0x5a};
-  write_response(pipe.write.get(), sent);
-  const Response received = read_response(pipe.read.get(), sent.nonce);
+  write_response(pipe.write.get(), sent, Operation::probe);
+  const Response received =
+      read_response(pipe.read.get(), sent.nonce, Operation::probe);
   expect(received.security_properties == kRequiredSecurityProperties,
          "response security properties did not round-trip");
 }
@@ -187,25 +188,55 @@ void test_response_round_trip() {
 void test_response_validation() {
   Response response{};
   response.security_properties = kRequiredSecurityProperties;
-  expect(valid_response(response), "valid response was rejected");
+  expect(valid_response(response, Operation::probe),
+         "valid response was rejected");
 
   response.security_properties = kKnownSecurityProperties | (1U << 31);
-  expect(!valid_response(response), "unknown security property was accepted");
+  expect(!valid_response(response, Operation::probe),
+         "unknown security property was accepted");
   response = Response{};
   response.security_properties = kRequiredSecurityProperties;
   response.detail = ERROR_ACCESS_DENIED;
-  expect(!valid_response(response), "successful response retained a detail");
+  expect(!valid_response(response, Operation::probe),
+         "successful probe response retained a detail");
+  expect(valid_response(response, Operation::development_session_probe),
+         "successful session attempt observation was rejected");
+  const DevelopmentSessionObservation observation{
+      .attempts_before = 200,
+      .maximum_before = 200,
+      .attempts_after = 199,
+      .maximum_after = 200,
+  };
+  expect(unpack_development_session_observation(
+             pack_development_session_observation(observation))
+                 .attempts_after == observation.attempts_after,
+         "session attempt observation did not round-trip");
+  expect(valid_development_session_observation(observation),
+         "consistent session attempt observation was rejected");
+  const DevelopmentSessionObservation inconsistent{
+      .attempts_before = 201,
+      .maximum_before = 200,
+      .attempts_after = 200,
+      .maximum_after = 200,
+  };
+  expect(!valid_development_session_observation(inconsistent),
+         "attempt observation above its maximum was accepted");
+  response.detail = pack_development_session_observation(inconsistent);
+  expect(!valid_response(response, Operation::development_session_probe),
+         "inconsistent successful session response was accepted");
   response = Response{};
   response.status = static_cast<std::int32_t>(CardError::backend_unavailable);
   response.detail = ERROR_ACCESS_DENIED;
-  expect(valid_response(response), "known helper error was rejected");
+  expect(valid_response(response, Operation::probe),
+         "known helper error was rejected");
   response.security_properties =
       property_bit(SecurityProperty::filtered_token);
-  expect(!valid_response(response),
+  expect(!valid_response(response, Operation::probe),
          "error response with security properties was accepted");
   response = Response{};
   response.status = 999;
-  expect(!valid_response(response), "unknown helper error was accepted");
+  expect(!valid_response(response, Operation::probe),
+         "unknown helper error was accepted");
 }
 
 void test_nonce_mismatch_is_rejected() {
@@ -213,10 +244,13 @@ void test_nonce_mismatch_is_rejected() {
   Response sent{};
   sent.security_properties = kRequiredSecurityProperties;
   sent.nonce[0] = std::byte{1};
-  write_response(pipe.write.get(), sent);
+  write_response(pipe.write.get(), sent, Operation::probe);
   std::array<std::byte, kNonceSize> expected{};
   expect_protocol_error(
-      [&] { static_cast<void>(read_response(pipe.read.get(), expected)); },
+      [&] {
+        static_cast<void>(
+            read_response(pipe.read.get(), expected, Operation::probe));
+      },
       "response nonce mismatch was accepted");
 }
 

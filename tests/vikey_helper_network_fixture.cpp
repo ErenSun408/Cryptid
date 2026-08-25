@@ -105,7 +105,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.security_properties = 0;
     }
     stage = 4;
-    write_response(response_handle, response);
+    write_response(response_handle, response, request.operation);
     if (response.status != 0) return 3;
     stage = 5;
     const std::uint32_t diagnostic =

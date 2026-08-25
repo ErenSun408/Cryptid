@@ -77,14 +77,20 @@ bool valid_request(const Request& request) noexcept {
          known_operation && request.payload_bytes == required_payload;
 }
 
-bool valid_response(const Response& response) noexcept {
+bool valid_response(const Response& response,
+                    const Operation expected_operation) noexcept {
   if (response.magic != kMagic || response.version != kVersion ||
       response.header_bytes != sizeof(Response) ||
       (response.security_properties & ~kKnownSecurityProperties) != 0) {
     return false;
   }
   if (response.status == 0) {
-    return response.security_properties != 0 && response.detail == 0;
+    if (response.security_properties == 0) return false;
+    if (expected_operation == Operation::development_session_probe) {
+      return valid_development_session_observation(
+          unpack_development_session_observation(response.detail));
+    }
+    return response.detail == 0;
   }
   const auto first = static_cast<std::int32_t>(CardError::backend_unavailable);
   const auto last = static_cast<std::int32_t>(CardError::device_failure);
@@ -147,8 +153,9 @@ DevelopmentSessionRequest read_development_session_request(
   return result;
 }
 
-void write_response(const HANDLE pipe, const Response& response) {
-  if (!valid_response(response)) {
+void write_response(const HANDLE pipe, const Response& response,
+                    const Operation expected_operation) {
+  if (!valid_response(response, expected_operation)) {
     throw_protocol("refuse invalid ViKey helper response");
   }
   write_exact(pipe, message_bytes(response));
@@ -156,10 +163,12 @@ void write_response(const HANDLE pipe, const Response& response) {
 
 Response read_response(
     const HANDLE pipe,
-    const std::array<std::byte, kNonceSize>& expected_nonce) {
+    const std::array<std::byte, kNonceSize>& expected_nonce,
+    const Operation expected_operation) {
   Response response{};
   read_exact(pipe, mutable_message_bytes(response));
-  if (!valid_response(response) || response.nonce != expected_nonce) {
+  if (!valid_response(response, expected_operation) ||
+      response.nonce != expected_nonce) {
     throw_protocol("reject invalid ViKey helper response");
   }
   return response;

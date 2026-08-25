@@ -205,11 +205,29 @@ struct OperationResult final {
     auto session = usb_vault::card::vikey::VikeySession::open(
         module.functions(), request.user_sn, request.api_key,
         request.user_pin);
+    DevelopmentSessionObservation observation{
+        .attempts_before = session.user_pin_attempts_remaining(),
+        .maximum_before = session.user_pin_attempts_maximum(),
+    };
+    const std::error_code observation_error =
+        usb_vault::card::vikey::map_status(
+            module.functions().get_user_password_attempt(
+                session.index(), &observation.attempts_after,
+                &observation.maximum_after));
+    if (observation_error) {
+      throw std::system_error(observation_error,
+                              "recheck ViKey user PIN attempts");
+    }
+    if (observation.maximum_after != 0 &&
+        observation.attempts_after > observation.maximum_after) {
+      return {.status =
+                  static_cast<std::int32_t>(CardError::device_failure)};
+    }
     const std::error_code close_error = session.close();
     if (close_error) {
       return {.status = close_error.value()};
     }
-    return {};
+    return {.detail = pack_development_session_observation(observation)};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
       return {.status = error.code().value()};
@@ -315,7 +333,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.security_properties = 0;
       response.detail = ERROR_GEN_FAILURE;
     }
-    write_response(response_handle, response);
+    write_response(response_handle, response, request.operation);
     return 0;
   } catch (...) {
     return 2;

@@ -16,6 +16,7 @@ enum class SessionState {
   attempts_read,
   logged_in,
   level_read,
+  attempts_rechecked,
   logged_off,
   complete,
 };
@@ -75,13 +76,16 @@ VikeySetApiKey(const WORD index, char* const api_key) {
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyGetUserPassWordAttempt(const WORD index, BYTE* const current,
                             BYTE* const maximum) {
-  if (session_state != SessionState::api_key_set || index != 0 ||
+  const bool before_login = session_state == SessionState::api_key_set;
+  const bool after_login = session_state == SessionState::level_read;
+  if ((!before_login && !after_login) || index != 0 ||
       current == nullptr || maximum == nullptr) {
     return kInvalidValue;
   }
   *current = 200;
   *maximum = 200;
-  session_state = SessionState::attempts_read;
+  session_state = before_login ? SessionState::attempts_read
+                               : SessionState::attempts_rechecked;
   return ERROR_SUCCESS;
 }
 
@@ -108,7 +112,7 @@ VikeyGetLevel(const WORD index, BYTE* const level) {
 
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyLogoff(const WORD index) {
-  if (session_state != SessionState::level_read || index != 0) {
+  if (session_state != SessionState::attempts_rechecked || index != 0) {
     return kInvalidValue;
   }
   session_state = SessionState::logged_off;

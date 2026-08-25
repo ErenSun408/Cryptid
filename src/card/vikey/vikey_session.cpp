@@ -132,8 +132,13 @@ class PendingSession final {
 }  // namespace
 
 VikeySession::VikeySession(sdk::Functions functions,
-                           const sdk::Index index) noexcept
-    : functions_(functions), index_(index) {}
+                           const sdk::Index index,
+                           const sdk::Byte attempts_remaining,
+                           const sdk::Byte attempts_maximum) noexcept
+    : functions_(functions),
+      index_(index),
+      attempts_remaining_(attempts_remaining),
+      attempts_maximum_(attempts_maximum) {}
 
 VikeySession::~VikeySession() noexcept { static_cast<void>(close()); }
 
@@ -202,7 +207,8 @@ VikeySession VikeySession::open(
   }
 
   pending.release();
-  return VikeySession(functions, kSelectedIndex);
+  return VikeySession(functions, kSelectedIndex, current_attempt,
+                      maximum_attempt);
 }
 
 std::error_code VikeySession::close() noexcept {
@@ -218,5 +224,13 @@ bool VikeySession::active() const noexcept {
 }
 
 sdk::Index VikeySession::index() const noexcept { return index_; }
+
+sdk::Byte VikeySession::user_pin_attempts_remaining() const noexcept {
+  return attempts_remaining_;
+}
+
+sdk::Byte VikeySession::user_pin_attempts_maximum() const noexcept {
+  return attempts_maximum_;
+}
 
 }  // namespace usb_vault::card::vikey

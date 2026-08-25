@@ -35,12 +35,18 @@ class VikeySession final {
   [[nodiscard]] std::error_code close() noexcept;
   [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] sdk::Index index() const noexcept;
+  [[nodiscard]] sdk::Byte user_pin_attempts_remaining() const noexcept;
+  [[nodiscard]] sdk::Byte user_pin_attempts_maximum() const noexcept;
 
  private:
-  VikeySession(sdk::Functions functions, sdk::Index index) noexcept;
+  VikeySession(sdk::Functions functions, sdk::Index index,
+               sdk::Byte attempts_remaining,
+               sdk::Byte attempts_maximum) noexcept;
 
   sdk::Functions functions_{};
   sdk::Index index_{};
+  sdk::Byte attempts_remaining_{};
+  sdk::Byte attempts_maximum_{};
   bool logged_in_{true};
   bool initialized_{true};
 };

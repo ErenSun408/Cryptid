@@ -221,6 +221,9 @@ void test_successful_session_has_exact_lifecycle() {
       credentials.user_pin);
   require(session.active(), "successful ViKey session was not active");
   require(session.index() == 0, "ViKey session selected the wrong index");
+  require(session.user_pin_attempts_remaining() == 200 &&
+              session.user_pin_attempts_maximum() == 200,
+          "ViKey session did not retain the observed PIN attempt budget");
   require(state.credentials_matched,
           "ViKey session changed or unterminated a credential");
   require(all_bytes_equal(credentials.user_sn, std::byte{'A'}) &&

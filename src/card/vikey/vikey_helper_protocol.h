@@ -13,7 +13,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 2;
+constexpr std::uint16_t kVersion = 3;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
     static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
@@ -106,14 +106,51 @@ struct DevelopmentSessionRequest final {
   security::SecureBuffer user_pin;
 };
 
+struct DevelopmentSessionObservation final {
+  std::uint8_t attempts_before{};
+  std::uint8_t maximum_before{};
+  std::uint8_t attempts_after{};
+  std::uint8_t maximum_after{};
+};
+
+[[nodiscard]] constexpr bool valid_development_session_observation(
+    const DevelopmentSessionObservation& observation) noexcept {
+  const bool before_valid = observation.maximum_before == 0 ||
+                            observation.attempts_before <=
+                                observation.maximum_before;
+  const bool after_valid = observation.maximum_after == 0 ||
+                           observation.attempts_after <=
+                               observation.maximum_after;
+  return before_valid && after_valid;
+}
+
+[[nodiscard]] constexpr std::uint32_t pack_development_session_observation(
+    const DevelopmentSessionObservation& observation) noexcept {
+  return static_cast<std::uint32_t>(observation.attempts_before) |
+         (static_cast<std::uint32_t>(observation.maximum_before) << 8U) |
+         (static_cast<std::uint32_t>(observation.attempts_after) << 16U) |
+         (static_cast<std::uint32_t>(observation.maximum_after) << 24U);
+}
+
+[[nodiscard]] constexpr DevelopmentSessionObservation
+unpack_development_session_observation(const std::uint32_t packed) noexcept {
+  return {
+      .attempts_before = static_cast<std::uint8_t>(packed & 0xffU),
+      .maximum_before = static_cast<std::uint8_t>((packed >> 8U) & 0xffU),
+      .attempts_after = static_cast<std::uint8_t>((packed >> 16U) & 0xffU),
+      .maximum_after = static_cast<std::uint8_t>((packed >> 24U) & 0xffU),
+  };
+}
+
 struct Response final {
   std::uint32_t magic{kMagic};
   std::uint16_t version{kVersion};
   std::uint16_t header_bytes{sizeof(Response)};
   std::int32_t status{};
   std::uint32_t security_properties{};
-  // Non-secret Win32 or vendor status for compatibility diagnostics. It is
-  // zero on success and never carries paths, identifiers, or credentials.
+  // Non-secret Win32 or vendor status on failure. A successful development
+  // session packs its before/after PIN-attempt observation here. It never
+  // carries paths, identifiers, credentials, or card data.
   std::uint32_t detail{};
   std::array<std::byte, kNonceSize> nonce{};
 };
@@ -122,7 +159,8 @@ static_assert(sizeof(Request) == 32);
 static_assert(sizeof(Response) == 36);
 
 [[nodiscard]] bool valid_request(const Request& request) noexcept;
-[[nodiscard]] bool valid_response(const Response& response) noexcept;
+[[nodiscard]] bool valid_response(const Response& response,
+                                  Operation expected_operation) noexcept;
 
 void write_request(HANDLE pipe, const Request& request);
 [[nodiscard]] Request read_request(HANDLE pipe);
@@ -133,8 +171,10 @@ void write_development_session_request(
     const security::SecureBuffer& user_pin);
 [[nodiscard]] DevelopmentSessionRequest read_development_session_request(
     HANDLE pipe, const Request& request);
-void write_response(HANDLE pipe, const Response& response);
+void write_response(HANDLE pipe, const Response& response,
+                    Operation expected_operation);
 [[nodiscard]] Response read_response(
-    HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce);
+    HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce,
+    Operation expected_operation);
 
 }  // namespace usb_vault::card::vikey::helper

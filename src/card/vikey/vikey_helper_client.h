@@ -13,9 +13,18 @@ struct VikeyHelperProbe final {
   std::uint32_t security_properties{};
 };
 
+struct VikeyDevelopmentSessionProbe final {
+  std::uint32_t security_properties{};
+  std::uint8_t attempts_before{};
+  std::uint8_t maximum_before{};
+  std::uint8_t attempts_after{};
+  std::uint8_t maximum_after{};
+};
+
 // Verifies the helper against the required digest, holds its file identity
 // locked, launches it under the mandatory process boundary, and performs the
-// version-1 probe handshake. This does not load ViKey.dll or access a card.
+// current versioned probe handshake. This does not load ViKey.dll or access a
+// card.
 [[nodiscard]] VikeyHelperProbe probe_vikey_helper(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_digest,
@@ -69,7 +78,7 @@ probe_vikey_development_hid_access_with_network_access(
 // the verified staged SDK, opens and closes one user session, then exits.
 // This boundary has ordinary network access and must never receive production
 // credentials or material.
-[[nodiscard]] VikeyHelperProbe
+[[nodiscard]] VikeyDevelopmentSessionProbe
 probe_vikey_development_session_with_network_access(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_helper_digest,

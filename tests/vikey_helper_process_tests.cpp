@@ -364,6 +364,9 @@ void test_development_session_staging(
              usb_vault::card::vikey::helper::
                  kDevelopmentCompatibilitySecurityProperties,
          "development session lost a restricted-process property");
+  expect(result.attempts_before == 200 && result.maximum_before == 200 &&
+             result.attempts_after == 200 && result.maximum_after == 200,
+         "development session returned the wrong PIN attempt observation");
   expect_fixed_secret(user_sn, std::byte{'A'},
                       "development session changed the caller UserSN");
   expect_fixed_secret(api_key, std::byte{'B'},
