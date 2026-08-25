@@ -11,6 +11,8 @@ namespace usb_vault::card::vikey {
 constexpr std::size_t kVikeyUserSnBytes = 32;
 constexpr std::size_t kVikeyApiKeyBytes = 128;
 constexpr std::size_t kVikeyUserPinBytes = 8;
+constexpr std::size_t kVikeyBlobBytes = 32;
+constexpr sdk::Address kVikeyBlobAddress = 0;
 
 // Owns one authenticated ViKey user session. Credentials must already reside
 // in locked SecureBuffer allocations and are copied only into short-lived,
@@ -37,6 +39,8 @@ class VikeySession final {
   [[nodiscard]] sdk::Index index() const noexcept;
   [[nodiscard]] sdk::Byte user_pin_attempts_remaining() const noexcept;
   [[nodiscard]] sdk::Byte user_pin_attempts_maximum() const noexcept;
+  [[nodiscard]] security::SecureBuffer read_user_blob();
+  void write_user_blob(const security::SecureBuffer& blob);
 
  private:
   VikeySession(sdk::Functions functions, sdk::Index index,

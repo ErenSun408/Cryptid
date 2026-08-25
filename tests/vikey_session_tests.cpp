@@ -2,6 +2,7 @@
 
 #include "usb_vault/card/card_error.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -29,6 +30,9 @@ enum class Call {
   get_attempts,
   user_login,
   get_level,
+  get_user_data_size,
+  read_data,
+  write_data,
   logoff,
   uninitialization,
 };
@@ -40,12 +44,17 @@ struct FakeSdk final {
   sdk::Status get_attempts_status{sdk::kSuccess};
   sdk::Status login_status{sdk::kSuccess};
   sdk::Status get_level_status{sdk::kSuccess};
+  sdk::Status get_user_data_size_status{sdk::kSuccess};
+  sdk::Status read_data_status{sdk::kSuccess};
+  sdk::Status write_data_status{sdk::kSuccess};
   sdk::Status logoff_status{sdk::kSuccess};
   sdk::Status uninitialization_status{sdk::kSuccess};
   std::uint32_t device_count{1};
   sdk::Byte current_attempt{200};
   sdk::Byte maximum_attempt{200};
   sdk::Byte level{1};
+  sdk::Length user_data_size{8192};
+  std::array<std::byte, usb_vault::card::vikey::kVikeyBlobBytes> user_data{};
   bool mutate_arguments{};
   bool credentials_matched{true};
   std::vector<Call> calls;
@@ -117,6 +126,50 @@ sdk::Status __stdcall fake_get_level(const sdk::Index index,
   return state.get_level_status;
 }
 
+sdk::Status __stdcall fake_get_user_data_size(
+    const sdk::Index index, sdk::Length* const bytes) {
+  FakeSdk& state = fake();
+  state.calls.push_back(Call::get_user_data_size);
+  state.credentials_matched = state.credentials_matched && index == 0;
+  if (bytes != nullptr) *bytes = state.user_data_size;
+  return state.get_user_data_size_status;
+}
+
+sdk::Status __stdcall fake_read_data(
+    const sdk::Index index, const sdk::Address address,
+    const sdk::Length length, sdk::Byte* const buffer) {
+  FakeSdk& state = fake();
+  state.calls.push_back(Call::read_data);
+  state.credentials_matched =
+      state.credentials_matched && index == 0 &&
+      address == usb_vault::card::vikey::kVikeyBlobAddress &&
+      length == usb_vault::card::vikey::kVikeyBlobBytes && buffer != nullptr;
+  if (buffer != nullptr && length == state.user_data.size()) {
+    for (std::size_t offset = 0; offset < state.user_data.size(); ++offset) {
+      buffer[offset] = std::to_integer<sdk::Byte>(state.user_data[offset]);
+    }
+  }
+  return state.read_data_status;
+}
+
+sdk::Status __stdcall fake_write_data(
+    const sdk::Index index, const sdk::Address address,
+    const sdk::Length length, sdk::Byte* const buffer) {
+  FakeSdk& state = fake();
+  state.calls.push_back(Call::write_data);
+  state.credentials_matched =
+      state.credentials_matched && index == 0 &&
+      address == usb_vault::card::vikey::kVikeyBlobAddress &&
+      length == usb_vault::card::vikey::kVikeyBlobBytes && buffer != nullptr;
+  if (buffer != nullptr && length == state.user_data.size()) {
+    for (std::size_t offset = 0; offset < state.user_data.size(); ++offset) {
+      state.user_data[offset] = static_cast<std::byte>(buffer[offset]);
+    }
+    if (state.mutate_arguments) buffer[0] = 0;
+  }
+  return state.write_data_status;
+}
+
 sdk::Status __stdcall fake_get_attempts(const sdk::Index index,
                                         sdk::Byte* const current,
                                         sdk::Byte* const maximum) {
@@ -154,9 +207,12 @@ sdk::Status __stdcall fake_logoff(const sdk::Index index) {
       .set_api_key = &fake_set_api_key,
       .uninitialization = &fake_uninitialization,
       .get_level = &fake_get_level,
+      .get_user_data_size = &fake_get_user_data_size,
       .get_user_password_attempt = &fake_get_attempts,
       .user_login = &fake_user_login,
       .logoff = &fake_logoff,
+      .read_data = &fake_read_data,
+      .write_data = &fake_write_data,
   };
 }
 
@@ -264,6 +320,124 @@ void test_destructor_closes_active_session() {
                 "ViKey destructor did not complete cleanup");
 }
 
+void test_fixed_user_blob_read_and_write() {
+  FakeSdk state{.mutate_arguments = true};
+  for (std::size_t offset = 0; offset < state.user_data.size(); ++offset) {
+    state.user_data[offset] = static_cast<std::byte>(offset);
+  }
+  ActiveFake activation(state);
+  Credentials credentials;
+  VikeySession session = VikeySession::open(
+      fake_functions(), credentials.user_sn, credentials.api_key,
+      credentials.user_pin);
+
+  SecureBuffer read = session.read_user_blob();
+  require(read.size() == usb_vault::card::vikey::kVikeyBlobBytes,
+          "ViKey user blob read returned the wrong size");
+  for (std::size_t offset = 0; offset < read.size(); ++offset) {
+    require(read.bytes()[offset] == static_cast<std::byte>(offset),
+            "ViKey user blob read returned the wrong data");
+  }
+
+  SecureBuffer replacement(usb_vault::card::vikey::kVikeyBlobBytes);
+  for (std::byte& value : replacement.bytes()) value = std::byte{0xa5};
+  session.write_user_blob(replacement);
+  require(all_bytes_equal(replacement, std::byte{0xa5}),
+          "vendor mutation escaped the temporary blob copy");
+  for (const std::byte value : state.user_data) {
+    require(value == std::byte{0xa5},
+            "ViKey user blob write stored the wrong data");
+  }
+  require_calls(
+      state,
+      {Call::set_user_sn, Call::find_ex, Call::set_api_key,
+       Call::get_attempts, Call::user_login, Call::get_level,
+       Call::get_user_data_size, Call::read_data,
+       Call::get_user_data_size, Call::write_data},
+      "ViKey fixed blob operation order differed");
+  require(!session.close(), "blob test session did not close");
+}
+
+void test_fixed_user_blob_failures() {
+  Credentials credentials;
+
+  {
+    FakeSdk state{.get_user_data_size_status = sdk::kCommunication};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    require_card_error([&] { static_cast<void>(session.read_user_blob()); },
+                       CardError::communication_failed,
+                       "ViKey capacity failure mapped to the wrong error");
+    require(state.calls.back() == Call::get_user_data_size,
+            "capacity failure reached the read operation");
+    require(!session.close(), "capacity-failure session did not close");
+  }
+
+  {
+    FakeSdk state{.user_data_size =
+                      usb_vault::card::vikey::kVikeyBlobBytes - 1};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    require_card_error([&] { static_cast<void>(session.read_user_blob()); },
+                       CardError::invalid_configuration,
+                       "undersized ViKey user area was accepted");
+    require(state.calls.back() == Call::get_user_data_size,
+            "undersized user area reached the read operation");
+    require(!session.close(), "undersized-area session did not close");
+  }
+
+  {
+    FakeSdk state{.read_data_status = sdk::kCommunication};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    require_card_error([&] { static_cast<void>(session.read_user_blob()); },
+                       CardError::communication_failed,
+                       "ViKey blob read failure mapped to the wrong error");
+    require(!session.close(), "read-failure session did not close");
+  }
+
+  {
+    FakeSdk state{.write_data_status = sdk::kInvalidAddressOrSize};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer blob(usb_vault::card::vikey::kVikeyBlobBytes);
+    require_card_error([&] { session.write_user_blob(blob); },
+                       CardError::invalid_operation,
+                       "ViKey blob write failure mapped to the wrong error");
+    require(!session.close(), "write-failure session did not close");
+  }
+
+  {
+    FakeSdk state;
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer short_blob(usb_vault::card::vikey::kVikeyBlobBytes - 1);
+    const std::size_t calls_before = state.calls.size();
+    require_card_error([&] { session.write_user_blob(short_blob); },
+                       CardError::invalid_configuration,
+                       "short ViKey user blob was accepted");
+    require(state.calls.size() == calls_before,
+            "short user blob reached the vendor SDK");
+    require(!session.close(), "short-blob session did not close");
+    const std::size_t calls_after_close = state.calls.size();
+    require_card_error([&] { static_cast<void>(session.read_user_blob()); },
+                       CardError::invalid_operation,
+                       "closed ViKey session allowed a blob read");
+    require(state.calls.size() == calls_after_close,
+            "closed-session read reached the vendor SDK");
+  }
+}
+
 void test_invalid_credentials_fail_before_vendor_calls() {
   FakeSdk state;
   ActiveFake activation(state);
@@ -319,6 +493,19 @@ void test_incomplete_functions_fail_before_vendor_calls() {
       CardError::invalid_configuration,
       "incomplete session functions were not rejected");
   require(state.calls.empty(), "incomplete functions reached the vendor SDK");
+
+  functions = fake_functions();
+  functions.read_data = nullptr;
+  require_card_error(
+      [&] {
+        static_cast<void>(VikeySession::open(
+            functions, credentials.user_sn, credentials.api_key,
+            credentials.user_pin));
+      },
+      CardError::invalid_configuration,
+      "missing ViKey data function was not rejected");
+  require(state.calls.empty(),
+          "missing data function reached the vendor SDK");
 }
 
 void test_failures_cleanup_without_spurious_logoff() {
@@ -530,6 +717,8 @@ int main() {
   try {
     test_successful_session_has_exact_lifecycle();
     test_destructor_closes_active_session();
+    test_fixed_user_blob_read_and_write();
+    test_fixed_user_blob_failures();
     test_invalid_credentials_fail_before_vendor_calls();
     test_incomplete_functions_fail_before_vendor_calls();
     test_failures_cleanup_without_spurious_logoff();

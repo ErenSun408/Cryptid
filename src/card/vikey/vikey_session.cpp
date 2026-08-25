@@ -64,10 +64,30 @@ void validate_functions(const sdk::Functions& functions) {
       functions.set_api_key == nullptr ||
       functions.uninitialization == nullptr ||
       functions.get_level == nullptr ||
+      functions.get_user_data_size == nullptr ||
       functions.get_user_password_attempt == nullptr ||
-      functions.user_login == nullptr || functions.logoff == nullptr) {
+      functions.user_login == nullptr || functions.logoff == nullptr ||
+      functions.read_data == nullptr || functions.write_data == nullptr) {
     fail(CardError::invalid_configuration,
          "ViKey session function table is incomplete");
+  }
+}
+
+void require_active(const bool active) {
+  if (!active) {
+    fail(CardError::invalid_operation,
+         "ViKey user data operation requires an active session");
+  }
+}
+
+void require_blob_capacity(const sdk::Functions& functions,
+                           const sdk::Index index) {
+  sdk::Length bytes = 0;
+  require_success(functions.get_user_data_size(index, &bytes),
+                  "read ViKey user data capacity");
+  if (bytes < kVikeyBlobBytes) {
+    fail(CardError::invalid_configuration,
+         "ViKey user data area is too small for the fixed blob");
   }
 }
 
@@ -231,6 +251,37 @@ sdk::Byte VikeySession::user_pin_attempts_remaining() const noexcept {
 
 sdk::Byte VikeySession::user_pin_attempts_maximum() const noexcept {
   return attempts_maximum_;
+}
+
+security::SecureBuffer VikeySession::read_user_blob() {
+  require_active(active());
+  require_blob_capacity(functions_, index_);
+  security::SecureBuffer result(kVikeyBlobBytes);
+  require_success(
+      functions_.read_data(
+          index_, kVikeyBlobAddress,
+          static_cast<sdk::Length>(result.size()),
+          reinterpret_cast<sdk::Byte*>(result.data())),
+      "read ViKey user blob");
+  return result;
+}
+
+void VikeySession::write_user_blob(
+    const security::SecureBuffer& blob) {
+  if (blob.size() != kVikeyBlobBytes) {
+    fail(CardError::invalid_configuration,
+         "ViKey user blob must contain exactly 32 bytes");
+  }
+  require_active(active());
+  require_blob_capacity(functions_, index_);
+  security::SecureBuffer argument(blob.size());
+  std::ranges::copy(blob.bytes(), argument.bytes().begin());
+  require_success(
+      functions_.write_data(
+          index_, kVikeyBlobAddress,
+          static_cast<sdk::Length>(argument.size()),
+          reinterpret_cast<sdk::Byte*>(argument.data())),
+      "write ViKey user blob");
 }
 
 }  // namespace usb_vault::card::vikey
