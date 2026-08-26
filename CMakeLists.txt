@@ -250,6 +250,7 @@ usb_vault_configure_target(usb_vault_vikey_helper_blob_backend)
 # helper backend's credential-provider boundary. Production provisioning is a
 # separate deployment decision.
 add_library(usb_vault_vikey_development_credentials STATIC EXCLUDE_FROM_ALL
+  src/card/vikey/vikey_development_app_config.cpp
   src/card/vikey/vikey_development_credentials.cpp
 )
 
@@ -407,6 +408,51 @@ if(USB_VAULT_BUILD_UI)
     VERBATIM
   )
   set_property(TARGET usb_vault_app APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_SOURCE_DIR}/ui/index.html"
+    "${CMAKE_SOURCE_DIR}/ui/session.js"
+  )
+
+  # Separate opt-in application wired to the network-enabled ViKey
+  # development backend. It is excluded from default builds and still
+  # requires an explicit runtime acknowledgement plus exact artifact digests.
+  add_executable(usb_vault_vikey_development_app WIN32 EXCLUDE_FROM_ALL
+    tools/app/main.cpp
+  )
+  target_include_directories(usb_vault_vikey_development_app PRIVATE
+    "${webview2_sdk_SOURCE_DIR}/build/native/include"
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(usb_vault_vikey_development_app PRIVATE
+    usb_vault_core
+    usb_vault_vikey_development_credentials
+    usb_vault_vikey_helper_blob_backend
+    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+    Ole32
+    Shell32
+    Shlwapi
+  )
+  target_compile_definitions(usb_vault_vikey_development_app PRIVATE
+    UNICODE
+    _UNICODE
+    USB_VAULT_VIKEY_DEVELOPMENT_APP
+  )
+  add_dependencies(usb_vault_vikey_development_app
+    usb_vault_vikey_helper
+    usb_vault_volume_creator
+  )
+  usb_vault_configure_target(usb_vault_vikey_development_app)
+
+  add_custom_command(TARGET usb_vault_vikey_development_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/ui/index.html"
+            "$<TARGET_FILE_DIR:usb_vault_vikey_development_app>/index.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/ui/session.js"
+            "$<TARGET_FILE_DIR:usb_vault_vikey_development_app>/session.js"
+    VERBATIM
+  )
+  set_property(TARGET usb_vault_vikey_development_app APPEND PROPERTY
+    LINK_DEPENDS
     "${CMAKE_SOURCE_DIR}/ui/index.html"
     "${CMAKE_SOURCE_DIR}/ui/session.js"
   )

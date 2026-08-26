@@ -137,6 +137,23 @@ usb_vault_configure_target(vikey_development_credentials_tests)
 add_test(NAME vikey_development_credentials_tests
   COMMAND vikey_development_credentials_tests)
 
+add_executable(vikey_development_app_config_tests
+  vikey_development_app_config_tests.cpp
+)
+
+target_include_directories(vikey_development_app_config_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_development_app_config_tests PRIVATE
+  usb_vault_vikey_development_credentials
+)
+
+usb_vault_configure_target(vikey_development_app_config_tests)
+
+add_test(NAME vikey_development_app_config_tests
+  COMMAND vikey_development_app_config_tests)
+
 add_executable(vikey_module_tests
   vikey_module_tests.cpp
 )

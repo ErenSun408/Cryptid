@@ -2,9 +2,19 @@
 #include <Shlwapi.h>
 #include <WebView2.h>
 #include <wrl.h>
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#include <shellapi.h>
+#endif
 
 #include "usb_vault/application/application_session.h"
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#include "card/vikey/vikey_card_store.h"
+#include "card/vikey/vikey_development_app_config.h"
+#include "card/vikey/vikey_development_credentials.h"
+#include "card/vikey/vikey_helper_blob_backend.h"
+#else
 #include "usb_vault/card/fixed_blob_card_store.h"
+#endif
 #include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/webview_host_object.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -14,6 +24,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -23,7 +34,12 @@ using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+constexpr wchar_t kWindowTitle[] =
+    L"USB Vault - ViKey 联网开发模式";
+#else
 constexpr wchar_t kWindowTitle[] = L"USB Vault";
+#endif
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 constexpr usb_vault::security::KdfV1Salt kContainerASalt{
     std::byte{0x30}, std::byte{0x31}, std::byte{0x32}, std::byte{0x33},
@@ -40,11 +56,18 @@ ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
 std::wstring g_page_uri;
-usb_vault::card::FixedBlobCardStore g_card_store;
 std::unique_ptr<usb_vault::volume::VolumeProvider> g_volume_provider;
 std::unique_ptr<usb_vault::application::IApplicationSessionActions>
     g_application_session;
 std::unique_ptr<usb_vault::ui::UiSessionController> g_ui_session;
+std::unique_ptr<usb_vault::card::ICardStore> g_card_store;
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+std::unique_ptr<
+    usb_vault::card::vikey::development::WindowsCredentialProvider>
+    g_vikey_credential_provider;
+std::unique_ptr<usb_vault::card::vikey::VikeyHelperBlobBackend>
+    g_vikey_backend;
+#endif
 
 void show_failure(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
@@ -108,7 +131,61 @@ void show_failure(const wchar_t* const message) noexcept {
   return result;
 }
 
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+class LocalArguments final {
+ public:
+  LocalArguments() {
+    values_ = ::CommandLineToArgvW(::GetCommandLineW(), &count_);
+    if (values_ == nullptr || count_ <= 0) {
+      throw std::runtime_error("cannot parse development command line");
+    }
+  }
+
+  ~LocalArguments() noexcept {
+    if (values_ != nullptr) static_cast<void>(::LocalFree(values_));
+  }
+
+  LocalArguments(const LocalArguments&) = delete;
+  LocalArguments& operator=(const LocalArguments&) = delete;
+
+  [[nodiscard]] std::vector<std::wstring_view> views() const {
+    std::vector<std::wstring_view> result;
+    result.reserve(static_cast<std::size_t>(count_));
+    for (int index = 0; index < count_; ++index) {
+      result.emplace_back(values_[index]);
+    }
+    return result;
+  }
+
+ private:
+  LPWSTR* values_{};
+  int count_{};
+};
+#endif
+
+void initialize_card_store() {
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+  const LocalArguments arguments;
+  const std::vector<std::wstring_view> views = arguments.views();
+  auto provider = std::make_unique<
+      usb_vault::card::vikey::development::WindowsCredentialProvider>();
+  auto backend =
+      std::make_unique<usb_vault::card::vikey::VikeyHelperBlobBackend>(
+          usb_vault::card::vikey::development::parse_app_config(views),
+          *provider);
+  auto store = std::make_unique<usb_vault::card::vikey::VikeyCardStore>(
+      *backend);
+  g_vikey_credential_provider = std::move(provider);
+  g_vikey_backend = std::move(backend);
+  g_card_store = std::move(store);
+#else
+  g_card_store =
+      std::make_unique<usb_vault::card::FixedBlobCardStore>();
+#endif
+}
+
 void initialize_application_session() {
+  initialize_card_store();
   const std::wstring directory = executable_directory();
   const auto drives = unused_drive_letters();
   usb_vault::application::ContainerLayout layout{
@@ -123,9 +200,20 @@ void initialize_application_session() {
       std::make_unique<usb_vault::volume::VolumeProvider>();
   g_application_session =
       std::make_unique<usb_vault::application::ApplicationSession>(
-          g_card_store, *g_volume_provider, std::move(layout));
+          *g_card_store, *g_volume_provider, std::move(layout));
   g_ui_session = std::make_unique<usb_vault::ui::UiSessionController>(
       *g_application_session);
+}
+
+void clear_application_session() noexcept {
+  g_ui_session.reset();
+  g_application_session.reset();
+  g_volume_provider.reset();
+  g_card_store.reset();
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+  g_vikey_backend.reset();
+  g_vikey_credential_provider.reset();
+#endif
 }
 
 void resize_webview(const HWND window) noexcept {
@@ -329,9 +417,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   } catch (...) {
     show_failure(L"本地界面初始化失败。");
     ::DestroyWindow(window);
-    g_ui_session.reset();
-    g_application_session.reset();
-    g_volume_provider.reset();
+    clear_application_session();
     ::CoUninitialize();
     return 1;
   }
@@ -344,9 +430,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     ::DispatchMessageW(&message);
   }
 
-  g_ui_session.reset();
-  g_application_session.reset();
-  g_volume_provider.reset();
+  clear_application_session();
   ::CoUninitialize();
   return static_cast<int>(message.wParam);
 }

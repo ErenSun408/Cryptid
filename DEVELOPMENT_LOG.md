@@ -2164,5 +2164,59 @@
   被修改，也没有产生写入至恢复之间的中断窗口。执行后未发现残留的随机 helper 暂存目录。
 - 即使只读验收通过，Windows 提供者和联网 helper 仍只允许开发凭据、开发卡和非生产 blob。
   下一代码切片才考虑显式启用的真卡开发版产品装配；生产材料进入前仍须恢复可验证出站隔离。
-- 当前提交状态：实现、自动验证、安全复核和实体只读验收均已完成，等待用户决定是否以
-  `[P1.6]add development ViKey credential provider` 创建本地提交；不执行 push。
+- 当前提交状态：已按批准创建本地提交
+  `714e371 [P1.6]add development ViKey credential provider`；未执行 push。
+
+### 小切片 19：显式启用的真卡开发版应用装配
+
+#### 计划、需求与既有实现复核
+
+- 在 `714e371` 基础上重新核对 P1.6、R-03、8.6 及开发/生产运行边界。默认产品入口仍硬编码
+  `FixedBlobCardStore`，此前的正式 ViKey 适配器、helper 后端和开发凭据提供者均尚未进入产品
+  应用；本切片只增加一个可单独构建、显式确认联网风险的开发版 EXE，不替换默认产品，也不把
+  Windows 凭据管理器确定为正式产品凭据方案。
+- 审计现有 CMake 配置后确认 `out/build/dev` 关闭 UI，`review-clean`、`analyze` 和 `asan` 才启用
+  UI。首次在 `out/build/dev` 请求应用目标因此得到“未知目标”；切换到正确的 UI 构建配置后，
+  默认应用与开发应用均正常编译。这是配置不匹配，不是代码编译失败。
+
+#### 实现
+
+- 新增默认构建排除的 `usb_vault_vikey_development_app`。它复用正式 UI 和
+  `ApplicationSession`，但把 `ICardStore` 装配为
+  `VikeyCardStore -> VikeyHelperBlobBackend -> WindowsCredentialProvider`；默认
+  `usb_vault_app` 继续装配 `FixedBlobCardStore`，没有改变既有演示/离线路径。
+- 开发 EXE 必须收到精确确认开关
+  `--i-understand-vikey-development-mode-is-network-enabled`、helper 绝对路径及 SHA-256、供应商
+  目录绝对路径及 DLL SHA-256。解析器拒绝缺失/错误确认、额外参数、相对或形状无效的路径、
+  非 64 位十六进制摘要，并只保存词法规范化后的非秘密部署数据。
+- 开发窗口标题固定显示“ViKey 联网开发模式”。应用启动只完成非秘密参数解析和对象装配，不读取
+  Windows 凭据；只有用户发起需要卡 blob 的会话操作时，后端才按既有边界加载一组新凭据并
+  启动单请求 helper。清理顺序先销毁 UI/应用会话和卡适配器，再销毁后端及凭据提供者，避免悬空
+  引用；命令行不承载 UserSN、API Key、PIN 或 blob。
+
+#### 验证与安全复核
+
+- 新增配置单测覆盖有效路径规范化与摘要解码、确认开关必需、helper/供应商相对路径拒绝、摘要
+  长度及非十六进制拒绝和额外参数拒绝。MSVC Debug `/W4 /WX` 全量 CTest **25/25**：23 项
+  执行通过，2 项按既有受限父进程令牌约束跳过；普通桌面 helper 测试 **3/3 通过**。
+- 默认应用和开发应用在 Debug、MSVC `/analyze`、AddressSanitizer 三套 UI 配置下均构建成功。
+  三个聚焦测试在 `/analyze` 和 AddressSanitizer 下分别 **3/3 通过**，无新增项目诊断或内存
+  错误。`git diff --check` 通过。
+- Ninja 默认 `all` 目标不包含开发应用。二进制导入表复核确认默认 EXE 不导入 `CredReadW` 或
+  `ViKey.dll`；开发 EXE 按设计导入 `CredReadW`，但不静态导入 `ViKey.dll`，官方 SDK 仍只在
+  独立 helper 内经摘要验证后动态加载。代码与测试未发现凭据或 blob 进入参数、日志、异常文本、
+  普通可重分配字节容器或持久文件。
+- 本切片没有启动开发 GUI、没有读取 Windows 凭据、没有加载官方 SDK、没有连接或改写实体卡；
+  既有的一次只读实体授权没有被扩大为新的访问或写入授权。
+
+#### 剩余风险与下一步
+
+- 开发 EXE 会把开发凭据和非生产 blob 交给具普通网络访问权限的 helper，匿名管道内核缓冲仍有
+  进程无法显式擦除的短期副本；它只能用于开发卡和开发材料，不能作为生产出站隔离或生产凭据
+  方案。命令行中的路径和摘要虽非秘密，仍需由可复现启动方式提供，避免人工抄错。
+- 真实应用闭环尚未验收：开发 EXE 尚未在连接的开发卡上完成“启动界面 -> 输入密码 -> 读取卡
+  blob -> 挂载/失败提示 -> 正常退出”的手工流程，WebView2、建卷工具、容器状态和卡内现有 blob
+  的兼容性仍可能暴露集成问题。下一最小切片应先生成或记录当前制品摘要，按用户对凭据和实体卡
+  的明确授权启动一次开发 EXE，执行只读应用级验收；不得在该验收中初始化或覆写卡 blob。
+- 当前提交状态：实现、自动验证和安全复核已完成，等待用户决定是否以
+  `[P1.6]add opt-in ViKey development app` 创建本地提交；不执行 push。
