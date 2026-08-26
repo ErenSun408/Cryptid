@@ -246,6 +246,26 @@ target_link_libraries(usb_vault_vikey_helper_blob_backend
 )
 usb_vault_configure_target(usb_vault_vikey_helper_blob_backend)
 
+# Development-only Windows Credential Manager implementation of the formal
+# helper backend's credential-provider boundary. Production provisioning is a
+# separate deployment decision.
+add_library(usb_vault_vikey_development_credentials STATIC EXCLUDE_FROM_ALL
+  src/card/vikey/vikey_development_credentials.cpp
+)
+
+target_include_directories(usb_vault_vikey_development_credentials
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_vikey_development_credentials
+  PUBLIC
+    usb_vault_vikey_helper_blob_backend
+  PRIVATE
+    Advapi32
+)
+usb_vault_configure_target(usb_vault_vikey_development_credentials)
+
 add_executable(usb_vault_vikey_helper WIN32
   tools/vikey_helper/main.cpp
   src/card/verified_local_artifact.cpp
@@ -284,8 +304,8 @@ target_include_directories(usb_vault_vikey_development_session_probe PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(usb_vault_vikey_development_session_probe PRIVATE
+  usb_vault_vikey_development_credentials
   usb_vault_vikey_helper_client
-  Advapi32
 )
 usb_vault_configure_target(usb_vault_vikey_development_session_probe)
 
@@ -309,12 +329,31 @@ target_compile_definitions(
 )
 target_link_libraries(
   usb_vault_vikey_development_blob_round_trip_probe PRIVATE
+  usb_vault_vikey_development_credentials
   usb_vault_vikey_helper_client
-  Advapi32
   Bcrypt
 )
 usb_vault_configure_target(
   usb_vault_vikey_development_blob_round_trip_probe)
+
+# Explicitly built read-only verifier for the complete formal development
+# ICardStore chain over IPC v5. It never writes card data and is not part of
+# the product or default build.
+add_executable(usb_vault_vikey_formal_blob_read_probe EXCLUDE_FROM_ALL
+  tools/vikey_development_session_probe/main.cpp
+)
+target_include_directories(usb_vault_vikey_formal_blob_read_probe PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(usb_vault_vikey_formal_blob_read_probe PRIVATE
+  USB_VAULT_VIKEY_FORMAL_BLOB_READ_PROBE
+)
+target_link_libraries(usb_vault_vikey_formal_blob_read_probe PRIVATE
+  usb_vault_vikey_development_credentials
+  usb_vault_vikey_helper_blob_backend
+)
+usb_vault_configure_target(usb_vault_vikey_formal_blob_read_probe)
 
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp

@@ -2109,5 +2109,60 @@
 - 产品仍使用固定桩，`IVikeyCredentialProvider` 也只有抽象边界和测试实现。下一最小切片可新增
   开发专用 Windows 凭据提供者及默认构建不包含的正式后端只读手工验收入口，先用实体开发卡
   证明 v5 get 链；正式 put、产品装配、持久计数器和 P1.7 拔卡处理继续分开审阅。
-- 当前提交状态：已完成实现、测试和安全复核，等待用户决定是否以
-  `[P1.6]add helper-backed ViKey blob operations` 创建本地提交；不执行 push。
+- 当前提交状态：已按批准创建本地提交
+  `07a1e28 [P1.6]add helper-backed ViKey blob operations`；未执行 push。
+
+### 小切片 18：开发凭据提供者与正式后端只读入口
+
+#### 计划、需求与既有实现复核
+
+- 在 `07a1e28` 基础上重新核对 P1.6、R-03、N-02、开发/生产运行边界、既有 Windows 凭据
+  读取代码及三个手工 probe。本切片只提供开发专用凭据来源和 IPC v5 正式后端的实体卡只读
+  入口；不替换产品固定桩、不定义生产凭据部署方案，也不调用 `put_blob`。
+- Windows 凭据管理器只是当前开发机上三项开发凭据的临时来源。正式产品仍只依赖
+  `IVikeyCredentialProvider` 抽象；量产凭据是否使用 DPAPI、受限服务或最终硬件自身能力须由
+  后续部署威胁模型决定，不能把本实现默认为生产方案。
+
+#### 实现
+
+- 新增默认构建排除的 `usb_vault_vikey_development_credentials` 组件及
+  `WindowsCredentialProvider`，只读取当前用户下三个固定开发目标。每次加载建立新的
+  `VikeyCredentialSet`；`CredReadW` 返回的原始 blob 在复制到锁页 `SecureBuffer` 后先用
+  `SecureZeroMemory` 擦除，再交给 `CredFree` 释放。异常发生在任意一项时，已构造的锁页凭据
+  随栈展开自动清零。
+- 抽出可确定性测试的凭据 blob 解码器，兼容既有原始 ASCII、带 NUL 的 ASCII、UTF-16LE 和
+  带 NUL 的 UTF-16LE 四种 Windows 存储形状；错误长度、零预期长度和非 ASCII UTF-16 高字节
+  均失败关闭。目标名、错误文本和测试不包含凭据值。
+- 既有只读会话 probe 和可恢复写入 probe 改为复用该提供者，删除重复的凭据管理器读取实现。
+  新增 `usb_vault_vikey_formal_blob_read_probe`，继续为 `EXCLUDE_FROM_ALL` 手工目标，只接受
+  helper/DLL 路径与精确摘要，通过
+  `VikeyCardStore -> VikeyHelperBlobBackend -> IPC v5 -> helper` 调用一次 `get_blob`。成功只输出
+  已取得锁页 32 字节结果，不打印 blob、凭据、路径或供应商状态。
+
+#### 验证与安全复核
+
+- 新增单元测试覆盖四种有效凭据形状、短值、零预期长度、非 ASCII UTF-16 和提供者禁拷贝属性；
+  测试只使用固定无害字节，不访问 Windows 凭据管理器。MSVC Debug `/W4 /WX` 下三个既有/新增
+  手工 probe 与新测试均构建通过。
+- Debug 全量 CTest **24/24**：22 项执行通过，2 项按受限父令牌约束跳过；普通桌面 helper
+  测试 **3/3 通过**。MSVC `/analyze` 与 AddressSanitizer 下三个聚焦测试分别 **3/3 通过**，
+  无新增项目诊断或内存错误。只读 probe 无参数运行在读取路径、摘要、凭据或设备前以用法错误
+  退出，退出码为 1。
+- `git diff --check` 通过，新文件无行尾空白。默认产品入口仍实例化 `FixedBlobCardStore`；产品
+  导入表没有 ViKey 或开发凭据组件，手工只读 probe 不静态导入 `ViKey.dll`。安全审阅未发现
+  凭据或 blob 进入日志、异常文本、普通可重分配容器、环境、命令行或持久文件。
+
+#### 实体验收、风险与下一步
+
+- 官方 x64 DLL 仍匹配既有 SHA-256 白名单
+  `735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E`；当前 Debug v5 helper
+  SHA-256 为 `C270D3E25CF8D62974D6832D4889F7A9065A26584570AE251749CE2CAA0C2E25`。安全审批首次拒绝
+  在隐含授权下读取三项开发凭据；用户随后明确授权把这些凭据交给本机具普通网络权限的开发
+  helper 和官方 SDK，用于一次实体开发卡只读 `get_blob`，未扩大为写入或生产材料授权。
+- 在上述明确授权下执行一次正式链路实体读取，probe 返回精确 32 字节锁页 blob，进程退出码为
+  0。输出只说明读取通过，未打印凭据、blob、路径或供应商状态；本次未调用写接口，卡内容没有
+  被修改，也没有产生写入至恢复之间的中断窗口。执行后未发现残留的随机 helper 暂存目录。
+- 即使只读验收通过，Windows 提供者和联网 helper 仍只允许开发凭据、开发卡和非生产 blob。
+  下一代码切片才考虑显式启用的真卡开发版产品装配；生产材料进入前仍须恢复可验证出站隔离。
+- 当前提交状态：实现、自动验证、安全复核和实体只读验收均已完成，等待用户决定是否以
+  `[P1.6]add development ViKey credential provider` 创建本地提交；不执行 push。
