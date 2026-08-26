@@ -105,7 +105,17 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.security_properties = 0;
     }
     stage = 4;
-    if (!valid_response(response, request.operation)) return 140;
+    if (!valid_response(response, request.operation)) {
+      if (response.magic != kMagic) return 141;
+      if (response.version != kVersion) return 142;
+      if (response.header_bytes != sizeof(Response)) return 143;
+      if (response.status == 0 && response.security_properties == 0) {
+        return 144;
+      }
+      if (response.payload_bytes != 0) return 145;
+      if (response.detail != 0) return 146;
+      return 147;
+    }
     stage = 5;
     write_response(response_handle, response, request.operation);
     if (response.status != 0) return 3;

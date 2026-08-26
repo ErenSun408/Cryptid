@@ -13,12 +13,17 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 4;
+constexpr std::uint16_t kVersion = 5;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
     static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
                                kVikeyApiKeyBytes + kVikeyUserPinBytes);
 constexpr std::uint32_t kDevelopmentBlobRoundTripPayloadBytes =
+    kDevelopmentSessionPayloadBytes +
+    static_cast<std::uint32_t>(kVikeyBlobBytes);
+constexpr std::uint32_t kDevelopmentBlobReadPayloadBytes =
+    kDevelopmentSessionPayloadBytes;
+constexpr std::uint32_t kDevelopmentBlobWritePayloadBytes =
     kDevelopmentSessionPayloadBytes +
     static_cast<std::uint32_t>(kVikeyBlobBytes);
 
@@ -28,6 +33,8 @@ enum class Operation : std::uint32_t {
   hid_access_probe = 3,
   development_session_probe = 4,
   development_blob_round_trip_probe = 5,
+  development_blob_read = 6,
+  development_blob_write = 7,
 };
 
 enum class SecurityProperty : std::uint32_t {
@@ -130,6 +137,24 @@ struct DevelopmentBlobRoundTripRequest final {
   security::SecureBuffer test_blob;
 };
 
+struct DevelopmentBlobWriteRequest final {
+  DevelopmentBlobWriteRequest();
+
+  DevelopmentBlobWriteRequest(const DevelopmentBlobWriteRequest&) = delete;
+  DevelopmentBlobWriteRequest& operator=(
+      const DevelopmentBlobWriteRequest&) = delete;
+  DevelopmentBlobWriteRequest(DevelopmentBlobWriteRequest&&) noexcept =
+      default;
+  DevelopmentBlobWriteRequest& operator=(
+      DevelopmentBlobWriteRequest&&) noexcept = default;
+
+  Sha256Digest vendor_digest{};
+  security::SecureBuffer user_sn;
+  security::SecureBuffer api_key;
+  security::SecureBuffer user_pin;
+  security::SecureBuffer blob;
+};
+
 struct DevelopmentSessionObservation final {
   std::uint8_t attempts_before{};
   std::uint8_t maximum_before{};
@@ -172,6 +197,7 @@ struct Response final {
   std::uint16_t header_bytes{sizeof(Response)};
   std::int32_t status{};
   std::uint32_t security_properties{};
+  std::uint32_t payload_bytes{};
   // Non-secret Win32 or vendor status on failure. A successful development
   // session packs its before/after PIN-attempt observation here. It never
   // carries paths, identifiers, credentials, or card data.
@@ -180,7 +206,7 @@ struct Response final {
 };
 
 static_assert(sizeof(Request) == 32);
-static_assert(sizeof(Response) == 36);
+static_assert(sizeof(Response) == 40);
 
 [[nodiscard]] bool valid_request(const Request& request) noexcept;
 [[nodiscard]] bool valid_response(const Response& response,
@@ -204,10 +230,30 @@ void write_development_blob_round_trip_request(
 [[nodiscard]] DevelopmentBlobRoundTripRequest
 read_development_blob_round_trip_request(HANDLE pipe,
                                          const Request& request);
+void write_development_blob_read_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] DevelopmentSessionRequest read_development_blob_read_request(
+    HANDLE pipe, const Request& request);
+void write_development_blob_write_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& blob);
+[[nodiscard]] DevelopmentBlobWriteRequest
+read_development_blob_write_request(HANDLE pipe, const Request& request);
 void write_response(HANDLE pipe, const Response& response,
                     Operation expected_operation);
+void write_development_blob_response(
+    HANDLE pipe, const Response& response,
+    const security::SecureBuffer& blob);
 [[nodiscard]] Response read_response(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce,
     Operation expected_operation);
+[[nodiscard]] security::SecureBuffer read_development_blob_response_payload(
+    HANDLE pipe, const Response& response);
 
 }  // namespace usb_vault::card::vikey::helper

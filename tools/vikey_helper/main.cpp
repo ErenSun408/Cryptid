@@ -149,6 +149,11 @@ struct OperationResult final {
   std::uint32_t detail{};
 };
 
+struct BlobReadResult final {
+  OperationResult operation;
+  usb_vault::security::SecureBuffer blob;
+};
+
 [[nodiscard]] OperationResult vendor_runtime_compatibility() {
   const std::filesystem::path staged = staged_vendor_dll();
   File readable(::CreateFileW(staged.c_str(), GENERIC_READ, FILE_SHARE_READ,
@@ -286,6 +291,92 @@ struct OperationResult final {
   }
 }
 
+[[nodiscard]] BlobReadResult development_blob_read(
+    const DevelopmentSessionRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+
+    usb_vault::security::SecureBuffer blob;
+    OperationResult result{};
+    try {
+      blob = session.read_user_blob();
+    } catch (const std::system_error& error) {
+      result.status = error.code().category() == card_error_category()
+                          ? error.code().value()
+                          : static_cast<std::int32_t>(
+                                CardError::backend_unavailable);
+    } catch (...) {
+      result.status =
+          static_cast<std::int32_t>(CardError::backend_unavailable);
+    }
+
+    const std::error_code close_error = session.close();
+    if (result.status != 0) return {.operation = result};
+    if (close_error) {
+      return {.operation = {.status = close_error.value()}};
+    }
+    if (blob.size() != usb_vault::card::vikey::kVikeyBlobBytes) {
+      return {.operation = {.status = static_cast<std::int32_t>(
+                                CardError::device_failure)}};
+    }
+    return {.blob = std::move(blob)};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.operation = {.status = error.code().value()}};
+    }
+    return {.operation = {.status = static_cast<std::int32_t>(
+                              CardError::backend_unavailable)}};
+  } catch (...) {
+    return {.operation = {.status = static_cast<std::int32_t>(
+                              CardError::backend_unavailable)}};
+  }
+}
+
+[[nodiscard]] OperationResult development_blob_write(
+    const DevelopmentBlobWriteRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+
+    try {
+      session.write_user_blob(request.blob);
+    } catch (...) {
+      static_cast<void>(session.close());
+      // The vendor may have changed some or all bytes before reporting an
+      // error. Never retry and never imply that the prior blob is intact.
+      return {.status =
+                  static_cast<std::int32_t>(CardError::device_failure)};
+    }
+    if (session.close()) {
+      return {.status =
+                  static_cast<std::int32_t>(CardError::device_failure)};
+    }
+    return {};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
 [[nodiscard]] OperationResult operation_result(
     const Operation operation,
     const DevelopmentSessionRequest* const session_request = nullptr) {
@@ -318,6 +409,8 @@ struct OperationResult final {
                        .status = static_cast<std::int32_t>(
                            CardError::invalid_operation)};
     case Operation::development_blob_round_trip_probe:
+    case Operation::development_blob_read:
+    case Operation::development_blob_write:
       return {.status =
                   static_cast<std::int32_t>(CardError::invalid_operation)};
   }
@@ -344,13 +437,16 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     const Request request = read_request(request_handle);
     Response response{};
     response.nonce = request.nonce;
+    usb_vault::security::SecureBuffer response_blob;
     try {
       const EnvironmentBoundary environment = sanitized_environment();
       if (environment != EnvironmentBoundary::invalid) {
         OperationResult result{};
         if (request.operation == Operation::development_session_probe ||
             request.operation ==
-                Operation::development_blob_round_trip_probe) {
+                Operation::development_blob_round_trip_probe ||
+            request.operation == Operation::development_blob_read ||
+            request.operation == Operation::development_blob_write) {
           if (environment !=
               EnvironmentBoundary::network_enabled_development) {
             result.status =
@@ -361,10 +457,27 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                   read_development_session_request(request_handle, request);
               result = operation_result(request.operation, &session_request);
             } else {
-              DevelopmentBlobRoundTripRequest blob_request =
-                  read_development_blob_round_trip_request(request_handle,
-                                                           request);
-              result = development_blob_round_trip(blob_request);
+              if (request.operation ==
+                  Operation::development_blob_round_trip_probe) {
+                DevelopmentBlobRoundTripRequest blob_request =
+                    read_development_blob_round_trip_request(request_handle,
+                                                             request);
+                result = development_blob_round_trip(blob_request);
+              } else if (request.operation ==
+                         Operation::development_blob_read) {
+                DevelopmentSessionRequest blob_request =
+                    read_development_blob_read_request(request_handle,
+                                                       request);
+                BlobReadResult read_result =
+                    development_blob_read(blob_request);
+                result = read_result.operation;
+                response_blob = std::move(read_result.blob);
+              } else {
+                DevelopmentBlobWriteRequest blob_request =
+                    read_development_blob_write_request(request_handle,
+                                                        request);
+                result = development_blob_write(blob_request);
+              }
             }
             // The scoped request above wipes all helper-side credential
             // buffers before any response is emitted.
@@ -382,6 +495,10 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       if (response.status == 0) {
         response.security_properties =
             property_bit(SecurityProperty::sanitized_environment);
+        if (request.operation == Operation::development_blob_read) {
+          response.payload_bytes =
+              static_cast<std::uint32_t>(response_blob.size());
+        }
       }
     } catch (...) {
       response.status =
@@ -389,7 +506,13 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.security_properties = 0;
       response.detail = ERROR_GEN_FAILURE;
     }
-    write_response(response_handle, response, request.operation);
+    if (request.operation == Operation::development_blob_read &&
+        response.status == 0) {
+      write_development_blob_response(response_handle, response,
+                                      response_blob);
+    } else {
+      write_response(response_handle, response, request.operation);
+    }
     return 0;
   } catch (...) {
     return 2;

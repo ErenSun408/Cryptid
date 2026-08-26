@@ -44,7 +44,7 @@ struct DevelopmentSessionInputs final {
   const security::SecureBuffer& user_sn;
   const security::SecureBuffer& api_key;
   const security::SecureBuffer& user_pin;
-  const security::SecureBuffer* test_blob{};
+  const security::SecureBuffer* blob{};
 };
 
 constexpr DWORD64 kHelperMitigations =
@@ -954,6 +954,47 @@ void cleanup_development_directory(
   }
 }
 
+[[nodiscard]] security::SecureBuffer read_blob_payload_until(
+    const HANDLE pipe, const HANDLE process,
+    const helper::Response& response,
+    const std::chrono::steady_clock::time_point deadline) {
+  for (;;) {
+    DWORD available = 0;
+    if (::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) ==
+        FALSE) {
+      throw_card(CardError::communication_failed,
+                 "inspect ViKey helper blob response");
+    }
+    if (available >= kVikeyBlobBytes) {
+      return helper::read_development_blob_response_payload(pipe, response);
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      throw_card(CardError::communication_failed,
+                 "ViKey helper blob response timed out");
+    }
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - now);
+    const DWORD wait_milliseconds = static_cast<DWORD>(
+        std::clamp<std::int64_t>(remaining.count(), 1, 10));
+    const DWORD wait = ::WaitForSingleObject(process, wait_milliseconds);
+    if (wait == WAIT_FAILED) {
+      throw_card(CardError::communication_failed,
+                 "wait for ViKey helper blob response");
+    }
+    if (wait == WAIT_OBJECT_0) {
+      if (::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) !=
+              FALSE &&
+          available >= kVikeyBlobBytes) {
+        return helper::read_development_blob_response_payload(pipe,
+                                                               response);
+      }
+      throw_card(CardError::communication_failed,
+                 "ViKey helper exited without a complete blob response");
+    }
+  }
+}
+
 void require_clean_exit(const HANDLE process, const HANDLE response_pipe,
                         const std::chrono::steady_clock::time_point deadline) {
   const auto now = std::chrono::steady_clock::now();
@@ -1007,7 +1048,8 @@ namespace {
     const DevelopmentSessionInputs* const session_inputs,
     std::uint32_t* const session_observation,
     const HelperBoundary boundary,
-    const std::chrono::milliseconds timeout) {
+    const std::chrono::milliseconds timeout,
+    security::SecureBuffer* const blob_response = nullptr) {
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");
@@ -1015,10 +1057,14 @@ namespace {
   const bool session_required =
       operation == helper::Operation::development_session_probe ||
       operation ==
-          helper::Operation::development_blob_round_trip_probe;
-  const bool blob_round_trip =
-      operation ==
-      helper::Operation::development_blob_round_trip_probe;
+          helper::Operation::development_blob_round_trip_probe ||
+      operation == helper::Operation::development_blob_read ||
+      operation == helper::Operation::development_blob_write;
+  const bool blob_input_required =
+      operation == helper::Operation::development_blob_round_trip_probe ||
+      operation == helper::Operation::development_blob_write;
+  const bool blob_output_required =
+      operation == helper::Operation::development_blob_read;
   const bool vendor_required =
       operation == helper::Operation::vendor_runtime_probe ||
       session_required;
@@ -1030,6 +1076,7 @@ namespace {
   if (session_required != (session_inputs != nullptr) ||
       (operation == helper::Operation::development_session_probe) !=
           (session_observation != nullptr) ||
+      blob_output_required != (blob_response != nullptr) ||
       (session_required &&
        boundary != HelperBoundary::network_enabled_development)) {
     throw_card(CardError::invalid_configuration,
@@ -1039,9 +1086,9 @@ namespace {
       (session_inputs->user_sn.size() != kVikeyUserSnBytes ||
        session_inputs->api_key.size() != kVikeyApiKeyBytes ||
        session_inputs->user_pin.size() != kVikeyUserPinBytes ||
-       blob_round_trip != (session_inputs->test_blob != nullptr) ||
-       (session_inputs->test_blob != nullptr &&
-        session_inputs->test_blob->size() != kVikeyBlobBytes))) {
+       blob_input_required != (session_inputs->blob != nullptr) ||
+       (session_inputs->blob != nullptr &&
+        session_inputs->blob->size() != kVikeyBlobBytes))) {
     throw_card(CardError::invalid_configuration,
                "ViKey development session credential size is invalid");
   }
@@ -1213,13 +1260,26 @@ namespace {
     request.operation = operation;
     request.nonce = random_nonce();
     if (session_inputs != nullptr && vendor_digest != nullptr) {
-      if (session_inputs->test_blob != nullptr) {
+      if (operation ==
+          helper::Operation::development_blob_round_trip_probe) {
         request.payload_bytes =
             helper::kDevelopmentBlobRoundTripPayloadBytes;
         helper::write_development_blob_round_trip_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
             session_inputs->user_sn, session_inputs->api_key,
-            session_inputs->user_pin, *session_inputs->test_blob);
+            session_inputs->user_pin, *session_inputs->blob);
+      } else if (operation == helper::Operation::development_blob_read) {
+        request.payload_bytes = helper::kDevelopmentBlobReadPayloadBytes;
+        helper::write_development_blob_read_request(
+            request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->user_sn, session_inputs->api_key,
+            session_inputs->user_pin);
+      } else if (operation == helper::Operation::development_blob_write) {
+        request.payload_bytes = helper::kDevelopmentBlobWritePayloadBytes;
+        helper::write_development_blob_write_request(
+            request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->user_sn, session_inputs->api_key,
+            session_inputs->user_pin, *session_inputs->blob);
       } else {
         request.payload_bytes = helper::kDevelopmentSessionPayloadBytes;
         helper::write_development_session_request(
@@ -1247,6 +1307,10 @@ namespace {
     if (security_properties != required_security_properties) {
       throw_card(CardError::backend_unavailable,
                  "ViKey helper security boundary is incomplete");
+    }
+    if (blob_response != nullptr) {
+      *blob_response = read_blob_payload_until(
+          response_pipe.parent_end.get(), process.get(), response, deadline);
     }
     require_clean_exit(process.get(), response_pipe.parent_end.get(),
                        deadline);
@@ -1358,7 +1422,7 @@ probe_vikey_development_session_with_network_access(
       .user_sn = user_sn,
       .api_key = api_key,
       .user_pin = user_pin,
-      .test_blob = nullptr};
+      .blob = nullptr};
   std::uint32_t packed_observation = 0;
   const VikeyHelperProbe probe = probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
@@ -1393,12 +1457,61 @@ probe_vikey_development_blob_round_trip_with_network_access(
       .user_sn = user_sn,
       .api_key = api_key,
       .user_pin = user_pin,
-      .test_blob = &test_blob};
+      .blob = &test_blob};
   return probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
       helper::Operation::development_blob_round_trip_probe, &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout);
+}
+
+security::SecureBuffer read_vikey_development_blob_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = nullptr};
+  security::SecureBuffer blob;
+  static_cast<void>(probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::development_blob_read, &vendor_path,
+      &expected_vendor_digest, &inputs, nullptr,
+      HelperBoundary::network_enabled_development, timeout, &blob));
+  return blob;
+}
+
+void write_vikey_development_blob_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& blob,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = &blob};
+  static_cast<void>(probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::development_blob_write, &vendor_path,
+      &expected_vendor_digest, &inputs, nullptr,
+      HelperBoundary::network_enabled_development, timeout));
 }
 
 }  // namespace usb_vault::card::vikey

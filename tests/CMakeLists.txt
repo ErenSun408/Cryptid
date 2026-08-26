@@ -296,6 +296,7 @@ target_include_directories(vikey_helper_process_tests
 )
 
 target_link_libraries(vikey_helper_process_tests PRIVATE
+  usb_vault_vikey_helper_blob_backend
   usb_vault_vikey_helper_client
   Ws2_32
 )

@@ -19,8 +19,10 @@ enum class SessionState {
   logged_in,
   level_read,
   attempts_rechecked,
-  backup_size_read,
-  backup_read,
+  initial_data_size_read,
+  initial_data_read,
+  standalone_written,
+  standalone_write_failed,
   test_write_size_read,
   test_written,
   test_read_size_read,
@@ -130,7 +132,10 @@ VikeyGetLevel(const WORD index, BYTE* const level) {
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyLogoff(const WORD index) {
   if ((session_state != SessionState::attempts_rechecked &&
-       session_state != SessionState::restore_verified) ||
+       session_state != SessionState::restore_verified &&
+       session_state != SessionState::initial_data_read &&
+       session_state != SessionState::standalone_written &&
+       session_state != SessionState::standalone_write_failed) ||
       index != 0) {
     return kInvalidValue;
   }
@@ -155,9 +160,9 @@ VikeyGetUserDataSize(const WORD index, DWORD* const bytes) {
   if (index != 0 || bytes == nullptr) return ERROR_INVALID_PARAMETER;
   switch (session_state) {
     case SessionState::level_read:
-      session_state = SessionState::backup_size_read;
+      session_state = SessionState::initial_data_size_read;
       break;
-    case SessionState::backup_read:
+    case SessionState::initial_data_read:
       session_state = SessionState::test_write_size_read;
       break;
     case SessionState::test_written:
@@ -185,8 +190,8 @@ VikeyReadData(const WORD index, const DWORD address, const DWORD length,
     return ERROR_INVALID_PARAMETER;
   }
   switch (session_state) {
-    case SessionState::backup_size_read:
-      session_state = SessionState::backup_read;
+    case SessionState::initial_data_size_read:
+      session_state = SessionState::initial_data_read;
       break;
     case SessionState::test_read_size_read:
       if (!std::ranges::all_of(user_data,
@@ -224,6 +229,18 @@ VikeyWriteData(const WORD index, const DWORD address, const DWORD length,
       return kInvalidValue;
     }
     session_state = SessionState::test_written;
+  } else if (session_state == SessionState::initial_data_size_read) {
+    const std::span input(buffer, user_data.size());
+    const bool successful_write = std::ranges::all_of(
+        input, [](const BYTE value) { return value == 0xd5; });
+    const bool partial_failure = std::ranges::all_of(
+        input, [](const BYTE value) { return value == 0xe1; });
+    if (!successful_write && !partial_failure) return kInvalidValue;
+    std::ranges::copy_n(buffer, user_data.size(), user_data.begin());
+    session_state = successful_write
+                        ? SessionState::standalone_written
+                        : SessionState::standalone_write_failed;
+    if (partial_failure) return ERROR_WRITE_FAULT;
   } else if (session_state == SessionState::restore_write_size_read) {
     if (!std::ranges::all_of(
             std::span(buffer, user_data.size()),

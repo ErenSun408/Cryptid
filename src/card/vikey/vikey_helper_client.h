@@ -105,4 +105,31 @@ probe_vikey_development_blob_round_trip_with_network_access(
     const security::SecureBuffer& test_blob,
     std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
+// Development-only one-shot blob operations used by the formal card-store
+// backend. A read returns card data directly in locked memory. A write never
+// retries; any reported write failure must be treated as an indeterminate card
+// state by the caller. These operations retain ordinary network access and
+// must not receive production credentials or material.
+[[nodiscard]] security::SecureBuffer
+read_vikey_development_blob_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+void write_vikey_development_blob_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& blob,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
 }  // namespace usb_vault::card::vikey

@@ -1,4 +1,5 @@
 #include "card/vikey/vikey_helper_client.h"
+#include "card/vikey/vikey_helper_blob_backend.h"
 #include "card/vikey/vikey_helper_protocol.h"
 #include "vikey_network_probe.h"
 
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -33,6 +35,11 @@ using usb_vault::card::vikey::
     probe_vikey_development_vendor_runtime_with_network_access;
 using usb_vault::card::vikey::probe_vikey_helper;
 using usb_vault::card::vikey::probe_vikey_vendor_runtime;
+using usb_vault::card::vikey::IVikeyCredentialProvider;
+using usb_vault::card::vikey::VikeyCardStore;
+using usb_vault::card::vikey::VikeyCredentialSet;
+using usb_vault::card::vikey::VikeyHelperBlobBackend;
+using usb_vault::card::vikey::VikeyHelperBlobBackendConfig;
 using usb_vault::security::SecureBuffer;
 
 [[noreturn]] void fail(const char* const message) {
@@ -341,6 +348,27 @@ void test_development_vendor_runtime_staging(
   return result;
 }
 
+class CountingCredentialProvider final : public IVikeyCredentialProvider {
+ public:
+  [[nodiscard]] VikeyCredentialSet load_credentials() override {
+    ++loads;
+    if (fail_load) {
+      throw std::runtime_error("fixture credential provider failed");
+    }
+    return {
+        .user_sn = fixed_secret(
+            usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'}),
+        .api_key = fixed_secret(
+            usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'}),
+        .user_pin = fixed_secret(
+            usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'}),
+    };
+  }
+
+  std::size_t loads{};
+  bool fail_load{};
+};
+
 void expect_fixed_secret(const SecureBuffer& secret, const std::byte value,
                          const char* const message) {
   for (const std::byte byte : secret.bytes()) {
@@ -464,6 +492,68 @@ void test_development_blob_round_trip_staging(
   }
   expect(development_helper_directory_count() == directories_before,
          "short development test blob created a staging directory");
+}
+
+void test_formal_blob_backend_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  VikeyHelperBlobBackendConfig config{
+      .helper_path = helper,
+      .helper_digest = file_digest(helper),
+      .vendor_directory = vendor.parent_path(),
+      .vendor_digest = file_digest(vendor),
+      .timeout = 5s,
+  };
+  CountingCredentialProvider provider;
+  VikeyHelperBlobBackend backend(config, provider);
+  VikeyCardStore store(backend);
+
+  SecureBuffer observed = store.get_blob();
+  expect_fixed_secret(observed, std::byte{0x3c},
+                      "formal blob backend returned the wrong data");
+
+  SecureBuffer blob = fixed_secret(
+      usb_vault::card::vikey::kVikeyBlobBytes, std::byte{0xd5});
+  store.put_blob(blob);
+  expect_fixed_secret(blob, std::byte{0xd5},
+                      "formal blob backend changed caller data");
+
+  SecureBuffer partial_failure = fixed_secret(
+      usb_vault::card::vikey::kVikeyBlobBytes, std::byte{0xe1});
+  try {
+    store.put_blob(partial_failure);
+    fail("partial formal blob write was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::device_failure),
+           "partial formal blob write returned the wrong error");
+  }
+  expect_fixed_secret(partial_failure, std::byte{0xe1},
+                      "failed formal blob write changed caller data");
+  expect(provider.loads == 3,
+         "formal blob backend cached or reused credentials");
+  expect(development_helper_directory_count() == directories_before,
+         "formal blob backend left a staging directory behind");
+
+  CountingCredentialProvider failing_provider;
+  failing_provider.fail_load = true;
+  VikeyHelperBlobBackend failing_backend(std::move(config),
+                                         failing_provider);
+  VikeyCardStore failing_store(failing_backend);
+  try {
+    static_cast<void>(failing_store.get_blob());
+    fail("credential provider failure was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::backend_unavailable),
+           "credential provider failure returned the wrong error");
+  }
+  expect(failing_provider.loads == 1,
+         "credential provider failure was retried");
+  expect(development_helper_directory_count() == directories_before,
+         "credential provider failure staged a helper directory");
 }
 
 void test_development_vendor_digest_mismatch_fails_before_staging(
@@ -671,6 +761,9 @@ int wmain(const int argc, wchar_t** const argv) {
     });
     run_test("development blob round trip", [&] {
       test_development_blob_round_trip_staging(helper, vendor);
+    });
+    run_test("formal blob backend", [&] {
+      test_formal_blob_backend_staging(helper, vendor);
     });
     run_test("development vendor digest mismatch", [&] {
       test_development_vendor_digest_mismatch_fails_before_staging(helper,

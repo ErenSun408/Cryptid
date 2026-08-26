@@ -98,6 +98,14 @@ void test_request_validation() {
   request.payload_bytes = kDevelopmentBlobRoundTripPayloadBytes;
   expect(valid_request(request),
          "development blob request was rejected");
+  request.operation = Operation::development_blob_read;
+  request.payload_bytes = kDevelopmentBlobReadPayloadBytes;
+  expect(valid_request(request),
+         "development blob read request was rejected");
+  request.operation = Operation::development_blob_write;
+  request.payload_bytes = kDevelopmentBlobWritePayloadBytes;
+  expect(valid_request(request),
+         "development blob write request was rejected");
   request.version = static_cast<std::uint16_t>(kVersion + 1);
   expect(!valid_request(request), "unknown request version was accepted");
   request = Request{};
@@ -236,6 +244,59 @@ void test_development_blob_request_rejects_wrong_sizes() {
       "short development test blob was accepted");
 }
 
+void test_development_blob_read_write_requests() {
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto blob = fixed_secret(kVikeyBlobBytes, std::byte{0xd5});
+  Sha256Digest digest{};
+  digest[3] = std::byte{0x44};
+
+  const Pipe read_pipe = make_pipe();
+  Request read_request_header{};
+  read_request_header.operation = Operation::development_blob_read;
+  read_request_header.payload_bytes = kDevelopmentBlobReadPayloadBytes;
+  write_development_blob_read_request(
+      read_pipe.write.get(), read_request_header, digest, user_sn, api_key,
+      user_pin);
+  const Request received_read_header = read_request(read_pipe.read.get());
+  DevelopmentSessionRequest read_body =
+      read_development_blob_read_request(read_pipe.read.get(),
+                                         received_read_header);
+  expect(read_body.vendor_digest == digest,
+         "blob read digest did not round-trip");
+  expect_fixed_secret(read_body.user_sn, std::byte{'A'},
+                      "blob read UserSN did not round-trip");
+  expect_fixed_secret(read_body.api_key, std::byte{'B'},
+                      "blob read API key did not round-trip");
+  expect_fixed_secret(read_body.user_pin, std::byte{'P'},
+                      "blob read PIN did not round-trip");
+
+  const Pipe write_pipe = make_pipe();
+  Request write_request_header{};
+  write_request_header.operation = Operation::development_blob_write;
+  write_request_header.payload_bytes = kDevelopmentBlobWritePayloadBytes;
+  write_development_blob_write_request(
+      write_pipe.write.get(), write_request_header, digest, user_sn, api_key,
+      user_pin, blob);
+  const Request received_write_header = read_request(write_pipe.read.get());
+  DevelopmentBlobWriteRequest write_body =
+      read_development_blob_write_request(write_pipe.read.get(),
+                                          received_write_header);
+  expect(write_body.vendor_digest == digest,
+         "blob write digest did not round-trip");
+  expect_fixed_secret(write_body.user_sn, std::byte{'A'},
+                      "blob write UserSN did not round-trip");
+  expect_fixed_secret(write_body.api_key, std::byte{'B'},
+                      "blob write API key did not round-trip");
+  expect_fixed_secret(write_body.user_pin, std::byte{'P'},
+                      "blob write PIN did not round-trip");
+  expect_fixed_secret(write_body.blob, std::byte{0xd5},
+                      "blob write data did not round-trip");
+  expect_fixed_secret(blob, std::byte{0xd5},
+                      "blob write changed caller data");
+}
+
 void test_response_round_trip() {
   const Pipe pipe = make_pipe();
   Response sent{};
@@ -246,6 +307,25 @@ void test_response_round_trip() {
       read_response(pipe.read.get(), sent.nonce, Operation::probe);
   expect(received.security_properties == kRequiredSecurityProperties,
          "response security properties did not round-trip");
+}
+
+void test_development_blob_response_round_trip() {
+  const Pipe pipe = make_pipe();
+  Response sent{};
+  sent.security_properties = kDevelopmentCompatibilitySecurityProperties;
+  sent.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
+  sent.nonce[7] = std::byte{0x71};
+  const auto blob = fixed_secret(kVikeyBlobBytes, std::byte{0x3c});
+
+  write_development_blob_response(pipe.write.get(), sent, blob);
+  const Response received = read_response(
+      pipe.read.get(), sent.nonce, Operation::development_blob_read);
+  auto received_blob =
+      read_development_blob_response_payload(pipe.read.get(), received);
+  expect_fixed_secret(received_blob, std::byte{0x3c},
+                      "blob response payload did not round-trip");
+  expect_fixed_secret(blob, std::byte{0x3c},
+                      "blob response changed caller data");
 }
 
 void test_response_validation() {
@@ -267,6 +347,20 @@ void test_response_validation() {
   expect(!valid_response(
              response, Operation::development_blob_round_trip_probe),
          "successful blob response retained a nonzero detail");
+  response.detail = 0;
+  expect(!valid_response(response, Operation::development_blob_read),
+         "blob read response without a payload was accepted");
+  response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
+  expect(valid_response(response, Operation::development_blob_read),
+         "valid blob read response was rejected");
+  const Pipe omitted_payload_pipe = make_pipe();
+  expect_protocol_error(
+      [&] {
+        write_response(omitted_payload_pipe.write.get(), response,
+                       Operation::development_blob_read);
+      },
+      "blob read response omitted its declared payload");
+  response.payload_bytes = 0;
   const DevelopmentSessionObservation observation{
       .attempts_before = 200,
       .maximum_before = 200,
@@ -295,6 +389,10 @@ void test_response_validation() {
   response.detail = ERROR_ACCESS_DENIED;
   expect(valid_response(response, Operation::probe),
          "known helper error was rejected");
+  response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
+  expect(!valid_response(response, Operation::development_blob_read),
+         "failed blob read response retained a payload");
+  response.payload_bytes = 0;
   response.security_properties =
       property_bit(SecurityProperty::filtered_token);
   expect(!valid_response(response, Operation::probe),
@@ -330,7 +428,9 @@ int main() {
     test_development_session_request_rejects_wrong_sizes();
     test_development_blob_request_round_trip();
     test_development_blob_request_rejects_wrong_sizes();
+    test_development_blob_read_write_requests();
     test_response_round_trip();
+    test_development_blob_response_round_trip();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
     std::cout << "vikey_helper_protocol_tests passed\n";

@@ -150,8 +150,9 @@ target_link_libraries(usb_vault_verified_local_artifact PRIVATE
 usb_vault_configure_target(usb_vault_verified_local_artifact)
 
 # The formal ViKey ICardStore adapter is kept independent from both the vendor
-# SDK and helper transport. A later helper-backed implementation supplies the
-# private blob backend without changing the application-facing card contract.
+# SDK and helper transport. The separate helper-backed implementation below
+# supplies the private blob backend without changing the application-facing
+# card contract.
 add_library(usb_vault_vikey_card_store STATIC
   src/card/vikey/vikey_card_store.cpp
 )
@@ -224,6 +225,26 @@ target_link_libraries(usb_vault_vikey_helper_client PRIVATE
   Userenv
 )
 usb_vault_configure_target(usb_vault_vikey_helper_client)
+
+# The transport-backed implementation remains a separate development-only
+# composition layer so the formal ICardStore adapter itself stays independent
+# from helper IPC and the vendor runtime boundary.
+add_library(usb_vault_vikey_helper_blob_backend STATIC
+  src/card/vikey/vikey_helper_blob_backend.cpp
+)
+
+target_include_directories(usb_vault_vikey_helper_blob_backend
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_vikey_helper_blob_backend
+  PUBLIC
+    usb_vault_vikey_card_store
+  PRIVATE
+    usb_vault_vikey_helper_client
+)
+usb_vault_configure_target(usb_vault_vikey_helper_blob_backend)
 
 add_executable(usb_vault_vikey_helper WIN32
   tools/vikey_helper/main.cpp
