@@ -140,6 +140,26 @@ usb_vault_configure_target(vikey_session_tests)
 
 add_test(NAME vikey_session_tests COMMAND vikey_session_tests)
 
+add_executable(vikey_development_test_blob_tests
+  vikey_development_test_blob_tests.cpp
+  ${PROJECT_SOURCE_DIR}/tools/vikey_development_session_probe/random_test_blob.cpp
+)
+
+target_include_directories(vikey_development_test_blob_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/tools/vikey_development_session_probe
+)
+
+target_link_libraries(vikey_development_test_blob_tests PRIVATE
+  usb_vault_core
+  Bcrypt
+)
+
+usb_vault_configure_target(vikey_development_test_blob_tests)
+
+add_test(NAME vikey_development_test_blob_tests
+  COMMAND vikey_development_test_blob_tests)
+
 add_executable(vikey_artifact_tests
   vikey_artifact_tests.cpp
 )

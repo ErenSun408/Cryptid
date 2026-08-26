@@ -1,5 +1,8 @@
 #include "card/vikey/vikey_helper_client.h"
 #include "card/vikey/vikey_session.h"
+#if defined(USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE)
+#include "random_test_blob.h"
+#endif
 #include "usb_vault/security/secure_buffer.h"
 
 #include <Windows.h>
@@ -11,6 +14,7 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -133,15 +137,29 @@ class Credential final {
       "development ViKey credential has the wrong size");
 }
 
+#if defined(USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE)
+constexpr std::wstring_view kRiskAcceptance =
+    L"--i-accept-card-interruption-risk";
+#endif
+
 }  // namespace
 
 int wmain(const int argc, wchar_t** const argv) {
   try {
+#if defined(USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE)
+    if (argc != 6 || argv[5] == nullptr ||
+        std::wstring_view(argv[5]) != kRiskAcceptance) {
+      throw std::invalid_argument(
+          "usage: probe <helper.exe> <helper-sha256> <vendor-dir> "
+          "<vendor-sha256> --i-accept-card-interruption-risk");
+    }
+#else
     if (argc != 5) {
       throw std::invalid_argument(
           "usage: probe <helper.exe> <helper-sha256> <vendor-dir> "
           "<vendor-sha256>");
     }
+#endif
     const std::filesystem::path helper =
         std::filesystem::absolute(argv[1]).lexically_normal();
     const std::filesystem::path vendor =
@@ -149,6 +167,10 @@ int wmain(const int argc, wchar_t** const argv) {
     const Sha256Digest helper_digest = parse_digest(argv[2]);
     const Sha256Digest vendor_digest = parse_digest(argv[4]);
 
+#if defined(USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE)
+    SecureBuffer test_blob =
+        usb_vault::card::vikey::development::random_test_blob();
+#endif
     SecureBuffer api_key = read_development_credential(
         kApiKeyCredentialTarget,
         usb_vault::card::vikey::kVikeyApiKeyBytes);
@@ -159,6 +181,15 @@ int wmain(const int argc, wchar_t** const argv) {
         kUserPinCredentialTarget,
         usb_vault::card::vikey::kVikeyUserPinBytes);
 
+#if defined(USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE)
+    static_cast<void>(
+        usb_vault::card::vikey::
+            probe_vikey_development_blob_round_trip_with_network_access(
+                helper, helper_digest, vendor, vendor_digest, user_sn, api_key,
+                user_pin, test_blob));
+    std::cout << "ViKey development blob round trip passed; original blob "
+                 "restoration was verified\n";
+#else
     const auto result = usb_vault::card::vikey::
         probe_vikey_development_session_with_network_access(
             helper, helper_digest, vendor, vendor_digest, user_sn, api_key,
@@ -169,10 +200,16 @@ int wmain(const int argc, wchar_t** const argv) {
               << " after="
               << static_cast<unsigned int>(result.attempts_after) << '/'
               << static_cast<unsigned int>(result.maximum_after) << '\n';
+#endif
     return 0;
   } catch (const std::exception& error) {
+#if defined(USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE)
+    std::cerr << "ViKey development blob round trip failed: " << error.what()
+              << '\n';
+#else
     std::cerr << "ViKey development session failed: " << error.what()
               << '\n';
+#endif
     return 1;
   }
 }

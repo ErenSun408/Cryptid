@@ -253,6 +253,33 @@ target_link_libraries(usb_vault_vikey_development_session_probe PRIVATE
 )
 usb_vault_configure_target(usb_vault_vikey_development_session_probe)
 
+# Explicitly built destructive verifier for the development card. It creates a
+# one-shot random non-production blob directly in locked memory and requires an
+# explicit interruption-risk acknowledgement before invoking the recoverable
+# helper transaction. It is never part of the product or default build.
+add_executable(usb_vault_vikey_development_blob_round_trip_probe
+  EXCLUDE_FROM_ALL
+  tools/vikey_development_session_probe/main.cpp
+  tools/vikey_development_session_probe/random_test_blob.cpp
+)
+target_include_directories(
+  usb_vault_vikey_development_blob_round_trip_probe PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(
+  usb_vault_vikey_development_blob_round_trip_probe PRIVATE
+  USB_VAULT_VIKEY_BLOB_ROUND_TRIP_PROBE
+)
+target_link_libraries(
+  usb_vault_vikey_development_blob_round_trip_probe PRIVATE
+  usb_vault_vikey_helper_client
+  Advapi32
+  Bcrypt
+)
+usb_vault_configure_target(
+  usb_vault_vikey_development_blob_round_trip_probe)
+
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp
   src/volume_creation/creator_helper_engine.cpp
