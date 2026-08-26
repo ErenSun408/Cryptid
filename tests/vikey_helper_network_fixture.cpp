@@ -105,9 +105,11 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.security_properties = 0;
     }
     stage = 4;
+    if (!valid_response(response, request.operation)) return 140;
+    stage = 5;
     write_response(response_handle, response, request.operation);
     if (response.status != 0) return 3;
-    stage = 5;
+    stage = 6;
     const std::uint32_t diagnostic =
         usb_vault::card::vikey::test::network_probe_diagnostic();
 #if defined(USB_VAULT_EXPECT_NETWORK_ACCESS)

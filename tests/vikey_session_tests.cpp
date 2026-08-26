@@ -1,3 +1,4 @@
+#include "card/vikey/vikey_blob_round_trip.h"
 #include "card/vikey/vikey_session.h"
 
 #include "usb_vault/card/card_error.h"
@@ -18,6 +19,7 @@ namespace sdk = usb_vault::card::vikey::sdk;
 using usb_vault::card::CardError;
 using usb_vault::card::make_error_code;
 using usb_vault::card::vikey::VikeySession;
+using usb_vault::card::vikey::verify_development_blob_round_trip;
 using usb_vault::security::SecureBuffer;
 
 static_assert(!std::is_copy_constructible_v<VikeySession>);
@@ -47,6 +49,8 @@ struct FakeSdk final {
   sdk::Status get_user_data_size_status{sdk::kSuccess};
   sdk::Status read_data_status{sdk::kSuccess};
   sdk::Status write_data_status{sdk::kSuccess};
+  std::vector<sdk::Status> read_data_statuses;
+  std::vector<sdk::Status> write_data_statuses;
   sdk::Status logoff_status{sdk::kSuccess};
   sdk::Status uninitialization_status{sdk::kSuccess};
   std::uint32_t device_count{1};
@@ -55,8 +59,11 @@ struct FakeSdk final {
   sdk::Byte level{1};
   sdk::Length user_data_size{8192};
   std::array<std::byte, usb_vault::card::vikey::kVikeyBlobBytes> user_data{};
+  std::size_t corrupt_read_call{static_cast<std::size_t>(-1)};
   bool mutate_arguments{};
   bool credentials_matched{true};
+  std::size_t read_data_calls{};
+  std::size_t write_data_calls{};
   std::vector<Call> calls;
 };
 
@@ -79,6 +86,12 @@ void require(const bool condition, const char* const message) {
 FakeSdk& fake() {
   if (active_fake == nullptr) throw std::runtime_error("no active fake SDK");
   return *active_fake;
+}
+
+[[nodiscard]] sdk::Status status_for_call(
+    const std::vector<sdk::Status>& statuses,
+    const std::size_t call, const sdk::Status fallback) noexcept {
+  return call < statuses.size() ? statuses[call] : fallback;
 }
 
 sdk::Status __stdcall fake_set_user_sn(char* const value) {
@@ -139,6 +152,7 @@ sdk::Status __stdcall fake_read_data(
     const sdk::Index index, const sdk::Address address,
     const sdk::Length length, sdk::Byte* const buffer) {
   FakeSdk& state = fake();
+  const std::size_t call = state.read_data_calls++;
   state.calls.push_back(Call::read_data);
   state.credentials_matched =
       state.credentials_matched && index == 0 &&
@@ -148,14 +162,17 @@ sdk::Status __stdcall fake_read_data(
     for (std::size_t offset = 0; offset < state.user_data.size(); ++offset) {
       buffer[offset] = std::to_integer<sdk::Byte>(state.user_data[offset]);
     }
+    if (call == state.corrupt_read_call) buffer[0] ^= 1U;
   }
-  return state.read_data_status;
+  return status_for_call(state.read_data_statuses, call,
+                         state.read_data_status);
 }
 
 sdk::Status __stdcall fake_write_data(
     const sdk::Index index, const sdk::Address address,
     const sdk::Length length, sdk::Byte* const buffer) {
   FakeSdk& state = fake();
+  const std::size_t call = state.write_data_calls++;
   state.calls.push_back(Call::write_data);
   state.credentials_matched =
       state.credentials_matched && index == 0 &&
@@ -167,7 +184,8 @@ sdk::Status __stdcall fake_write_data(
     }
     if (state.mutate_arguments) buffer[0] = 0;
   }
-  return state.write_data_status;
+  return status_for_call(state.write_data_statuses, call,
+                         state.write_data_status);
 }
 
 sdk::Status __stdcall fake_get_attempts(const sdk::Index index,
@@ -435,6 +453,187 @@ void test_fixed_user_blob_failures() {
                        "closed ViKey session allowed a blob read");
     require(state.calls.size() == calls_after_close,
             "closed-session read reached the vendor SDK");
+  }
+}
+
+[[nodiscard]] SecureBuffer fixed_blob(const std::byte value) {
+  SecureBuffer blob(usb_vault::card::vikey::kVikeyBlobBytes);
+  for (std::byte& byte : blob.bytes()) byte = value;
+  return blob;
+}
+
+void fill_user_data(FakeSdk& state, const std::byte value) noexcept {
+  for (std::byte& byte : state.user_data) byte = value;
+}
+
+void require_user_data(const FakeSdk& state, const std::byte expected,
+                       const char* const message) {
+  for (const std::byte byte : state.user_data) {
+    if (byte != expected) throw std::runtime_error(message);
+  }
+}
+
+void test_development_blob_round_trip_restores_original() {
+  FakeSdk state;
+  fill_user_data(state, std::byte{0x3c});
+  ActiveFake activation(state);
+  Credentials credentials;
+  VikeySession session = VikeySession::open(
+      fake_functions(), credentials.user_sn, credentials.api_key,
+      credentials.user_pin);
+  SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+
+  verify_development_blob_round_trip(session, test_blob);
+
+  require_user_data(state, std::byte{0x3c},
+                    "successful round trip did not restore original data");
+  require(all_bytes_equal(test_blob, std::byte{0xa5}),
+          "round trip changed the caller test blob");
+  require(state.read_data_calls == 3 && state.write_data_calls == 2,
+          "successful round trip used the wrong read/write count");
+  require(!session.close(), "successful round-trip session did not close");
+}
+
+void test_development_blob_round_trip_restores_after_test_failures() {
+  Credentials credentials;
+
+  {
+    FakeSdk state;
+    fill_user_data(state, std::byte{0x3c});
+    state.write_data_statuses = {sdk::kCommunication, sdk::kSuccess};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, test_blob); },
+        CardError::communication_failed,
+        "partial test write failure returned the wrong error");
+    require_user_data(state, std::byte{0x3c},
+                      "partial test write failure was not restored");
+    require(state.write_data_calls == 2 && state.read_data_calls == 2,
+            "partial test write failure skipped verified restoration");
+    require(!session.close(), "partial-write session did not close");
+  }
+
+  {
+    FakeSdk state;
+    fill_user_data(state, std::byte{0x3c});
+    state.read_data_statuses = {sdk::kSuccess, sdk::kCommunication,
+                                sdk::kSuccess};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, test_blob); },
+        CardError::communication_failed,
+        "test verification read failure returned the wrong error");
+    require_user_data(state, std::byte{0x3c},
+                      "test verification read failure was not restored");
+    require(state.write_data_calls == 2 && state.read_data_calls == 3,
+            "test read failure skipped verified restoration");
+    require(!session.close(), "test-read-failure session did not close");
+  }
+
+  {
+    FakeSdk state;
+    fill_user_data(state, std::byte{0x3c});
+    state.corrupt_read_call = 1;
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, test_blob); },
+        CardError::device_failure,
+        "test blob mismatch returned the wrong error");
+    require_user_data(state, std::byte{0x3c},
+                      "test blob mismatch was not restored");
+    require(state.write_data_calls == 2 && state.read_data_calls == 3,
+            "test blob mismatch skipped verified restoration");
+    require(!session.close(), "test-mismatch session did not close");
+  }
+}
+
+void test_development_blob_round_trip_reports_unverified_restore() {
+  Credentials credentials;
+
+  {
+    FakeSdk state;
+    fill_user_data(state, std::byte{0x3c});
+    state.write_data_statuses = {sdk::kSuccess, sdk::kCommunication};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, test_blob); },
+        CardError::device_failure,
+        "failed restore write was not promoted to device failure");
+    require(state.write_data_calls == 2 && state.read_data_calls == 2,
+            "failed restore write performed an invalid verification read");
+    require(!session.close(), "restore-write-failure session did not close");
+  }
+
+  {
+    FakeSdk state;
+    fill_user_data(state, std::byte{0x3c});
+    state.read_data_statuses = {sdk::kSuccess, sdk::kSuccess,
+                                sdk::kCommunication};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, test_blob); },
+        CardError::device_failure,
+        "failed restore verification was not promoted to device failure");
+    require(state.write_data_calls == 2 && state.read_data_calls == 3,
+            "restore verification failure used the wrong operation count");
+    require(!session.close(), "restore-read-failure session did not close");
+  }
+
+  {
+    FakeSdk state;
+    fill_user_data(state, std::byte{0x3c});
+    state.read_data_statuses = {sdk::kCommunication};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer test_blob = fixed_blob(std::byte{0xa5});
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, test_blob); },
+        CardError::communication_failed,
+        "backup read failure returned the wrong error");
+    require(state.write_data_calls == 0 && state.read_data_calls == 1,
+            "backup read failure attempted a write without an original");
+    require_user_data(state, std::byte{0x3c},
+                      "backup read failure changed user data");
+    require(!session.close(), "backup-read-failure session did not close");
+  }
+
+  {
+    FakeSdk state;
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    SecureBuffer short_blob(usb_vault::card::vikey::kVikeyBlobBytes - 1);
+    const std::size_t calls_before = state.calls.size();
+    require_card_error(
+        [&] { verify_development_blob_round_trip(session, short_blob); },
+        CardError::invalid_configuration,
+        "short development test blob was accepted");
+    require(state.calls.size() == calls_before,
+            "short development test blob reached the vendor SDK");
+    require(!session.close(), "short-test-blob session did not close");
   }
 }
 
@@ -719,6 +918,9 @@ int main() {
     test_destructor_closes_active_session();
     test_fixed_user_blob_read_and_write();
     test_fixed_user_blob_failures();
+    test_development_blob_round_trip_restores_original();
+    test_development_blob_round_trip_restores_after_test_failures();
+    test_development_blob_round_trip_reports_unverified_restore();
     test_invalid_credentials_fail_before_vendor_calls();
     test_incomplete_functions_fail_before_vendor_calls();
     test_failures_cleanup_without_spurious_logoff();

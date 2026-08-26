@@ -1,8 +1,10 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <iterator>
+#include <span>
 
 namespace {
 
@@ -17,11 +19,26 @@ enum class SessionState {
   logged_in,
   level_read,
   attempts_rechecked,
+  backup_size_read,
+  backup_read,
+  test_write_size_read,
+  test_written,
+  test_read_size_read,
+  test_verified,
+  restore_write_size_read,
+  restored,
+  restore_read_size_read,
+  restore_verified,
   logged_off,
   complete,
 };
 
 SessionState session_state = SessionState::initial;
+std::array<BYTE, 32> user_data = [] {
+  std::array<BYTE, 32> result{};
+  result.fill(0x3c);
+  return result;
+}();
 
 [[nodiscard]] bool fixed_argument_matches(const char* const value,
                                           const char expected,
@@ -112,7 +129,9 @@ VikeyGetLevel(const WORD index, BYTE* const level) {
 
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyLogoff(const WORD index) {
-  if (session_state != SessionState::attempts_rechecked || index != 0) {
+  if ((session_state != SessionState::attempts_rechecked &&
+       session_state != SessionState::restore_verified) ||
+      index != 0) {
     return kInvalidValue;
   }
   session_state = SessionState::logged_off;
@@ -132,18 +151,90 @@ VikeyGetHID(const WORD, DWORD* const hardware_id) {
 }
 
 extern "C" __declspec(dllexport) DWORD __stdcall
-VikeyGetUserDataSize(const WORD, DWORD* const bytes) {
-  if (bytes != nullptr) *bytes = 8192;
+VikeyGetUserDataSize(const WORD index, DWORD* const bytes) {
+  if (index != 0 || bytes == nullptr) return ERROR_INVALID_PARAMETER;
+  switch (session_state) {
+    case SessionState::level_read:
+      session_state = SessionState::backup_size_read;
+      break;
+    case SessionState::backup_read:
+      session_state = SessionState::test_write_size_read;
+      break;
+    case SessionState::test_written:
+      session_state = SessionState::test_read_size_read;
+      break;
+    case SessionState::test_verified:
+      session_state = SessionState::restore_write_size_read;
+      break;
+    case SessionState::restored:
+      session_state = SessionState::restore_read_size_read;
+      break;
+    default:
+      return kInvalidValue;
+  }
+  *bytes = 8192;
   return ERROR_SUCCESS;
 }
 
 extern "C" __declspec(dllexport) DWORD __stdcall
-VikeyReadData(const WORD, const DWORD, const DWORD, BYTE*) {
+VikeyReadData(const WORD index, const DWORD address, const DWORD length,
+              BYTE* const buffer) {
+  if (index != 0 || address != 0 ||
+      length != static_cast<DWORD>(user_data.size()) ||
+      buffer == nullptr) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  switch (session_state) {
+    case SessionState::backup_size_read:
+      session_state = SessionState::backup_read;
+      break;
+    case SessionState::test_read_size_read:
+      if (!std::ranges::all_of(user_data,
+                               [](const BYTE value) { return value == 0xa5; })) {
+        return kInvalidValue;
+      }
+      session_state = SessionState::test_verified;
+      break;
+    case SessionState::restore_read_size_read:
+      if (!std::ranges::all_of(user_data,
+                               [](const BYTE value) { return value == 0x3c; })) {
+        return kInvalidValue;
+      }
+      session_state = SessionState::restore_verified;
+      break;
+    default:
+      return kInvalidValue;
+  }
+  std::ranges::copy(user_data, buffer);
   return ERROR_SUCCESS;
 }
 
 extern "C" __declspec(dllexport) DWORD __stdcall
-VikeyWriteData(const WORD, const DWORD, const DWORD, BYTE*) {
+VikeyWriteData(const WORD index, const DWORD address, const DWORD length,
+               BYTE* const buffer) {
+  if (index != 0 || address != 0 ||
+      length != static_cast<DWORD>(user_data.size()) ||
+      buffer == nullptr) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  if (session_state == SessionState::test_write_size_read) {
+    if (!std::ranges::all_of(
+            std::span(buffer, user_data.size()),
+            [](const BYTE value) { return value == 0xa5; })) {
+      return kInvalidValue;
+    }
+    session_state = SessionState::test_written;
+  } else if (session_state == SessionState::restore_write_size_read) {
+    if (!std::ranges::all_of(
+            std::span(buffer, user_data.size()),
+            [](const BYTE value) { return value == 0x3c; })) {
+      return kInvalidValue;
+    }
+    session_state = SessionState::restored;
+  } else {
+    return kInvalidValue;
+  }
+  std::ranges::copy_n(buffer, user_data.size(), user_data.begin());
   return ERROR_SUCCESS;
 }
 

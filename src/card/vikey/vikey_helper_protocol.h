@@ -13,17 +13,21 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 3;
+constexpr std::uint16_t kVersion = 4;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
     static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
                                kVikeyApiKeyBytes + kVikeyUserPinBytes);
+constexpr std::uint32_t kDevelopmentBlobRoundTripPayloadBytes =
+    kDevelopmentSessionPayloadBytes +
+    static_cast<std::uint32_t>(kVikeyBlobBytes);
 
 enum class Operation : std::uint32_t {
   probe = 1,
   vendor_runtime_probe = 2,
   hid_access_probe = 3,
   development_session_probe = 4,
+  development_blob_round_trip_probe = 5,
 };
 
 enum class SecurityProperty : std::uint32_t {
@@ -88,8 +92,9 @@ struct Request final {
   std::array<std::byte, kNonceSize> nonce{};
 };
 
-// The non-secret digest remains ordinary fixed storage. All credentials are
-// allocated as locked buffers and are wiped by their destructors.
+// The non-secret digest remains ordinary fixed storage. All credentials and
+// development blob data are allocated as locked buffers and wiped by their
+// destructors.
 struct DevelopmentSessionRequest final {
   DevelopmentSessionRequest();
 
@@ -104,6 +109,25 @@ struct DevelopmentSessionRequest final {
   security::SecureBuffer user_sn;
   security::SecureBuffer api_key;
   security::SecureBuffer user_pin;
+};
+
+struct DevelopmentBlobRoundTripRequest final {
+  DevelopmentBlobRoundTripRequest();
+
+  DevelopmentBlobRoundTripRequest(
+      const DevelopmentBlobRoundTripRequest&) = delete;
+  DevelopmentBlobRoundTripRequest& operator=(
+      const DevelopmentBlobRoundTripRequest&) = delete;
+  DevelopmentBlobRoundTripRequest(
+      DevelopmentBlobRoundTripRequest&&) noexcept = default;
+  DevelopmentBlobRoundTripRequest& operator=(
+      DevelopmentBlobRoundTripRequest&&) noexcept = default;
+
+  Sha256Digest vendor_digest{};
+  security::SecureBuffer user_sn;
+  security::SecureBuffer api_key;
+  security::SecureBuffer user_pin;
+  security::SecureBuffer test_blob;
 };
 
 struct DevelopmentSessionObservation final {
@@ -171,6 +195,15 @@ void write_development_session_request(
     const security::SecureBuffer& user_pin);
 [[nodiscard]] DevelopmentSessionRequest read_development_session_request(
     HANDLE pipe, const Request& request);
+void write_development_blob_round_trip_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& test_blob);
+[[nodiscard]] DevelopmentBlobRoundTripRequest
+read_development_blob_round_trip_request(HANDLE pipe,
+                                         const Request& request);
 void write_response(HANDLE pipe, const Response& response,
                     Operation expected_operation);
 [[nodiscard]] Response read_response(

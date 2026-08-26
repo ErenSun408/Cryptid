@@ -24,6 +24,8 @@ using namespace std::chrono_literals;
 using usb_vault::card::CardError;
 using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::
+    probe_vikey_development_blob_round_trip_with_network_access;
+using usb_vault::card::vikey::
     probe_vikey_development_helper_with_network_access;
 using usb_vault::card::vikey::
     probe_vikey_development_session_with_network_access;
@@ -419,6 +421,51 @@ void test_development_session_rejects_invalid_credentials(
          "short development session created a staging directory");
 }
 
+void test_development_blob_round_trip_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
+  const auto test_blob = fixed_secret(
+      usb_vault::card::vikey::kVikeyBlobBytes, std::byte{0xa5});
+
+  const auto result =
+      probe_vikey_development_blob_round_trip_with_network_access(
+          helper, file_digest(helper), vendor.parent_path(),
+          file_digest(vendor), user_sn, api_key, user_pin, test_blob, 5s);
+  expect(result.security_properties ==
+             usb_vault::card::vikey::helper::
+                 kDevelopmentCompatibilitySecurityProperties,
+         "development blob round trip lost a restricted-process property");
+  expect_fixed_secret(test_blob, std::byte{0xa5},
+                      "development blob round trip changed caller data");
+  expect(development_helper_directory_count() == directories_before,
+         "development blob round trip left a staging directory behind");
+
+  const auto short_blob = fixed_secret(
+      usb_vault::card::vikey::kVikeyBlobBytes - 1, std::byte{0xa5});
+  try {
+    static_cast<void>(
+        probe_vikey_development_blob_round_trip_with_network_access(
+            helper, file_digest(helper), vendor.parent_path(),
+            file_digest(vendor), user_sn, api_key, user_pin, short_blob,
+            5s));
+    fail("short development test blob was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "short development test blob returned the wrong error");
+  }
+  expect(development_helper_directory_count() == directories_before,
+         "short development test blob created a staging directory");
+}
+
 void test_development_vendor_digest_mismatch_fails_before_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -621,6 +668,9 @@ int wmain(const int argc, wchar_t** const argv) {
              [&] { test_development_session_staging(helper, vendor); });
     run_test("development invalid credentials", [&] {
       test_development_session_rejects_invalid_credentials(helper, vendor);
+    });
+    run_test("development blob round trip", [&] {
+      test_development_blob_round_trip_staging(helper, vendor);
     });
     run_test("development vendor digest mismatch", [&] {
       test_development_vendor_digest_mismatch_fails_before_staging(helper,

@@ -154,6 +154,7 @@ usb_vault_configure_target(usb_vault_verified_local_artifact)
 # use injected function tables and never load ViKey.dll.
 add_library(usb_vault_vikey_sdk STATIC
   src/card/vikey/vikey_artifact.cpp
+  src/card/vikey/vikey_blob_round_trip.cpp
   src/card/vikey/vikey_module.cpp
   src/card/vikey/vikey_session.cpp
 )
@@ -215,6 +216,7 @@ add_executable(usb_vault_vikey_helper WIN32
   src/card/vikey/vikey_helper_protocol.cpp
   src/card/vikey/vikey_hid_probe.cpp
   src/card/vikey/vikey_artifact.cpp
+  src/card/vikey/vikey_blob_round_trip.cpp
   src/card/vikey/vikey_module.cpp
   src/card/vikey/vikey_session.cpp
   src/card/card_error.cpp

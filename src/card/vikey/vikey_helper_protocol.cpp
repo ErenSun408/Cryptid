@@ -67,11 +67,15 @@ bool valid_request(const Request& request) noexcept {
       request.operation == Operation::probe ||
       request.operation == Operation::vendor_runtime_probe ||
       request.operation == Operation::hid_access_probe ||
-      request.operation == Operation::development_session_probe;
-  const std::uint32_t required_payload =
-      request.operation == Operation::development_session_probe
-          ? kDevelopmentSessionPayloadBytes
-          : 0;
+      request.operation == Operation::development_session_probe ||
+      request.operation == Operation::development_blob_round_trip_probe;
+  std::uint32_t required_payload = 0;
+  if (request.operation == Operation::development_session_probe) {
+    required_payload = kDevelopmentSessionPayloadBytes;
+  } else if (request.operation ==
+             Operation::development_blob_round_trip_probe) {
+    required_payload = kDevelopmentBlobRoundTripPayloadBytes;
+  }
   return request.magic == kMagic && request.version == kVersion &&
          request.header_bytes == sizeof(Request) &&
          known_operation && request.payload_bytes == required_payload;
@@ -119,6 +123,12 @@ DevelopmentSessionRequest::DevelopmentSessionRequest()
       api_key(kVikeyApiKeyBytes),
       user_pin(kVikeyUserPinBytes) {}
 
+DevelopmentBlobRoundTripRequest::DevelopmentBlobRoundTripRequest()
+    : user_sn(kVikeyUserSnBytes),
+      api_key(kVikeyApiKeyBytes),
+      user_pin(kVikeyUserPinBytes),
+      test_blob(kVikeyBlobBytes) {}
+
 void write_development_session_request(
     const HANDLE pipe, const Request& request,
     const Sha256Digest& vendor_digest,
@@ -150,6 +160,44 @@ DevelopmentSessionRequest read_development_session_request(
   read_exact(pipe, result.user_sn.bytes());
   read_exact(pipe, result.api_key.bytes());
   read_exact(pipe, result.user_pin.bytes());
+  return result;
+}
+
+void write_development_blob_round_trip_request(
+    const HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& test_blob) {
+  if (!valid_request(request) ||
+      request.operation != Operation::development_blob_round_trip_probe ||
+      user_sn.size() != kVikeyUserSnBytes ||
+      api_key.size() != kVikeyApiKeyBytes ||
+      user_pin.size() != kVikeyUserPinBytes ||
+      test_blob.size() != kVikeyBlobBytes) {
+    throw_protocol("refuse invalid ViKey development blob request");
+  }
+  write_exact(pipe, message_bytes(request));
+  write_exact(pipe, vendor_digest);
+  write_exact(pipe, user_sn.bytes());
+  write_exact(pipe, api_key.bytes());
+  write_exact(pipe, user_pin.bytes());
+  write_exact(pipe, test_blob.bytes());
+}
+
+DevelopmentBlobRoundTripRequest read_development_blob_round_trip_request(
+    const HANDLE pipe, const Request& request) {
+  if (!valid_request(request) ||
+      request.operation != Operation::development_blob_round_trip_probe) {
+    throw_protocol("reject invalid ViKey development blob request");
+  }
+  DevelopmentBlobRoundTripRequest result;
+  read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, result.user_sn.bytes());
+  read_exact(pipe, result.api_key.bytes());
+  read_exact(pipe, result.user_pin.bytes());
+  read_exact(pipe, result.test_blob.bytes());
   return result;
 }
 

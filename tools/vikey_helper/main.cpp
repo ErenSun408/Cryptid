@@ -1,6 +1,7 @@
 #include "card/vikey/vikey_helper_protocol.h"
 #include "card/vikey/vikey_hid_probe.h"
 #include "card/vikey/vikey_artifact.h"
+#include "card/vikey/vikey_blob_round_trip.h"
 #include "card/vikey/vikey_module.h"
 #include "card/vikey/vikey_session.h"
 
@@ -240,6 +241,51 @@ struct OperationResult final {
   }
 }
 
+[[nodiscard]] OperationResult development_blob_round_trip(
+    const DevelopmentBlobRoundTripRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+
+    OperationResult result{};
+    try {
+      usb_vault::card::vikey::verify_development_blob_round_trip(
+          session, request.test_blob);
+    } catch (const std::system_error& error) {
+      result.status = error.code().category() == card_error_category()
+                          ? error.code().value()
+                          : static_cast<std::int32_t>(
+                                CardError::backend_unavailable);
+    } catch (...) {
+      result.status =
+          static_cast<std::int32_t>(CardError::backend_unavailable);
+    }
+
+    const std::error_code close_error = session.close();
+    if (result.status == static_cast<std::int32_t>(
+                             CardError::device_failure)) {
+      return result;
+    }
+    if (close_error) return {.status = close_error.value()};
+    return result;
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
 [[nodiscard]] OperationResult operation_result(
     const Operation operation,
     const DevelopmentSessionRequest* const session_request = nullptr) {
@@ -271,6 +317,9 @@ struct OperationResult final {
                  : OperationResult{
                        .status = static_cast<std::int32_t>(
                            CardError::invalid_operation)};
+    case Operation::development_blob_round_trip_probe:
+      return {.status =
+                  static_cast<std::int32_t>(CardError::invalid_operation)};
   }
   return {.status =
               static_cast<std::int32_t>(CardError::invalid_operation),
@@ -299,16 +348,23 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       const EnvironmentBoundary environment = sanitized_environment();
       if (environment != EnvironmentBoundary::invalid) {
         OperationResult result{};
-        if (request.operation == Operation::development_session_probe) {
+        if (request.operation == Operation::development_session_probe ||
+            request.operation ==
+                Operation::development_blob_round_trip_probe) {
           if (environment !=
               EnvironmentBoundary::network_enabled_development) {
             result.status =
                 static_cast<std::int32_t>(CardError::invalid_operation);
           } else {
-            {
+            if (request.operation == Operation::development_session_probe) {
               DevelopmentSessionRequest session_request =
                   read_development_session_request(request_handle, request);
               result = operation_result(request.operation, &session_request);
+            } else {
+              DevelopmentBlobRoundTripRequest blob_request =
+                  read_development_blob_round_trip_request(request_handle,
+                                                           request);
+              result = development_blob_round_trip(blob_request);
             }
             // The scoped request above wipes all helper-side credential
             // buffers before any response is emitted.

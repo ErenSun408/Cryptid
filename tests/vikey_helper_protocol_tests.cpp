@@ -16,6 +16,7 @@ namespace {
 using usb_vault::card::CardError;
 using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::kVikeyApiKeyBytes;
+using usb_vault::card::vikey::kVikeyBlobBytes;
 using usb_vault::card::vikey::kVikeyUserPinBytes;
 using usb_vault::card::vikey::kVikeyUserSnBytes;
 using namespace usb_vault::card::vikey::helper;
@@ -93,6 +94,10 @@ void test_request_validation() {
   request.operation = Operation::development_session_probe;
   request.payload_bytes = kDevelopmentSessionPayloadBytes;
   expect(valid_request(request), "development session request was rejected");
+  request.operation = Operation::development_blob_round_trip_probe;
+  request.payload_bytes = kDevelopmentBlobRoundTripPayloadBytes;
+  expect(valid_request(request),
+         "development blob request was rejected");
   request.version = static_cast<std::uint16_t>(kVersion + 1);
   expect(!valid_request(request), "unknown request version was accepted");
   request = Request{};
@@ -104,6 +109,11 @@ void test_request_validation() {
   request = Request{};
   request.operation = Operation::development_session_probe;
   expect(!valid_request(request), "missing session payload was accepted");
+  request = Request{};
+  request.operation = Operation::development_blob_round_trip_probe;
+  request.payload_bytes = kDevelopmentSessionPayloadBytes;
+  expect(!valid_request(request),
+         "development blob request accepted the session payload size");
 }
 
 [[nodiscard]] usb_vault::security::SecureBuffer fixed_secret(
@@ -173,6 +183,59 @@ void test_development_session_request_rejects_wrong_sizes() {
       "short session UserSN was accepted");
 }
 
+void test_development_blob_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  Request sent{};
+  sent.operation = Operation::development_blob_round_trip_probe;
+  sent.payload_bytes = kDevelopmentBlobRoundTripPayloadBytes;
+  sent.nonce[4] = std::byte{0x7a};
+  Sha256Digest digest{};
+  digest.back() = std::byte{0xe1};
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto test_blob = fixed_secret(kVikeyBlobBytes, std::byte{0xa5});
+
+  write_development_blob_round_trip_request(
+      pipe.write.get(), sent, digest, user_sn, api_key, user_pin, test_blob);
+  const Request received = read_request(pipe.read.get());
+  DevelopmentBlobRoundTripRequest body =
+      read_development_blob_round_trip_request(pipe.read.get(), received);
+  expect(received.nonce == sent.nonce,
+         "development blob nonce did not round-trip");
+  expect(body.vendor_digest == digest,
+         "development blob vendor digest did not round-trip");
+  expect_fixed_secret(body.user_sn, std::byte{'A'},
+                      "development blob UserSN did not round-trip");
+  expect_fixed_secret(body.api_key, std::byte{'B'},
+                      "development blob API key did not round-trip");
+  expect_fixed_secret(body.user_pin, std::byte{'P'},
+                      "development blob PIN did not round-trip");
+  expect_fixed_secret(body.test_blob, std::byte{0xa5},
+                      "development test blob did not round-trip");
+  expect_fixed_secret(test_blob, std::byte{0xa5},
+                      "development blob write changed caller data");
+}
+
+void test_development_blob_request_rejects_wrong_sizes() {
+  const Pipe pipe = make_pipe();
+  Request request{};
+  request.operation = Operation::development_blob_round_trip_probe;
+  request.payload_bytes = kDevelopmentBlobRoundTripPayloadBytes;
+  const Sha256Digest digest{};
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto short_blob = fixed_secret(kVikeyBlobBytes - 1, std::byte{0xa5});
+  expect_protocol_error(
+      [&] {
+        write_development_blob_round_trip_request(
+            pipe.write.get(), request, digest, user_sn, api_key, user_pin,
+            short_blob);
+      },
+      "short development test blob was accepted");
+}
+
 void test_response_round_trip() {
   const Pipe pipe = make_pipe();
   Response sent{};
@@ -201,6 +264,9 @@ void test_response_validation() {
          "successful probe response retained a detail");
   expect(valid_response(response, Operation::development_session_probe),
          "successful session attempt observation was rejected");
+  expect(!valid_response(
+             response, Operation::development_blob_round_trip_probe),
+         "successful blob response retained a nonzero detail");
   const DevelopmentSessionObservation observation{
       .attempts_before = 200,
       .maximum_before = 200,
@@ -262,6 +328,8 @@ int main() {
     test_request_validation();
     test_development_session_request_round_trip();
     test_development_session_request_rejects_wrong_sizes();
+    test_development_blob_request_round_trip();
+    test_development_blob_request_rejects_wrong_sizes();
     test_response_round_trip();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
