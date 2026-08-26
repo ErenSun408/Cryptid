@@ -104,6 +104,22 @@ usb_vault_configure_target(fixed_blob_card_store_tests)
 
 add_test(NAME fixed_blob_card_store_tests COMMAND fixed_blob_card_store_tests)
 
+add_executable(vikey_card_store_tests
+  vikey_card_store_tests.cpp
+)
+
+target_include_directories(vikey_card_store_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_card_store_tests PRIVATE
+  usb_vault_vikey_card_store
+)
+
+usb_vault_configure_target(vikey_card_store_tests)
+
+add_test(NAME vikey_card_store_tests COMMAND vikey_card_store_tests)
+
 add_executable(vikey_module_tests
   vikey_module_tests.cpp
 )
