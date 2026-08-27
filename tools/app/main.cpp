@@ -7,6 +7,7 @@
 #endif
 
 #include "usb_vault/application/application_session.h"
+#include "usb_vault/application/container_layout_v1.h"
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
 #include "card/vikey/vikey_card_store.h"
 #include "card/vikey/vikey_development_app_config.h"
@@ -45,17 +46,6 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
 constexpr wchar_t kWindowTitle[] = L"USB Vault";
 #endif
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
-constexpr usb_vault::security::KdfV1Salt kContainerASalt{
-    std::byte{0x30}, std::byte{0x31}, std::byte{0x32}, std::byte{0x33},
-    std::byte{0x34}, std::byte{0x35}, std::byte{0x36}, std::byte{0x37},
-    std::byte{0x38}, std::byte{0x39}, std::byte{0x3A}, std::byte{0x3B},
-    std::byte{0x3C}, std::byte{0x3D}, std::byte{0x3E}, std::byte{0x3F}};
-constexpr usb_vault::security::KdfV1Salt kContainerBSalt{
-    std::byte{0x20}, std::byte{0x21}, std::byte{0x22}, std::byte{0x23},
-    std::byte{0x24}, std::byte{0x25}, std::byte{0x26}, std::byte{0x27},
-    std::byte{0x28}, std::byte{0x29}, std::byte{0x2A}, std::byte{0x2B},
-    std::byte{0x2C}, std::byte{0x2D}, std::byte{0x2E}, std::byte{0x2F}};
-
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
@@ -197,12 +187,15 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   initialize_card_store();
   const std::wstring directory = executable_directory();
   const auto drives = unused_drive_letters();
+  namespace layout_v1 = usb_vault::application;
   usb_vault::application::ContainerLayout layout{
-      .container_a = {.path = child_path(directory, L"container_a.hc"),
-                      .salt = kContainerASalt,
+      .container_a = {.path = child_path(directory,
+                                         layout_v1::kContainerAFilename),
+                      .salt = layout_v1::kContainerASalt,
                       .drive_letter = drives[0]},
-      .container_b = {.path = child_path(directory, L"container_b.hc"),
-                      .salt = kContainerBSalt,
+      .container_b = {.path = child_path(directory,
+                                         layout_v1::kContainerBFilename),
+                      .salt = layout_v1::kContainerBSalt,
                       .drive_letter = drives[1]},
   };
   g_volume_provider =

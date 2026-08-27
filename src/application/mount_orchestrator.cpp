@@ -1,6 +1,7 @@
 #include "usb_vault/application/mount_orchestrator.h"
 
 #include "application/mount_orchestrator_internal.h"
+#include "usb_vault/application/container_layout_v1.h"
 #include "usb_vault/volume/unmount_retry.h"
 #include "volume/mount_request.h"
 
@@ -20,10 +21,6 @@
 
 namespace usb_vault::application {
 namespace {
-
-constexpr std::array kContainerAPasswordInput{
-    std::byte{'d'}, std::byte{'i'}, std::byte{'s'}, std::byte{'k'},
-    std::byte{'A'}};
 
 [[nodiscard]] std::wstring comparable_path(const std::wstring_view path) {
   std::wstring result =

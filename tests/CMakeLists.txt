@@ -24,6 +24,19 @@ usb_vault_configure_target(kdf_v1_tests)
 
 add_test(NAME kdf_v1_tests COMMAND kdf_v1_tests)
 
+add_executable(development_container_fixture_tests
+  development_container_fixture_tests.cpp
+)
+
+target_link_libraries(development_container_fixture_tests PRIVATE
+  usb_vault_p1_7_development_fixture
+)
+
+usb_vault_configure_target(development_container_fixture_tests)
+
+add_test(NAME development_container_fixture_tests
+  COMMAND development_container_fixture_tests)
+
 add_executable(volume_provider_tests
   volume_provider_tests.cpp
 )

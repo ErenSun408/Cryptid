@@ -380,6 +380,38 @@ target_link_libraries(usb_vault_vikey_formal_blob_read_probe PRIVATE
 )
 usb_vault_configure_target(usb_vault_vikey_formal_blob_read_probe)
 
+# Explicit P1.7 acceptance support. The executable reads the development card
+# once, derives fixed non-production fixture passwords in locked memory, and
+# creates disposable local containers beside the development app. It is never
+# part of the product or default build and requires an explicit runtime flag.
+add_library(usb_vault_p1_7_development_fixture STATIC EXCLUDE_FROM_ALL
+  tools/p1_7_development_fixture/development_container_fixture.cpp
+)
+target_include_directories(usb_vault_p1_7_development_fixture PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/p1_7_development_fixture
+)
+target_link_libraries(usb_vault_p1_7_development_fixture PUBLIC
+  usb_vault_core
+)
+usb_vault_configure_target(usb_vault_p1_7_development_fixture)
+
+add_executable(usb_vault_p1_7_development_container_fixture EXCLUDE_FROM_ALL
+  tools/p1_7_development_fixture/main.cpp
+)
+target_include_directories(
+  usb_vault_p1_7_development_container_fixture PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(
+  usb_vault_p1_7_development_container_fixture PRIVATE
+  usb_vault_p1_7_development_fixture
+  usb_vault_vikey_development_credentials
+  usb_vault_vikey_helper_blob_backend
+)
+usb_vault_configure_target(
+  usb_vault_p1_7_development_container_fixture)
+
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp
   src/volume_creation/creator_helper_engine.cpp
@@ -466,6 +498,12 @@ if(USB_VAULT_BUILD_UI)
     usb_vault_volume_creator
   )
   usb_vault_configure_target(usb_vault_vikey_development_app)
+
+  add_dependencies(usb_vault_p1_7_development_container_fixture
+    usb_vault_vikey_development_app
+    usb_vault_vikey_helper
+    usb_vault_volume_creator
+  )
 
   add_custom_command(TARGET usb_vault_vikey_development_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

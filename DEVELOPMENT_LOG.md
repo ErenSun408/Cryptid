@@ -2462,3 +2462,75 @@
   真卡在场、移除卸载与页面刷新验收。
 - 当前提交状态：等待用户决定是否以
   `[P1.7]refresh UI after external unmount` 创建本地提交；不执行 push。
+
+### 小切片 4：P1.7 真卡验收夹具（可丢弃匹配容器）
+
+#### 计划、需求与既有实现复核
+
+- 在 `528fd63` 基础上复核 P1.7 出口条件与阻塞项。代码层的插卡发现、拔卡卸载和页面刷新已
+  齐备，但真卡闭环缺少可挂载对象：开发版 EXE 只认自己目录旁的 `container_a.hc` 与
+  `container_b.hc`，两者当前都不存在；仓库内 P1.3 遗留容器由合成卡材料建成，卷密码与真卡
+  blob 的派生结果不一致，不得复制冒充。
+- 手工用 P1.4 建卷工具无法补齐：容器卷密码由「用户输入 + 卡 blob + 固定盐」派生，而卡 blob
+  从不离开锁页缓冲，人无法抄写。因此需要一个复用产品自身常量与 KDF 的一次性夹具，而不是把
+  建卷能力混入正式应用（首次建卷向导仍属 P2）。
+
+#### 实现
+
+- 新增 `include/usb_vault/application/container_layout_v1.h`，把容器文件名、容器 A/B 的固定盐
+  与容器 A 的固定派生输入 `diskA` 从 `mount_orchestrator.cpp` 与 `tools/app/main.cpp` 中提取为
+  共享常量。这些值原本就分别硬编码在这两处，抽出后夹具与产品挂载路径共用同一份定义，避免
+  夹具与产品出现静默漂移。常量均为非秘密，未新增任何落盘、日志或注册表产物。
+- 新增默认排除构建的 `usb_vault_p1_7_development_fixture` 库与
+  `usb_vault_p1_7_development_container_fixture` 可执行文件。库负责语义：读卡恰好一次且从不
+  写卡，blob 非 32 字节时在派生前失败关闭，三组卷密码（容器 A 固定输入、容器 B 外层=胁迫
+  测试口令、容器 B 隐藏=真实测试口令）全程在锁页 `SecureBuffer` 中派生并在最后一次使用后
+  显式清零。
+- 破坏性保证同样落在库内而不是可执行文件内：`require_absent` 对既有文件、目录以及无法分类的
+  目标一律拒绝，绝不打开或覆盖既有容器；`require_regular_file` 校验三个必需制品；
+  `FixtureCleanup` 在**调用建卷之前**登记暂存路径所有权，因此建卷写到一半再抛异常时暂存文件
+  仍会被删除。发布采用「先建暂存名、两只都成功后再改名为正式名」，`publish_b` 后若
+  `publish_a` 失败，已发布的容器 B 会被回滚，不留半发布布局。
+- 可执行文件退化为纯装配：解析确认开关与制品参数、组装
+  `VikeyCardStore -> VikeyHelperBlobBackend -> WindowsCredentialProvider`、提供基于 P1.4
+  `VolumeCreator` 的建卷适配器。缺少精确确认开关
+  `--create-disposable-p1.7-containers` 或参数不全时，在读取凭据、访问卡和创建任何文件之前
+  即以用法错误退出。
+
+#### 验证与安全复核
+
+- 单元测试从 2 项扩到 8 项，新增覆盖：建卷失败时半成品被清理、`require_absent` 拒绝既有文件
+  与既有目录、`require_regular_file` 拒绝缺失与目录、已登记/未登记暂存文件的差别清理、
+  第二次发布失败时回滚第一次发布、`release()` 后完整布局保留。测试使用独立临时目录，只写入
+  1 字节占位内容，不接触真实卡、凭据或容器。
+- 变异验证确认新测试确有鉴别力：删除「建卷前登记所有权」后报
+  `a partially written container survived the failure`；删除 blob 尺寸门后报
+  `fixture changed card blob size`；删除发布回滚的所有权转移后报
+  `a half-published layout survived the failure`；三者恢复后全部通过。
+- MSVC Debug `/W4 /WX` 全量 CTest **28/28 通过，0 失败**（本次环境下此前受限父令牌跳过的
+  2 项也已执行通过）。`/analyze` 与 AddressSanitizer 两套配置下，夹具库、夹具 EXE、默认应用与
+  开发版应用均构建成功且无新增诊断，夹具测试在两套配置下分别 **1/1 通过**。
+  首次测试编译因自定义 `exists` 与 `std::filesystem::exists` 经 ADL 产生重载歧义而失败，改名为
+  `path_exists` 后通过，不涉及产品逻辑降级。
+- Ninja 默认 `all` 目标不含夹具 EXE 与开发版应用，只含链接夹具库的单元测试。默认
+  `usb_vault_app.exe` 导入表复核仍无 `CredReadW`、`ViKey.dll`、`HID.DLL` 或 `SETUPAPI.dll`。
+  `git diff --check` 通过。异常文本不含容器路径、卡标识、档位、凭据或 blob。
+- 本切片只编译并运行合成单元测试，**没有**读取 Windows 凭据、加载官方 SDK、连接或改写实体卡、
+  创建任何容器，也没有挂载或卸载真实卷。
+
+#### 剩余风险与下一步
+
+- 夹具会在磁盘上产生一个含隐藏卷的容器 B，即 8.3 意义上的档三布局。这是容器文件本身的属性，
+  夹具不写配置、注册表或日志，不构成 8.6 禁止的「本地产物记录档位」；但这两只容器是一次性
+  测试材料，验收结束后应删除，不得用于任何生产或演示数据。
+- 单次建卷不是断电原子事务。夹具只保证异常路径下删除暂存文件与回滚半发布布局；进程被强制
+  终止或系统断电时，暂存文件可能残留，需人工删除 `*.p1-7-preparing`。
+- 下一步是需要用户物理配合的真卡验收，且必须先取得明确授权：读取三项开发凭据、启动具普通
+  网络权限的 helper 对开发卡执行一次只读 `get_blob`、两次 UAC 提权建卷、生成约 120MB 可丢弃
+  容器；随后启动开发版 EXE，完成「卡在场 → 输入测试口令 → 挂出两个盘 → 物理拔卡 → 自动卸载 →
+  页面刷新 → 盘符与驱动无残留」。真实口令与胁迫口令都应验证挂出**数量一致**的两个盘。
+- 附带发现（不属本切片范围）：`integration` 预设未设置
+  `FETCHCONTENT_SOURCE_DIR_WEBVIEW2_SDK`，因而尝试联网重新下载 WebView2 SDK 并在受限网络下
+  失败。本地 `out/webview2-sdk-1.0.4129.50/` 已完整可用，`dev`／`analyze`／`asan`／`review-clean`
+  均已指向它，故不影响当前构建与验收；如需修复，只是给预设补一个 cache 变量，不需要网络。
+- 提交：待定（`[P1.7]add disposable real-card container fixture`）
