@@ -18,6 +18,7 @@
 #endif
 #include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/webview_host_object.h"
+#include "usb_vault/ui/webview_session_event.h"
 #include "usb_vault/volume/volume_provider.h"
 
 #include <array>
@@ -251,6 +252,25 @@ void resize_webview(const HWND window) noexcept {
   }
 }
 
+void notify_webview_session_changed() noexcept {
+  if (!g_webview) return;
+  const HRESULT result = g_webview->ExecuteScript(
+      usb_vault::ui::kWebviewSessionChangedScript,
+      Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+          [](const HRESULT script_result, LPCWSTR) -> HRESULT {
+            if (FAILED(script_result)) {
+              show_failure(
+                  L"安全会话状态已变化，但界面刷新失败。请重新打开应用确认状态。");
+            }
+            return S_OK;
+          })
+          .Get());
+  if (FAILED(result)) {
+    show_failure(
+        L"安全会话状态已变化，但界面刷新失败。请重新打开应用确认状态。");
+  }
+}
+
 void initialize_webview(const HWND window) {
   g_page_uri = local_page_uri();
   const HRESULT result = ::CreateCoreWebView2EnvironmentWithOptions(
@@ -392,6 +412,12 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
             usb_vault::platform::windows::handle_hid_device_change(
                 *g_card_presence_controller, wparam, lparam,
                 kDevelopmentCardIdentity);
+        if (transition == usb_vault::application::CardPresenceTransition::
+                              active_session_unmounted ||
+            transition == usb_vault::application::CardPresenceTransition::
+                              active_session_remains) {
+          notify_webview_session_changed();
+        }
         if (transition == usb_vault::application::
                               CardPresenceTransition::active_session_remains) {
           show_failure(

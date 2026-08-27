@@ -9,6 +9,7 @@
   let bridge = null;
   let active = false;
   let busy = true;
+  let externalRefreshPending = false;
 
   const render = (state, message) => {
     surface.dataset.sessionState = state;
@@ -25,6 +26,41 @@
     }
     active = value;
   };
+
+  const refreshAfterExternalChange = async () => {
+    externalRefreshPending = true;
+    if (busy || bridge === null) {
+      return;
+    }
+
+    do {
+      externalRefreshPending = false;
+      busy = true;
+      render("refreshing", "正在确认安全会话状态");
+      let confirmed = false;
+      try {
+        await refreshActiveState();
+        confirmed = true;
+      } catch (_) {
+        active = true;
+      } finally {
+        busy = false;
+        const message = !confirmed
+          ? "无法确认安全会话状态，请尝试安全卸载。"
+          : active
+            ? "安全卡状态已变化，但安全会话仍在。请尝试安全卸载。"
+            : "安全卡状态已变化，安全会话已关闭。";
+        render(active ? "active" : "ready", message);
+        if (!active) {
+          passwordInput.focus();
+        }
+      }
+    } while (externalRefreshPending);
+  };
+
+  window.addEventListener("usb-vault-session-changed", () => {
+    void refreshAfterExternalChange();
+  });
 
   const submitPassword = async () => {
     let passwordBytes = null;
@@ -64,6 +100,9 @@
       if (!active) {
         passwordInput.focus();
       }
+      if (externalRefreshPending) {
+        void refreshAfterExternalChange();
+      }
     }
   };
 
@@ -89,6 +128,9 @@
       render(active ? "active" : "ready", message);
       if (!active) {
         passwordInput.focus();
+      }
+      if (externalRefreshPending) {
+        void refreshAfterExternalChange();
       }
     }
   };
@@ -126,6 +168,9 @@
              active ? "安全会话已打开。" : "安全组件已就绪。");
       if (!active) {
         passwordInput.focus();
+      }
+      if (externalRefreshPending) {
+        void refreshAfterExternalChange();
       }
     } catch (_) {
       active = false;

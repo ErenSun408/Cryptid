@@ -1,4 +1,5 @@
 #include "usb_vault/ui/webview_host_object.h"
+#include "usb_vault/ui/webview_session_event.h"
 
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -32,6 +33,8 @@ constexpr int kUnmountFailure = 13;
 constexpr int kDriverLoadedWithoutResult = 14;
 constexpr int kSubmissionPayloadMismatch = 15;
 constexpr int kSubmissionStateMismatch = 16;
+constexpr int kExternalRemainsFailure = 17;
+constexpr int kExternalUnmountFailure = 18;
 
 class ProbeSession final : public IApplicationSessionActions {
  public:
@@ -67,6 +70,7 @@ class ProbeSession final : public IApplicationSessionActions {
   bool payload_matched{false};
   bool is_mounted{false};
   bool unmounted{false};
+  bool external_unmounted{false};
 };
 
 ComPtr<ICoreWebView2Controller> g_controller;
@@ -196,9 +200,47 @@ void initialize_webview(const HWND window) {
                                     ::CoTaskMemFree(raw_message);
                                     return S_OK;
                                   }
+                                  if (std::wcscmp(
+                                          raw_message,
+                                          L"request-external-refresh") == 0) {
+                                    const HRESULT dispatch_result =
+                                        g_webview->ExecuteScript(
+                                            usb_vault::ui::
+                                                kWebviewSessionChangedScript,
+                                            nullptr);
+                                    ::CoTaskMemFree(raw_message);
+                                    if (FAILED(dispatch_result)) {
+                                      fail_and_close(window);
+                                    }
+                                    return dispatch_result;
+                                  }
+                                  if (std::wcscmp(
+                                          raw_message,
+                                          L"request-external-unmount") == 0) {
+                                    try {
+                                      g_probe_session.unmount_active();
+                                      g_probe_session.external_unmounted = true;
+                                    } catch (...) {
+                                      g_exit_code = kExternalUnmountFailure;
+                                      ::CoTaskMemFree(raw_message);
+                                      static_cast<void>(::DestroyWindow(window));
+                                      return E_FAIL;
+                                    }
+                                    const HRESULT dispatch_result =
+                                        g_webview->ExecuteScript(
+                                            usb_vault::ui::
+                                                kWebviewSessionChangedScript,
+                                            nullptr);
+                                    ::CoTaskMemFree(raw_message);
+                                    if (FAILED(dispatch_result)) {
+                                      fail_and_close(window);
+                                    }
+                                    return dispatch_result;
+                                  }
                                   if (std::wcscmp(raw_message, L"pass") == 0 &&
                                       g_probe_session.received &&
-                                      g_probe_session.unmounted) {
+                                      g_probe_session.unmounted &&
+                                      g_probe_session.external_unmounted) {
                                     g_exit_code = 0;
                                   } else if (std::wcscmp(
                                                  raw_message,
@@ -215,6 +257,16 @@ void initialize_webview(const HWND window) {
                                   } else if (std::wcscmp(raw_message,
                                                         L"fail-unmount") == 0) {
                                     g_exit_code = kUnmountFailure;
+                                  } else if (std::wcscmp(
+                                                 raw_message,
+                                                 L"fail-external-remains") ==
+                                             0) {
+                                    g_exit_code = kExternalRemainsFailure;
+                                  } else if (std::wcscmp(
+                                                 raw_message,
+                                                 L"fail-external-unmounted") ==
+                                             0) {
+                                    g_exit_code = kExternalUnmountFailure;
                                   }
                                 }
                                 ::CoTaskMemFree(raw_message);

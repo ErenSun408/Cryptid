@@ -119,6 +119,28 @@ void test_session_actions_are_serialized_and_recoverable() {
           "UI must expose active-session unmounting");
 }
 
+void test_external_session_changes_are_mode_neutral_and_coalesced() {
+  const std::string script = read_source(USB_VAULT_UI_SCRIPT);
+  require(script.find(
+              "window.addEventListener(\"usb-vault-session-changed\"") !=
+              std::string::npos,
+          "UI does not listen for native session-state changes");
+  require(script.find("externalRefreshPending = true") != std::string::npos &&
+              script.find("if (busy || bridge === null)") !=
+                  std::string::npos &&
+              script.find("while (externalRefreshPending)") !=
+                  std::string::npos,
+          "external session refresh is not coalesced across busy actions");
+  require(script.find("await refreshActiveState();") != std::string::npos,
+          "external change does not query unified session state");
+  require(script.find("安全卡状态已变化，安全会话已关闭。") !=
+              std::string::npos &&
+              script.find(
+                  "安全卡状态已变化，但安全会话仍在。请尝试安全卸载。") !=
+                  std::string::npos,
+          "external change lacks mode-neutral success/failure feedback");
+}
+
 }  // namespace
 
 int main() {
@@ -126,6 +148,7 @@ int main() {
   test_page_does_not_expose_disallowed_state();
   test_password_is_cleared_at_bridge_settlement();
   test_session_actions_are_serialized_and_recoverable();
+  test_external_session_changes_are_mode_neutral_and_coalesced();
 
   std::cout << "ui_page_contract_tests: PASS\n";
   return 0;
