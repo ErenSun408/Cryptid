@@ -100,8 +100,7 @@
 ### 提交决定
 
 - 已于 2026-08-22 批准提交；本条记录随 P1.0 提交落库。
-- 提交哈希：`e0909a2fe0c048bcd316c2062377a9b3de7df54f`。
-- 未执行 push。
+- 提交：`e0909a2 [P1.0]add secure memory foundation and build validation`
 
 ---
 
@@ -192,7 +191,7 @@
 ### 提交决定
 
 - 已于 2026-08-22 批准按重排后的阶段边界继续拆分提交。
-- 本条随 P1.1 提交落库；不执行 push。
+- 本条随 P1.1 提交落库。
 
 ---
 
@@ -219,8 +218,7 @@
 - 新边界将密码学供应链、驱动 ABI、失败回滚、提权、卡秘密和设备移除响应拆开，
   降低单次审计与回退的耦合风险。
 - 计划修改未触碰运行时代码；编号一致性和 `git diff --check` 均通过。
-- 已于 2026-08-22 批准提交；计划文档提交为 `f691745`。
-- 未执行 push。
+- 提交：`f691745 [docs]split P1 into auditable development stages`
 
 ---
 
@@ -311,7 +309,7 @@
 ### 提交决定
 
 - 已于 2026-08-22 批准继续按重排后的边界拆分提交。
-- P1.2 经独立快照复验后提交；不执行 push。
+- P1.2 经独立快照复验后提交。
 
 ---
 
@@ -413,8 +411,7 @@
   因而文件探测与驱动打开之间无法彻底消除本地文件系统竞态；攻击者需已具备修改
   容器目录的权限，认证门和事务回滚把其影响限制为拒绝服务。硬链接同一文件也不能
   仅靠词法比较识别；P1.4 必须继续保证 A/B 由产品创建为两个独立文件。
-- 2026-08-23 审阅阶段报告后已批准提交 P1.3；本次只创建本地提交，
-  不执行 push。
+- 2026-08-23 审阅阶段报告后已批准提交 P1.3。
 
 ---
 
@@ -516,15 +513,17 @@
 
 ### 提交决定
 
-- 2026-08-23 审阅阶段报告后已批准提交 P1.4；本次只创建本地提交，不执行 push。
-  实现按协议与客户端 `a1bde93`、提权 helper 与 FormatDLL 边界 `0b964d0`、验证
-  `d951ba8` 分开提交，阶段记录另行提交。
+- 2026-08-23 审阅阶段报告后已批准提交 P1.4；实现按协议与客户端、提权 helper 与
+  FormatDLL 边界、验证分开提交，阶段记录另行提交。
+- 提交：`a1bde93 [P1.4]add volume creation client protocol`、
+  `0b964d0 [P1.4]add elevated volume creation helper`、
+  `d951ba8 [P1.4]add volume creation verification`
 
 ---
 
 ## 2026-08-23 — P1.5 最小 UI 与应用闭环
 
-**状态：** ✅ 已完成；小切片 1~15 均已按独立可审查边界提交，未执行 push
+**状态：** ✅ 已完成；小切片 1~15 均已按独立可审查边界提交
 
 ### 计划与需求审计
 
@@ -565,7 +564,7 @@
 - 审查未发现普通堆容器持有 blob、日志/异常输出秘密、档位/模式字段或本地持久化行为。
   接口故意不规定 blob 长度；P1.5 应用会话在交给固定参数 KDF 前仍须强制验证 32 字节，
   P1.6 真卡实现也应在设备边界校验自身容量与返回长度。
-- 审阅后已批准提交小切片 1，提交为 `e0fd8e8`；只创建本地提交，不执行 push。
+- 提交：`e0fd8e8 [P1.5]define single-blob card store contract`
 
 ### 小切片 2：UI 无关的应用会话控制器
 
@@ -595,8 +594,8 @@
 - `ApplicationSession` 析构函数不会静默强制卸载，因为析构路径无法可靠报告 busy/失败，
   强制卸载又可能损坏未写完数据。P1.5 后续宿主必须在窗口关闭路径显式调用
   `unmount_active()` 并展示失败；进程崩溃或被强杀后的自动卸载仍属于 P1.7 插拔/异常闭环。
-- 尚未实现 WebView2 宿主、口令桥或真实 UI 闭环。审阅后已批准提交小切片 2，提交为
-  `4e4a1ef`；只创建本地提交，未执行 push。
+- 尚未实现 WebView2 宿主、口令桥或真实 UI 闭环。
+- 提交：`4e4a1ef [P1.5]add retryable application session lifecycle`
 
 ### 小切片 3：可擦除的 UI 口令 UTF-8 入口
 
@@ -623,7 +622,7 @@
 - 剩余风险位于尚未实现的 WebView2 边界：密码在 DOM、JavaScript 字符串、`TextEncoder`
   内部及 COM 跨进程封送中可能有不可锁页副本。下一切片必须最小化存活时间、避免
   JSON/字符串桥并及时清空可控缓冲，但浏览器进程内存无法作绝对清零保证。
-- 审阅后已批准提交小切片 3，提交为 `8e68661`；只创建本地提交，未执行 push。
+- 提交：`8e68661 [P1.5]add wipeable UI password ingress`
 
 ### 小切片 4：UI 会话适配器
 
@@ -646,7 +645,7 @@
   AddressSanitizer 发现；`git diff --check` 通过。
 - 安全复核未发现适配器持久化或分类状态、复制秘密到普通所有权容器、记录秘密或吞掉
   卸载失败。WebView2/COM 侧不可控副本风险仍未改变，必须由后续宿主切片继续约束。
-- 审阅后已批准提交小切片 4，提交为 `9c09fd5`；只创建本地提交，未执行 push。
+- 提交：`9c09fd5 [P1.5]add UI session action boundary`
 
 ### 小切片 5：WebView2 本地页面宿主骨架
 
@@ -676,7 +675,7 @@
 - 安全复核未发现外部导航、脚本执行、敏感状态、日志或持久化业务字段。WebView2 Runtime
   必然维护用户数据目录；当前页面不写业务状态，但该目录仍须纳入 P3 档二/档三逐字节
   不可区分性验收，后续桥接不得使用 localStorage、自动填充或浏览器日志保存秘密。
-- 审阅后已批准提交小切片 5，提交为 `47cb861`；只创建本地提交，未执行 push。
+- 提交：`47cb861 [P1.5]add local-only WebView2 host`
 
 ### 小切片 6：单密码框页面契约
 
@@ -698,7 +697,7 @@
   DOM 到原生的口令复制路径，禁用控件也不会产生用户输入的秘密副本。
 - 视觉样式只提供中性登录卡片，不复用设计稿中与技术主文档冲突的用户名、密码存卡、
   隐藏卷分类和历史日志内容。完整视觉与无障碍验收仍属于后续 UI 工作。
-- 审阅后已批准提交小切片 6，提交为 `482bd5d`；只创建本地提交，未执行 push。
+- 提交：`482bd5d [P1.5]define inert single-password UI`
 
 ### 小切片 7：WebView2 字节数组适配器
 
@@ -721,7 +720,7 @@
 - 人工复核未发现字符串/JSON 密码副本、日志、持久化或分类状态。错误类型在无法证明其
   所有权和字节布局时只拒绝、不擅自改写；浏览器 DOM、JavaScript 引擎及 COM 跨进程
   封送仍可能保留不可控副本，后续桥接只能缩短可控副本寿命，不能声称绝对清零。
-- 审阅后已批准提交小切片 7，提交为 `29a00cf`；只创建本地提交，未执行 push。
+- 提交：`29a00cf [P1.5]add WebView password array adapter`
 
 ### 小切片 8：窄化原生 WebView host object
 
@@ -743,7 +742,7 @@
 - 人工复核未发现 host object 暴露分类状态、记录秘密、把口令变成字符串，或在异常文本中
   回显输入。其生命周期依赖后续宿主确保控制器活得更久；真正注册到页面后仍须限制仅本地
   源可访问，并验证 typed array 以 SAFEARRAY 而非字符串/JSON 方式封送。
-- 审阅后已批准提交小切片 8，提交为 `4d5be60`；只创建本地提交，未执行 push。
+- 提交：`4d5be60 [P1.5]add narrow WebView host object`
 
 ### 小切片 9：受限本地 WebView2 的 host object 注册
 
@@ -766,8 +765,8 @@
   只清空并拒绝口令；但 host object 一旦注册就会对该 WebView 的文档可见，因此现有严格
   导航白名单仍是安全边界，后续不得放宽为任意本地或网络页面。
 - GUI ASan 二进制未自动运行，本切片的 ASan 结果只证明可插桩构建；真实 Debug Runtime
-  冒烟不等同于 ASan 运行时检查。审阅后已批准提交小切片 9，提交为 `23c2a7c`；
-  只创建本地提交，未执行 push。
+  冒烟不等同于 ASan 运行时检查。
+- 提交：`23c2a7c [P1.5]register local WebView host object`
 
 ### 小切片 10：固定 blob 桩卡与正式应用会话组合
 
@@ -796,8 +795,8 @@
   P1.5 桩，不能进入 P1.6 真卡实现；固定容器文件名和盐不是秘密，但发行配置与建卷流程
   后续仍需形成明确契约。页面启用前还必须补齐关闭主动卸载，并依据微软 WebView2 契约
   设置 `shouldPassTypedArraysAsArrays=true` 后做真实封送验证；两项均未被当前禁用页面触发，
-  记录为后续边界而非本切片阻塞。复核后已批准提交小切片 10，提交为 `16f8037`；
-  只创建本地提交，未执行 push。
+  记录为后续边界而非本切片阻塞。
+- 提交：`16f8037 [P1.5]compose fixed-card application session`
 
 ### 小切片 11：窗口关闭主动卸载守卫
 
@@ -820,8 +819,8 @@
   关闭，主进程在 5 秒内自行退出。500ms 后尚有 2 个本次 WebView2 子进程处于退出尾声，
   测试随后按 PID 清理，未触碰既有 WebView2 进程。
 - 安全复核未发现卸载异常泄露分类状态、窗口在失败时错误退出或活动状态被吞掉。系统强杀
-  仍可绕过 `WM_CLOSE`，这是桌面进程无法完全消除的剩余风险。复核后已批准提交
-  小切片 11，提交为 `a7d328f`；只创建本地提交，未执行 push。
+  仍可绕过 `WM_CLOSE`，这是桌面进程无法完全消除的剩余风险。
+- 提交：`a7d328f [P1.5]guard window close with unmount`
 
 ### 小切片 12：WebView2 typed array 真实 Runtime 验证
 
@@ -848,8 +847,8 @@
   不触发真实挂载。既有单元测试继续覆盖 COM SAFEARRAY 在成功和失败路径的清零。
 - JavaScript 引擎、WebView2 和 COM 内部仍可能制造测试无法逐字节追踪或主动擦除的短期副本；
   本切片只验证可控 typed array 与原生消费链路，不把它表述为浏览器进程全内存清零保证。
-  `git diff --check` 通过。复核后已批准提交小切片 12，提交为 `7276726`；只创建本地
-  提交，未执行 push。
+  `git diff --check` 通过。
+- 提交：`7276726 [P1.5]verify WebView typed array bridge`
 
 ### 小切片 13：WebView2 主动卸载方法
 
@@ -872,8 +871,8 @@
   确认会话先挂载后卸载，且既有 JavaScript 数组清零断言仍通过。
 - 安全复核未发现新口令副本、日志、持久化状态、档位/模式实体或分类反馈。产品页面仍无
   脚本且控件保持禁用；下一页面切片必须在异步调用期间禁用操作，防止重复提交或卸载重入。
-  `git diff --check` 通过。复核后已批准提交小切片 13，提交为 `7f8070f`；只创建本地
-  提交，未执行 push。
+  `git diff --check` 通过。
+- 提交：`7f8070f [P1.5]expose active-session unmount`
 
 ### 小切片 14：WebView2 统一活动会话查询
 
@@ -898,8 +897,8 @@
 - 该布尔值会向严格本地页面表明当前应用会话是否仍有活动挂载，这是实现状态反馈和恢复
   所需的最小可观察面；真实与胁迫路径、一个与两个容器均只得到同一个 `true`，不能据此
   分类。未发现口令副本、日志或持久化行为。产品页面仍无脚本且控件禁用。
-  `git diff --check` 通过。复核后已批准提交小切片 14，提交为 `c37db3d`；只创建本地
-  提交，未执行 push。
+  `git diff --check` 通过。
+- 提交：`c37db3d [P1.5]expose unified session activity`
 
 ### 小切片 15（2026-08-24）：产品页面最小会话状态机
 
@@ -951,9 +950,9 @@
   会立即清空 DOM，在异步编组结算后清空 typed array，并清空已识别的 COM/原生受控缓冲区，
   但不能承诺浏览器全内存清零。异步代理挂起期间 typed array 必须保留原值，否则会破坏提交；
   本地 `session.js` 的替换防护仍依赖后续安装包与签名完整性阶段。
-- `git diff --check` 通过。复核后已批准提交：SAFEARRAY variant 字节数组兼容边界提交为
-  `072f79b`，产品页面最小会话状态机、宿主加固与真实 Runtime 闭环提交为 `42000bf`；
-  均只创建本地提交，未执行 push。
+- `git diff --check` 通过。
+- 提交：`072f79b [P1.5]accept WebView variant byte arrays`、
+  `42000bf [P1.5]activate secure session controls`
 
 ### 阶段收口（2026-08-24）
 
@@ -982,7 +981,7 @@
 - 验证：`git diff --check` 通过；既有 MSVC Debug CTest 15/15 通过。本切片只改文档，未触碰
   生产代码或安全卡。安全复核确认未新增根密钥导出、恢复码、新卡迁移或档位元数据；P2 实现
   时仍须专项防范目标覆盖、部分副本、重解析点/路径替换、Shell 最近记录和持久化复制校验值。
-- 当前提交状态：已提交为 `f48cca9`，未执行 push。
+- 提交：`f48cca9 [docs]define encrypted migration export boundary`
 
 ## P1.6 真卡存储（2026-08-24 开始）
 
@@ -1014,7 +1013,7 @@
   递减模型；该资料只作为索引线索，不作为生产 ABI 或安全结论。取得与本卡匹配的官方 SDK
   并审计其签名、位数、调用约定、缓冲区长度、错误码、PIN 重试/锁卡语义前，不进行登录或
   任何写卡测试。
-- 当前提交状态：仅形成 P1.6 审计记录，未修改产品代码，未提交。
+- 提交：无（仅文档审计）
 
 ### 官方 SDK 静态审计（小切片 1）
 
@@ -1074,11 +1073,12 @@
 - 本切片结论：设备枚举与 SDK ABI 的静态可行性成立，但 P1.6 的“真卡写入并读回”出口尚未
   通过。需先向供应商取得本批 UserSN、API Key 生成/交付方式、ABI 冲突答复、签名/现代构建和
   DLL 再分发授权，并由项目负责人确认配卡认证契约；随后才能在受控环境执行首次非破坏查询和
-  单 blob 读写。当前提交状态：仅审计与文档记录，未修改产品代码，未提交。
+  单 blob 读写。
 - 验证：MSVC Debug CTest 15/15 通过，`git diff --check` 通过。由于本切片没有生产代码或构建
   产物变更，未重复运行 ASan、`/analyze` 或真实 WebView2 闭环；安全审查集中于供应链、PIN
   锁定、秘密生命周期、DLL 进程边界、联网能力、许可和本地不可区分性。PDF 审计产生的 12 张
   临时渲染页已从专用临时目录删除。
+- 提交：无（仅文档审计）
 
 ### UserSN 获取与匿名真卡探测（小切片 1 补验）
 
@@ -1143,7 +1143,7 @@
   `ICardStore` 契约、秘密生命周期、错误映射、插拔和能力降级测试，不修改上层安全设计。
 - 下一代码切片建议先实现“厂商无关函数表/错误域 + ViKey 动态加载边界”的单元测试骨架，
   不立即把未签名 DLL 加载进主进程；该边界评审并提交后，再接真实登录、blob 和计数器调用。
-- 当前提交状态：已批准提交本节 P1.6 审计与硬件交付边界；未执行 push。
+- 提交：`d665955 [P1.6]record ViKey audit and replaceable hardware boundary`
 
 ### 小切片 2：通用错误域与 ViKey 动态加载边界
 
@@ -1197,9 +1197,8 @@
   下一会话 RAII 必须保证一旦执行 `FindEx`，所有成功/失败路径都先注销权限并执行
   `VikeyUninitialization`，之后才卸载模块。
 - 真卡 `ICardStore`、8 字符设备 PIN 的独立凭据注入、32 字节 blob 地址/版本/首次写入恢复、
-  持久计数器实测和拔卡处理均未实现。本切片没有改变卡片状态。当前提交状态：尚未提交，等待
-  审阅决定；随后批准以 `[P1.6]add isolated ViKey SDK loading boundary` 提交，未执行
-  push；提交号为 `00b3319`。
+  持久计数器实测和拔卡处理均未实现。本切片没有改变卡片状态。
+- 提交：`00b3319 [P1.6]add isolated ViKey SDK loading boundary`
 
 ### 小切片 3：ViKey DLL 固定身份与加载期防替换门
 
@@ -1253,7 +1252,8 @@
   安装器保护的父目录并设置只读 ACL；开发机用户可写的 SDK 目录只允许用于受控跑通，不能作为
   量产可信部署。供应商升级还必须显式更新摘要白名单并重跑 ABI、导出和安全审计。
 - 真卡登录、独立 8 字符设备 PIN 注入、32 字节 blob 读写、计数器和拔卡处理均未开始，本切片
-  未改变安全卡状态。当前提交状态：尚未提交，等待审阅与提交决定；未执行 push。
+  未改变安全卡状态。
+- 提交：`357b751 [P1.6]require verified ViKey DLL identity`
 
 ### 小切片 4：受限 ViKey helper 与最小 IPC 空外壳
 
@@ -1318,8 +1318,8 @@
   本切片可安全验收；在装载未签名供应商 DLL 前必须增加可验证的网络隔离，否则不能把卡内
   根密钥交给该进程。
 - 真卡会话 RAII、独立 8 字符设备 PIN 注入、32 字节 blob get/put、首次写入恢复、持久计数器和
-  P1.7 拔卡处理仍未实现。审阅后已批准以
-  `[P1.6]add restricted ViKey helper boundary` 提交；只创建本地提交，未执行 push。
+  P1.7 拔卡处理仍未实现。
+- 提交：`9603b38 [P1.6]add restricted ViKey helper boundary`
 
 ### 小切片 5：ViKey helper 固定身份与启动期防替换门
 
@@ -1372,7 +1372,7 @@
 - 受限令牌、身份门和映像加载策略仍不等于禁网。下一独立小切片只建立可验证的 helper 网络
   隔离；在该门通过前继续禁止装载真实 `ViKey.dll`、注入卡凭据或读取卡内 blob。之后才可接入
   真卡会话 RAII、独立 8 字符设备 PIN、32 字节 blob 和持久计数器。
-- 当前提交状态：尚未提交，等待审阅与提交决定；未执行 push。
+- 提交：`db7bef1 [P1.6]verify ViKey helper identity before launch`
 
 ### 小切片 6：ViKey helper 可验证网络隔离门
 
@@ -1443,7 +1443,7 @@
 - 发布时仍须把 helper/DLL 固定 SHA-256 注入不可由普通用户修改的配置，并由安装器落实受保护
   目录 ACL。本切片未改变该部署门，也未完成真卡会话 RAII、独立设备 PIN、32 字节 blob、首次
   写入恢复、持久计数器或 P1.7 拔卡处理。
-- 当前提交状态：尚未提交，等待审阅与提交决定；未执行 push。
+- 提交：`7ab0237 [P1.6]add verifiable ViKey helper network isolation`
 
 ### 小切片 7：ViKey helper 供应商运行库与零能力 HID 兼容性门
 
@@ -1533,8 +1533,7 @@
   不能沿用小切片 6 的“可验证禁网”结论。
 - 因当前小切片 7 尚未提交，以上决策先并入同一审阅边界；下一代码切片须在本切片提交决定后
   开始，不把历史零网络启动函数静默改义，应为开发兼容启动提供显式、不可误认的入口与测试。
-- 当前提交状态：已批准以
-  `[P1.6]verify ViKey helper runtime compatibility` 创建本地提交；不执行 push。
+- 提交：`da88f0f [P1.6]verify ViKey helper runtime compatibility`
 
 ### 小切片 8：ViKey helper 明确联网的开发兼容启动边界
 
@@ -1611,8 +1610,7 @@
 - 下一独立小切片可在这个明确的开发边界内实现 ViKey 卡会话 RAII 和错误映射，随后再接 32 字节
   单 blob get/put、首次写入恢复与持久计数器。生产阶段另行落实防火墙/WFP、兼容 capability、
   驱动 custom capability/设备 ACL 或经审计的等价方案后，才能让真实根材料进入 helper。
-- 当前提交状态：已批准以
-  `[P1.6]add network-enabled ViKey development boundary` 创建本地提交；不执行 push。
+- 提交：`905cb64 [P1.6]add network-enabled ViKey development boundary`
 
 ### 小切片 9：ViKey 开发卡会话 RAII 与错误映射核心
 
@@ -1673,8 +1671,7 @@
 - 精确 UserSN/API Key 长度来自官方示例的一致行为而非头文件常量，PIN 尝试首值语义来自既有
   实体卡运行证据而非可靠文档。下一真实会话切片必须在只使用测试材料的前提下复核这两项，并
   保留开发联网风险、生产出站隔离、受保护安装目录 ACL 与固定发布摘要作为独立交付门。
-- 当前提交状态：已批准以
-  `[P1.6]add ViKey development session lifecycle` 创建本地提交；不执行 push。
+- 提交：`7de1701 [P1.6]add ViKey development session lifecycle`
 
 ### 小切片 10：开发凭据受控 IPC 与 helper 会话接线
 
@@ -1739,8 +1736,7 @@
   尝试都必须停止，不能自动重试。
 - `ICardStore` 的 32 字节单 blob get/put、首次写入恢复、拔卡中断和持久计数器仍未开始。生产
   出站隔离、受保护安装目录 ACL、固定发布摘要注入和量产凭据管理仍为独立交付门。
-- 当前提交状态：已以
-  `[P1.6]wire development credentials into ViKey helper session` 创建本地提交；未执行 push。
+- 提交：`ac41e8e [P1.6]wire development credentials into ViKey helper session`
 
 ### 小切片 11：实体开发卡会话与 PIN 尝试预算复核
 
@@ -1794,8 +1790,7 @@
   中途拔卡后的恢复判据。
 - 开发 helper 仍允许普通网络访问；供应商 DLL、开发凭据和当前用户网络能力属于同一信任域。
   生产根材料进入前仍须落实可验证出站隔离、受保护安装目录 ACL、固定发布摘要和生产凭据注入。
-- 当前提交状态：已批准以
-  `[P1.6]verify real ViKey development session` 创建本地提交；不执行 push。
+- 提交：`4774f7c [P1.6]verify real ViKey development session`
 
 ### 小切片 12：ViKey 固定 32 字节用户区原语
 
@@ -1845,8 +1840,7 @@
   或拔卡仍可能使自动恢复失败，因此真卡执行前需要再次明确这一残余风险。
 - 开发 helper 仍允许普通网络访问，真实读写只能使用开发卡和非生产 blob。生产根材料进入前的
   可验证出站隔离、安装目录 ACL、发布摘要及生产凭据管理仍为独立交付门。
-- 当前提交状态：已以
-  `aea344d [P1.6]add fixed ViKey user blob operations` 创建本地提交；未执行 push。
+- 提交：`aea344d [P1.6]add fixed ViKey user blob operations`
 
 ### 小切片 13：helper 可恢复 blob 往返事务
 
@@ -1907,8 +1901,7 @@
   决定是否对实体开发卡执行。
 - 公共 `ICardStore` 的 ViKey 适配、首次正式 put 语义、持久计数器以及 P1.7 拔卡处理仍未开始。
   生产材料进入前的可验证出站隔离、安装目录 ACL、发布摘要和生产凭据管理仍为独立交付门。
-- 当前提交状态：已批准以
-  `[P1.6]add recoverable ViKey blob round trip` 创建本地提交；不执行 push。
+- 提交：`27b7abe [P1.6]add recoverable ViKey blob round trip`
 
 ### 小切片 14：实体 blob 往返手工验收入口
 
@@ -1959,15 +1952,14 @@
   固定且接受中断窗口风险的前提下执行一次实体往返。
 - 公共 `ICardStore` ViKey 适配、首次正式 put 语义、持久计数器、P1.7 拔卡处理以及生产出站
   隔离/安装 ACL/发布摘要/生产凭据管理仍未开始，不属于本切片。
-- 当前提交状态：已批准以
-  `[P1.6]add ViKey blob acceptance probe` 创建本地提交；不执行 push。
+- 提交：`866a6e4 [P1.6]add ViKey blob acceptance probe`
 
 ### 小切片 15：实体开发卡 blob 往返验收
 
 #### 计划、需求与既有实现复核
 
-- 小切片 14 已按批准创建本地提交 `866a6e4 [P1.6]add ViKey blob acceptance probe`，未执行
-  push。本切片不修改产品代码，只按独立风险决策执行一次实体开发卡验收并记录结果。
+- 小切片 14 已按批准创建本地提交 `866a6e4 [P1.6]add ViKey blob acceptance probe`。
+  本切片不修改产品代码，只按独立风险决策执行一次实体开发卡验收并记录结果。
 - 执行前重新核对 P1.6 真卡出口、开发/生产运行边界、小切片 13 的恢复判据及小切片 14 的防误
   触入口。用户已明确理解并接受测试写入至恢复之间发生断电、拔卡或强制终止时可能无法恢复卡内
   原 32 字节的残余风险；本次目标仅为开发卡和非生产用户区，不承载真实根材料。
@@ -2004,15 +1996,14 @@
   隔离/安装 ACL/发布摘要/生产凭据管理仍是交付门。下一最小代码切片应先审计并设计正式
   `ICardStore` get/put 与开发 helper IPC 的边界，避免把 ViKey 私有凭据、地址或错误域上移到
   公共接口；计数器继续作为之后的独立切片。
-- 当前提交状态：已批准以
-  `[P1.6]record real ViKey blob acceptance` 创建本地提交；不执行 push。
+- 提交：`cac2d45 [P1.6]record real ViKey blob acceptance`
 
 ### 小切片 16：正式 ViKey `ICardStore` 适配边界
 
 #### 计划、需求与既有实现复核
 
 - 小切片 15 已按批准创建本地提交
-  `cac2d45 [P1.6]record real ViKey blob acceptance`，未执行 push。本切片重新核对 P1.6、
+  `cac2d45 [P1.6]record real ViKey blob acceptance`。本切片重新核对 P1.6、
   R-03、N-02、公共 `ICardStore`、P1.5 固定桩、产品装配及 helper IPC v4；范围仅为建立正式
   ViKey 卡存储适配边界，不同时升级 IPC、读取凭据、加载官方 DLL、访问实体卡或替换产品桩。
 - 公共接口继续只表达单 blob 的 `get_blob`、`put_blob` 和能力位。ViKey 的凭据、DLL 路径、
@@ -2052,8 +2043,7 @@
 - 下一切片必须专项检查秘密 blob 在匿名管道内核缓冲和父进程响应缓冲中的短期副本、异常/超时
   清零、错误响应禁止携带 blob、凭据不得缓存，以及 put 失败时“可能已部分写入”的语义。首次
   正式 put、持久计数器、P1.7 拔卡处理和生产出站隔离仍应继续拆分审阅。
-- 当前提交状态：已按批准创建本地提交
-  `bfc15e2 [P1.6]add formal ViKey card-store adapter`；未执行 push。
+- 提交：`bfc15e2 [P1.6]add formal ViKey card-store adapter`
 
 ### 小切片 17：helper IPC v5 正式 blob 后端
 
@@ -2109,8 +2099,7 @@
 - 产品仍使用固定桩，`IVikeyCredentialProvider` 也只有抽象边界和测试实现。下一最小切片可新增
   开发专用 Windows 凭据提供者及默认构建不包含的正式后端只读手工验收入口，先用实体开发卡
   证明 v5 get 链；正式 put、产品装配、持久计数器和 P1.7 拔卡处理继续分开审阅。
-- 当前提交状态：已按批准创建本地提交
-  `07a1e28 [P1.6]add helper-backed ViKey blob operations`；未执行 push。
+- 提交：`07a1e28 [P1.6]add helper-backed ViKey blob operations`
 
 ### 小切片 18：开发凭据提供者与正式后端只读入口
 
@@ -2164,8 +2153,7 @@
   被修改，也没有产生写入至恢复之间的中断窗口。执行后未发现残留的随机 helper 暂存目录。
 - 即使只读验收通过，Windows 提供者和联网 helper 仍只允许开发凭据、开发卡和非生产 blob。
   下一代码切片才考虑显式启用的真卡开发版产品装配；生产材料进入前仍须恢复可验证出站隔离。
-- 当前提交状态：已按批准创建本地提交
-  `714e371 [P1.6]add development ViKey credential provider`；未执行 push。
+- 提交：`714e371 [P1.6]add development ViKey credential provider`
 
 ### 小切片 19：显式启用的真卡开发版应用装配
 
@@ -2218,8 +2206,7 @@
   blob -> 挂载/失败提示 -> 正常退出”的手工流程，WebView2、建卷工具、容器状态和卡内现有 blob
   的兼容性仍可能暴露集成问题。下一最小切片应先生成或记录当前制品摘要，按用户对凭据和实体卡
   的明确授权启动一次开发 EXE，执行只读应用级验收；不得在该验收中初始化或覆写卡 blob。
-- 当前提交状态：已按批准创建本地提交
-  `9195800 [P1.6]add opt-in ViKey development app`；未执行 push。
+- 提交：`9195800 [P1.6]add opt-in ViKey development app`
 
 ### 小切片 20：真卡开发版应用只读界面冒烟
 
@@ -2270,8 +2257,7 @@
   复制容器代替正式建卷向导验收。
 - 下一项 P1.6 硬件能力工作仍是可选持久计数器的 ABI、失败语义和实体能力验证；任何会永久消耗、
   递增或不可恢复改变计数器的测试必须先查清供应商语义，并作为独立风险决策点。
-- 当前提交状态：已按批准创建本地提交
-  `f2480df [P1.6]record ViKey development app smoke test`；未执行 push。
+- 提交：`f2480df [P1.6]record ViKey development app smoke test`
 
 ### 小切片 21：P1.6 完结与计数器暂缓决策
 
@@ -2305,8 +2291,8 @@
 - 下一阶段为 P1.7：插卡发现、拔卡触发卸载、忙碌/异常反馈和真卡最小闭环。该阶段不得顺带加入
   P2 建卷向导、计数器或生产凭据部署。
 - 本切片只修改文档，没有编译或执行代码，没有读取 Windows 凭据、加载官方 SDK、连接实体卡或
-  修改容器。当前提交状态：已按批准创建本地提交
-  `124933a [docs]close P1.6 real card storage`；未执行 push。
+  修改容器。
+- 提交：`124933a [docs]close P1.6 real card storage`
 
 ## P1.7 插拔监听与真机闭环（2026-08-27 开始）
 
@@ -2352,8 +2338,7 @@
   自动重试，后续 UI 必须明确显示仍有活动会话并提供人工重试/退出保护。
 - 下一最小切片应实现 Windows 设备通知适配器：枚举启动时在场状态、只接受目标 ViKey 接口的
   到达/移除事件、把事件送入本控制器并妥善注销通知；仍不访问凭据、不读写卡、不自动登录。
-- 当前提交状态：已按批准创建本地提交
-  `90a1c45 [P1.7]add card removal session controller`；未执行 push。
+- 提交：`90a1c45 [P1.7]add card removal session controller`
 
 ### 小切片 2：Windows HID 设备通知适配与开发版接线
 
@@ -2409,8 +2394,7 @@
 - 下一最小切片应增加不泄露模式的 WebView 会话状态刷新事件，分别反馈“拔卡后已安全关闭”和
   “拔卡但卸载失败、仍需人工重试”，并用窗口级合成/集成测试验证；之后才进行需用户物理配合的
   真卡插拔与实际挂载清理验收。
-- 当前提交状态：已按批准创建本地提交
-  `968cddc [P1.7]wire Windows HID card notifications`；未执行 push。
+- 提交：`968cddc [P1.7]wire Windows HID card notifications`
 
 ### 小切片 3：拔卡后 WebView 会话状态刷新
 
@@ -2460,8 +2444,7 @@
 - 下一最小切片应先核对卡 blob 中已有容器标识与本机测试容器，必要时仅在用户明确
   批准后准备可丢弃的匹配测试容器；然后启动开发版 EXE，进行需用户物理插拔配合的
   真卡在场、移除卸载与页面刷新验收。
-- 当前提交状态：等待用户决定是否以
-  `[P1.7]refresh UI after external unmount` 创建本地提交；不执行 push。
+- 提交：`528fd63 [P1.7]refresh UI after external unmount`
 
 ### 小切片 4：P1.7 真卡验收夹具（可丢弃匹配容器）
 
@@ -2533,4 +2516,4 @@
   `FETCHCONTENT_SOURCE_DIR_WEBVIEW2_SDK`，因而尝试联网重新下载 WebView2 SDK 并在受限网络下
   失败。本地 `out/webview2-sdk-1.0.4129.50/` 已完整可用，`dev`／`analyze`／`asan`／`review-clean`
   均已指向它，故不影响当前构建与验收；如需修复，只是给预设补一个 cache 变量，不需要网络。
-- 提交：待定（`[P1.7]add disposable real-card container fixture`）
+- 提交：`3deed4c [P1.7]add disposable real-card container fixture`
