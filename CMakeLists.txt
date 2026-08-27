@@ -97,6 +97,7 @@ endif()
 
 add_library(usb_vault_core STATIC
   src/application/application_session.cpp
+  src/application/card_presence_controller.cpp
   src/application/mount_orchestrator.cpp
   src/card/card_error.cpp
   src/card/fixed_blob_card_store.cpp

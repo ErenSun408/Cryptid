@@ -401,6 +401,20 @@ usb_vault_configure_target(application_session_tests)
 
 add_test(NAME application_session_tests COMMAND application_session_tests)
 
+add_executable(card_presence_controller_tests
+  card_presence_controller_tests.cpp
+)
+
+target_link_libraries(card_presence_controller_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(card_presence_controller_tests)
+
+add_test(NAME card_presence_controller_tests
+  COMMAND card_presence_controller_tests)
+
 add_executable(password_ingress_tests
   password_ingress_tests.cpp
 )
