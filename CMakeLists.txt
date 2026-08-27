@@ -132,6 +132,29 @@ target_link_libraries(usb_vault_core PRIVATE
 
 usb_vault_configure_target(usb_vault_core)
 
+# Windows HID notification delivery is kept outside the vendor-neutral core.
+# Consumers provide a VID/PID identity; the adapter never links a vendor SDK
+# or performs HID report I/O.
+add_library(usb_vault_windows_hid_notifications STATIC
+  src/platform/windows/hid_card_device_notifications.cpp
+)
+
+target_include_directories(usb_vault_windows_hid_notifications
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_windows_hid_notifications
+  PUBLIC
+    usb_vault_core
+  PRIVATE
+    Hid
+    Setupapi
+    User32
+)
+
+usb_vault_configure_target(usb_vault_windows_hid_notifications)
+
 # Local artifact identity and replacement locks are shared by the vendor DLL
 # verifier and the isolated helper launcher without linking either consumer to
 # the other.
@@ -427,6 +450,7 @@ if(USB_VAULT_BUILD_UI)
     usb_vault_core
     usb_vault_vikey_development_credentials
     usb_vault_vikey_helper_blob_backend
+    usb_vault_windows_hid_notifications
     "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
     Ole32
     Shell32

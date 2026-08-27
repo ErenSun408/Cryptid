@@ -12,6 +12,7 @@
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_blob_backend.h"
+#include "platform/windows/hid_card_device_notifications.h"
 #else
 #include "usb_vault/card/fixed_blob_card_store.h"
 #endif
@@ -37,6 +38,8 @@ constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
 constexpr wchar_t kWindowTitle[] =
     L"USB Vault - ViKey 联网开发模式";
+constexpr usb_vault::platform::windows::HidDeviceIdentity
+    kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 #else
 constexpr wchar_t kWindowTitle[] = L"USB Vault";
 #endif
@@ -67,6 +70,11 @@ std::unique_ptr<
     g_vikey_credential_provider;
 std::unique_ptr<usb_vault::card::vikey::VikeyHelperBlobBackend>
     g_vikey_backend;
+std::unique_ptr<usb_vault::application::CardPresenceController>
+    g_card_presence_controller;
+std::unique_ptr<
+    usb_vault::platform::windows::HidCardDeviceNotificationRegistration>
+    g_card_device_notifications;
 #endif
 
 void show_failure(const wchar_t* const message) noexcept {
@@ -184,7 +192,7 @@ void initialize_card_store() {
 #endif
 }
 
-void initialize_application_session() {
+void initialize_application_session([[maybe_unused]] const HWND window) {
   initialize_card_store();
   const std::wstring directory = executable_directory();
   const auto drives = unused_drive_letters();
@@ -203,9 +211,26 @@ void initialize_application_session() {
           *g_card_store, *g_volume_provider, std::move(layout));
   g_ui_session = std::make_unique<usb_vault::ui::UiSessionController>(
       *g_application_session);
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+  auto presence =
+      std::make_unique<usb_vault::application::CardPresenceController>(
+          *g_application_session);
+  auto notifications = std::make_unique<
+      usb_vault::platform::windows::HidCardDeviceNotificationRegistration>(
+      window, kDevelopmentCardIdentity);
+  if (notifications->target_present()) {
+    static_cast<void>(presence->handle_arrival());
+  }
+  g_card_presence_controller = std::move(presence);
+  g_card_device_notifications = std::move(notifications);
+#endif
 }
 
 void clear_application_session() noexcept {
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+  g_card_device_notifications.reset();
+  g_card_presence_controller.reset();
+#endif
   g_ui_session.reset();
   g_application_session.reset();
   g_volume_provider.reset();
@@ -359,6 +384,22 @@ void initialize_webview(const HWND window) {
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+    case WM_DEVICECHANGE:
+      if (g_card_device_notifications != nullptr &&
+          g_card_presence_controller != nullptr) {
+        const auto transition =
+            usb_vault::platform::windows::handle_hid_device_change(
+                *g_card_presence_controller, wparam, lparam,
+                kDevelopmentCardIdentity);
+        if (transition == usb_vault::application::
+                              CardPresenceTransition::active_session_remains) {
+          show_failure(
+              L"安全卡已拔出，但无法安全卸载当前磁盘。请关闭占用文件后重试。");
+        }
+      }
+      return 0;
+#endif
     case WM_SIZE:
       resize_webview(window);
       return 0;
@@ -371,6 +412,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+      g_card_device_notifications.reset();
+#endif
       g_webview.Reset();
       g_controller.Reset();
       g_host_object.Reset();
@@ -412,7 +456,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   }
 
   try {
-    initialize_application_session();
+    initialize_application_session(window);
     initialize_webview(window);
   } catch (...) {
     show_failure(L"本地界面初始化失败。");

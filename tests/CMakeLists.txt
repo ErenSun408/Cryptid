@@ -415,6 +415,20 @@ usb_vault_configure_target(card_presence_controller_tests)
 add_test(NAME card_presence_controller_tests
   COMMAND card_presence_controller_tests)
 
+add_executable(hid_card_device_notifications_tests
+  hid_card_device_notifications_tests.cpp
+)
+
+target_link_libraries(hid_card_device_notifications_tests
+  PRIVATE
+    usb_vault_windows_hid_notifications
+)
+
+usb_vault_configure_target(hid_card_device_notifications_tests)
+
+add_test(NAME hid_card_device_notifications_tests
+  COMMAND hid_card_device_notifications_tests)
+
 add_executable(password_ingress_tests
   password_ingress_tests.cpp
 )
