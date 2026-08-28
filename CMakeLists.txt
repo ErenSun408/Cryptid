@@ -413,6 +413,22 @@ target_link_libraries(
 usb_vault_configure_target(
   usb_vault_p1_7_development_container_fixture)
 
+# Explicit read-only-card P1.7 mount diagnostic. It uses only the disposable
+# fixture passwords, never writes the card, and unmounts every successful
+# diagnostic mount before returning. It is excluded from default builds.
+add_executable(usb_vault_p1_7_mount_diagnostic EXCLUDE_FROM_ALL
+  tools/p1_7_development_fixture/mount_diagnostic.cpp
+)
+target_include_directories(usb_vault_p1_7_mount_diagnostic PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(usb_vault_p1_7_mount_diagnostic PRIVATE
+  usb_vault_p1_7_development_fixture
+  usb_vault_vikey_development_credentials
+  usb_vault_vikey_helper_blob_backend
+)
+usb_vault_configure_target(usb_vault_p1_7_mount_diagnostic)
+
 add_executable(usb_vault_volume_creator WIN32
   tools/volume_creator/main.cpp
   src/volume_creation/creator_helper_engine.cpp

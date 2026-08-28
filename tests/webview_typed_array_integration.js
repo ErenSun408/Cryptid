@@ -70,7 +70,7 @@ chrome.webview.postMessage("driver-loaded");
     chrome.webview.postMessage("fail-initialize");
     return;
   }
-  password.value = "p\u0000ä";
+  password.value = "p1.7-real-test";
   action.click();
   if (!await waitForState("active") || password.value !== "") {
     chrome.webview.postMessage("fail-submit");

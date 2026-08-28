@@ -63,6 +63,7 @@
   });
 
   const submitPassword = async () => {
+    let encodedPasswordBytes = null;
     let passwordBytes = null;
     let message = "无法打开安全会话，请检查密码后重试。";
     busy = true;
@@ -70,9 +71,15 @@
 
     try {
       try {
-        passwordBytes = new TextEncoder().encode(passwordInput.value);
+        encodedPasswordBytes =
+          new TextEncoder().encode(passwordInput.value);
+        passwordBytes = Array.from(encodedPasswordBytes);
       } finally {
         passwordInput.value = "";
+        if (encodedPasswordBytes !== null) {
+          encodedPasswordBytes.fill(0);
+          encodedPasswordBytes = null;
+        }
       }
 
       try {
@@ -92,6 +99,9 @@
         message = "安全操作未完成，请尝试安全卸载。";
       }
     } finally {
+      if (encodedPasswordBytes !== null) {
+        encodedPasswordBytes.fill(0);
+      }
       if (passwordBytes !== null) {
         passwordBytes.fill(0);
       }
@@ -160,7 +170,6 @@
 
   (async () => {
     try {
-      chrome.webview.hostObjects.options.shouldPassTypedArraysAsArrays = true;
       bridge = chrome.webview.hostObjects.nativeBridge;
       await refreshActiveState();
       busy = false;

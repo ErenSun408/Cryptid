@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cwchar>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -40,8 +41,16 @@ class ProbeSession final : public IApplicationSessionActions {
  public:
   void authenticate_and_mount(SecureBuffer password) override {
     submission_observed = true;
-    constexpr std::array<std::byte, 4> expected{
+    constexpr std::array<std::byte, 14> first_expected{
+        std::byte{'p'}, std::byte{'1'}, std::byte{'.'}, std::byte{'7'},
+        std::byte{'-'}, std::byte{'r'}, std::byte{'e'}, std::byte{'a'},
+        std::byte{'l'}, std::byte{'-'}, std::byte{'t'}, std::byte{'e'},
+        std::byte{'s'}, std::byte{'t'}};
+    constexpr std::array<std::byte, 4> second_expected{
         std::byte{0x70}, std::byte{0x00}, std::byte{0xC3}, std::byte{0xA4}};
+    const std::span<const std::byte> expected =
+        submission_count == 0 ? std::span<const std::byte>(first_expected)
+                              : std::span<const std::byte>(second_expected);
     if (password.size() != expected.size()) {
       throw std::runtime_error("typed array size changed");
     }
@@ -54,6 +63,7 @@ class ProbeSession final : public IApplicationSessionActions {
     payload_matched = true;
     received = true;
     is_mounted = true;
+    ++submission_count;
   }
 
   void unmount_active() override {
@@ -71,6 +81,7 @@ class ProbeSession final : public IApplicationSessionActions {
   bool is_mounted{false};
   bool unmounted{false};
   bool external_unmounted{false};
+  std::size_t submission_count{0};
 };
 
 ComPtr<ICoreWebView2Controller> g_controller;

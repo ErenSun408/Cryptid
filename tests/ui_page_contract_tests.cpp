@@ -55,9 +55,10 @@ void test_single_password_surface_is_bridge_controlled() {
   require(page.find("id=\"session-action\" type=\"button\" disabled") !=
               std::string::npos,
           "action must start inert before native bridge readiness");
+  constexpr std::string_view kScriptTag =
+      "<script src=\"session.js?v=p1-7-array-transport\"></script>";
   require(count_occurrences(page, "<script") == 1 &&
-              page.find("<script src=\"session.js\"></script>") !=
-                  std::string::npos,
+              page.find(kScriptTag) != std::string::npos,
           "page must load only the packaged session controller");
 }
 
@@ -88,23 +89,31 @@ void test_page_does_not_expose_disallowed_state() {
 void test_password_is_cleared_at_bridge_settlement() {
   const std::string script = read_source(USB_VAULT_UI_SCRIPT);
   const std::size_t encode = script.find(
-      "passwordBytes = new TextEncoder().encode(passwordInput.value)");
+      "new TextEncoder().encode(passwordInput.value)");
+  const std::size_t copy =
+      script.find("passwordBytes = Array.from(encodedPasswordBytes);", encode);
   const std::size_t clear_dom =
-      script.find("passwordInput.value = \"\";", encode);
+      script.find("passwordInput.value = \"\";", copy);
+  const std::size_t wipe_encoded =
+      script.find("encodedPasswordBytes.fill(0);", clear_dom);
   const std::size_t submit = script.find(
-      "await bridge.submitPasswordBytes(passwordBytes);", clear_dom);
+      "await bridge.submitPasswordBytes(passwordBytes);", wipe_encoded);
   const std::size_t wipe = script.find("passwordBytes.fill(0);", submit);
 
-  require(encode != std::string::npos && clear_dom != std::string::npos &&
+  require(encode != std::string::npos && copy != std::string::npos &&
+              clear_dom != std::string::npos &&
+              wipe_encoded != std::string::npos &&
               submit != std::string::npos && wipe != std::string::npos,
           "password submission clearing contract is incomplete");
-  require(encode < clear_dom && clear_dom < submit && submit < wipe,
+  require(encode < copy && copy < clear_dom && clear_dom < wipe_encoded &&
+              wipe_encoded < submit && submit < wipe,
           "password copies are not cleared at their safe lifetime boundaries");
+  require(count_occurrences(script, "encodedPasswordBytes.fill(0);") >= 2,
+          "encoded password byte array must have a fallback wipe");
   require(count_occurrences(script, "passwordBytes.fill(0);") >= 2,
-          "password byte array must have a fallback wipe");
-  require(script.find("shouldPassTypedArraysAsArrays = true") !=
-              std::string::npos,
-          "typed-array projection must be explicitly enabled");
+          "bridge password array must have a fallback wipe");
+  require(script.find("shouldPassTypedArraysAsArrays") == std::string::npos,
+          "UI must avoid the Runtime-dependent typed-array projection");
 }
 
 void test_session_actions_are_serialized_and_recoverable() {
