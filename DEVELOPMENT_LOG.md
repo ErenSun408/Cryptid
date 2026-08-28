@@ -2611,4 +2611,97 @@
 
 - 本切片完成普通与胁迫口令的真卡挂载和主动卸载验收；物理拔卡触发的自动卸载、页面刷新及
   盘符/驱动无残留仍作为下一独立验收切片，不在本提交中宣称完成。
-- 提交：待定（`[P1.7]verify real-card mount and fix password array transport`）
+- 提交：`7c486b1 [P1.7]verify real-card mount and fix password array transport`
+
+### 小切片 7：拔卡强制卸载与 MSVC/Ninja 头文件依赖修复
+
+#### 计划、需求与既有实现复核
+
+- 重新核对 P1.7 的出口条件、基本需求第 3 条、R-03/8.6、既有普通卸载重试、窗口关闭守卫和
+  手工安全卸载路径。物理拔卡后卡材料已不可再信任，若卷因资源管理器等进程占用而拒绝普通
+  卸载，应优先消除仍公开可见的解密盘符；但用户主动卸载与关窗仍须保持非强制，避免把普通
+  busy 状态转换成可能丢失未写入数据的破坏性操作。
+- 审阅未提交实现时发现构建证据污染：`dev`、`analyze`、`asan`、`integration`、
+  `review-clean`、`asan-debug-diagnostic`、`release-diagnostic`、
+  `release-helper-diagnostic`、`vikey-release-diagnostic` 共 9 个 Ninja 目录的
+  `msvc_deps_prefix` 被写成乱码，`application_session.cpp.obj` 的 Ninja 依赖数为 0；正常的
+  `p1_7_acceptance` 同一目标有 128 条依赖。纯头文件变更因此不会触发重编，曾造成新增纯虚
+  函数后旧对象仍参与链接、vtable 槽位错位并在 `noexcept` 路径进入 `std::terminate`。
+- 新配置实验确认根因是 CMake 配置时的 Windows 控制台代码页。代码页 936 会生成无法与
+  `cl /showIncludes` 输出匹配的 Ninja 前缀并泄露数千行包含信息；配置前切换到 65001 后前缀
+  和依赖数据库均正常。`VSLANG=1033` 不能修复该问题。
+
+#### 构建系统修复
+
+- `CMakeLists.txt` 在 MSVC + Ninja 配置期读取活动 Windows 代码页，非 65001 时立即失败并
+  指向仓库入口；同时要求 C 与 C++ 的 `CMAKE_*_CL_SHOWINCLUDES_PREFIX` 均存在，避免生成
+  头文件依赖状态不可验证的构建目录。该保护不影响 Visual Studio 等其他生成器。
+- 新增 `tools/configure-preset.cmd`：先执行 `chcp 65001`，失败则关闭配置，再原样转发 preset
+  和附加 CMake 参数。代码页 936 的负向配置探针已确认在生成 Ninja 文件前失败，不再产生
+  “配置成功但头文件不重编”的目录。
+- 删除并按原有构建类型、测试、UI、ASan、`/analyze`、集成测试和本地格式化 DLL 参数重建
+  上述 9 个仅含生成产物的目录；所有 `rules.ninja` 现均记录正确的
+  `注意: 包含文件:` 前缀。UI 配置显式复用已存在且此前通过验收的本地 WebView2 SDK，未联网
+  获取新依赖。
+- 这次缺陷只使“受影响目录中的纯头文件增量构建”证据失效，不等于全部历史验证作废：发生
+  `.cpp` 重编、执行 clean-first 或使用正常 `p1_7_acceptance` 目录的证据仍然成立。后续若需
+  依赖历史纯头文件验证，应在已修复目录重新执行。
+
+#### 拔卡强制卸载实现与审阅修正
+
+- 新增 `unmount_with_forced_escalation()`：先执行一次普通卸载，使空闲卷仍能正常刷写和关闭；
+  只有精确收到 `DriverError::volume_busy` 才立即执行一次强制卸载，其他驱动、版本或传输错误
+  原样传播。原有 `unmount_with_retry()` 未改动，继续只在两秒窗口内重试 busy 且永不强制。
+- `IApplicationSessionActions` 新增仅供物理移除控制器调用的 `force_unmount_active()`；会话层
+  保持 B 后 A 的清理顺序，每个盘只在卸载成功后清除状态。B 失败时保留 A/B，B 成功而 A
+  失败时只保留 A，调用方仍可通过手工安全卸载重试准确残留。
+- 物理移除新增 `active_session_force_unmounted` 结果。真正使用强制卸载时原生宿主显示警告，
+  明确说明未写入数据可能丢失；连强制卸载也失败时才报告会话仍在。WebView 只刷新统一活动
+  会话状态，不新增档位、卷类型、盘符或卡身份观察面。
+- 手工“安全卸载”、WebView host object 入口与窗口关闭守卫仍只调用原有非强制路径；相关测试
+  替身在意外触达强制入口时显式抛错，防止以后无意扩大破坏性策略。
+
+#### 验证与安全复核
+
+- 重新配置后的 Debug 从零执行 135 步构建，未再泄露 `/showIncludes` 行；CTest **28/28**：
+  26 项通过，2 项按沙箱父令牌约束跳过。新增测试覆盖强制路径 B→A 顺序、是否实际使用 force
+  的返回值、强制失败保留可重试状态、物理移除结果分类，以及非拔卡路径不得调用强制卸载。
+- 将 `application_session.h` 时间戳临时推进后执行 Ninja dry-run，准确调度 **43 步**，包括
+  `application_session.cpp`、控制器、UI 与 7 个测试消费者；恢复时间戳后工作区内容不变。
+  `application_session.cpp.obj` 的依赖数据库由原来的 0 恢复为完整头文件集合。
+- MSVC `/analyze` 从零完成 137 步构建，无新增项目诊断；CTest **28/28**，其中 2 项按环境
+  约束跳过。AddressSanitizer 从零完成 137 步构建；CTest **28/28**，其中 2 项按相同约束跳过，
+  未报告内存错误。`git diff --check` 通过。
+- `p1_7_acceptance` 已在 UTF-8 配置保护下重新生成，核心库、挂载诊断及 CTest **28/28** 均已
+  刷新通过；但旧的 `usb_vault_vikey_development_app.exe` 仍被既有运行进程占用，链接器无法
+  覆盖该单一制品。本轮未擅自终止用户进程；相同开发应用目标已在 Analyze 与 ASan 目录从零
+  构建成功。用户随后关闭旧窗口，验收目录中的开发版应用已重新链接成功，现可执行真卡测试。
+- 安全复核确认强制策略只由已匹配的物理卡移除事件触发，只对精确 busy 升级，且失败不会吞掉
+  活动状态；没有读取 Windows 凭据、加载官方 SDK、连接或改写实体卡、修改容器内容，也没有
+  新增秘密、档位或身份持久化。
+
+#### 剩余风险与下一步
+
+- 软件无法保证强制卸载时尚未写入磁盘的数据不丢失；这是物理拔卡后消除持续暴露盘符与数据
+  完整性之间的明确取舍，因此 UI 必须保留当前警告，正常卸载路径不得复用此策略。
+- 真卡最终验收已完成：real/duress 均能挂载 X/Y；real 会话在资源管理器占用时物理拔卡，
+  强制卸载警告、双盘符消失和页面回到统一关闭状态均符合预期；重开后两条口令再次挂载成功，
+  排除了卡 blob、容器或驱动状态残留。强制清理与派生口令无关，无需重复一次破坏性拔卡。
+- 提交：`b0198d7 [build]fix MSVC Ninja header dependencies`；
+  `d852f87 [P1.7]force unmount busy volumes after card removal`。
+
+#### 真卡强制卸载首轮验收与重开故障排除
+
+- 用户从普通 PowerShell 启动重新链接的开发版应用，输入 `p1.7-real-test` 后成功挂出 X/Y；
+  保持资源管理器占用并物理拔卡时，应用显示强制卸载及未写入数据可能丢失的警告，两个盘符
+  均立即消失，证明 busy → force 的真实 VeraCrypt 驱动路径生效。
+- 随后重开应用时 real/duress 均统一失败。排查确认卡和容器没有损坏：此前提供的启动命令把
+  实际目录 `ViKeySDK_V4.1.2.37-7.4.7-7` 误写为不存在的
+  `ViKeySDK\_V4.1.2.37-7.4.7-7`，会在读取卡之前以统一 backend failure 关闭；诊断期间重新
+  链接 helper 后，其内容固定哈希也相应变化，继续传旧哈希会被本地制品身份门拒绝。
+- Codex 沙箱内的只读探针另观察到 `LocalAppData` 被 Windows 重定向至 Codex 包的
+  `LocalCache`，因路径身份门而按设计拒绝；这只影响包沙箱内的诊断进程，不影响用户从普通
+  PowerShell 启动的开发应用。用于显示期望/最终路径的临时诊断改动已撤销，正式源码无残留。
+- 使用实际 SDK 目录和重新计算的 helper SHA-256 后，用户重新验证 `p1.7-real-test` 与
+  `p1.7-duress-test` 均能正常登录和挂载。这证明首次强制卸载没有改写 32 字节卡 blob，也没有
+  破坏两只可丢弃测试容器。
