@@ -73,6 +73,10 @@ class ProbeSession final : public IApplicationSessionActions {
     is_mounted = false;
     unmounted = true;
   }
+  [[nodiscard]] bool force_unmount_active() override {
+    throw std::logic_error(
+        "forced unmount is outside this contract");
+  }
   [[nodiscard]] bool mounted() const noexcept override { return is_mounted; }
 
   bool received{false};

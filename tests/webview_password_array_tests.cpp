@@ -39,6 +39,10 @@ class FakeSession final : public IApplicationSessionActions {
   }
 
   void unmount_active() override { is_mounted = false; }
+  [[nodiscard]] bool force_unmount_active() override {
+    throw std::logic_error(
+        "forced unmount is outside this contract");
+  }
   [[nodiscard]] bool mounted() const noexcept override { return is_mounted; }
 
   std::array<std::byte, 4> expected{

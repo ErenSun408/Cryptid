@@ -16,6 +16,11 @@ class IApplicationSessionActions {
   virtual void authenticate_and_mount(
       security::SecureBuffer password_utf8) = 0;
   virtual void unmount_active() = 0;
+  // Unmounts the active session even when a drive is busy, for the single
+  // case where the key material behind it can no longer be trusted. Returns
+  // true when a forced unmount was required, which can discard data the
+  // filesystem has not written yet.
+  [[nodiscard]] virtual bool force_unmount_active() = 0;
   [[nodiscard]] virtual bool mounted() const noexcept = 0;
 };
 
@@ -38,6 +43,7 @@ class ApplicationSession final : public IApplicationSessionActions {
   void authenticate_and_mount(
       security::SecureBuffer password_utf8) override;
   void unmount_active() override;
+  [[nodiscard]] bool force_unmount_active() override;
 
   [[nodiscard]] bool mounted() const noexcept override;
 

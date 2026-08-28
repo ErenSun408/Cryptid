@@ -33,6 +33,11 @@ class FakeSession final : public IApplicationSessionActions {
     ++unmount_calls;
     mounted_state = false;
   }
+  [[nodiscard]] bool force_unmount_active() override {
+    ++force_unmount_calls;
+    mounted_state = false;
+    return false;
+  }
   [[nodiscard]] bool mounted() const noexcept override {
     return mounted_state;
   }
@@ -40,6 +45,7 @@ class FakeSession final : public IApplicationSessionActions {
   bool mounted_state{};
   int authenticate_calls{};
   int unmount_calls{};
+  int force_unmount_calls{};
 };
 
 class BroadcastPayload final {
@@ -106,7 +112,7 @@ void test_target_arrival_and_removal_are_routed() {
                                    payload.parameter(), kTarget) ==
               CardPresenceTransition::active_session_unmounted,
           "target removal was not routed");
-  require(session.unmount_calls == 1 && !session.mounted_state,
+  require(session.force_unmount_calls == 1 && !session.mounted_state,
           "target removal did not unmount once");
 }
 
@@ -170,7 +176,7 @@ void test_unrelated_and_malformed_payloads_are_ignored() {
               CardPresenceTransition::no_change,
           "unterminated payload was routed");
 
-  require(controller.card_present() && session.unmount_calls == 0,
+  require(controller.card_present() && session.force_unmount_calls == 0,
           "ignored payload changed session or presence state");
   require(handle_hid_device_change(controller, DBT_DEVNODES_CHANGED, 0,
                                    kTarget) ==

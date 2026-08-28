@@ -20,6 +20,7 @@ using usb_vault::application::MountSessionResult;
 using usb_vault::application::detail::ApplicationSessionRuntime;
 using usb_vault::application::detail::ApplicationSessionState;
 using usb_vault::application::detail::authenticate_and_mount_with_runtime;
+using usb_vault::application::detail::force_unmount_active_with_runtime;
 using usb_vault::application::detail::unmount_active_with_runtime;
 using usb_vault::security::SecureBuffer;
 
@@ -56,6 +57,10 @@ class FakeApplicationSessionRuntime final : public ApplicationSessionRuntime {
   bool leave_b_after_mount_failure{false};
   bool fail_unmount_a{false};
   bool fail_unmount_b{false};
+  bool fail_force_unmount_a{false};
+  bool fail_force_unmount_b{false};
+  bool force_required_a{false};
+  bool force_required_b{false};
   std::vector<std::string> events;
 
   [[nodiscard]] SecureBuffer get_card_blob() override {
@@ -114,6 +119,25 @@ class FakeApplicationSessionRuntime final : public ApplicationSessionRuntime {
         throw std::runtime_error("unmount A failed");
       }
       return {};
+    }
+    throw std::runtime_error("unexpected drive letter");
+  }
+
+  [[nodiscard]] usb_vault::volume::UnmountEscalationResult unmount_forced(
+      const wchar_t drive_letter) override {
+    if (drive_letter == L'Y') {
+      events.emplace_back("force-unmount:B");
+      if (fail_force_unmount_b) {
+        throw std::runtime_error("forced unmount B failed");
+      }
+      return {.result = {}, .forced = force_required_b};
+    }
+    if (drive_letter == L'X') {
+      events.emplace_back("force-unmount:A");
+      if (fail_force_unmount_a) {
+        throw std::runtime_error("forced unmount A failed");
+      }
+      return {.result = {}, .forced = force_required_a};
     }
     throw std::runtime_error("unexpected drive letter");
   }
@@ -251,6 +275,40 @@ void test_failed_a_unmount_retains_only_a_for_retry() {
   require_events(runtime, {"unmount:B", "unmount:A", "unmount:A"});
 }
 
+void test_forced_unmount_orders_b_before_a_and_reports_force() {
+  FakeApplicationSessionRuntime runtime;
+  ApplicationSessionState state{.container_a_mounted = true,
+                                .container_b_mounted = true};
+  require(!force_unmount_active_with_runtime(runtime, layout(), state),
+          "an idle forced unmount claimed that force was required");
+  require(!state.mounted(), "forced unmount retained state");
+  require_events(runtime, {"force-unmount:B", "force-unmount:A"});
+
+  FakeApplicationSessionRuntime busy;
+  busy.force_required_a = true;
+  ApplicationSessionState busy_state{.container_a_mounted = true,
+                                     .container_b_mounted = true};
+  require(force_unmount_active_with_runtime(busy, layout(), busy_state),
+          "a required forced unmount was not reported");
+  require(!busy_state.mounted(), "busy forced unmount retained state");
+}
+
+void test_failed_forced_unmount_preserves_the_exact_drive() {
+  FakeApplicationSessionRuntime runtime;
+  runtime.fail_force_unmount_b = true;
+  ApplicationSessionState state{.container_a_mounted = true,
+                                .container_b_mounted = true};
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(
+            force_unmount_active_with_runtime(runtime, layout(), state));
+      },
+      "forced B unmount failure was not propagated");
+  require(state.container_a_mounted && state.container_b_mounted,
+          "forced B unmount failure lost retryable state");
+  require_events(runtime, {"force-unmount:B"});
+}
+
 void test_second_mount_is_rejected_before_card_access() {
   FakeApplicationSessionRuntime runtime;
   ApplicationSessionState state{.container_a_mounted = true};
@@ -274,6 +332,8 @@ int main() {
   test_active_unmount_orders_b_before_a();
   test_failed_b_unmount_preserves_both_for_retry();
   test_failed_a_unmount_retains_only_a_for_retry();
+  test_forced_unmount_orders_b_before_a_and_reports_force();
+  test_failed_forced_unmount_preserves_the_exact_drive();
   test_second_mount_is_rejected_before_card_access();
 
   std::cout << "application_session_tests: PASS\n";

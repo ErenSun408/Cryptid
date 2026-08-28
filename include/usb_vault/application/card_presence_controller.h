@@ -11,12 +11,17 @@ enum class CardPresenceTransition {
   card_available,
   card_unavailable,
   active_session_unmounted,
+  active_session_force_unmounted,
   active_session_remains,
 };
 
 // Routes vendor-neutral card arrival/removal events to the active application
 // session. Arrival never authenticates. First removal makes the card
-// unavailable and attempts to unmount an active session; a failure remains
+// unavailable and unmounts an active session, escalating to a forced unmount
+// when a drive is busy: the card behind the key material is physically gone,
+// so leaving a decrypted drive letter behind is the worse outcome. A forced
+// unmount is reported separately because it can discard unwritten data. Only
+// a drive that even the forced unmount cannot release remains, and it stays
 // retryable through the unchanged session state.
 class CardPresenceController final {
  public:

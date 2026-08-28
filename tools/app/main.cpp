@@ -73,6 +73,11 @@ void show_failure(const wchar_t* const message) noexcept {
                                   MB_OK | MB_ICONERROR));
 }
 
+void show_warning(const wchar_t* const message) noexcept {
+  static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
+                                  MB_OK | MB_ICONWARNING));
+}
+
 [[nodiscard]] std::wstring executable_directory() {
   std::vector<wchar_t> executable_path(32768);
   const DWORD length = ::GetModuleFileNameW(
@@ -405,16 +410,21 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
             usb_vault::platform::windows::handle_hid_device_change(
                 *g_card_presence_controller, wparam, lparam,
                 kDevelopmentCardIdentity);
-        if (transition == usb_vault::application::CardPresenceTransition::
-                              active_session_unmounted ||
-            transition == usb_vault::application::CardPresenceTransition::
-                              active_session_remains) {
+        using Transition = usb_vault::application::CardPresenceTransition;
+        if (transition == Transition::active_session_unmounted ||
+            transition == Transition::active_session_force_unmounted ||
+            transition == Transition::active_session_remains) {
           notify_webview_session_changed();
         }
-        if (transition == usb_vault::application::
-                              CardPresenceTransition::active_session_remains) {
+        if (transition == Transition::active_session_force_unmounted) {
+          show_warning(
+              L"安全卡已拔出，磁盘正在被占用，已强制卸载。"
+              L"未写入磁盘的数据可能已丢失。");
+        }
+        if (transition == Transition::active_session_remains) {
           show_failure(
-              L"安全卡已拔出，但无法安全卸载当前磁盘。请关闭占用文件后重试。");
+              L"安全卡已拔出，强制卸载当前磁盘仍然失败。"
+              L"请立即关闭占用该磁盘的程序并重试安全卸载。");
         }
       }
       return 0;

@@ -33,6 +33,11 @@ class ProductionApplicationSessionRuntime final
     return volume::unmount_with_retry(provider_, drive_letter);
   }
 
+  [[nodiscard]] volume::UnmountEscalationResult unmount_forced(
+      const wchar_t drive_letter) override {
+    return volume::unmount_with_forced_escalation(provider_, drive_letter);
+  }
+
  private:
   card::ICardStore& card_store_;
   const volume::VolumeProvider& provider_;
@@ -74,6 +79,13 @@ void ApplicationSession::unmount_active() {
   ProductionApplicationSessionRuntime runtime(impl_->card_store,
                                               impl_->provider);
   detail::unmount_active_with_runtime(runtime, impl_->layout, impl_->state);
+}
+
+bool ApplicationSession::force_unmount_active() {
+  ProductionApplicationSessionRuntime runtime(impl_->card_store,
+                                              impl_->provider);
+  return detail::force_unmount_active_with_runtime(runtime, impl_->layout,
+                                                   impl_->state);
 }
 
 bool ApplicationSession::mounted() const noexcept {
@@ -148,6 +160,25 @@ void unmount_active_with_runtime(ApplicationSessionRuntime& runtime,
     static_cast<void>(runtime.unmount(layout.container_a.drive_letter));
     state.container_a_mounted = false;
   }
+}
+
+bool force_unmount_active_with_runtime(ApplicationSessionRuntime& runtime,
+                                       const ContainerLayout& layout,
+                                       ApplicationSessionState& state) {
+  // Same order as the normal unmount: B first, then A. A drive whose forced
+  // unmount still throws keeps its flag so the exact drive can be retried,
+  // and the throw reaches the caller instead of being reported as clean.
+  bool forced = false;
+  if (state.container_b_mounted) {
+    forced = runtime.unmount_forced(layout.container_b.drive_letter).forced;
+    state.container_b_mounted = false;
+  }
+  if (state.container_a_mounted) {
+    forced = runtime.unmount_forced(layout.container_a.drive_letter).forced ||
+             forced;
+    state.container_a_mounted = false;
+  }
+  return forced;
 }
 
 }  // namespace detail

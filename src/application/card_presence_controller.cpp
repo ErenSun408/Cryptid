@@ -22,14 +22,17 @@ CardPresenceTransition CardPresenceController::handle_removal() noexcept {
   if (!session_.mounted()) {
     return CardPresenceTransition::card_unavailable;
   }
+  bool forced = false;
   try {
-    session_.unmount_active();
+    forced = session_.force_unmount_active();
   } catch (...) {
     return CardPresenceTransition::active_session_remains;
   }
-  return session_.mounted()
-             ? CardPresenceTransition::active_session_remains
-             : CardPresenceTransition::active_session_unmounted;
+  if (session_.mounted()) {
+    return CardPresenceTransition::active_session_remains;
+  }
+  return forced ? CardPresenceTransition::active_session_force_unmounted
+                : CardPresenceTransition::active_session_unmounted;
 }
 
 bool CardPresenceController::card_present() const noexcept {

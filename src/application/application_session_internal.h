@@ -2,6 +2,7 @@
 
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
 
 namespace usb_vault::application::detail {
@@ -26,6 +27,10 @@ class ApplicationSessionRuntime {
       const security::SecureBuffer& card_secret) = 0;
   [[nodiscard]] virtual volume::UnmountResult unmount(
       wchar_t drive_letter) = 0;
+  // Emergency cleanup only. Escalates to a forced unmount when the normal
+  // one is rejected, and reports whether force was actually required.
+  [[nodiscard]] virtual volume::UnmountEscalationResult unmount_forced(
+      wchar_t drive_letter) = 0;
 };
 
 void authenticate_and_mount_with_runtime(
@@ -37,5 +42,10 @@ void authenticate_and_mount_with_runtime(
 void unmount_active_with_runtime(ApplicationSessionRuntime& runtime,
                                  const ContainerLayout& layout,
                                  ApplicationSessionState& state);
+
+// Returns true when at least one drive needed a forced unmount.
+[[nodiscard]] bool force_unmount_active_with_runtime(
+    ApplicationSessionRuntime& runtime, const ContainerLayout& layout,
+    ApplicationSessionState& state);
 
 }  // namespace usb_vault::application::detail
