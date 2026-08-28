@@ -2764,3 +2764,68 @@
   不得让开发应用把它误判为未初始化并覆盖。
 - 用户已于 2026-08-29 决定提交本切片；本次提交只包含需求基线、里程碑与开发记录，不包含
   产品代码。提交完成后进入双信封卡记录格式与纯内存状态机小切片。
+
+### 小切片 1：Card Record v1 固定格式与纯内存双信封 codec
+
+#### 计划、需求与既有实现复核
+
+- P2.0 需求基线已提交为 `2efe7cb [docs]rebaseline P2 card initialization and login`。本切片遵守
+  用户“首次建卷向导暂缓”的顺序，只锁定持久格式与纯内存密码操作，不接 UI、`ICardStore`、
+  ViKey helper、实体卡写入或建卷事务。
+- 重新检查 `SecureBuffer`、`kdf_v1`、Argon2 静态库、Windows CNG 链接及 card/test 目录。现有
+  `kdf_v1.cpp` 自己持有 Argon2 mutex 和 512MiB `VirtualAlloc` 回调；若卡记录再复制一套 mutex，
+  两条路径可并发占用 1GiB，违反 P-002 的资源边界，因此先抽出进程内共享运行器。
+- 当前 `ICardStore` 与 ViKey helper 仍固定传输 32 字节 P1 blob。直接把 216 字节 codec 接进去会
+  同时扩大 IPC、真卡地址范围和失败恢复范围，不是同一可逆边界；本切片明确不修改这些接口。
+
+#### 固定格式与实现
+
+- 新增公开 `card_record_v1` 纯内存 API，记录固定 **216 字节**：64 字节 little-endian 公开头，
+  后接两个各 76 字节的信封。头含 magic/version/length、16 字节 Argon2 盐、16 字节 record id、
+  固定 m=512MiB/t=2/p=1 与 Argon2 v1.3 参数；信封均为 12 字节 nonce、48 字节 ciphertext、
+  16 字节 GCM tag，布局不存在档位差异。
+- 有效信封的明文为 32 字节 S + 16 字节 marker。密码先经域
+  `usb-vault:card-record-master:v1` 的 Argon2id 得到一个 32 字节 master；再用 HMAC-SHA-256、
+  record id、槽位号及域 `usb-vault:card-envelope-key:v1` 派生两个 AES-256-GCM key。完整 64 字节
+  头和槽位号作为 AAD，阻止参数降级、头篡改或信封换位。
+- 初始化生成随机 S、盐、record id、nonce，主信封有效，第二信封由 CNG 随机数完整填充。通用
+  `rewrap_card_record_v1()` 只接受互不相同的主/第二密码，把原记录解出的同一 S 封入两边；API
+  不出现日常/诱饵、档位、模式或“第二槽启用”状态。登录结果只返回 S，不返回命中的槽位。
+- `unlock_card_record_v1()` 对一次输入只运行一次 512MiB Argon2id，再无条件认证两个信封，不因
+  主信封成功提前返回；两边统一分配 32 字节结果缓冲，并以掩码选择唯一成功的 S，不按槽位分支。
+  错误密码与 GCM tag/密文损坏统一抛 `CardCredentialRejected`；若同一密码异常地同时解开两个
+  信封则按歧义记录失败关闭，不猜测使用哪一边。
+- 产品未初始化改用受控配卡流程预写的精确 216 字节 marker：`UVBLNK2\0` + 208 个零字节。
+  只有逐字节完全匹配才返回 `provisioned_uninitialized`；全零、修改过的 marker、截断或未知内容
+  返回 malformed，32 字节 P1 blob 返回独立 legacy 状态，均不能进入覆盖式初始化。
+- 抽出内部 `argon2id_runtime`，统一 UTF-8 校验、参数/长度检查、512MiB 工作区分配与重复清零，
+  并用一个进程级 mutex 串行所有域。`derive_volume_password_v1()` 改为调用该运行器，公开 API、
+  参数、域、输出和锁页语义不变，原 KDF 向量测试保持通过。
+
+#### 测试、静态分析与安全复核
+
+- 新增 `card_record_v1_tests`，真实使用生产 Argon2 参数覆盖：精确 provisioning marker；全零、
+  marker 变异、截断、legacy 分类；初始化和主信封登录；错误密码；GCM tag 篡改；双信封改封后
+  两个密码解出同一 S；记录长度/公开 magic 不随形态变化；相同双密码拒绝；空/非法 UTF-8；
+  未知版本、错误长度与 malformed 记录不得进入密码处理。
+- Debug 全量构建通过，CTest **29/29**：27 项通过，2 项按受限父令牌约束跳过；新测试约 44.5s，
+  因为真实执行多条 512MiB KDF 路径。原 `kdf_v1_tests` 约 3.6s 并保持全部向量通过，证明共享
+  运行器重构没有改变卷密码派生。
+- MSVC `/analyze` 全量构建无项目诊断；CTest **29/29**（27 通过、2 跳过）。ASan 全量构建及
+  CTest **29/29**（27 通过、2 跳过），未报告内存错误。`clang-format` 已应用到新增/重构 C++，
+  `git diff --check` 通过。
+- 安全复核确认：S、Argon master、HMAC key、AES key object 与解密明文均在 `SecureBuffer` 中；
+  CNG/Argon 失败路径由 RAII 清理；头与槽位均认证；主/第二信封等长且均呈随机外观；没有明文
+  密码、命中槽位、诱饵启用、档位或模式持久字段。密码长度差异不是秘密；相同密码比较不提前
+  接触卡记录。代码与测试均未读取 Windows 凭据、调用 ViKey SDK、写实体卡或修改容器。
+
+#### 剩余边界与提交状态
+
+- codec 只构造完整的新记录，不声称单次 216 字节卡写具备原子性。下一切片须审计 ViKey 用户区
+  写入粒度，设计“写暂存区 → 逐字节回读认证 → 提交选择器/恢复”的协议，再把 helper IPC 与
+  `ICardStore` 从 32 字节迁移；没有该协议前不得写开发卡。
+- provisioning marker 需要客户硬件方或受控配卡工具预写，不能把任意空白用户区自动视为新卡。
+  当前开发卡中的 P1 32 字节测试 blob 会明确显示 legacy；迁移还是拒绝并重新配卡尚待下一切片
+  决定。
+- 用户已于 2026-08-29 决定提交本切片；提交完成后进入 216 字节记录的卡上暂存、回读验证与
+  提交协议小切片。该后续切片先使用伪 SDK/helper 测试，不因本次授权扩大到实体开发卡写入。
