@@ -112,6 +112,7 @@ add_library(usb_vault_core STATIC
   src/volume/unmount_retry.cpp
   src/volume/volume_provider.cpp
   src/volume_creation/creator_protocol.cpp
+  src/volume_creation/creator_pipe_security.cpp
   src/volume_creation/volume_creator.cpp
 )
 

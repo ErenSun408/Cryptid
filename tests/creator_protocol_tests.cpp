@@ -1,4 +1,5 @@
 #include "volume_creation/creator_protocol.h"
+#include "volume_creation/creator_pipe_security.h"
 #include "volume_creation/veracrypt_format_abi.h"
 
 #include <Windows.h>
@@ -12,6 +13,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -190,6 +192,89 @@ void test_format_error_mapping() {
          "unknown SDK error did not fail closed");
 }
 
+[[nodiscard]] std::vector<std::byte> current_token_user() {
+  HANDLE raw_token = INVALID_HANDLE_VALUE;
+  if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &raw_token) ==
+      FALSE) {
+    throw std::system_error(static_cast<int>(::GetLastError()),
+                            std::system_category(), "OpenProcessToken");
+  }
+  const Handle token(raw_token);
+  DWORD needed = 0;
+  static_cast<void>(
+      ::GetTokenInformation(token.get(), TokenUser, nullptr, 0, &needed));
+  if (needed == 0 || ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw std::runtime_error("measure current token user");
+  }
+  std::vector<std::byte> result(needed);
+  if (::GetTokenInformation(token.get(), TokenUser, result.data(), needed,
+                            &needed) == FALSE) {
+    throw std::runtime_error("read current token user");
+  }
+  return result;
+}
+
+void test_pipe_dacl_names_system_and_token_user_explicitly() {
+  auto descriptor =
+      usb_vault::volume_creation::detail::
+          current_user_pipe_security_descriptor();
+  expect(descriptor.get() != nullptr,
+         "current-user pipe security descriptor was unavailable");
+
+  SECURITY_DESCRIPTOR_CONTROL control{};
+  DWORD revision = 0;
+  expect(::GetSecurityDescriptorControl(descriptor.get(), &control,
+                                        &revision) != FALSE &&
+             (control & SE_DACL_PROTECTED) != 0,
+         "pipe DACL is not protected from inherited access");
+
+  BOOL present = FALSE;
+  BOOL defaulted = FALSE;
+  PACL dacl = nullptr;
+  expect(::GetSecurityDescriptorDacl(descriptor.get(), &present, &dacl,
+                                     &defaulted) != FALSE &&
+             present != FALSE && dacl != nullptr,
+         "pipe security descriptor omitted its DACL");
+  ACL_SIZE_INFORMATION information{};
+  expect(::GetAclInformation(dacl, &information, sizeof(information),
+                             AclSizeInformation) != FALSE &&
+             information.AceCount == 2,
+         "pipe DACL did not contain exactly two allow entries");
+
+  const std::vector<std::byte> token_buffer = current_token_user();
+  const auto* const token_user =
+      reinterpret_cast<const TOKEN_USER*>(token_buffer.data());
+  std::array<std::byte, SECURITY_MAX_SID_SIZE> system_sid{};
+  DWORD system_sid_size = static_cast<DWORD>(system_sid.size());
+  expect(::CreateWellKnownSid(WinLocalSystemSid, nullptr, system_sid.data(),
+                              &system_sid_size) != FALSE,
+         "cannot create LocalSystem SID for pipe DACL test");
+
+  bool found_system = false;
+  bool found_user = false;
+  for (DWORD index = 0; index < information.AceCount; ++index) {
+    void* raw_ace = nullptr;
+    expect(::GetAce(dacl, index, &raw_ace) != FALSE && raw_ace != nullptr,
+           "cannot inspect pipe DACL entry");
+    const auto* const ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw_ace);
+    expect(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
+               (ace->Mask & GENERIC_ALL) != 0,
+           "pipe DACL contains a non-full-access allow entry");
+    const PSID sid = const_cast<DWORD*>(&ace->SidStart);
+    if (::EqualSid(sid, system_sid.data()) != FALSE) {
+      expect(!found_system, "pipe DACL repeats the LocalSystem SID");
+      found_system = true;
+    } else if (::EqualSid(sid, token_user->User.Sid) != FALSE) {
+      expect(!found_user, "pipe DACL repeats the token user SID");
+      found_user = true;
+    } else {
+      fail("pipe DACL grants an unexpected principal");
+    }
+  }
+  expect(found_system && found_user,
+         "pipe DACL did not explicitly grant system and token user");
+}
+
 }  // namespace
 
 int main() {
@@ -199,6 +284,7 @@ int main() {
     test_nonce_mismatch_is_rejected();
     test_response_round_trip();
     test_format_error_mapping();
+    test_pipe_dacl_names_system_and_token_user_explicitly();
     std::cout << "creator_protocol_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

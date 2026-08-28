@@ -1,4 +1,5 @@
 #include "volume_creation/creator_helper_engine.h"
+#include "volume_creation/creator_pipe_security.h"
 #include "volume_creation/creator_protocol.h"
 
 #include <Windows.h>
@@ -113,16 +114,6 @@ struct Arguments final {
          suffix == std::wstring_view(values[4]);
 }
 
-[[nodiscard]] LocalMemory pipe_security_descriptor() {
-  PSECURITY_DESCRIPTOR descriptor = nullptr;
-  if (::ConvertStringSecurityDescriptorToSecurityDescriptorW(
-          L"D:P(A;;GA;;;SY)(A;;GA;;;OW)", SDDL_REVISION_1, &descriptor,
-          nullptr) == FALSE) {
-    return LocalMemory{};
-  }
-  return LocalMemory(static_cast<HLOCAL>(descriptor));
-}
-
 void send_failure(const HANDLE pipe, const CreationError error,
                   const DWORD native_error = 0) noexcept {
   try {
@@ -151,7 +142,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
 
   const std::wstring pipe_name =
       L"\\\\.\\pipe\\usb-vault-create-" + arguments.pipe_suffix;
-  LocalMemory descriptor = pipe_security_descriptor();
+  auto descriptor = usb_vault::volume_creation::detail::
+      current_user_pipe_security_descriptor();
   if (descriptor.get() == nullptr) return 3;
   SECURITY_ATTRIBUTES security{
       .nLength = sizeof(SECURITY_ATTRIBUTES),
