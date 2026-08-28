@@ -2,6 +2,41 @@ cmake_minimum_required(VERSION 3.25)
 
 project(usb_vault LANGUAGES C CXX)
 
+# CMake learns Ninja's MSVC /showIncludes marker while identifying the
+# compiler. On a Chinese Windows console configured with a legacy code page,
+# some CMake versions decode that marker as UTF-8 mojibake. Ninja then cannot
+# recognize any header dependency: header-only edits appear to need no work,
+# and stale objects can survive ABI changes. Fail during configuration instead
+# of allowing a build tree with silently invalid dependency tracking.
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
+  execute_process(
+    COMMAND cmd.exe /d /c chcp
+    RESULT_VARIABLE code_page_result
+    OUTPUT_VARIABLE code_page_output
+    ERROR_VARIABLE code_page_error
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  string(REGEX MATCH "[0-9]+" active_code_page "${code_page_output}")
+  if(NOT code_page_result EQUAL 0 OR NOT active_code_page STREQUAL "65001")
+    message(FATAL_ERROR
+      "MSVC/Ninja configuration requires Windows code page 65001 so CMake "
+      "and Ninja agree on the /showIncludes encoding (detected output: "
+      "'${code_page_output}${code_page_error}'). Use "
+      "tools/configure-preset.cmd <preset> for repository presets.")
+  endif()
+
+  foreach(language IN ITEMS C CXX)
+    set(prefix_variable "CMAKE_${language}_CL_SHOWINCLUDES_PREFIX")
+    if(NOT DEFINED ${prefix_variable} OR "${${prefix_variable}}" STREQUAL "")
+      message(FATAL_ERROR
+        "MSVC/Ninja did not report a /showIncludes dependency prefix for "
+        "${language}; refusing to generate a build with unverified header "
+        "dependency tracking")
+    endif()
+
+  endforeach()
+endif()
+
 if(NOT WIN32)
   message(FATAL_ERROR "usb-vault currently supports Windows only")
 endif()
