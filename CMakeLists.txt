@@ -135,6 +135,7 @@ add_library(usb_vault_core STATIC
   src/application/card_presence_controller.cpp
   src/application/mount_orchestrator.cpp
   src/card/card_error.cpp
+  src/card/card_record_journal_v1.cpp
   src/card/card_record_v1.cpp
   src/card/fixed_blob_card_store.cpp
   src/security/argon2id_runtime.cpp

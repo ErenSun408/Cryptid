@@ -24,6 +24,23 @@ usb_vault_configure_target(kdf_v1_tests)
 
 add_test(NAME kdf_v1_tests COMMAND kdf_v1_tests)
 
+add_executable(card_record_journal_v1_tests
+  card_record_journal_v1_tests.cpp
+)
+
+target_include_directories(card_record_journal_v1_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(card_record_journal_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(card_record_journal_v1_tests)
+
+add_test(NAME card_record_journal_v1_tests
+  COMMAND card_record_journal_v1_tests)
+
 add_executable(development_container_fixture_tests
   development_container_fixture_tests.cpp
 )
