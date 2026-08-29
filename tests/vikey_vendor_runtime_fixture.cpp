@@ -1,8 +1,10 @@
 #include <Windows.h>
+#include <bcrypt.h>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <span>
 
@@ -31,6 +33,7 @@ enum class SessionState {
   restored,
   restore_read_size_read,
   restore_verified,
+  journal_active,
   logged_off,
   complete,
 };
@@ -41,6 +44,73 @@ std::array<BYTE, 32> user_data = [] {
   result.fill(0x3c);
   return result;
 }();
+constexpr std::size_t kDescriptorSize = 152;
+constexpr std::size_t kDescriptorPrefixSize = 120;
+constexpr std::size_t kSlot0Offset = 304;
+constexpr std::size_t kSlot1Offset = 520;
+constexpr std::size_t kRecordSize = 216;
+constexpr std::size_t kJournalSize = 736;
+std::array<BYTE, kJournalSize> journal_data{};
+bool journal_initialized = false;
+
+void store_u32(const std::size_t offset,
+               const std::uint32_t value,
+               const std::span<BYTE> destination) noexcept {
+  for (std::size_t index = 0; index < 4; ++index) {
+    destination[offset + index] =
+        static_cast<BYTE>((value >> (index * 8U)) & 0xffU);
+  }
+}
+
+[[nodiscard]] bool sha256(const std::span<const BYTE> input,
+                          const std::span<BYTE, 32> output) noexcept {
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  if (!BCRYPT_SUCCESS(::BCryptOpenAlgorithmProvider(
+          &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0))) {
+    return false;
+  }
+  const NTSTATUS status = ::BCryptHash(
+      algorithm, nullptr, 0,
+      const_cast<PUCHAR>(input.data()), static_cast<ULONG>(input.size()),
+      output.data(), static_cast<ULONG>(output.size()));
+  static_cast<void>(::BCryptCloseAlgorithmProvider(algorithm, 0));
+  return BCRYPT_SUCCESS(status);
+}
+
+[[nodiscard]] bool initialize_journal() noexcept {
+  if (journal_initialized) return true;
+  journal_data.fill(0);
+  constexpr std::array<BYTE, 8> kMarkerMagic{
+      'U', 'V', 'B', 'L', 'N', 'K', '2', 0};
+  std::ranges::copy(kMarkerMagic,
+                    journal_data.begin() + kSlot0Offset);
+  std::fill_n(journal_data.begin() + kSlot1Offset, kRecordSize,
+              static_cast<BYTE>(0xa5));
+
+  std::array<BYTE, kDescriptorSize> descriptor{};
+  constexpr std::array<BYTE, 8> kDescriptorMagic{
+      'U', 'V', 'J', 'R', 'N', '2', 0, 0};
+  std::ranges::copy(kDescriptorMagic, descriptor.begin());
+  store_u32(8, 1, descriptor);
+  store_u32(12, static_cast<std::uint32_t>(descriptor.size()), descriptor);
+  std::fill_n(descriptor.begin() + 16, 16, static_cast<BYTE>(0x11));
+  std::fill_n(descriptor.begin() + 32, 16, static_cast<BYTE>(0x22));
+  store_u32(48, 0, descriptor);
+  store_u32(52, static_cast<std::uint32_t>(kRecordSize), descriptor);
+  if (!sha256(std::span(journal_data).subspan(kSlot0Offset, kRecordSize),
+              std::span<BYTE, 32>(descriptor.data() + 56, 32)) ||
+      !sha256(std::span(journal_data).subspan(kSlot1Offset, kRecordSize),
+              std::span<BYTE, 32>(descriptor.data() + 88, 32)) ||
+      !sha256(std::span(descriptor).first(kDescriptorPrefixSize),
+              std::span<BYTE, 32>(descriptor.data() + 120, 32))) {
+    return false;
+  }
+  std::ranges::copy(descriptor, journal_data.begin());
+  std::ranges::copy(descriptor,
+                    journal_data.begin() + kDescriptorSize);
+  journal_initialized = true;
+  return true;
+}
 
 [[nodiscard]] bool fixed_argument_matches(const char* const value,
                                           const char expected,
@@ -135,7 +205,8 @@ VikeyLogoff(const WORD index) {
        session_state != SessionState::restore_verified &&
        session_state != SessionState::initial_data_read &&
        session_state != SessionState::standalone_written &&
-       session_state != SessionState::standalone_write_failed) ||
+       session_state != SessionState::standalone_write_failed &&
+       session_state != SessionState::journal_active) ||
       index != 0) {
     return kInvalidValue;
   }
@@ -174,6 +245,8 @@ VikeyGetUserDataSize(const WORD index, DWORD* const bytes) {
     case SessionState::restored:
       session_state = SessionState::restore_read_size_read;
       break;
+    case SessionState::journal_active:
+      break;
     default:
       return kInvalidValue;
   }
@@ -184,9 +257,25 @@ VikeyGetUserDataSize(const WORD index, DWORD* const bytes) {
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyReadData(const WORD index, const DWORD address, const DWORD length,
               BYTE* const buffer) {
-  if (index != 0 || address != 0 ||
-      length != static_cast<DWORD>(user_data.size()) ||
-      buffer == nullptr) {
+  if (index != 0 || buffer == nullptr) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  if (session_state == SessionState::initial_data_size_read && address == 0 &&
+      length == kDescriptorSize) {
+    if (!initialize_journal()) return kInvalidValue;
+    session_state = SessionState::journal_active;
+  }
+  if (session_state == SessionState::journal_active) {
+    const std::size_t offset = address;
+    const std::size_t bytes = length;
+    if (offset > journal_data.size() ||
+        bytes > journal_data.size() - offset) {
+      return ERROR_INVALID_PARAMETER;
+    }
+    std::ranges::copy(std::span(journal_data).subspan(offset, bytes), buffer);
+    return ERROR_SUCCESS;
+  }
+  if (address != 0 || length != static_cast<DWORD>(user_data.size())) {
     return ERROR_INVALID_PARAMETER;
   }
   switch (session_state) {
@@ -217,9 +306,20 @@ VikeyReadData(const WORD index, const DWORD address, const DWORD length,
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyWriteData(const WORD index, const DWORD address, const DWORD length,
                BYTE* const buffer) {
-  if (index != 0 || address != 0 ||
-      length != static_cast<DWORD>(user_data.size()) ||
-      buffer == nullptr) {
+  if (index != 0 || buffer == nullptr) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  if (session_state == SessionState::journal_active) {
+    const std::size_t offset = address;
+    const std::size_t bytes = length;
+    if (offset > journal_data.size() ||
+        bytes > journal_data.size() - offset) {
+      return ERROR_INVALID_PARAMETER;
+    }
+    std::ranges::copy_n(buffer, bytes, journal_data.begin() + offset);
+    return ERROR_SUCCESS;
+  }
+  if (address != 0 || length != static_cast<DWORD>(user_data.size())) {
     return ERROR_INVALID_PARAMETER;
   }
   if (session_state == SessionState::test_write_size_read) {

@@ -370,6 +370,7 @@ set_target_properties(vikey_vendor_runtime_fixture PROPERTIES
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 usb_vault_configure_target(vikey_vendor_runtime_fixture)
+target_link_libraries(vikey_vendor_runtime_fixture PRIVATE Bcrypt)
 
 add_executable(vikey_helper_process_tests
   vikey_helper_process_tests.cpp

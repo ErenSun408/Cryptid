@@ -137,6 +137,7 @@ add_library(usb_vault_core STATIC
   src/card/card_error.cpp
   src/card/card_record_journal_v1.cpp
   src/card/card_record_v1.cpp
+  src/card/card_record_v1_inspection.cpp
   src/card/fixed_blob_card_store.cpp
   src/security/argon2id_runtime.cpp
   src/security/kdf_v1.cpp
@@ -338,8 +339,11 @@ add_executable(usb_vault_vikey_helper WIN32
   src/card/vikey/vikey_hid_probe.cpp
   src/card/vikey/vikey_artifact.cpp
   src/card/vikey/vikey_blob_round_trip.cpp
+  src/card/vikey/vikey_card_record_io.cpp
   src/card/vikey/vikey_module.cpp
   src/card/vikey/vikey_session.cpp
+  src/card/card_record_journal_v1.cpp
+  src/card/card_record_v1_inspection.cpp
   src/card/card_error.cpp
   src/security/secure_buffer.cpp
 )

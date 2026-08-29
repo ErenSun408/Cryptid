@@ -4,6 +4,7 @@
 #include "vikey_network_probe.h"
 
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/card/card_record_v1.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -33,6 +34,10 @@ using usb_vault::card::vikey::
     probe_vikey_development_session_with_network_access;
 using usb_vault::card::vikey::
     probe_vikey_development_vendor_runtime_with_network_access;
+using usb_vault::card::vikey::
+    read_vikey_development_card_record_with_network_access;
+using usb_vault::card::vikey::
+    write_vikey_development_card_record_with_network_access;
 using usb_vault::card::vikey::probe_vikey_helper;
 using usb_vault::card::vikey::probe_vikey_vendor_runtime;
 using usb_vault::card::vikey::IVikeyCredentialProvider;
@@ -494,6 +499,79 @@ void test_development_blob_round_trip_staging(
          "short development test blob created a staging directory");
 }
 
+void store_u32(SecureBuffer& destination, const std::size_t offset,
+               const std::uint32_t value) {
+  for (std::size_t index = 0; index < 4; ++index) {
+    destination.bytes()[offset + index] =
+        static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+  }
+}
+
+[[nodiscard]] SecureBuffer initialized_record_fixture() {
+  SecureBuffer record(usb_vault::card::kCardRecordV1Size);
+  std::ranges::fill(record.bytes(), std::byte{0x7b});
+  constexpr std::array<std::byte, 8> kMagic{
+      std::byte{'U'}, std::byte{'V'}, std::byte{'C'}, std::byte{'R'},
+      std::byte{'D'}, std::byte{'2'}, std::byte{},    std::byte{}};
+  std::ranges::copy(kMagic, record.bytes().begin());
+  store_u32(record, 8, usb_vault::card::kCardRecordV1Version);
+  store_u32(record, 12,
+            static_cast<std::uint32_t>(usb_vault::card::kCardRecordV1Size));
+  store_u32(record, 48, 512U * 1024U);
+  store_u32(record, 52, 2);
+  store_u32(record, 56, 1);
+  store_u32(record, 60, 0x13);
+  return record;
+}
+
+void test_development_card_record_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
+  const Sha256Digest helper_digest = file_digest(helper);
+  const Sha256Digest vendor_digest = file_digest(vendor);
+
+  SecureBuffer observed =
+      read_vikey_development_card_record_with_network_access(
+          helper, helper_digest, vendor.parent_path(), vendor_digest,
+          user_sn, api_key, user_pin, 5s);
+  expect(observed.size() == usb_vault::card::kCardRecordV1Size,
+         "development card-record read returned the wrong size");
+  expect(usb_vault::card::inspect_card_record(observed.bytes()) ==
+             usb_vault::card::CardRecordState::provisioned_uninitialized,
+         "development card-record read returned the wrong journal record");
+
+  SecureBuffer record = initialized_record_fixture();
+  const std::vector<std::byte> original(record.bytes().begin(),
+                                        record.bytes().end());
+  write_vikey_development_card_record_with_network_access(
+      helper, helper_digest, vendor.parent_path(), vendor_digest, user_sn,
+      api_key, user_pin, record, 5s);
+  expect(std::ranges::equal(record.bytes(), original),
+         "development card-record write changed caller data");
+
+  SecureBuffer short_record(usb_vault::card::kCardRecordV1Size - 1);
+  try {
+    write_vikey_development_card_record_with_network_access(
+        helper, helper_digest, vendor.parent_path(), vendor_digest, user_sn,
+        api_key, user_pin, short_record, 5s);
+    fail("short development card record was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "short development card record returned the wrong error");
+  }
+  expect(development_helper_directory_count() == directories_before,
+         "development card-record operations left staging residue");
+}
+
 void test_formal_blob_backend_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -761,6 +839,9 @@ int wmain(const int argc, wchar_t** const argv) {
     });
     run_test("development blob round trip", [&] {
       test_development_blob_round_trip_staging(helper, vendor);
+    });
+    run_test("development card record", [&] {
+      test_development_card_record_staging(helper, vendor);
     });
     run_test("formal blob backend", [&] {
       test_formal_blob_backend_staging(helper, vendor);
