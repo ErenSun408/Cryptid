@@ -49,6 +49,7 @@ using usb_vault::card::vikey::VikeyCredentialSet;
 using usb_vault::card::vikey::VikeyHelperBlobBackend;
 using usb_vault::card::vikey::VikeyHelperBackendConfig;
 using usb_vault::card::vikey::VikeyHelperCardEnrollment;
+using usb_vault::card::vikey::VikeyHelperCardInitializationTarget;
 using usb_vault::card::vikey::VikeyHelperCardRecordBackend;
 using usb_vault::security::SecureBuffer;
 
@@ -725,9 +726,16 @@ void test_formal_card_enrollment_staging(
          "formal enrollment returned the wrong insertion context");
   expect(provider.loads == 1,
          "formal enrollment probe did not load one credential set");
-  enrollment.bootstrap(context);
+  VikeyHelperCardInitializationTarget target(config, provider, context);
+  target.ensure_provisioning_record();
   expect(provider.loads == 2,
          "formal enrollment bootstrap reused probe credentials");
+  target.ensure_provisioning_record();
+  expect(provider.loads == 2,
+         "formal initialization target repeated verified bootstrap");
+  expect(!target.card_store().capabilities().supports(
+             usb_vault::card::CardCapability::multiple_pins),
+         "formal initialization target exposed unexpected capabilities");
 
   auto zero_identity = context;
   zero_identity.hardware_id = 0;
@@ -755,6 +763,33 @@ void test_formal_card_enrollment_staging(
   }
   expect(provider.loads == 2,
          "formal enrollment loaded credentials for foreign media");
+
+  auto stale_context = context;
+  stale_context.media_state =
+      usb_vault::card::vikey::VikeyCardMediaState::
+          provisioning_interrupted;
+  VikeyHelperCardInitializationTarget stale_target(
+      config, provider, stale_context);
+  try {
+    stale_target.ensure_provisioning_record();
+    fail("formal initialization target accepted a changed media state");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::device_failure),
+           "formal initialization target returned the wrong state error");
+  }
+  expect(provider.loads == 3,
+         "formal initialization target did not make one bootstrap attempt");
+  try {
+    stale_target.ensure_provisioning_record();
+    fail("formal initialization target retried an uncertain failure");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_operation),
+           "stale initialization target returned the wrong retry error");
+  }
+  expect(provider.loads == 3,
+         "stale initialization target reloaded credentials");
 
   CountingCredentialProvider failing_provider;
   failing_provider.fail_load = true;

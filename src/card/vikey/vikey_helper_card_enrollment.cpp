@@ -26,6 +26,17 @@ namespace {
          state == VikeyCardMediaState::provisioning_interrupted;
 }
 
+[[nodiscard]] VikeyCardMediaProbe validate_initialization_context(
+    const VikeyCardMediaProbe context) {
+  if (context.hardware_id == 0 ||
+      !eligible_bootstrap_state(context.media_state)) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey initialization target requires eligible insertion context");
+  }
+  return context;
+}
+
 }  // namespace
 
 VikeyHelperCardEnrollment::VikeyHelperCardEnrollment(
@@ -67,6 +78,32 @@ void VikeyHelperCardEnrollment::bootstrap(
   } catch (...) {
     rethrow_enrollment_failure();
   }
+}
+
+VikeyHelperCardInitializationTarget::VikeyHelperCardInitializationTarget(
+    VikeyHelperBackendConfig config,
+    IVikeyCredentialProvider& credential_provider,
+    const VikeyCardMediaProbe context)
+    : context_(validate_initialization_context(context)),
+      enrollment_(config, credential_provider),
+      backend_(std::move(config), credential_provider,
+               context_.hardware_id),
+      store_(backend_) {}
+
+void VikeyHelperCardInitializationTarget::ensure_provisioning_record() {
+  if (provisioning_state_ == ProvisioningState::verified) return;
+  if (provisioning_state_ == ProvisioningState::failed) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_operation),
+        "ViKey initialization target requires a fresh insertion probe");
+  }
+  provisioning_state_ = ProvisioningState::failed;
+  enrollment_.bootstrap(context_);
+  provisioning_state_ = ProvisioningState::verified;
+}
+
+ICardStore& VikeyHelperCardInitializationTarget::card_store() noexcept {
+  return store_;
 }
 
 }  // namespace usb_vault::card::vikey

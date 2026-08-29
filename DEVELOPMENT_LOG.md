@@ -3439,3 +3439,47 @@
 - 下一切片 P2.11b 才在厂商无关产品编排层组合“适配器探测 → 用户提交已确认且强度合格的日常
   密码 → 适配器 bootstrap → 用同一硬件 ID 构造正式 `ICardStore` → 既有初始化服务”，并定义
   中断后重新探测/恢复的状态机。本切片全部验证通过，用户已批准提交；本地提交将在本记录后创建。
+- 提交：`7dbab36 [P2.11]add formal ViKey enrollment adapter`。
+
+### 小切片 11b：厂商无关新卡初始化事务
+
+#### 需求审计与实现
+
+- 审计 P2.6 `CardRecordService`、P2.11a ViKey 私有探测/bootstrap 适配器、正式 216 字节 store、
+  密码入口和强度需求后，将本切片锁定为可独立审查的产品写事务：它只接收已由后续 UI 提交层完成
+  二次确认和强度策略验收的单个日常密码，不在没有明确产品口径时擅自发明强度算法，也不提前改
+  登录、插拔路由或首次建卷向导。
+- 新增厂商无关 `ICardInitializationTarget` 和 `CardInitializationService`。目标必须把“确保精确
+  provisioning marker”和随后返回的正式 `ICardStore` 绑定到同一物理插卡上下文；服务固定先
+  调用前者，成功后才把密码移交既有 `CardRecordService::initialize_and_authenticate`，从而复用
+  精确 marker 前置检查、KDF 后二次状态检查、可恢复写、逐字节回读和成功直接返回根秘密 S。
+- 新增 `VikeyHelperCardInitializationTarget`，只接受非零 ID 且介质状态为 `blank` 或
+  `provisioning_interrupted` 的上下文。它用同一 ID 同时构造 P2.11a bootstrap 适配器和正式
+  216 字节 backend/store；bootstrap 每次使用新鲜锁页厂商凭据，后续每次 store 操作仍重新认证
+  并在 helper 内比对原 ID，不把 ViKey 类型暴露给通用初始化服务。
+- 目标仅在 v9 bootstrap 已验证成功后于进程内缓存“marker 已确保”，以便随后 Card Record 写失败
+  时同一事务对象不重复写 marker。第一次 bootstrap 尝试前即把上下文置为一次性失败态；任何异常
+  后再次调用都会在加载凭据或启动 helper 前返回 `invalid_operation`，必须重新执行插卡探测。该
+  易失状态不落盘、不跨进程，也不替代卡上日志恢复证据。
+
+#### 测试、安全复核与剩余边界
+
+- 新增 `card_initialization_service_tests`：覆盖 bootstrap 必须先于任何 store/KDF 工作、成功路径
+  固定执行 Card Record 的三次读取/一次写入并得到 initialized v1 与 32 字节 S、bootstrap 失败
+  不触达 store，以及伪 bootstrap 发布非精确 marker 时在首次读取后失败且不写卡。
+- helper 进程测试将正式初始化适配链改为新 ViKey 目标，覆盖探测和 bootstrap 分别加载新凭据、
+  已验证成功的重复 `ensure` 不重启 helper、正式 store 能力边界，以及精确状态错配第一次失败后
+  同一目标被永久作废、第二次调用不重新加载凭据。受限 Codex 父令牌下该进程测试仍按设计跳过，
+  用户随后在普通、非管理员桌面 PowerShell 补跑最新 Debug 产物并得到
+  `vikey_helper_process_tests passed`；测试只使用伪 `ViKey.dll`，未访问实体卡。
+- 最终代码在 Debug、MSVC `/analyze`、ASan 三套全量构建和 CTest 中均为 **34/34**：32 项实际
+  通过、2 项按受限父令牌约束跳过。`/analyze` 无项目诊断，ASan 未报告内存错误；新增通用事务
+  测试在三套配置中均实际执行通过。
+- 安全复核确认通用服务不认识厂商 ID/状态、卷形态、档位、模式、诱饵密码或 UI 状态；日常密码
+  在进入服务后由锁页 `SecureBuffer` 独占，bootstrap 异常时立即清零，成功时移动交给已审计的
+  Card Record 服务消费。marker 未验证前不运行 512 MiB KDF、不生成 S、不触达 store；成功后
+  store 仍绑定原 ID。任何不确定 bootstrap 结果都不自动重试或改绑，只能重新探测卡上事实。
+- 剩余边界是产品入口路由与密码提交策略：下一切片应定义具体、可测试且不依赖本地历史的日常
+  密码确认/强度合约，再把未初始化页接到本事务；产品 marker 已存在的中断恢复路径应直接通过
+  正式 store 的 `CardRecordService` 继续，不再次执行裸介质 bootstrap。首次建卷向导继续暂缓。
+  本切片全部验证通过，用户已批准提交；本地提交将在本记录后创建。
