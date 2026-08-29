@@ -2945,3 +2945,35 @@
   仍失败关闭而不回滚；日志与 ViKey 适配层不持久化密码种类、命中槽、档位、模式或更新计数。
   SHA-256 仍只用于撕裂/偶发损坏检测，不声称抵抗可任意改写并重算摘要的攻击者。实体卡迁移和
   受控重新配卡仍未授权、未执行。
+- 提交：`e89ca26 [P2.2]bind inactive journal slot integrity`、
+  `ceff863 [P2.3]add ViKey card record random access`。
+
+### 小切片 4a：helper IPC v6 固定 216 字节卡记录消息
+
+#### 计划与边界审计
+
+- 审计 `ICardStore`、`VikeyCardStore`、helper backend/client/main、IPC v5 和 P1 开发工具后确认，
+  现有 `development_blob_round_trip/read/write` 均明确绑定 32 字节，并承担实体开发卡原值恢复证据。
+  直接把它们改成 216 字节会破坏 P1 探针；此时直接把 `VikeyCardStore` 切为 216 字节，又会让尚未
+  迁移的 P1 `ApplicationSession` 把 Card Record 错当成 32 字节 KDF 输入。
+- 因此本切片只建立可独立审核的 IPC 消息边界：协议升为 v6，保留全部旧操作和 32 字节尺寸，新增
+  `card_record_read` 与 `card_record_write`。暂不在 helper main 分派，不新增客户端启动 API，也不
+  切换 backend/`ICardStore`；未知或尚未执行的新操作仍不会触卡。
+
+#### 实现与当前验证
+
+- `card_record_read` 请求固定为既有开发会话材料，成功响应固定为 216 字节；
+  `card_record_write` 请求固定为会话材料加 216 字节记录，成功响应无载荷。请求头仍固定 32 字节，
+  响应头仍固定 40 字节，凭据和记录继续由 `SecureBuffer` 承载。
+- 新增独立 `CardRecordWriteRequest` 和读写序列化 API；`valid_request/valid_response` 按操作精确
+  选择 32 或 216 字节，不能让旧 blob 读响应冒充卡记录响应，也拒绝 215 字节写入。
+- Debug 针对性构建、helper 链接和 `vikey_helper_protocol_tests` 已通过。尚待全量 Debug、MSVC
+  `/analyze`、ASan、CTest 和最终安全复核；未启动 helper、未加载厂商 DLL、未读取凭据或写卡。
+- 当前提交状态：未提交，等待全量验证和用户审阅。
+- 最终 Debug、MSVC `/analyze`、ASan 均完成全量构建，CTest **31/31**：29 项通过、2 项按受限
+  父令牌约束跳过；静态分析无项目诊断，ASan 无内存错误。`git diff --check` 通过（仅既有
+  LF→CRLF 提示）。
+- 安全复核确认 helper main 与客户端尚未把新操作列入会话分派：helper 收到合法 v6 新操作时只会
+  通过既有默认分支返回 `invalid_operation`，不会读取凭据体、加载厂商 DLL 或触卡；客户端也没有
+  对外启动 API。旧开发操作仍严格要求 32 字节，新卡记录操作严格要求 216 字节，成功读响应尺寸
+  不能互相冒充，失败响应仍禁止携带载荷或安全属性。

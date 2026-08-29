@@ -19,6 +19,7 @@ using usb_vault::card::vikey::kVikeyApiKeyBytes;
 using usb_vault::card::vikey::kVikeyBlobBytes;
 using usb_vault::card::vikey::kVikeyUserPinBytes;
 using usb_vault::card::vikey::kVikeyUserSnBytes;
+using usb_vault::card::kCardRecordV1Size;
 using namespace usb_vault::card::vikey::helper;
 
 class Handle final {
@@ -106,6 +107,12 @@ void test_request_validation() {
   request.payload_bytes = kDevelopmentBlobWritePayloadBytes;
   expect(valid_request(request),
          "development blob write request was rejected");
+  request.operation = Operation::card_record_read;
+  request.payload_bytes = kCardRecordReadPayloadBytes;
+  expect(valid_request(request), "card record read request was rejected");
+  request.operation = Operation::card_record_write;
+  request.payload_bytes = kCardRecordWritePayloadBytes;
+  expect(valid_request(request), "card record write request was rejected");
   request.version = static_cast<std::uint16_t>(kVersion + 1);
   expect(!valid_request(request), "unknown request version was accepted");
   request = Request{};
@@ -297,6 +304,55 @@ void test_development_blob_read_write_requests() {
                       "blob write changed caller data");
 }
 
+void test_card_record_read_write_requests() {
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto record = fixed_secret(kCardRecordV1Size, std::byte{0x6d});
+  Sha256Digest digest{};
+  digest[5] = std::byte{0x91};
+
+  const Pipe read_pipe = make_pipe();
+  Request read_header{};
+  read_header.operation = Operation::card_record_read;
+  read_header.payload_bytes = kCardRecordReadPayloadBytes;
+  write_card_record_read_request(read_pipe.write.get(), read_header, digest,
+                                 user_sn, api_key, user_pin);
+  const Request received_read_header = read_request(read_pipe.read.get());
+  DevelopmentSessionRequest read_body = read_card_record_read_request(
+      read_pipe.read.get(), received_read_header);
+  expect(read_body.vendor_digest == digest,
+         "card record read digest did not round-trip");
+  expect_fixed_secret(read_body.user_sn, std::byte{'A'},
+                      "card record read UserSN did not round-trip");
+
+  const Pipe write_pipe = make_pipe();
+  Request write_header{};
+  write_header.operation = Operation::card_record_write;
+  write_header.payload_bytes = kCardRecordWritePayloadBytes;
+  write_card_record_write_request(write_pipe.write.get(), write_header,
+                                  digest, user_sn, api_key, user_pin, record);
+  const Request received_write_header = read_request(write_pipe.read.get());
+  CardRecordWriteRequest write_body = read_card_record_write_request(
+      write_pipe.read.get(), received_write_header);
+  expect(write_body.vendor_digest == digest,
+         "card record write digest did not round-trip");
+  expect_fixed_secret(write_body.record, std::byte{0x6d},
+                      "card record write data did not round-trip");
+  expect_fixed_secret(record, std::byte{0x6d},
+                      "card record write changed caller data");
+
+  const auto short_record =
+      fixed_secret(kCardRecordV1Size - 1, std::byte{0x6d});
+  expect_protocol_error(
+      [&] {
+        write_card_record_write_request(
+            write_pipe.write.get(), write_header, digest, user_sn, api_key,
+            user_pin, short_record);
+      },
+      "short card record was accepted");
+}
+
 void test_response_round_trip() {
   const Pipe pipe = make_pipe();
   Response sent{};
@@ -328,6 +384,25 @@ void test_development_blob_response_round_trip() {
                       "blob response changed caller data");
 }
 
+void test_card_record_response_round_trip() {
+  const Pipe pipe = make_pipe();
+  Response sent{};
+  sent.security_properties = kDevelopmentCompatibilitySecurityProperties;
+  sent.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1Size);
+  sent.nonce[8] = std::byte{0x42};
+  const auto record = fixed_secret(kCardRecordV1Size, std::byte{0x7e});
+
+  write_card_record_response(pipe.write.get(), sent, record);
+  const Response received = read_response(
+      pipe.read.get(), sent.nonce, Operation::card_record_read);
+  auto received_record =
+      read_card_record_response_payload(pipe.read.get(), received);
+  expect_fixed_secret(received_record, std::byte{0x7e},
+                      "card record response did not round-trip");
+  expect_fixed_secret(record, std::byte{0x7e},
+                      "card record response changed caller data");
+}
+
 void test_response_validation() {
   Response response{};
   response.security_properties = kRequiredSecurityProperties;
@@ -353,6 +428,11 @@ void test_response_validation() {
   response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
   expect(valid_response(response, Operation::development_blob_read),
          "valid blob read response was rejected");
+  expect(!valid_response(response, Operation::card_record_read),
+         "card record read accepted a 32-byte payload");
+  response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1Size);
+  expect(valid_response(response, Operation::card_record_read),
+         "valid card record response was rejected");
   const Pipe omitted_payload_pipe = make_pipe();
   expect_protocol_error(
       [&] {
@@ -429,8 +509,10 @@ int main() {
     test_development_blob_request_round_trip();
     test_development_blob_request_rejects_wrong_sizes();
     test_development_blob_read_write_requests();
+    test_card_record_read_write_requests();
     test_response_round_trip();
     test_development_blob_response_round_trip();
+    test_card_record_response_round_trip();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
     std::cout << "vikey_helper_protocol_tests passed\n";

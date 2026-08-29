@@ -2,6 +2,7 @@
 
 #include "card/verified_local_artifact.h"
 #include "card/vikey/vikey_session.h"
+#include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <Windows.h>
@@ -13,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 5;
+constexpr std::uint16_t kVersion = 6;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
     static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
@@ -26,6 +27,11 @@ constexpr std::uint32_t kDevelopmentBlobReadPayloadBytes =
 constexpr std::uint32_t kDevelopmentBlobWritePayloadBytes =
     kDevelopmentSessionPayloadBytes +
     static_cast<std::uint32_t>(kVikeyBlobBytes);
+constexpr std::uint32_t kCardRecordReadPayloadBytes =
+    kDevelopmentSessionPayloadBytes;
+constexpr std::uint32_t kCardRecordWritePayloadBytes =
+    kDevelopmentSessionPayloadBytes +
+    static_cast<std::uint32_t>(kCardRecordV1Size);
 
 enum class Operation : std::uint32_t {
   probe = 1,
@@ -35,6 +41,8 @@ enum class Operation : std::uint32_t {
   development_blob_round_trip_probe = 5,
   development_blob_read = 6,
   development_blob_write = 7,
+  card_record_read = 8,
+  card_record_write = 9,
 };
 
 enum class SecurityProperty : std::uint32_t {
@@ -155,6 +163,22 @@ struct DevelopmentBlobWriteRequest final {
   security::SecureBuffer blob;
 };
 
+struct CardRecordWriteRequest final {
+  CardRecordWriteRequest();
+
+  CardRecordWriteRequest(const CardRecordWriteRequest&) = delete;
+  CardRecordWriteRequest& operator=(const CardRecordWriteRequest&) = delete;
+  CardRecordWriteRequest(CardRecordWriteRequest&&) noexcept = default;
+  CardRecordWriteRequest& operator=(CardRecordWriteRequest&&) noexcept =
+      default;
+
+  Sha256Digest vendor_digest{};
+  security::SecureBuffer user_sn;
+  security::SecureBuffer api_key;
+  security::SecureBuffer user_pin;
+  security::SecureBuffer record;
+};
+
 struct DevelopmentSessionObservation final {
   std::uint8_t attempts_before{};
   std::uint8_t maximum_before{};
@@ -245,15 +269,34 @@ void write_development_blob_write_request(
     const security::SecureBuffer& blob);
 [[nodiscard]] DevelopmentBlobWriteRequest
 read_development_blob_write_request(HANDLE pipe, const Request& request);
+void write_card_record_read_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] DevelopmentSessionRequest read_card_record_read_request(
+    HANDLE pipe, const Request& request);
+void write_card_record_write_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& record);
+[[nodiscard]] CardRecordWriteRequest read_card_record_write_request(
+    HANDLE pipe, const Request& request);
 void write_response(HANDLE pipe, const Response& response,
                     Operation expected_operation);
 void write_development_blob_response(
     HANDLE pipe, const Response& response,
     const security::SecureBuffer& blob);
+void write_card_record_response(HANDLE pipe, const Response& response,
+                                const security::SecureBuffer& record);
 [[nodiscard]] Response read_response(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce,
     Operation expected_operation);
 [[nodiscard]] security::SecureBuffer read_development_blob_response_payload(
+    HANDLE pipe, const Response& response);
+[[nodiscard]] security::SecureBuffer read_card_record_response_payload(
     HANDLE pipe, const Response& response);
 
 }  // namespace usb_vault::card::vikey::helper
