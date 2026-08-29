@@ -6,6 +6,21 @@ namespace usb_vault::card::vikey {
 
 class VikeySession;
 
+// ViKey-private, read-only classification of the complete user-data area.
+// A 32-byte prefix cannot be proven to be a P1 blob because P1 had no magic;
+// that state therefore remains blocked together with same-shaped foreign data.
+enum class VikeyCardMediaState {
+  blank,
+  legacy_p1_or_foreign_prefix,
+  foreign_data,
+  provisioning_interrupted,
+  conflicting_evidence,
+  product_evidence,
+};
+
+[[nodiscard]] VikeyCardMediaState inspect_vikey_card_media(
+    VikeySession& session);
+
 [[nodiscard]] security::SecureBuffer read_vikey_card_record(
     VikeySession& session);
 
