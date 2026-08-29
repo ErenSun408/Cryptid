@@ -250,6 +250,14 @@ void test_staging_failures_preserve_active_commit() {
   {
     FakeStorage storage;
     provision(storage, marker);
+    const std::size_t active_slot =
+        same_record_at(storage.data_, kCardRecordJournalV1Slot0Offset, marker)
+            ? kCardRecordJournalV1Slot0Offset
+            : kCardRecordJournalV1Slot1Offset;
+    const std::size_t inactive_slot =
+        active_slot == kCardRecordJournalV1Slot0Offset
+            ? kCardRecordJournalV1Slot1Offset
+            : kCardRecordJournalV1Slot0Offset;
     storage.write_fault_ = {.call = 0, .bytes_before_failure = 37};
     expect_card_error(
         [&] { commit_card_record_journal_v1(storage, replacement.bytes()); },
@@ -258,6 +266,15 @@ void test_staging_failures_preserve_active_commit() {
     SecureBuffer observed = read_card_record_journal_v1(storage);
     expect(same(observed, marker),
            "partial staging write changed the active commit");
+    expect(storage.write_offsets_ ==
+               std::vector<std::size_t>{inactive_slot, inactive_slot,
+                                        kCardRecordJournalV1Descriptor1Offset,
+                                        kCardRecordJournalV1Descriptor0Offset},
+           "read recovery did not scrub the partially staged record");
+    expect(same_range(storage.data_, kCardRecordJournalV1Descriptor0Offset,
+                      kCardRecordJournalV1Descriptor1Offset,
+                      kCardRecordJournalV1DescriptorSize),
+           "staging recovery did not mirror the refreshed filler digest");
   }
 
   {
@@ -350,6 +367,37 @@ void test_descriptor_failures_recover_old_or_complete_new() {
   }
 }
 
+void test_staging_cleanup_recovery_can_resume() {
+  FakeStorage storage;
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  SecureBuffer replacement = framed_record(std::byte{0x79});
+  provision(storage, marker);
+
+  storage.write_fault_ = {.call = 0, .bytes_before_failure = 37};
+  expect_card_error(
+      [&] { commit_card_record_journal_v1(storage, replacement.bytes()); },
+      CardError::communication_failed,
+      "partial staging setup returned the wrong error");
+
+  // Recovery writes filler, then the other descriptor, then the selected
+  // descriptor. Tear that final mirror so the next insertion sees two
+  // descriptors for one commit with different inactive-slot digests.
+  storage.write_fault_ = {.call = 3, .bytes_before_failure = 17};
+  expect_card_error(
+      [&] { static_cast<void>(read_card_record_journal_v1(storage)); },
+      CardError::communication_failed,
+      "interrupted staging cleanup returned the wrong error");
+
+  storage.write_fault_ = {};
+  SecureBuffer observed = read_card_record_journal_v1(storage);
+  expect(same(observed, marker),
+         "resumed staging cleanup did not preserve the old commit");
+  expect(same_range(storage.data_, kCardRecordJournalV1Descriptor0Offset,
+                    kCardRecordJournalV1Descriptor1Offset,
+                    kCardRecordJournalV1DescriptorSize),
+         "resumed staging cleanup did not restore mirrored descriptors");
+}
+
 void test_corruption_fails_closed_without_credential_rollback() {
   FakeStorage storage;
   SecureBuffer marker = provision_uninitialized_card_record_v1();
@@ -429,6 +477,7 @@ int main() {
     test_provision_and_alternating_commits();
     test_staging_failures_preserve_active_commit();
     test_descriptor_failures_recover_old_or_complete_new();
+    test_staging_cleanup_recovery_can_resume();
     test_corruption_fails_closed_without_credential_rollback();
     test_invalid_inputs_do_not_touch_storage();
     std::cout << "card record journal v1 tests passed\n";

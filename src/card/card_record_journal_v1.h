@@ -7,12 +7,12 @@
 
 namespace usb_vault::card {
 
-inline constexpr std::size_t kCardRecordJournalV1DescriptorSize = 120;
+inline constexpr std::size_t kCardRecordJournalV1DescriptorSize = 152;
 inline constexpr std::size_t kCardRecordJournalV1Descriptor0Offset = 0;
-inline constexpr std::size_t kCardRecordJournalV1Descriptor1Offset = 120;
-inline constexpr std::size_t kCardRecordJournalV1Slot0Offset = 240;
-inline constexpr std::size_t kCardRecordJournalV1Slot1Offset = 456;
-inline constexpr std::size_t kCardRecordJournalV1StorageSize = 672;
+inline constexpr std::size_t kCardRecordJournalV1Descriptor1Offset = 152;
+inline constexpr std::size_t kCardRecordJournalV1Slot0Offset = 304;
+inline constexpr std::size_t kCardRecordJournalV1Slot1Offset = 520;
+inline constexpr std::size_t kCardRecordJournalV1StorageSize = 736;
 
 static_assert(kCardRecordJournalV1Descriptor1Offset ==
               kCardRecordJournalV1Descriptor0Offset +

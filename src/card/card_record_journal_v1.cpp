@@ -22,7 +22,7 @@ constexpr std::array<std::byte, 8> kDescriptorMagic{
     std::byte{'U'}, std::byte{'V'}, std::byte{'J'}, std::byte{'R'},
     std::byte{'N'}, std::byte{'2'}, std::byte{},    std::byte{}};
 constexpr std::uint32_t kDescriptorVersion = 1;
-constexpr std::size_t kDescriptorPrefixSize = 88;
+constexpr std::size_t kDescriptorPrefixSize = 120;
 constexpr std::size_t kDigestSize = 32;
 constexpr std::size_t kCommitIdSize = 16;
 constexpr std::size_t kDescriptorCommitIdOffset = 16;
@@ -30,7 +30,8 @@ constexpr std::size_t kDescriptorPreviousIdOffset = 32;
 constexpr std::size_t kDescriptorSlotOffset = 48;
 constexpr std::size_t kDescriptorRecordLengthOffset = 52;
 constexpr std::size_t kDescriptorRecordDigestOffset = 56;
-constexpr std::size_t kDescriptorDigestOffset = 88;
+constexpr std::size_t kDescriptorInactiveDigestOffset = 88;
+constexpr std::size_t kDescriptorDigestOffset = 120;
 
 using Digest = std::array<std::byte, kDigestSize>;
 using CommitId = std::array<std::byte, kCommitIdSize>;
@@ -69,6 +70,7 @@ using AlgorithmHandle =
 struct ParsedDescriptor final {
   bool valid{};
   bool record_matches{};
+  bool inactive_matches{};
   CommitId commit_id{};
   CommitId previous_id{};
   std::uint32_t slot{};
@@ -76,7 +78,6 @@ struct ParsedDescriptor final {
 
 struct LoadedJournal final {
   security::SecureBuffer record;
-  DescriptorBytes selected_descriptor{};
   CommitId commit_id{};
   CommitId previous_id{};
   std::uint32_t slot{};
@@ -208,7 +209,8 @@ descriptor_offset(const std::uint32_t descriptor) noexcept {
 [[nodiscard]] DescriptorBytes
 make_descriptor(const CommitId &commit_id, const CommitId &previous_id,
                 const std::uint32_t slot,
-                const std::span<const std::byte> record) {
+                const std::span<const std::byte> record,
+                const std::span<const std::byte> inactive) {
   DescriptorBytes descriptor{};
   std::ranges::copy(kDescriptorMagic, descriptor.begin());
   store_u32(descriptor, 8, kDescriptorVersion);
@@ -222,6 +224,9 @@ make_descriptor(const CommitId &commit_id, const CommitId &previous_id,
   const Digest record_digest = sha256(record);
   std::ranges::copy(record_digest,
                     descriptor.begin() + kDescriptorRecordDigestOffset);
+  const Digest inactive_digest = sha256(inactive);
+  std::ranges::copy(inactive_digest,
+                    descriptor.begin() + kDescriptorInactiveDigestOffset);
   const Digest descriptor_digest =
       sha256(std::span(descriptor).first(kDescriptorPrefixSize));
   std::ranges::copy(descriptor_digest,
@@ -267,6 +272,9 @@ parse_descriptor(const std::span<const std::byte> descriptor,
       .record_matches = equal_bytes(
           descriptor.subspan(kDescriptorRecordDigestOffset, kDigestSize),
           slot_digests[slot]),
+      .inactive_matches = equal_bytes(
+          descriptor.subspan(kDescriptorInactiveDigestOffset, kDigestSize),
+          slot_digests[slot ^ 1U]),
       .commit_id = commit_id,
       .previous_id = previous_id,
       .slot = slot,
@@ -298,19 +306,31 @@ parse_descriptor(const std::span<const std::byte> descriptor,
     selected = 1;
   } else if (parsed[1].valid &&
              !equal_bytes(descriptors[0].bytes(), descriptors[1].bytes())) {
-    const bool zero_follows_one =
-        equal_bytes(parsed[0].previous_id, parsed[1].commit_id);
-    const bool one_follows_zero =
-        equal_bytes(parsed[1].previous_id, parsed[0].commit_id);
-    if (zero_follows_one == one_follows_zero) {
-      fail(CardError::device_failure,
-           "card record journal has an ambiguous commit chain");
+    const bool same_commit =
+        equal_bytes(parsed[0].commit_id, parsed[1].commit_id) &&
+        equal_bytes(parsed[0].previous_id, parsed[1].previous_id) &&
+        parsed[0].slot == parsed[1].slot;
+    if (same_commit) {
+      if (parsed[0].inactive_matches == parsed[1].inactive_matches) {
+        fail(CardError::device_failure,
+             "card record journal has ambiguous mirrored metadata");
+      }
+      selected = parsed[1].inactive_matches ? 1U : 0U;
+    } else {
+      const bool zero_follows_one =
+          equal_bytes(parsed[0].previous_id, parsed[1].commit_id);
+      const bool one_follows_zero =
+          equal_bytes(parsed[1].previous_id, parsed[0].commit_id);
+      if (zero_follows_one == one_follows_zero) {
+        fail(CardError::device_failure,
+             "card record journal has an ambiguous commit chain");
+      }
+      if (parsed[0].slot == parsed[1].slot) {
+        fail(CardError::device_failure,
+             "card record journal commit chain reused one slot");
+      }
+      selected = one_follows_zero ? 1U : 0U;
     }
-    if (parsed[0].slot == parsed[1].slot) {
-      fail(CardError::device_failure,
-           "card record journal commit chain reused one slot");
-    }
-    selected = one_follows_zero ? 1U : 0U;
   }
 
   if (!parsed[selected].record_matches) {
@@ -318,17 +338,15 @@ parse_descriptor(const std::span<const std::byte> descriptor,
          "active card record journal commit is damaged");
   }
   const std::uint32_t selected_slot = parsed[selected].slot;
-  DescriptorBytes selected_descriptor{};
-  std::ranges::copy(descriptors[selected].bytes(), selected_descriptor.begin());
   return {.record = std::move(slots[selected_slot]),
-          .selected_descriptor = selected_descriptor,
           .commit_id = parsed[selected].commit_id,
           .previous_id = parsed[selected].previous_id,
           .slot = selected_slot,
           .descriptor = selected,
           .mirrored =
               parsed[0].valid && parsed[1].valid &&
-              equal_bytes(descriptors[0].bytes(), descriptors[1].bytes())};
+              equal_bytes(descriptors[0].bytes(), descriptors[1].bytes()) &&
+              parsed[selected].inactive_matches};
 }
 
 void validate_logical_record(const std::span<const std::byte> record) {
@@ -374,8 +392,13 @@ read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
     security::SecureBuffer filler(kCardRecordV1Size);
     fill_random(filler.bytes());
     write_verified(storage, slot_offset(journal.slot ^ 1U), filler.bytes());
+    const DescriptorBytes normalized_descriptor =
+        make_descriptor(journal.commit_id, journal.previous_id, journal.slot,
+                        journal.record.bytes(), filler.bytes());
     write_verified(storage, descriptor_offset(journal.descriptor ^ 1U),
-                   journal.selected_descriptor);
+                   normalized_descriptor);
+    write_verified(storage, descriptor_offset(journal.descriptor),
+                   normalized_descriptor);
 
     LoadedJournal normalized = load_journal(storage);
     validate_logical_record(normalized.record.bytes());
@@ -411,8 +434,9 @@ void provision_card_record_journal_v1(
   fill_random(filler.bytes());
   write_verified(storage, slot_offset(initial_slot ^ 1U), filler.bytes());
   write_verified(storage, slot_offset(initial_slot), provisioning_record);
-  const DescriptorBytes descriptor = make_descriptor(
-      commit_id, previous_id, initial_slot, provisioning_record);
+  const DescriptorBytes descriptor =
+      make_descriptor(commit_id, previous_id, initial_slot, provisioning_record,
+                      filler.bytes());
   write_verified(storage, kCardRecordJournalV1Descriptor0Offset, descriptor);
   write_verified(storage, kCardRecordJournalV1Descriptor1Offset, descriptor);
 }
@@ -429,16 +453,17 @@ void commit_card_record_journal_v1(
   write_verified(storage, slot_offset(target_slot), replacement_record);
   const CommitId commit_id =
       distinct_commit_id(current.commit_id, current.previous_id);
-  const DescriptorBytes descriptor = make_descriptor(
-      commit_id, current.commit_id, target_slot, replacement_record);
+  security::SecureBuffer filler(kCardRecordV1Size);
+  fill_random(filler.bytes());
+  const DescriptorBytes descriptor =
+      make_descriptor(commit_id, current.commit_id, target_slot,
+                      replacement_record, filler.bytes());
   write_verified(storage, descriptor_offset(target_descriptor), descriptor);
 
   // The new descriptor is now authoritative. Remove the prior logical record
   // before mirroring metadata so a stable card retains no readable update
   // history. If either cleanup step tears, the random commit link still selects
   // the already-verified new record and a retry can finish normalization.
-  security::SecureBuffer filler(kCardRecordV1Size);
-  fill_random(filler.bytes());
   write_verified(storage, slot_offset(current.slot), filler.bytes());
   write_verified(storage, descriptor_offset(current.descriptor), descriptor);
 
