@@ -28,6 +28,8 @@ using namespace std::chrono_literals;
 using usb_vault::card::CardError;
 using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::
+    bootstrap_vikey_development_card_media_with_network_access;
+using usb_vault::card::vikey::
     probe_vikey_development_blob_round_trip_with_network_access;
 using usb_vault::card::vikey::
     probe_vikey_development_card_media_with_network_access;
@@ -636,6 +638,67 @@ void test_formal_card_record_backend_staging(
          "card-record credential failure staged a helper directory");
 }
 
+void test_development_card_media_bootstrap_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto blank_user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'Q'});
+  const auto helper_digest = file_digest(helper);
+  const auto vendor_digest = file_digest(vendor);
+
+  bootstrap_vikey_development_card_media_with_network_access(
+      helper, helper_digest, vendor.parent_path(), vendor_digest, 1,
+      usb_vault::card::vikey::VikeyCardMediaState::blank, user_sn,
+      api_key, blank_user_pin, 5s);
+  expect(development_helper_directory_count() == directories_before,
+         "card media bootstrap left staging residue");
+
+  try {
+    bootstrap_vikey_development_card_media_with_network_access(
+        helper, helper_digest, vendor.parent_path(), vendor_digest, 2,
+        usb_vault::card::vikey::VikeyCardMediaState::blank, user_sn,
+        api_key, blank_user_pin, 5s);
+    fail("mismatched card media bootstrap identity was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::device_failure),
+           "mismatched bootstrap identity returned the wrong error");
+  }
+
+  try {
+    bootstrap_vikey_development_card_media_with_network_access(
+        helper, helper_digest, vendor.parent_path(), vendor_digest, 1,
+        usb_vault::card::vikey::
+            VikeyCardMediaState::provisioning_interrupted,
+        user_sn, api_key, blank_user_pin, 5s);
+    fail("changed card media bootstrap state was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::device_failure),
+           "changed bootstrap state returned the wrong error");
+  }
+
+  try {
+    bootstrap_vikey_development_card_media_with_network_access(
+        helper, helper_digest, vendor.parent_path(), vendor_digest, 1,
+        usb_vault::card::vikey::VikeyCardMediaState::foreign_data,
+        user_sn, api_key, blank_user_pin, 5s);
+    fail("ineligible card media bootstrap state was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "ineligible bootstrap state returned the wrong error");
+  }
+  expect(development_helper_directory_count() == directories_before,
+         "failed card media bootstrap left staging residue");
+}
+
 void test_formal_blob_backend_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -906,6 +969,9 @@ int wmain(const int argc, wchar_t** const argv) {
     });
     run_test("formal card-record backend", [&] {
       test_formal_card_record_backend_staging(helper, vendor);
+    });
+    run_test("development card media bootstrap", [&] {
+      test_development_card_media_bootstrap_staging(helper, vendor);
     });
     run_test("formal blob backend", [&] {
       test_formal_blob_backend_staging(helper, vendor);

@@ -49,9 +49,10 @@ constexpr std::size_t kDescriptorPrefixSize = 120;
 constexpr std::size_t kSlot0Offset = 304;
 constexpr std::size_t kSlot1Offset = 520;
 constexpr std::size_t kRecordSize = 216;
-constexpr std::size_t kJournalSize = 736;
-std::array<BYTE, kJournalSize> journal_data{};
+constexpr std::size_t kUserDataSize = 8192;
+std::array<BYTE, kUserDataSize> journal_data{};
 bool journal_initialized = false;
+bool blank_media_session = false;
 
 void store_u32(const std::size_t offset,
                const std::uint32_t value,
@@ -180,10 +181,13 @@ VikeyGetUserPassWordAttempt(const WORD index, BYTE* const current,
 
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyUserLogin(const WORD index, char* const user_pin) {
+  const bool product_session = fixed_argument_matches(user_pin, 'P', 8);
+  const bool bootstrap_session = fixed_argument_matches(user_pin, 'Q', 8);
   if (session_state != SessionState::attempts_read || index != 0 ||
-      !fixed_argument_matches(user_pin, 'P', 8)) {
+      (!product_session && !bootstrap_session)) {
     return kInvalidValue;
   }
+  blank_media_session = bootstrap_session;
   session_state = SessionState::logged_in;
   return ERROR_SUCCESS;
 }
@@ -251,7 +255,7 @@ VikeyGetUserDataSize(const WORD index, DWORD* const bytes) {
     default:
       return kInvalidValue;
   }
-  *bytes = 8192;
+  *bytes = static_cast<DWORD>(kUserDataSize);
   return ERROR_SUCCESS;
 }
 
@@ -263,7 +267,7 @@ VikeyReadData(const WORD index, const DWORD address, const DWORD length,
   }
   if (session_state == SessionState::initial_data_size_read && address == 0 &&
       length == kDescriptorSize) {
-    if (!initialize_journal()) return kInvalidValue;
+    if (!blank_media_session && !initialize_journal()) return kInvalidValue;
     session_state = SessionState::journal_active;
   }
   if (session_state == SessionState::journal_active) {

@@ -3362,3 +3362,42 @@
 - 下一切片 P2.10b 应把期望硬件 ID 与精确期望介质状态加入固定 IPC 请求，在同一 helper 会话先
   比对 ID，再调用本原语并显式关闭，客户端只暴露一次性开发 bootstrap 操作。当前提交状态：实现、
   测试和安全复核完成，用户已批准提交；本地提交将在本记录后创建。
+- 提交：`d504575 [P2.10]guard ViKey media bootstrap`。
+
+### 小切片 10b：IPC v9 同卡/状态绑定 bootstrap
+
+#### 需求审计与实现
+
+- 审计 P2.10a 原语、v8 插卡上下文和正式 216 字节 backend 后确认，bootstrap 请求必须同时携带
+  探针得到的硬件 ID 与当时的精确介质状态；只携带 ID 会允许 UI 停留期间介质状态变化后仍写卡，
+  只携带状态则无法封闭跨 helper 换卡窗口。
+- helper IPC 升级至 v9，新增固定 208 字节 `card_media_bootstrap` 请求：厂商摘要、非零期望 ID、
+  4 字节严格状态和三个固定长度厂商凭据。writer、reader 和客户端启动前验证均只接受 `blank` 或
+  `provisioning_interrupted`；请求不含日常登录密码、根秘密、marker 副本或最终 Card Record。
+- helper 在受限联网开发边界打开完整认证会话，先逐值比对期望硬件 ID，错配时在任何容量查询、
+  用户区读写前失败；随后把严格 wire 状态映射到 P2.10a 原语，完整复验并执行可恢复 bootstrap，
+  最后显式关闭。成功响应不携带 detail、result 或 payload，失败不重试、不探测新 ID、不改绑。
+- 客户端新增一次性开发 bootstrap 入口；四种不允许的内部介质状态在验证 helper 和厂商制品、创建
+  暂存目录或启动子进程前返回 `invalid_configuration`。现有探针、P1 blob 和 216 字节读写语义不变。
+
+#### 测试、安全复核与剩余边界
+
+- 协议测试覆盖 v9 操作和固定载荷、摘要/ID/状态/锁页凭据往返、零 ID 与不允许状态发送前拒绝、
+  v8 降级拒绝及无数据成功响应。严格伪 SDK 扩为 8192 字节用户区，并以独立测试 PIN 提供每个
+  helper 进程全空白介质，不影响既有产品日志路径。
+- 进程测试新增“ID 1 + `blank` 成功建立并内部复验 marker”“错 ID 2 返回 `device_failure` 且在
+  容量查询前关闭”“期望中断但实际空白返回 `device_failure`”，以及外来状态由客户端在启动前
+  返回 `invalid_configuration`；所有路径断言无暂存目录残留。
+- Debug、MSVC `/analyze`、ASan 三套全量构建和 CTest 均通过；每套 **33/33**：31 项实际通过、
+  2 项按既有受限父令牌约束跳过。`/analyze` 无项目诊断，ASan 未报告内存错误。协议测试在三套
+  配置中实际通过；由于 IPC 版本、helper 分派和伪 SDK 调用序列均变化，仍待用户在普通、非管理员
+  PowerShell 运行最新 Debug `vikey_helper_process_tests`。用户随后补跑并得到完整输出
+  `vikey_helper_process_tests passed`，确认 v9 bootstrap 成功、错 ID/错状态拒绝、既有 helper
+  隔离与卡记录链以及暂存清理均通过；该测试只使用伪 `ViKey.dll`，未访问实体卡。
+- 安全复核确认写授权是“受限 wire 状态、旧插卡上下文 ID、实际会话 ID、重新分类状态”四者的
+  交集；错卡在用户区访问前拒绝，错状态在首个写调用前拒绝。IPC 只增加两个非秘密、易失字段，
+  不携带或记录密码、根秘密、信封命中、模式、档位或诱饵信息。marker 写仍限制在 736 字节日志区，
+  保持既有写后复读和尾区复验；供应商 SDK 单次调用内部物理窗口仍是不可消除边界。
+- 下一切片应在产品层编排“v8 探测上下文 → 用户确认/强度合格的日常密码 → v9 bootstrap → 绑定
+  同一 ID 的正式 `ICardStore` → 既有 Card Record 初始化服务”，并定义中途失败后的恢复入口。
+  当前提交状态：全部验证通过，用户已批准提交；本地提交将在本记录后创建。

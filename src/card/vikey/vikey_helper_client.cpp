@@ -46,6 +46,7 @@ struct DevelopmentSessionInputs final {
   const security::SecureBuffer& user_pin;
   const security::SecureBuffer* blob{};
   std::uint32_t expected_hardware_id{};
+  helper::CardMediaState expected_media_state{};
 };
 
 constexpr DWORD64 kHelperMitigations =
@@ -1067,6 +1068,7 @@ namespace {
       operation == helper::Operation::development_session_probe ||
       operation == helper::Operation::card_identity_probe ||
       operation == helper::Operation::card_media_probe ||
+      operation == helper::Operation::card_media_bootstrap ||
       operation ==
           helper::Operation::development_blob_round_trip_probe ||
       operation == helper::Operation::development_blob_read ||
@@ -1085,7 +1087,10 @@ namespace {
       session_required;
   const bool expected_identity_required =
       operation == helper::Operation::card_record_read ||
-      operation == helper::Operation::card_record_write;
+      operation == helper::Operation::card_record_write ||
+      operation == helper::Operation::card_media_bootstrap;
+  const bool expected_media_state_required =
+      operation == helper::Operation::card_media_bootstrap;
   const bool success_detail_required =
       operation == helper::Operation::development_session_probe ||
       operation == helper::Operation::card_identity_probe ||
@@ -1112,6 +1117,9 @@ namespace {
        session_inputs->user_pin.size() != kVikeyUserPinBytes ||
        expected_identity_required !=
            (session_inputs->expected_hardware_id != 0) ||
+       expected_media_state_required !=
+           helper::valid_bootstrap_media_state(
+               session_inputs->expected_media_state) ||
        blob_input_required != (session_inputs->blob != nullptr) ||
        (session_inputs->blob != nullptr &&
         session_inputs->blob->size() !=
@@ -1333,6 +1341,14 @@ namespace {
         request.payload_bytes = helper::kCardMediaProbePayloadBytes;
         helper::write_card_media_probe_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->user_sn, session_inputs->api_key,
+            session_inputs->user_pin);
+      } else if (operation == helper::Operation::card_media_bootstrap) {
+        request.payload_bytes = helper::kCardMediaBootstrapPayloadBytes;
+        helper::write_card_media_bootstrap_request(
+            request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->expected_hardware_id,
+            session_inputs->expected_media_state,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin);
       } else {
@@ -1589,6 +1605,46 @@ probe_vikey_development_card_media_with_network_access(
   return {.security_properties = probe.security_properties,
           .hardware_id = hardware_id,
           .media_state = media_state};
+}
+
+void bootstrap_vikey_development_card_media_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const std::uint32_t expected_hardware_id,
+    const VikeyCardMediaState expected_media_state,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  helper::CardMediaState wire_state{};
+  switch (expected_media_state) {
+    case VikeyCardMediaState::blank:
+      wire_state = helper::CardMediaState::blank;
+      break;
+    case VikeyCardMediaState::provisioning_interrupted:
+      wire_state = helper::CardMediaState::provisioning_interrupted;
+      break;
+    default:
+      throw_card(CardError::invalid_configuration,
+                 "ViKey bootstrap media state is not eligible");
+  }
+
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = nullptr,
+      .expected_hardware_id = expected_hardware_id,
+      .expected_media_state = wire_state};
+  static_cast<void>(probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::card_media_bootstrap, &vendor_path,
+      &expected_vendor_digest, &inputs, nullptr,
+      HelperBoundary::network_enabled_development, timeout));
 }
 
 VikeyHelperProbe

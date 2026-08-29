@@ -119,19 +119,22 @@ void test_request_validation() {
   request.operation = Operation::card_media_probe;
   request.payload_bytes = kCardMediaProbePayloadBytes;
   expect(valid_request(request), "card media request was rejected");
+  request.operation = Operation::card_media_bootstrap;
+  request.payload_bytes = kCardMediaBootstrapPayloadBytes;
+  expect(valid_request(request), "card media bootstrap was rejected");
   request.payload_bytes = 0;
   expect(!valid_request(request),
-         "card media request without credentials was accepted");
+         "card media bootstrap without bindings was accepted");
   request.operation = Operation::card_record_read;
   request.payload_bytes = kDevelopmentSessionPayloadBytes;
   expect(!valid_request(request),
-         "v8 card record read accepted the v6 payload shape");
+         "v9 card record read accepted the v6 payload shape");
   request.operation = Operation::card_record_write;
   request.payload_bytes =
       kDevelopmentSessionPayloadBytes +
       static_cast<std::uint32_t>(kCardRecordV1Size);
   expect(!valid_request(request),
-         "v8 card record write accepted the v6 payload shape");
+         "v9 card record write accepted the v6 payload shape");
   request.operation = Operation::card_identity_probe;
   request.payload_bytes = kCardIdentityProbePayloadBytes;
   request.version = static_cast<std::uint16_t>(kVersion + 1);
@@ -253,6 +256,50 @@ void test_card_media_request_round_trip() {
                       "card media API key did not round-trip");
   expect_fixed_secret(body.user_pin, std::byte{'P'},
                       "card media PIN did not round-trip");
+}
+
+void test_card_media_bootstrap_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  Request sent{};
+  sent.operation = Operation::card_media_bootstrap;
+  sent.payload_bytes = kCardMediaBootstrapPayloadBytes;
+  Sha256Digest digest{};
+  digest[5] = std::byte{0x73};
+  constexpr std::uint32_t kExpectedHardwareId = 0x12345678U;
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'Q'});
+
+  write_card_media_bootstrap_request(
+      pipe.write.get(), sent, digest, kExpectedHardwareId,
+      CardMediaState::blank, user_sn, api_key, user_pin);
+  const Request received = read_request(pipe.read.get());
+  CardMediaBootstrapRequest body =
+      read_card_media_bootstrap_request(pipe.read.get(), received);
+  expect(body.vendor_digest == digest,
+         "card bootstrap digest did not round-trip");
+  expect(body.expected_hardware_id == kExpectedHardwareId,
+         "card bootstrap identity did not round-trip");
+  expect(body.expected_media_state == CardMediaState::blank,
+         "card bootstrap media state did not round-trip");
+  expect_fixed_secret(body.user_pin, std::byte{'Q'},
+                      "card bootstrap PIN did not round-trip");
+
+  const Pipe invalid_pipe = make_pipe();
+  expect_protocol_error(
+      [&] {
+        write_card_media_bootstrap_request(
+            invalid_pipe.write.get(), sent, digest, 0,
+            CardMediaState::blank, user_sn, api_key, user_pin);
+      },
+      "zero card bootstrap identity was accepted");
+  expect_protocol_error(
+      [&] {
+        write_card_media_bootstrap_request(
+            invalid_pipe.write.get(), sent, digest, kExpectedHardwareId,
+            CardMediaState::foreign_data, user_sn, api_key, user_pin);
+      },
+      "ineligible card bootstrap state was accepted");
 }
 
 void test_development_session_request_rejects_wrong_sizes() {
@@ -551,6 +598,8 @@ void test_response_validation() {
          "card media response without a hardware identity was accepted");
   response.result = 0;
   response.detail = 0;
+  expect(valid_response(response, Operation::card_media_bootstrap),
+         "valid card media bootstrap response was rejected");
   expect(!valid_response(response, Operation::development_blob_read),
          "blob read response without a payload was accepted");
   response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
@@ -644,6 +693,7 @@ int main() {
     test_development_session_request_round_trip();
     test_card_identity_request_round_trip();
     test_card_media_request_round_trip();
+    test_card_media_bootstrap_request_round_trip();
     test_development_session_request_rejects_wrong_sizes();
     test_development_blob_request_round_trip();
     test_development_blob_request_rejects_wrong_sizes();

@@ -359,6 +359,66 @@ void require_expected_hardware_identity(
   }
 }
 
+[[nodiscard]] usb_vault::card::vikey::VikeyCardMediaState
+bootstrap_media_state(const CardMediaState state) {
+  switch (state) {
+    case CardMediaState::blank:
+      return usb_vault::card::vikey::VikeyCardMediaState::blank;
+    case CardMediaState::provisioning_interrupted:
+      return usb_vault::card::vikey::
+          VikeyCardMediaState::provisioning_interrupted;
+    default:
+      throw std::system_error(
+          usb_vault::card::make_error_code(
+              CardError::invalid_configuration),
+          "ViKey helper received an ineligible bootstrap media state");
+  }
+}
+
+[[nodiscard]] OperationResult card_media_bootstrap(
+    const CardMediaBootstrapRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+    require_expected_hardware_identity(session,
+                                       request.expected_hardware_id);
+
+    OperationResult result{};
+    try {
+      usb_vault::card::vikey::bootstrap_vikey_card_media(
+          session, bootstrap_media_state(request.expected_media_state));
+    } catch (const std::system_error& error) {
+      result.status = error.code().category() == card_error_category()
+                          ? error.code().value()
+                          : static_cast<std::int32_t>(
+                                CardError::backend_unavailable);
+    } catch (...) {
+      result.status =
+          static_cast<std::int32_t>(CardError::backend_unavailable);
+    }
+
+    const std::error_code close_error = session.close();
+    if (result.status != 0) return result;
+    if (close_error) return {.status = close_error.value()};
+    return {};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
 [[nodiscard]] OperationResult development_blob_round_trip(
     const DevelopmentBlobRoundTripRequest& request) {
   try {
@@ -632,6 +692,7 @@ void require_expected_hardware_identity(
     case Operation::development_blob_write:
     case Operation::card_record_read:
     case Operation::card_record_write:
+    case Operation::card_media_bootstrap:
       return {.status =
                   static_cast<std::int32_t>(CardError::invalid_operation)};
   }
@@ -671,7 +732,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
             request.operation == Operation::card_record_read ||
             request.operation == Operation::card_record_write ||
             request.operation == Operation::card_identity_probe ||
-            request.operation == Operation::card_media_probe) {
+            request.operation == Operation::card_media_probe ||
+            request.operation == Operation::card_media_bootstrap) {
           if (environment !=
               EnvironmentBoundary::network_enabled_development) {
             result.status =
@@ -693,6 +755,12 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                   read_card_media_probe_request(request_handle, request);
               result = operation_result(request.operation,
                                         &media_request);
+            } else if (request.operation ==
+                       Operation::card_media_bootstrap) {
+              CardMediaBootstrapRequest bootstrap_request =
+                  read_card_media_bootstrap_request(request_handle,
+                                                    request);
+              result = card_media_bootstrap(bootstrap_request);
             } else {
               if (request.operation ==
                   Operation::development_blob_round_trip_probe) {

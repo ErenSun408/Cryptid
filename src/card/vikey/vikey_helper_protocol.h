@@ -14,9 +14,10 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 8;
+constexpr std::uint16_t kVersion = 9;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
+constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
     static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
                                kVikeyApiKeyBytes + kVikeyUserPinBytes);
@@ -37,6 +38,9 @@ constexpr std::uint32_t kCardIdentityProbePayloadBytes =
     kDevelopmentSessionPayloadBytes;
 constexpr std::uint32_t kCardMediaProbePayloadBytes =
     kDevelopmentSessionPayloadBytes;
+constexpr std::uint32_t kCardMediaBootstrapPayloadBytes =
+    kDevelopmentSessionPayloadBytes + kHardwareIdentityBytes +
+    kCardMediaStateBytes;
 
 enum class Operation : std::uint32_t {
   probe = 1,
@@ -50,6 +54,7 @@ enum class Operation : std::uint32_t {
   card_record_write = 9,
   card_identity_probe = 10,
   card_media_probe = 11,
+  card_media_bootstrap = 12,
 };
 
 enum class CardMediaState : std::uint32_t {
@@ -61,11 +66,19 @@ enum class CardMediaState : std::uint32_t {
   product_evidence = 6,
 };
 
+static_assert(sizeof(CardMediaState) == kCardMediaStateBytes);
+
 [[nodiscard]] constexpr bool valid_card_media_state(
     const std::uint32_t value) noexcept {
   return value >= static_cast<std::uint32_t>(CardMediaState::blank) &&
          value <= static_cast<std::uint32_t>(
                       CardMediaState::product_evidence);
+}
+
+[[nodiscard]] constexpr bool valid_bootstrap_media_state(
+    const CardMediaState state) noexcept {
+  return state == CardMediaState::blank ||
+         state == CardMediaState::provisioning_interrupted;
 }
 
 enum class SecurityProperty : std::uint32_t {
@@ -203,6 +216,24 @@ struct CardRecordSessionRequest final {
   security::SecureBuffer user_pin;
 };
 
+struct CardMediaBootstrapRequest final {
+  CardMediaBootstrapRequest();
+
+  CardMediaBootstrapRequest(const CardMediaBootstrapRequest&) = delete;
+  CardMediaBootstrapRequest& operator=(const CardMediaBootstrapRequest&) =
+      delete;
+  CardMediaBootstrapRequest(CardMediaBootstrapRequest&&) noexcept = default;
+  CardMediaBootstrapRequest& operator=(CardMediaBootstrapRequest&&) noexcept =
+      default;
+
+  Sha256Digest vendor_digest{};
+  std::uint32_t expected_hardware_id{};
+  CardMediaState expected_media_state{};
+  security::SecureBuffer user_sn;
+  security::SecureBuffer api_key;
+  security::SecureBuffer user_pin;
+};
+
 struct CardRecordWriteRequest final {
   CardRecordWriteRequest();
 
@@ -303,6 +334,15 @@ void write_card_media_probe_request(
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin);
 [[nodiscard]] DevelopmentSessionRequest read_card_media_probe_request(
+    HANDLE pipe, const Request& request);
+void write_card_media_bootstrap_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    std::uint32_t expected_hardware_id,
+    CardMediaState expected_media_state,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] CardMediaBootstrapRequest read_card_media_bootstrap_request(
     HANDLE pipe, const Request& request);
 void write_development_blob_round_trip_request(
     HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
