@@ -1,5 +1,6 @@
 #include "card/vikey/vikey_helper_client.h"
 #include "card/vikey/vikey_helper_blob_backend.h"
+#include "card/vikey/vikey_helper_card_enrollment.h"
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_protocol.h"
 #include "vikey_network_probe.h"
@@ -47,6 +48,7 @@ using usb_vault::card::vikey::VikeyCardStore;
 using usb_vault::card::vikey::VikeyCredentialSet;
 using usb_vault::card::vikey::VikeyHelperBlobBackend;
 using usb_vault::card::vikey::VikeyHelperBackendConfig;
+using usb_vault::card::vikey::VikeyHelperCardEnrollment;
 using usb_vault::card::vikey::VikeyHelperCardRecordBackend;
 using usb_vault::security::SecureBuffer;
 
@@ -369,12 +371,13 @@ class CountingCredentialProvider final : public IVikeyCredentialProvider {
         .api_key = fixed_secret(
             usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'}),
         .user_pin = fixed_secret(
-            usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'}),
+            usb_vault::card::vikey::kVikeyUserPinBytes, pin_value),
     };
   }
 
   std::size_t loads{};
   bool fail_load{};
+  std::byte pin_value{std::byte{'P'}};
 };
 
 void expect_fixed_secret(const SecureBuffer& secret, const std::byte value,
@@ -699,6 +702,78 @@ void test_development_card_media_bootstrap_staging(
          "failed card media bootstrap left staging residue");
 }
 
+void test_formal_card_enrollment_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  VikeyHelperBackendConfig config{
+      .helper_path = helper,
+      .helper_digest = file_digest(helper),
+      .vendor_directory = vendor.parent_path(),
+      .vendor_digest = file_digest(vendor),
+      .timeout = 5s,
+  };
+  CountingCredentialProvider provider;
+  provider.pin_value = std::byte{'Q'};
+  VikeyHelperCardEnrollment enrollment(config, provider);
+
+  const auto context = enrollment.probe();
+  expect(context.hardware_id == 1 &&
+             context.media_state ==
+                 usb_vault::card::vikey::VikeyCardMediaState::blank,
+         "formal enrollment returned the wrong insertion context");
+  expect(provider.loads == 1,
+         "formal enrollment probe did not load one credential set");
+  enrollment.bootstrap(context);
+  expect(provider.loads == 2,
+         "formal enrollment bootstrap reused probe credentials");
+
+  auto zero_identity = context;
+  zero_identity.hardware_id = 0;
+  try {
+    enrollment.bootstrap(zero_identity);
+    fail("formal enrollment accepted a zero hardware identity");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "formal enrollment zero identity returned the wrong error");
+  }
+  expect(provider.loads == 2,
+         "formal enrollment loaded credentials for a zero identity");
+
+  auto ineligible = context;
+  ineligible.media_state =
+      usb_vault::card::vikey::VikeyCardMediaState::foreign_data;
+  try {
+    enrollment.bootstrap(ineligible);
+    fail("formal enrollment accepted foreign media");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "formal enrollment foreign media returned the wrong error");
+  }
+  expect(provider.loads == 2,
+         "formal enrollment loaded credentials for foreign media");
+
+  CountingCredentialProvider failing_provider;
+  failing_provider.fail_load = true;
+  VikeyHelperCardEnrollment failing_enrollment(std::move(config),
+                                                failing_provider);
+  try {
+    static_cast<void>(failing_enrollment.probe());
+    fail("formal enrollment accepted a credential-provider failure");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::backend_unavailable),
+           "formal enrollment credential failure returned the wrong error");
+  }
+  expect(failing_provider.loads == 1,
+         "formal enrollment retried failed credentials");
+  expect(development_helper_directory_count() == directories_before,
+         "formal enrollment left staging residue");
+}
+
 void test_formal_blob_backend_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -972,6 +1047,9 @@ int wmain(const int argc, wchar_t** const argv) {
     });
     run_test("development card media bootstrap", [&] {
       test_development_card_media_bootstrap_staging(helper, vendor);
+    });
+    run_test("formal card enrollment", [&] {
+      test_formal_card_enrollment_staging(helper, vendor);
     });
     run_test("formal blob backend", [&] {
       test_formal_blob_backend_staging(helper, vendor);

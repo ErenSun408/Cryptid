@@ -314,6 +314,7 @@ target_link_libraries(usb_vault_vikey_helper_blob_backend
 usb_vault_configure_target(usb_vault_vikey_helper_blob_backend)
 
 add_library(usb_vault_vikey_helper_card_record_backend STATIC
+  src/card/vikey/vikey_helper_card_enrollment.cpp
   src/card/vikey/vikey_helper_card_record_backend.cpp
 )
 

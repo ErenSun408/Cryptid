@@ -3401,3 +3401,41 @@
 - 下一切片应在产品层编排“v8 探测上下文 → 用户确认/强度合格的日常密码 → v9 bootstrap → 绑定
   同一 ID 的正式 `ICardStore` → 既有 Card Record 初始化服务”，并定义中途失败后的恢复入口。
   当前提交状态：全部验证通过，用户已批准提交；本地提交将在本记录后创建。
+- 提交：`5a959ab [P2.10]bind helper media bootstrap context`。
+
+### 小切片 11a：正式 ViKey 初始化适配边界
+
+#### 需求审计与实现
+
+- 审计 P2.6 厂商无关初始化服务、P2.9b 易失插卡上下文、P2.10b 同卡/状态绑定 bootstrap、正式
+  216 字节 helper backend 与开发凭据生命周期后确认：产品层下一步需要的是可替换硬件适配器，
+  不应让通用 `CardRecordService`、密码入口或 UI 直接调用 ViKey 私有 helper API。本切片只建立
+  该边界，不提前接入日常密码、生成根秘密、写最终 Card Record 或改变 UI。
+- 新增 ViKey 私有 `VikeyHelperCardEnrollment`。对象只保存非秘密 helper/厂商制品配置并借用
+  凭据提供者；`probe()` 每次取得一套新的锁页开发凭据，调用 v8 原子介质探针并返回仅含非零
+  硬件 ID 与严格介质状态的易失上下文；`bootstrap(context)` 再取得另一套新凭据，调用 v9 写事务。
+  探测凭据不会跨 UI 等待期保留或复用，适配器也不接收日常登录密码。
+- bootstrap 入口在加载凭据、验证制品、建立暂存目录或启动 helper 前拒绝零硬件 ID，以及
+  `legacy_p1_or_foreign_prefix`、`foreign_data`、`conflicting_evidence`、`product_evidence`
+  四类不可写状态；只把 `blank` 或 `provisioning_interrupted` 连同原始硬件 ID 原样交给 v9。
+  helper 仍负责重新认证、比对实际 ID、完整重分类和可恢复 marker 写入，因此适配器不会把旧
+  探针结论当作当前写权限。
+
+#### 测试、安全复核与剩余边界
+
+- 进程测试新增正式初始化适配链：独立测试 PIN 的空白伪卡经适配器探测得到 ID 1/`blank`，再
+  通过适配器 bootstrap；断言两次操作分别加载一套新凭据。零 ID 与外来状态均在凭据加载前返回
+  `invalid_configuration`，凭据提供者失败只调用一次、归一化为 `backend_unavailable`，并检查
+  所有路径无 helper 暂存目录残留。
+- Debug、MSVC `/analyze`、ASan 三套全量构建和 CTest 均通过；每套 **33/33**：31 项实际通过、
+  2 项按既有受限父令牌约束跳过。`/analyze` 无项目诊断，ASan 未报告内存错误。新增正式适配
+  成功链位于受限环境会跳过的 `vikey_helper_process_tests`；用户随后在普通、非管理员桌面
+  PowerShell 对最新 Debug 产物补跑并得到 `vikey_helper_process_tests passed`。测试仅使用伪
+  `ViKey.dll`，不会访问实体卡。
+- 安全复核确认适配器没有持有、接收或记录日常密码、根秘密、卡记录、信封命中、模式、档位或
+  诱饵启用信息；每套厂商凭据只驻留于一次调用的锁页缓冲，并在一次性 helper 返回或异常展开后
+  销毁。插卡上下文只含非秘密且不持久化的厂商私有 ID/介质枚举；无效上下文在秘密取得和任何
+  外部副作用前失败。helper 的同卡、精确状态复验、写后复读及不自动重试边界保持不变。
+- 下一切片 P2.11b 才在厂商无关产品编排层组合“适配器探测 → 用户提交已确认且强度合格的日常
+  密码 → 适配器 bootstrap → 用同一硬件 ID 构造正式 `ICardStore` → 既有初始化服务”，并定义
+  中断后重新探测/恢复的状态机。本切片全部验证通过，用户已批准提交；本地提交将在本记录后创建。
