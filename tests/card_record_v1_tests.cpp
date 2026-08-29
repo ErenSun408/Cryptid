@@ -14,6 +14,7 @@ namespace {
 
 using usb_vault::card::CardCredentialRejected;
 using usb_vault::card::CardRecordState;
+using usb_vault::card::initialize_card_record_and_root_v1;
 using usb_vault::card::initialize_card_record_v1;
 using usb_vault::card::inspect_card_record;
 using usb_vault::card::kCardRecordV1EnvelopeSize;
@@ -108,8 +109,10 @@ void test_public_state_classification_fails_closed() {
 }
 
 void test_initialization_and_primary_unlock() {
-  SecureBuffer initialized =
-      initialize_card_record_v1(secure_text("daily-password-v1"));
+  auto material =
+      initialize_card_record_and_root_v1(
+          secure_text("daily-password-v1"));
+  SecureBuffer &initialized = material.record;
   expect(initialized.size() == kCardRecordV1Size,
          "initialized record has wrong size");
   expect(inspect_card_record(initialized.bytes()) ==
@@ -127,6 +130,8 @@ void test_initialization_and_primary_unlock() {
                                             secure_text("daily-password-v1"));
   expect(root.size() == kCardRecordV1RootSecretSize,
          "primary unlock returned wrong root size");
+  expect_same_secret(material.root_secret, root,
+                     "initialization returned the wrong root secret");
 
   expect_credential_rejected(
       [&] {

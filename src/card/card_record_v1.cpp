@@ -426,14 +426,22 @@ security::SecureBuffer provision_uninitialized_card_record_v1() {
 
 security::SecureBuffer
 initialize_card_record_v1(security::SecureBuffer password_utf8) {
+  InitializedCardRecordV1 initialized =
+      initialize_card_record_and_root_v1(std::move(password_utf8));
+  initialized.root_secret.clear();
+  return std::move(initialized.record);
+}
+
+InitializedCardRecordV1 initialize_card_record_and_root_v1(
+    security::SecureBuffer password_utf8) {
   security::SecureBuffer root_secret(kCardRecordV1RootSecretSize);
   fill_random(root_secret.bytes());
   try {
-    security::SecureBuffer result =
+    security::SecureBuffer record =
         build_record(root_secret, password_utf8, nullptr);
-    root_secret.clear();
     password_utf8.clear();
-    return result;
+    return {.record = std::move(record),
+            .root_secret = std::move(root_secret)};
   } catch (...) {
     root_secret.clear();
     password_utf8.clear();

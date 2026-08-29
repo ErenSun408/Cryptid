@@ -34,6 +34,11 @@ public:
   CardCredentialRejected();
 };
 
+struct InitializedCardRecordV1 final {
+  security::SecureBuffer record;
+  security::SecureBuffer root_secret;
+};
+
 // Classifies public framing only and never attempts a password operation.
 // A card is initializable only when it contains the exact provisioning marker;
 // blank-looking, truncated, foreign, and legacy values fail closed.
@@ -49,6 +54,14 @@ inspect_card_record(std::span<const std::byte> record) noexcept;
 // wiped; the generated root secret only leaves this function encrypted.
 [[nodiscard]] security::SecureBuffer
 initialize_card_record_v1(security::SecureBuffer password_utf8);
+
+// Initialization workflow variant that returns the generated root secret in
+// locked memory so a successfully persisted card can immediately enter an
+// authenticated no-volume session without repeating the password KDF.
+// The password is consumed and wiped.
+[[nodiscard]] InitializedCardRecordV1
+initialize_card_record_and_root_v1(
+    security::SecureBuffer password_utf8);
 
 // Tries both equal-size envelopes after one password-hardening operation and
 // returns only the common root secret. Slot identity is deliberately not part

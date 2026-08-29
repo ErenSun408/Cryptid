@@ -3066,5 +3066,46 @@
   不会把 216 字节记录误传给 `derive_volume_password_v1`。下一切片应在产品层新增卡记录状态机：
   先分类 provisioning/initialized/legacy/损坏，再实现初始化和登录，不能直接替换现有
   `ApplicationSession` 的 32 字节读取。
-- 当前提交状态：未提交，等待用户审阅。未读取 Windows 开发凭据、未加载
+- 提交：`8755a4a [P2.5]add helper-backed card record store`。未读取 Windows 开发凭据、未加载
   官方 SDK、未连接或改写实体卡；联网开发 helper 仍不得承载生产材料。
+
+### 小切片 6：产品层卡初始化与统一认证状态机
+
+#### 需求审计、实现与边界
+
+- 重新审计 N-02、N-06、Q-07、R-03 和 8.6，并检查 Card Record v1 codec、正式 216 字节
+  `ICardStore` 与仍使用 P1 32 字节开发链的 `ApplicationSession`。本切片只建立可复用的产品层
+  生命周期服务，不提前切换 UI、挂载或旧开发装配；口令强度、二次确认与风险确认属于后续 UI
+  接入切片，首次建卷向导继续暂缓。
+- 新增 `CardRecordService`，先按公开格式分类 provisioning、initialized、legacy、未知版本和损坏
+  状态。只有逐字节精确匹配 provisioning marker 才允许初始化；其余状态通过带观测状态的
+  `UnexpectedCardRecordState` 失败关闭，且不会进入密码 KDF 或写卡。登录也只有 initialized v1
+  才进入双信封解封，未初始化卡不会被误当作密码错误或自动覆盖。
+- Card Record 初始化 codec 新增一次性返回“216 字节记录 + 根秘密 S”的锁页结果。产品初始化在
+  写入并验证成功后可直接把同一个 S 交给已认证无卷会话，不必再次执行 Argon2id；保留原只返回
+  记录的 API，并在该兼容路径立即清除多返回的 S。
+- 初始化在慢 KDF 前后各读取并验证一次精确 provisioning 状态，避免用户计算密码期间卡记录已被
+  另一流程改变仍遭覆盖；随后只调用一次 `put_blob`，无自动重试。无论写调用报告成功还是失败，
+  都重新读取逻辑记录并与预期 216 字节常量时间比较：只有完全一致才返回 S；写报错但复读完全
+  一致视为已提交，无法复读或成功写后内容不一致统一按 `device_failure` 失败关闭；若写报错且旧
+  记录仍在，则保留原卡错误供上层呈现。
+
+#### 测试、安全复核与剩余风险
+
+- 新增真实 Argon2 参数的 `card_record_service_tests`，覆盖全部公开状态只读分类、初始化后直接得到
+  与再次登录相同的 S、非 provisioning 状态零写入、未初始化状态禁止登录、写后报错但精确复读
+  成功、KDF 期间状态变化不覆盖、提交前写失败保留旧 marker 与原错误，以及写后损坏/无法复读
+  的失败关闭。codec 测试同时验证初始化返回的 S 与日常密码解封结果一致。
+- Debug、MSVC `/analyze`、ASan 三套全量构建均通过；三套 CTest 均为 **33/33**：31 项执行通过、
+  2 项按既有受限父进程令牌约束跳过。静态分析无项目诊断，ASan 未报告内存错误。用户已在上一
+  切片从普通 PowerShell 运行最新 Debug `vikey_helper_process_tests` 并得到 passed；本切片未改
+  helper 或跨进程路径，无需重复实体桌面令牌测试。
+- 安全复核确认密码与 S 只经 `SecureBuffer` 流转，初始化仅在精确复读后释放 S；未新增本地配置、
+  命中信封、档位、模式、诱饵启用或更新计数状态，错误密码与密文损坏仍由 codec 统一拒绝。公共
+  `ICardStore` 继续是单 blob get/put，不暴露物理日志或供应商细节。
+- 仍有一个由 N-02 接口能力决定的极短竞争窗口：第二次 provisioning 读取与随后 `put_blob` 之间
+  若物理卡被替换，单纯 get/put 无法执行原子 compare-and-swap。后续把服务接入插拔控制器时必须
+  在一次操作期间绑定并复验同一设备身份；当前双读已经消除耗时最长的 KDF 窗口，但不虚报完全
+  原子化。
+- 当前提交状态：用户已批准提交；本地提交将在本记录后创建。未读取开发凭据、未加载厂商 DLL、
+  未连接或写入实体卡。
