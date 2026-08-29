@@ -45,6 +45,7 @@ struct DevelopmentSessionInputs final {
   const security::SecureBuffer& api_key;
   const security::SecureBuffer& user_pin;
   const security::SecureBuffer* blob{};
+  std::uint32_t expected_hardware_id{};
 };
 
 constexpr DWORD64 kHelperMitigations =
@@ -1053,7 +1054,7 @@ namespace {
     const std::filesystem::path* const vendor_path,
     const Sha256Digest* const vendor_digest,
     const DevelopmentSessionInputs* const session_inputs,
-    std::uint32_t* const session_observation,
+    std::uint32_t* const success_detail,
     const HelperBoundary boundary,
     const std::chrono::milliseconds timeout,
     security::SecureBuffer* const blob_response = nullptr) {
@@ -1063,6 +1064,7 @@ namespace {
   }
   const bool session_required =
       operation == helper::Operation::development_session_probe ||
+      operation == helper::Operation::card_identity_probe ||
       operation ==
           helper::Operation::development_blob_round_trip_probe ||
       operation == helper::Operation::development_blob_read ||
@@ -1079,14 +1081,19 @@ namespace {
   const bool vendor_required =
       operation == helper::Operation::vendor_runtime_probe ||
       session_required;
+  const bool expected_identity_required =
+      operation == helper::Operation::card_record_read ||
+      operation == helper::Operation::card_record_write;
+  const bool success_detail_required =
+      operation == helper::Operation::development_session_probe ||
+      operation == helper::Operation::card_identity_probe;
   if (vendor_required !=
       (vendor_path != nullptr && vendor_digest != nullptr)) {
     throw_card(CardError::invalid_configuration,
                "ViKey vendor probe configuration is incomplete");
   }
   if (session_required != (session_inputs != nullptr) ||
-      (operation == helper::Operation::development_session_probe) !=
-          (session_observation != nullptr) ||
+      success_detail_required != (success_detail != nullptr) ||
       blob_output_required != (blob_response != nullptr) ||
       (session_required &&
        boundary != HelperBoundary::network_enabled_development)) {
@@ -1097,6 +1104,8 @@ namespace {
       (session_inputs->user_sn.size() != kVikeyUserSnBytes ||
        session_inputs->api_key.size() != kVikeyApiKeyBytes ||
        session_inputs->user_pin.size() != kVikeyUserPinBytes ||
+       expected_identity_required !=
+           (session_inputs->expected_hardware_id != 0) ||
        blob_input_required != (session_inputs->blob != nullptr) ||
        (session_inputs->blob != nullptr &&
         session_inputs->blob->size() !=
@@ -1298,14 +1307,22 @@ namespace {
         request.payload_bytes = helper::kCardRecordReadPayloadBytes;
         helper::write_card_record_read_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->expected_hardware_id,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin);
       } else if (operation == helper::Operation::card_record_write) {
         request.payload_bytes = helper::kCardRecordWritePayloadBytes;
         helper::write_card_record_write_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->expected_hardware_id,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin, *session_inputs->blob);
+      } else if (operation == helper::Operation::card_identity_probe) {
+        request.payload_bytes = helper::kCardIdentityProbePayloadBytes;
+        helper::write_card_identity_probe_request(
+            request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->user_sn, session_inputs->api_key,
+            session_inputs->user_pin);
       } else {
         request.payload_bytes = helper::kDevelopmentSessionPayloadBytes;
         helper::write_development_session_request(
@@ -1345,8 +1362,8 @@ namespace {
     }
     require_clean_exit(process.get(), response_pipe.parent_end.get(),
                        deadline);
-    if (session_observation != nullptr) {
-      *session_observation = response.detail;
+    if (success_detail != nullptr) {
+      *success_detail = response.detail;
     }
     result.security_properties = security_properties;
   } catch (...) {
@@ -1471,6 +1488,38 @@ probe_vikey_development_session_with_network_access(
   };
 }
 
+VikeyCardIdentityProbe
+probe_vikey_development_card_identity_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = nullptr,
+      .expected_hardware_id = 0};
+  std::uint32_t hardware_id = 0;
+  const VikeyHelperProbe probe = probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::card_identity_probe, &vendor_path,
+      &expected_vendor_digest, &inputs, &hardware_id,
+      HelperBoundary::network_enabled_development, timeout);
+  if (hardware_id == 0) {
+    throw_card(CardError::device_failure,
+               "ViKey helper returned a zero hardware identity");
+  }
+  return {.security_properties = probe.security_properties,
+          .hardware_id = hardware_id};
+}
+
 VikeyHelperProbe
 probe_vikey_development_blob_round_trip_with_network_access(
     const std::filesystem::path& helper_path,
@@ -1551,6 +1600,7 @@ read_vikey_development_card_record_with_network_access(
     const Sha256Digest& expected_helper_digest,
     const std::filesystem::path& vendor_directory,
     const Sha256Digest& expected_vendor_digest,
+    const std::uint32_t expected_hardware_id,
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
@@ -1561,7 +1611,8 @@ read_vikey_development_card_record_with_network_access(
       .user_sn = user_sn,
       .api_key = api_key,
       .user_pin = user_pin,
-      .blob = nullptr};
+      .blob = nullptr,
+      .expected_hardware_id = expected_hardware_id};
   security::SecureBuffer record;
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
@@ -1576,6 +1627,7 @@ void write_vikey_development_card_record_with_network_access(
     const Sha256Digest& expected_helper_digest,
     const std::filesystem::path& vendor_directory,
     const Sha256Digest& expected_vendor_digest,
+    const std::uint32_t expected_hardware_id,
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
@@ -1587,7 +1639,8 @@ void write_vikey_development_card_record_with_network_access(
       .user_sn = user_sn,
       .api_key = api_key,
       .user_pin = user_pin,
-      .blob = &record};
+      .blob = &record,
+      .expected_hardware_id = expected_hardware_id};
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
       helper::Operation::card_record_write, &vendor_path,

@@ -14,8 +14,9 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 6;
+constexpr std::uint16_t kVersion = 7;
 constexpr std::size_t kNonceSize = 16;
+constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
     static_cast<std::uint32_t>(Sha256Digest{}.size() + kVikeyUserSnBytes +
                                kVikeyApiKeyBytes + kVikeyUserPinBytes);
@@ -28,10 +29,12 @@ constexpr std::uint32_t kDevelopmentBlobWritePayloadBytes =
     kDevelopmentSessionPayloadBytes +
     static_cast<std::uint32_t>(kVikeyBlobBytes);
 constexpr std::uint32_t kCardRecordReadPayloadBytes =
-    kDevelopmentSessionPayloadBytes;
+    kDevelopmentSessionPayloadBytes + kHardwareIdentityBytes;
 constexpr std::uint32_t kCardRecordWritePayloadBytes =
-    kDevelopmentSessionPayloadBytes +
+    kCardRecordReadPayloadBytes +
     static_cast<std::uint32_t>(kCardRecordV1Size);
+constexpr std::uint32_t kCardIdentityProbePayloadBytes =
+    kDevelopmentSessionPayloadBytes;
 
 enum class Operation : std::uint32_t {
   probe = 1,
@@ -43,6 +46,7 @@ enum class Operation : std::uint32_t {
   development_blob_write = 7,
   card_record_read = 8,
   card_record_write = 9,
+  card_identity_probe = 10,
 };
 
 enum class SecurityProperty : std::uint32_t {
@@ -163,6 +167,23 @@ struct DevelopmentBlobWriteRequest final {
   security::SecureBuffer blob;
 };
 
+struct CardRecordSessionRequest final {
+  CardRecordSessionRequest();
+
+  CardRecordSessionRequest(const CardRecordSessionRequest&) = delete;
+  CardRecordSessionRequest& operator=(const CardRecordSessionRequest&) =
+      delete;
+  CardRecordSessionRequest(CardRecordSessionRequest&&) noexcept = default;
+  CardRecordSessionRequest& operator=(CardRecordSessionRequest&&) noexcept =
+      default;
+
+  Sha256Digest vendor_digest{};
+  std::uint32_t expected_hardware_id{};
+  security::SecureBuffer user_sn;
+  security::SecureBuffer api_key;
+  security::SecureBuffer user_pin;
+};
+
 struct CardRecordWriteRequest final {
   CardRecordWriteRequest();
 
@@ -173,6 +194,7 @@ struct CardRecordWriteRequest final {
       default;
 
   Sha256Digest vendor_digest{};
+  std::uint32_t expected_hardware_id{};
   security::SecureBuffer user_sn;
   security::SecureBuffer api_key;
   security::SecureBuffer user_pin;
@@ -245,6 +267,13 @@ void write_development_session_request(
     const security::SecureBuffer& user_pin);
 [[nodiscard]] DevelopmentSessionRequest read_development_session_request(
     HANDLE pipe, const Request& request);
+void write_card_identity_probe_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] DevelopmentSessionRequest read_card_identity_probe_request(
+    HANDLE pipe, const Request& request);
 void write_development_blob_round_trip_request(
     HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
     const security::SecureBuffer& user_sn,
@@ -271,13 +300,15 @@ void write_development_blob_write_request(
 read_development_blob_write_request(HANDLE pipe, const Request& request);
 void write_card_record_read_request(
     HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    std::uint32_t expected_hardware_id,
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin);
-[[nodiscard]] DevelopmentSessionRequest read_card_record_read_request(
+[[nodiscard]] CardRecordSessionRequest read_card_record_read_request(
     HANDLE pipe, const Request& request);
 void write_card_record_write_request(
     HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    std::uint32_t expected_hardware_id,
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,

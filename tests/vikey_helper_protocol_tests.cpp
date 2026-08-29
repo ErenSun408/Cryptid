@@ -113,6 +113,21 @@ void test_request_validation() {
   request.operation = Operation::card_record_write;
   request.payload_bytes = kCardRecordWritePayloadBytes;
   expect(valid_request(request), "card record write request was rejected");
+  request.operation = Operation::card_identity_probe;
+  request.payload_bytes = kCardIdentityProbePayloadBytes;
+  expect(valid_request(request), "card identity request was rejected");
+  request.operation = Operation::card_record_read;
+  request.payload_bytes = kDevelopmentSessionPayloadBytes;
+  expect(!valid_request(request),
+         "v7 card record read accepted the v6 payload shape");
+  request.operation = Operation::card_record_write;
+  request.payload_bytes =
+      kDevelopmentSessionPayloadBytes +
+      static_cast<std::uint32_t>(kCardRecordV1Size);
+  expect(!valid_request(request),
+         "v7 card record write accepted the v6 payload shape");
+  request.operation = Operation::card_identity_probe;
+  request.payload_bytes = kCardIdentityProbePayloadBytes;
   request.version = static_cast<std::uint16_t>(kVersion + 1);
   expect(!valid_request(request), "unknown request version was accepted");
   request = Request{};
@@ -178,6 +193,32 @@ void test_development_session_request_round_trip() {
                       "session write changed the caller API key");
   expect_fixed_secret(user_pin, std::byte{'P'},
                       "session write changed the caller PIN");
+}
+
+void test_card_identity_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  Request sent{};
+  sent.operation = Operation::card_identity_probe;
+  sent.payload_bytes = kCardIdentityProbePayloadBytes;
+  Sha256Digest digest{};
+  digest[3] = std::byte{0x71};
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+
+  write_card_identity_probe_request(pipe.write.get(), sent, digest, user_sn,
+                                    api_key, user_pin);
+  const Request received = read_request(pipe.read.get());
+  DevelopmentSessionRequest body =
+      read_card_identity_probe_request(pipe.read.get(), received);
+  expect(body.vendor_digest == digest,
+         "card identity digest did not round-trip");
+  expect_fixed_secret(body.user_sn, std::byte{'A'},
+                      "card identity UserSN did not round-trip");
+  expect_fixed_secret(body.api_key, std::byte{'B'},
+                      "card identity API key did not round-trip");
+  expect_fixed_secret(body.user_pin, std::byte{'P'},
+                      "card identity PIN did not round-trip");
 }
 
 void test_development_session_request_rejects_wrong_sizes() {
@@ -311,18 +352,22 @@ void test_card_record_read_write_requests() {
   const auto record = fixed_secret(kCardRecordV1Size, std::byte{0x6d});
   Sha256Digest digest{};
   digest[5] = std::byte{0x91};
+  constexpr std::uint32_t kExpectedHardwareId = 0x12345678U;
 
   const Pipe read_pipe = make_pipe();
   Request read_header{};
   read_header.operation = Operation::card_record_read;
   read_header.payload_bytes = kCardRecordReadPayloadBytes;
   write_card_record_read_request(read_pipe.write.get(), read_header, digest,
-                                 user_sn, api_key, user_pin);
+                                 kExpectedHardwareId, user_sn, api_key,
+                                 user_pin);
   const Request received_read_header = read_request(read_pipe.read.get());
-  DevelopmentSessionRequest read_body = read_card_record_read_request(
+  CardRecordSessionRequest read_body = read_card_record_read_request(
       read_pipe.read.get(), received_read_header);
   expect(read_body.vendor_digest == digest,
          "card record read digest did not round-trip");
+  expect(read_body.expected_hardware_id == kExpectedHardwareId,
+         "card record read identity did not round-trip");
   expect_fixed_secret(read_body.user_sn, std::byte{'A'},
                       "card record read UserSN did not round-trip");
 
@@ -331,12 +376,15 @@ void test_card_record_read_write_requests() {
   write_header.operation = Operation::card_record_write;
   write_header.payload_bytes = kCardRecordWritePayloadBytes;
   write_card_record_write_request(write_pipe.write.get(), write_header,
-                                  digest, user_sn, api_key, user_pin, record);
+                                  digest, kExpectedHardwareId, user_sn,
+                                  api_key, user_pin, record);
   const Request received_write_header = read_request(write_pipe.read.get());
   CardRecordWriteRequest write_body = read_card_record_write_request(
       write_pipe.read.get(), received_write_header);
   expect(write_body.vendor_digest == digest,
          "card record write digest did not round-trip");
+  expect(write_body.expected_hardware_id == kExpectedHardwareId,
+         "card record write identity did not round-trip");
   expect_fixed_secret(write_body.record, std::byte{0x6d},
                       "card record write data did not round-trip");
   expect_fixed_secret(record, std::byte{0x6d},
@@ -347,10 +395,17 @@ void test_card_record_read_write_requests() {
   expect_protocol_error(
       [&] {
         write_card_record_write_request(
-            write_pipe.write.get(), write_header, digest, user_sn, api_key,
-            user_pin, short_record);
+            write_pipe.write.get(), write_header, digest,
+            kExpectedHardwareId, user_sn, api_key, user_pin, short_record);
       },
       "short card record was accepted");
+  expect_protocol_error(
+      [&] {
+        write_card_record_read_request(
+            read_pipe.write.get(), read_header, digest, 0, user_sn, api_key,
+            user_pin);
+      },
+      "zero expected hardware identity was accepted");
 }
 
 void test_response_round_trip() {
@@ -422,6 +477,12 @@ void test_response_validation() {
   expect(!valid_response(
              response, Operation::development_blob_round_trip_probe),
          "successful blob response retained a nonzero detail");
+  response.detail = 0;
+  expect(!valid_response(response, Operation::card_identity_probe),
+         "zero card identity response was accepted");
+  response.detail = 0x12345678U;
+  expect(valid_response(response, Operation::card_identity_probe),
+         "nonzero card identity response was rejected");
   response.detail = 0;
   expect(!valid_response(response, Operation::development_blob_read),
          "blob read response without a payload was accepted");
@@ -505,6 +566,7 @@ int main() {
     test_request_round_trip();
     test_request_validation();
     test_development_session_request_round_trip();
+    test_card_identity_request_round_trip();
     test_development_session_request_rejects_wrong_sizes();
     test_development_blob_request_round_trip();
     test_development_blob_request_rejects_wrong_sizes();

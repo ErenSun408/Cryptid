@@ -72,16 +72,19 @@ bool valid_request(const Request& request) noexcept {
       request.operation == Operation::development_blob_read ||
       request.operation == Operation::development_blob_write ||
       request.operation == Operation::card_record_read ||
-      request.operation == Operation::card_record_write;
+      request.operation == Operation::card_record_write ||
+      request.operation == Operation::card_identity_probe;
   std::uint32_t required_payload = 0;
   if (request.operation == Operation::development_session_probe ||
       request.operation == Operation::development_blob_read ||
-      request.operation == Operation::card_record_read) {
+      request.operation == Operation::card_identity_probe) {
     required_payload = kDevelopmentSessionPayloadBytes;
   } else if (request.operation ==
                  Operation::development_blob_round_trip_probe ||
              request.operation == Operation::development_blob_write) {
     required_payload = kDevelopmentBlobRoundTripPayloadBytes;
+  } else if (request.operation == Operation::card_record_read) {
+    required_payload = kCardRecordReadPayloadBytes;
   } else if (request.operation == Operation::card_record_write) {
     required_payload = kCardRecordWritePayloadBytes;
   }
@@ -109,6 +112,9 @@ bool valid_response(const Response& response,
     if (expected_operation == Operation::development_session_probe) {
       return valid_development_session_observation(
           unpack_development_session_observation(response.detail));
+    }
+    if (expected_operation == Operation::card_identity_probe) {
+      return response.detail != 0;
     }
     return response.detail == 0;
   }
@@ -151,6 +157,11 @@ DevelopmentBlobWriteRequest::DevelopmentBlobWriteRequest()
       user_pin(kVikeyUserPinBytes),
       blob(kVikeyBlobBytes) {}
 
+CardRecordSessionRequest::CardRecordSessionRequest()
+    : user_sn(kVikeyUserSnBytes),
+      api_key(kVikeyApiKeyBytes),
+      user_pin(kVikeyUserPinBytes) {}
+
 CardRecordWriteRequest::CardRecordWriteRequest()
     : user_sn(kVikeyUserSnBytes),
       api_key(kVikeyApiKeyBytes),
@@ -182,6 +193,40 @@ DevelopmentSessionRequest read_development_session_request(
   if (!valid_request(request) ||
       request.operation != Operation::development_session_probe) {
     throw_protocol("reject invalid ViKey development session request");
+  }
+  DevelopmentSessionRequest result;
+  read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, result.user_sn.bytes());
+  read_exact(pipe, result.api_key.bytes());
+  read_exact(pipe, result.user_pin.bytes());
+  return result;
+}
+
+void write_card_identity_probe_request(
+    const HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin) {
+  if (!valid_request(request) ||
+      request.operation != Operation::card_identity_probe ||
+      user_sn.size() != kVikeyUserSnBytes ||
+      api_key.size() != kVikeyApiKeyBytes ||
+      user_pin.size() != kVikeyUserPinBytes) {
+    throw_protocol("refuse invalid ViKey card identity request");
+  }
+  write_exact(pipe, message_bytes(request));
+  write_exact(pipe, vendor_digest);
+  write_exact(pipe, user_sn.bytes());
+  write_exact(pipe, api_key.bytes());
+  write_exact(pipe, user_pin.bytes());
+}
+
+DevelopmentSessionRequest read_card_identity_probe_request(
+    const HANDLE pipe, const Request& request) {
+  if (!valid_request(request) ||
+      request.operation != Operation::card_identity_probe) {
+    throw_protocol("reject invalid ViKey card identity request");
   }
   DevelopmentSessionRequest result;
   read_exact(pipe, result.vendor_digest);
@@ -304,11 +349,13 @@ DevelopmentBlobWriteRequest read_development_blob_write_request(
 void write_card_record_read_request(
     const HANDLE pipe, const Request& request,
     const Sha256Digest& vendor_digest,
+    const std::uint32_t expected_hardware_id,
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin) {
   if (!valid_request(request) ||
       request.operation != Operation::card_record_read ||
+      expected_hardware_id == 0 ||
       user_sn.size() != kVikeyUserSnBytes ||
       api_key.size() != kVikeyApiKeyBytes ||
       user_pin.size() != kVikeyUserPinBytes) {
@@ -316,34 +363,41 @@ void write_card_record_read_request(
   }
   write_exact(pipe, message_bytes(request));
   write_exact(pipe, vendor_digest);
+  write_exact(pipe, message_bytes(expected_hardware_id));
   write_exact(pipe, user_sn.bytes());
   write_exact(pipe, api_key.bytes());
   write_exact(pipe, user_pin.bytes());
 }
 
-DevelopmentSessionRequest read_card_record_read_request(
+CardRecordSessionRequest read_card_record_read_request(
     const HANDLE pipe, const Request& request) {
   if (!valid_request(request) ||
       request.operation != Operation::card_record_read) {
     throw_protocol("reject invalid ViKey card record read request");
   }
-  DevelopmentSessionRequest result;
+  CardRecordSessionRequest result;
   read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, mutable_message_bytes(result.expected_hardware_id));
   read_exact(pipe, result.user_sn.bytes());
   read_exact(pipe, result.api_key.bytes());
   read_exact(pipe, result.user_pin.bytes());
+  if (result.expected_hardware_id == 0) {
+    throw_protocol("reject zero ViKey card record identity");
+  }
   return result;
 }
 
 void write_card_record_write_request(
     const HANDLE pipe, const Request& request,
     const Sha256Digest& vendor_digest,
+    const std::uint32_t expected_hardware_id,
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
     const security::SecureBuffer& record) {
   if (!valid_request(request) ||
       request.operation != Operation::card_record_write ||
+      expected_hardware_id == 0 ||
       user_sn.size() != kVikeyUserSnBytes ||
       api_key.size() != kVikeyApiKeyBytes ||
       user_pin.size() != kVikeyUserPinBytes ||
@@ -352,6 +406,7 @@ void write_card_record_write_request(
   }
   write_exact(pipe, message_bytes(request));
   write_exact(pipe, vendor_digest);
+  write_exact(pipe, message_bytes(expected_hardware_id));
   write_exact(pipe, user_sn.bytes());
   write_exact(pipe, api_key.bytes());
   write_exact(pipe, user_pin.bytes());
@@ -366,10 +421,14 @@ CardRecordWriteRequest read_card_record_write_request(
   }
   CardRecordWriteRequest result;
   read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, mutable_message_bytes(result.expected_hardware_id));
   read_exact(pipe, result.user_sn.bytes());
   read_exact(pipe, result.api_key.bytes());
   read_exact(pipe, result.user_pin.bytes());
   read_exact(pipe, result.record.bytes());
+  if (result.expected_hardware_id == 0) {
+    throw_protocol("reject zero ViKey card record identity");
+  }
   return result;
 }
 

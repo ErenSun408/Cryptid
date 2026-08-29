@@ -30,6 +30,8 @@ using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::
     probe_vikey_development_blob_round_trip_with_network_access;
 using usb_vault::card::vikey::
+    probe_vikey_development_card_identity_with_network_access;
+using usb_vault::card::vikey::
     probe_vikey_development_helper_with_network_access;
 using usb_vault::card::vikey::
     probe_vikey_development_session_with_network_access;
@@ -535,8 +537,25 @@ void test_formal_card_record_backend_staging(
       .vendor_digest = file_digest(vendor),
       .timeout = 5s,
   };
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
+  const auto identity =
+      probe_vikey_development_card_identity_with_network_access(
+          helper, config.helper_digest, vendor.parent_path(),
+          config.vendor_digest, user_sn, api_key, user_pin, 5s);
+  expect(identity.hardware_id == 1,
+         "card identity probe returned the wrong hardware ID");
+  expect(identity.security_properties ==
+             usb_vault::card::vikey::helper::
+                 kDevelopmentCompatibilitySecurityProperties,
+         "card identity probe lost a restricted-process property");
   CountingCredentialProvider provider;
-  VikeyHelperCardRecordBackend backend(config, provider);
+  VikeyHelperCardRecordBackend backend(config, provider,
+                                       identity.hardware_id);
   VikeyCardRecordStore store(backend);
 
   SecureBuffer observed = store.get_blob();
@@ -567,10 +586,38 @@ void test_formal_card_record_backend_staging(
   expect(development_helper_directory_count() == directories_before,
          "development card-record operations left staging residue");
 
+  CountingCredentialProvider mismatched_provider;
+  VikeyHelperCardRecordBackend mismatched_backend(
+      config, mismatched_provider, identity.hardware_id + 1U);
+  VikeyCardRecordStore mismatched_store(mismatched_backend);
+  try {
+    static_cast<void>(mismatched_store.get_blob());
+    fail("mismatched card-record hardware identity was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::device_failure),
+           "mismatched card-record identity returned the wrong error");
+  }
+  expect(mismatched_provider.loads == 1,
+         "mismatched card-record identity retried credentials");
+  expect(development_helper_directory_count() == directories_before,
+         "mismatched card-record identity left staging residue");
+
+  try {
+    VikeyHelperCardRecordBackend zero_identity_backend(config, provider, 0);
+    static_cast<void>(zero_identity_backend);
+    fail("zero card-record hardware identity was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "zero card-record identity returned the wrong error");
+  }
+
   CountingCredentialProvider failing_provider;
   failing_provider.fail_load = true;
   VikeyHelperCardRecordBackend failing_backend(std::move(config),
-                                                failing_provider);
+                                                failing_provider,
+                                                identity.hardware_id);
   VikeyCardRecordStore failing_store(failing_backend);
   try {
     static_cast<void>(failing_store.get_blob());

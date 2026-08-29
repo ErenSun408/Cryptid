@@ -247,6 +247,44 @@ struct BlobReadResult final {
   }
 }
 
+[[nodiscard]] OperationResult card_identity_probe(
+    const DevelopmentSessionRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+    const std::uint32_t hardware_id = session.hardware_id();
+    const std::error_code close_error = session.close();
+    if (close_error) return {.status = close_error.value()};
+    return {.detail = hardware_id};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
+void require_expected_hardware_identity(
+    const usb_vault::card::vikey::VikeySession& session,
+    const std::uint32_t expected_hardware_id) {
+  if (expected_hardware_id == 0 ||
+      session.hardware_id() != expected_hardware_id) {
+    throw std::system_error(
+        usb_vault::card::make_error_code(CardError::device_failure),
+        "ViKey helper opened an unexpected hardware identity");
+  }
+}
+
 [[nodiscard]] OperationResult development_blob_round_trip(
     const DevelopmentBlobRoundTripRequest& request) {
   try {
@@ -379,7 +417,7 @@ struct BlobReadResult final {
 }
 
 [[nodiscard]] BlobReadResult card_record_read(
-    const DevelopmentSessionRequest& request) {
+    const CardRecordSessionRequest& request) {
   try {
     const std::filesystem::path staged = staged_vendor_dll();
     auto verified = usb_vault::card::vikey::verify_vikey_dll(
@@ -389,6 +427,8 @@ struct BlobReadResult final {
     auto session = usb_vault::card::vikey::VikeySession::open(
         module.functions(), request.user_sn, request.api_key,
         request.user_pin);
+    require_expected_hardware_identity(session,
+                                       request.expected_hardware_id);
 
     usb_vault::security::SecureBuffer record;
     OperationResult result{};
@@ -437,6 +477,8 @@ struct BlobReadResult final {
     auto session = usb_vault::card::vikey::VikeySession::open(
         module.functions(), request.user_sn, request.api_key,
         request.user_pin);
+    require_expected_hardware_identity(session,
+                                       request.expected_hardware_id);
 
     OperationResult result{};
     try {
@@ -499,6 +541,12 @@ struct BlobReadResult final {
                  : OperationResult{
                        .status = static_cast<std::int32_t>(
                            CardError::invalid_operation)};
+    case Operation::card_identity_probe:
+      return session_request != nullptr
+                 ? card_identity_probe(*session_request)
+                 : OperationResult{
+                       .status = static_cast<std::int32_t>(
+                           CardError::invalid_operation)};
     case Operation::development_blob_round_trip_probe:
     case Operation::development_blob_read:
     case Operation::development_blob_write:
@@ -541,7 +589,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
             request.operation == Operation::development_blob_read ||
             request.operation == Operation::development_blob_write ||
             request.operation == Operation::card_record_read ||
-            request.operation == Operation::card_record_write) {
+            request.operation == Operation::card_record_write ||
+            request.operation == Operation::card_identity_probe) {
           if (environment !=
               EnvironmentBoundary::network_enabled_development) {
             result.status =
@@ -551,6 +600,12 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
               DevelopmentSessionRequest session_request =
                   read_development_session_request(request_handle, request);
               result = operation_result(request.operation, &session_request);
+            } else if (request.operation ==
+                       Operation::card_identity_probe) {
+              DevelopmentSessionRequest identity_request =
+                  read_card_identity_probe_request(request_handle, request);
+              result = operation_result(request.operation,
+                                        &identity_request);
             } else {
               if (request.operation ==
                   Operation::development_blob_round_trip_probe) {
@@ -574,7 +629,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                                                         request);
                 result = development_blob_write(blob_request);
               } else if (request.operation == Operation::card_record_read) {
-                DevelopmentSessionRequest record_request =
+                CardRecordSessionRequest record_request =
                     read_card_record_read_request(request_handle, request);
                 BlobReadResult read_result =
                     card_record_read(record_request);

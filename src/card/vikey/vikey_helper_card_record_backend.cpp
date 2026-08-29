@@ -25,9 +25,17 @@ namespace {
 
 VikeyHelperCardRecordBackend::VikeyHelperCardRecordBackend(
     VikeyHelperBackendConfig config,
-    IVikeyCredentialProvider& credential_provider)
+    IVikeyCredentialProvider& credential_provider,
+    const std::uint32_t expected_hardware_id)
     : config_(std::move(config)),
-      credential_provider_(credential_provider) {}
+      credential_provider_(credential_provider),
+      expected_hardware_id_(expected_hardware_id) {
+  if (expected_hardware_id_ == 0) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey card-record backend requires a hardware identity");
+  }
+}
 
 security::SecureBuffer VikeyHelperCardRecordBackend::read_record() {
   try {
@@ -36,6 +44,7 @@ security::SecureBuffer VikeyHelperCardRecordBackend::read_record() {
     return read_vikey_development_card_record_with_network_access(
         config_.helper_path, config_.helper_digest,
         config_.vendor_directory, config_.vendor_digest,
+        expected_hardware_id_,
         credentials.user_sn, credentials.api_key, credentials.user_pin,
         config_.timeout);
   } catch (...) {
@@ -51,6 +60,7 @@ void VikeyHelperCardRecordBackend::write_record(
     write_vikey_development_card_record_with_network_access(
         config_.helper_path, config_.helper_digest,
         config_.vendor_directory, config_.vendor_digest,
+        expected_hardware_id_,
         credentials.user_sn, credentials.api_key, credentials.user_pin,
         record, config_.timeout);
   } catch (...) {

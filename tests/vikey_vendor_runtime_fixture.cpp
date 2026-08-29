@@ -201,7 +201,8 @@ VikeyGetLevel(const WORD index, BYTE* const level) {
 
 extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyLogoff(const WORD index) {
-  if ((session_state != SessionState::attempts_rechecked &&
+  if ((session_state != SessionState::level_read &&
+       session_state != SessionState::attempts_rechecked &&
        session_state != SessionState::restore_verified &&
        session_state != SessionState::initial_data_read &&
        session_state != SessionState::standalone_written &&
