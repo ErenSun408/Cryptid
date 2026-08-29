@@ -66,6 +66,12 @@ sdk::Status __stdcall set_api_key(sdk::Index, char*) {
 
 sdk::Status __stdcall uninitialization() { return sdk::kSuccess; }
 
+sdk::Status __stdcall get_hid(sdk::Index,
+                              std::uint32_t* const hardware_id) {
+  if (hardware_id != nullptr) *hardware_id = 0x12345678U;
+  return sdk::kSuccess;
+}
+
 sdk::Status __stdcall get_level(sdk::Index, sdk::Byte* const level) {
   if (level != nullptr) *level = 1;
   return sdk::kSuccess;
@@ -131,6 +137,7 @@ sdk::Status __stdcall write_data(const sdk::Index index,
           .find_ex = &find_ex,
           .set_api_key = &set_api_key,
           .uninitialization = &uninitialization,
+          .get_hid = &get_hid,
           .get_level = &get_level,
           .get_user_data_size = &get_user_data_size,
           .get_user_password_attempt = &get_attempts,

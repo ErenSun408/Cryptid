@@ -4,6 +4,7 @@
 #include "usb_vault/security/secure_buffer.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <system_error>
 
@@ -40,6 +41,7 @@ class VikeySession final {
   [[nodiscard]] std::error_code close() noexcept;
   [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] sdk::Index index() const noexcept;
+  [[nodiscard]] std::uint32_t hardware_id() const noexcept;
   [[nodiscard]] sdk::Byte user_pin_attempts_remaining() const noexcept;
   [[nodiscard]] sdk::Byte user_pin_attempts_maximum() const noexcept;
   [[nodiscard]] security::SecureBuffer read_user_blob();
@@ -47,6 +49,7 @@ class VikeySession final {
 
  private:
   VikeySession(sdk::Functions functions, sdk::Index index,
+               std::uint32_t hardware_id,
                sdk::Byte attempts_remaining,
                sdk::Byte attempts_maximum) noexcept;
 
@@ -56,9 +59,11 @@ class VikeySession final {
       std::size_t offset, std::size_t length);
   void write_user_data(std::size_t offset,
                        std::span<const std::byte> bytes);
+  void verify_hardware_identity() const;
 
   sdk::Functions functions_{};
   sdk::Index index_{};
+  std::uint32_t hardware_id_{};
   sdk::Byte attempts_remaining_{};
   sdk::Byte attempts_maximum_{};
   bool logged_in_{true};

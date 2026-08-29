@@ -64,6 +64,7 @@ void validate_functions(const sdk::Functions& functions) {
   if (functions.set_user_sn == nullptr || functions.find_ex == nullptr ||
       functions.set_api_key == nullptr ||
       functions.uninitialization == nullptr ||
+      functions.get_hid == nullptr ||
       functions.get_level == nullptr ||
       functions.get_user_data_size == nullptr ||
       functions.get_user_password_attempt == nullptr ||
@@ -72,6 +73,18 @@ void validate_functions(const sdk::Functions& functions) {
     fail(CardError::invalid_configuration,
          "ViKey session function table is incomplete");
   }
+}
+
+[[nodiscard]] std::uint32_t read_hardware_id(
+    const sdk::Functions& functions, const sdk::Index index) {
+  std::uint32_t hardware_id = 0;
+  require_success(functions.get_hid(index, &hardware_id),
+                  "read ViKey hardware identity");
+  if (hardware_id == 0) {
+    fail(CardError::device_failure,
+         "ViKey reported an unusable hardware identity");
+  }
+  return hardware_id;
 }
 
 void require_active(const bool active) {
@@ -154,10 +167,12 @@ class PendingSession final {
 
 VikeySession::VikeySession(sdk::Functions functions,
                            const sdk::Index index,
+                           const std::uint32_t hardware_id,
                            const sdk::Byte attempts_remaining,
                            const sdk::Byte attempts_maximum) noexcept
     : functions_(functions),
       index_(index),
+      hardware_id_(hardware_id),
       attempts_remaining_(attempts_remaining),
       attempts_maximum_(attempts_maximum) {}
 
@@ -190,6 +205,8 @@ VikeySession VikeySession::open(
          "ViKey session requires exactly one connected device");
   }
   constexpr sdk::Index kSelectedIndex = 0;
+  const std::uint32_t hardware_id =
+      read_hardware_id(functions, kSelectedIndex);
 
   require_success(
       call_with_secret(api_key, [&](char* const value) {
@@ -226,9 +243,13 @@ VikeySession VikeySession::open(
     fail(CardError::device_failure,
          "ViKey login succeeded without user permission level");
   }
+  if (read_hardware_id(functions, kSelectedIndex) != hardware_id) {
+    fail(CardError::device_failure,
+         "ViKey hardware identity changed during authentication");
+  }
 
   pending.release();
-  return VikeySession(functions, kSelectedIndex, current_attempt,
+  return VikeySession(functions, kSelectedIndex, hardware_id, current_attempt,
                       maximum_attempt);
 }
 
@@ -246,6 +267,10 @@ bool VikeySession::active() const noexcept {
 
 sdk::Index VikeySession::index() const noexcept { return index_; }
 
+std::uint32_t VikeySession::hardware_id() const noexcept {
+  return hardware_id_;
+}
+
 sdk::Byte VikeySession::user_pin_attempts_remaining() const noexcept {
   return attempts_remaining_;
 }
@@ -256,6 +281,7 @@ sdk::Byte VikeySession::user_pin_attempts_maximum() const noexcept {
 
 security::SecureBuffer VikeySession::read_user_blob() {
   require_active(active());
+  verify_hardware_identity();
   require_blob_capacity(functions_, index_);
   security::SecureBuffer result(kVikeyBlobBytes);
   require_success(
@@ -274,6 +300,7 @@ void VikeySession::write_user_blob(
          "ViKey user blob must contain exactly 32 bytes");
   }
   require_active(active());
+  verify_hardware_identity();
   require_blob_capacity(functions_, index_);
   security::SecureBuffer argument(blob.size());
   std::ranges::copy(blob.bytes(), argument.bytes().begin());
@@ -287,6 +314,7 @@ void VikeySession::write_user_blob(
 
 std::size_t VikeySession::user_data_capacity() {
   require_active(active());
+  verify_hardware_identity();
   sdk::Length bytes = 0;
   require_success(functions_.get_user_data_size(index_, &bytes),
                   "read ViKey card journal capacity");
@@ -302,6 +330,7 @@ security::SecureBuffer VikeySession::read_user_data(
     fail(CardError::invalid_operation,
          "ViKey card journal read range is invalid");
   }
+  verify_hardware_identity();
   security::SecureBuffer result(length);
   require_success(
       functions_.read_data(
@@ -322,6 +351,7 @@ void VikeySession::write_user_data(
     fail(CardError::invalid_operation,
          "ViKey card journal write range is invalid");
   }
+  verify_hardware_identity();
   security::SecureBuffer argument(bytes.size());
   std::ranges::copy(bytes, argument.bytes().begin());
   require_success(
@@ -330,6 +360,13 @@ void VikeySession::write_user_data(
           static_cast<sdk::Length>(argument.size()),
           reinterpret_cast<sdk::Byte*>(argument.data())),
       "write ViKey card journal range");
+}
+
+void VikeySession::verify_hardware_identity() const {
+  if (read_hardware_id(functions_, index_) != hardware_id_) {
+    fail(CardError::device_failure,
+         "ViKey hardware identity changed during the active session");
+  }
 }
 
 }  // namespace usb_vault::card::vikey

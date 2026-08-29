@@ -46,6 +46,8 @@ struct FakeSdk final {
   sdk::Status get_attempts_status{sdk::kSuccess};
   sdk::Status login_status{sdk::kSuccess};
   sdk::Status get_level_status{sdk::kSuccess};
+  sdk::Status get_hid_status{sdk::kSuccess};
+  std::vector<sdk::Status> get_hid_statuses;
   sdk::Status get_user_data_size_status{sdk::kSuccess};
   sdk::Status read_data_status{sdk::kSuccess};
   sdk::Status write_data_status{sdk::kSuccess};
@@ -54,6 +56,8 @@ struct FakeSdk final {
   sdk::Status logoff_status{sdk::kSuccess};
   sdk::Status uninitialization_status{sdk::kSuccess};
   std::uint32_t device_count{1};
+  std::uint32_t hardware_id{0x12345678U};
+  std::vector<std::uint32_t> hardware_ids;
   sdk::Byte current_attempt{200};
   sdk::Byte maximum_attempt{200};
   sdk::Byte level{1};
@@ -64,6 +68,7 @@ struct FakeSdk final {
   bool credentials_matched{true};
   std::size_t read_data_calls{};
   std::size_t write_data_calls{};
+  std::size_t get_hid_calls{};
   std::vector<Call> calls;
 };
 
@@ -128,6 +133,21 @@ sdk::Status __stdcall fake_uninitialization() {
   FakeSdk& state = fake();
   state.calls.push_back(Call::uninitialization);
   return state.uninitialization_status;
+}
+
+sdk::Status __stdcall fake_get_hid(
+    const sdk::Index index, std::uint32_t* const hardware_id) {
+  FakeSdk& state = fake();
+  const std::size_t call = state.get_hid_calls++;
+  state.credentials_matched = state.credentials_matched && index == 0;
+  const sdk::Status status = status_for_call(
+      state.get_hid_statuses, call, state.get_hid_status);
+  if (status == sdk::kSuccess && hardware_id != nullptr) {
+    *hardware_id = call < state.hardware_ids.size()
+                       ? state.hardware_ids[call]
+                       : state.hardware_id;
+  }
+  return status;
 }
 
 sdk::Status __stdcall fake_get_level(const sdk::Index index,
@@ -224,6 +244,7 @@ sdk::Status __stdcall fake_logoff(const sdk::Index index) {
       .find_ex = &fake_find_ex,
       .set_api_key = &fake_set_api_key,
       .uninitialization = &fake_uninitialization,
+      .get_hid = &fake_get_hid,
       .get_level = &fake_get_level,
       .get_user_data_size = &fake_get_user_data_size,
       .get_user_password_attempt = &fake_get_attempts,
@@ -295,6 +316,9 @@ void test_successful_session_has_exact_lifecycle() {
       credentials.user_pin);
   require(session.active(), "successful ViKey session was not active");
   require(session.index() == 0, "ViKey session selected the wrong index");
+  require(session.hardware_id() == state.hardware_id &&
+              state.get_hid_calls == 2,
+          "ViKey session did not bind the stable hardware identity");
   require(session.user_pin_attempts_remaining() == 200 &&
               session.user_pin_attempts_maximum() == 200,
           "ViKey session did not retain the observed PIN attempt budget");
@@ -705,6 +729,117 @@ void test_incomplete_functions_fail_before_vendor_calls() {
       "missing ViKey data function was not rejected");
   require(state.calls.empty(),
           "missing data function reached the vendor SDK");
+
+  functions = fake_functions();
+  functions.get_hid = nullptr;
+  require_card_error(
+      [&] {
+        static_cast<void>(VikeySession::open(
+            functions, credentials.user_sn, credentials.api_key,
+            credentials.user_pin));
+      },
+      CardError::invalid_configuration,
+      "missing ViKey identity function was not rejected");
+  require(state.calls.empty() && state.get_hid_calls == 0,
+          "missing identity function reached the vendor SDK");
+}
+
+void test_hardware_identity_failures_fail_closed() {
+  Credentials credentials;
+
+  {
+    FakeSdk state{.get_hid_status = sdk::kCommunication};
+    ActiveFake activation(state);
+    require_card_error(
+        [&] {
+          static_cast<void>(VikeySession::open(
+              fake_functions(), credentials.user_sn, credentials.api_key,
+              credentials.user_pin));
+        },
+        CardError::communication_failed,
+        "initial ViKey identity failure mapped to the wrong error");
+    require(state.get_hid_calls == 1,
+            "initial identity failure used the wrong query count");
+    require_calls(state,
+                  {Call::set_user_sn, Call::find_ex,
+                   Call::uninitialization},
+                  "initial identity failure cleanup differed");
+  }
+
+  {
+    FakeSdk state{.hardware_id = 0};
+    ActiveFake activation(state);
+    require_card_error(
+        [&] {
+          static_cast<void>(VikeySession::open(
+              fake_functions(), credentials.user_sn, credentials.api_key,
+              credentials.user_pin));
+        },
+        CardError::device_failure,
+        "zero ViKey hardware identity was accepted");
+    require(state.get_hid_calls == 1,
+            "zero identity used the wrong query count");
+    require_calls(state,
+                  {Call::set_user_sn, Call::find_ex,
+                   Call::uninitialization},
+                  "zero identity cleanup differed");
+  }
+
+  {
+    FakeSdk state{
+        .hardware_ids = {0x11111111U, 0x22222222U}};
+    ActiveFake activation(state);
+    require_card_error(
+        [&] {
+          static_cast<void>(VikeySession::open(
+              fake_functions(), credentials.user_sn, credentials.api_key,
+              credentials.user_pin));
+        },
+        CardError::device_failure,
+        "identity change during authentication was accepted");
+    require(state.get_hid_calls == 2,
+            "authentication identity change used the wrong query count");
+    require_calls(state,
+                  {Call::set_user_sn, Call::find_ex, Call::set_api_key,
+                   Call::get_attempts, Call::user_login, Call::get_level,
+                   Call::logoff, Call::uninitialization},
+                  "authentication identity change cleanup differed");
+  }
+
+  {
+    FakeSdk state{
+        .hardware_ids = {0x11111111U, 0x11111111U, 0x22222222U}};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    require_card_error([&] { static_cast<void>(session.read_user_blob()); },
+                       CardError::device_failure,
+                       "active-session card replacement was accepted");
+    require(state.get_hid_calls == 3 && state.read_data_calls == 0,
+            "card replacement reached the user data operation");
+    require_calls(state,
+                  {Call::set_user_sn, Call::find_ex, Call::set_api_key,
+                   Call::get_attempts, Call::user_login, Call::get_level},
+                  "card replacement reached the capacity query");
+    require(!session.close(), "replacement-detection session did not close");
+  }
+
+  {
+    FakeSdk state{
+        .get_hid_statuses = {sdk::kSuccess, sdk::kSuccess,
+                             sdk::kCommunication}};
+    ActiveFake activation(state);
+    VikeySession session = VikeySession::open(
+        fake_functions(), credentials.user_sn, credentials.api_key,
+        credentials.user_pin);
+    require_card_error([&] { static_cast<void>(session.read_user_blob()); },
+                       CardError::communication_failed,
+                       "active-session identity failure mapped incorrectly");
+    require(state.get_hid_calls == 3 && state.read_data_calls == 0,
+            "identity communication failure reached user data");
+    require(!session.close(), "identity-failure session did not close");
+  }
 }
 
 void test_failures_cleanup_without_spurious_logoff() {
@@ -923,6 +1058,7 @@ int main() {
     test_development_blob_round_trip_reports_unverified_restore();
     test_invalid_credentials_fail_before_vendor_calls();
     test_incomplete_functions_fail_before_vendor_calls();
+    test_hardware_identity_failures_fail_closed();
     test_failures_cleanup_without_spurious_logoff();
     test_explicit_close_reports_failure_and_still_uninitializes();
   } catch (const std::exception& error) {
