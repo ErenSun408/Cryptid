@@ -233,6 +233,23 @@ usb_vault_configure_target(vikey_session_tests)
 
 add_test(NAME vikey_session_tests COMMAND vikey_session_tests)
 
+add_executable(vikey_card_record_io_tests
+  vikey_card_record_io_tests.cpp
+)
+
+target_include_directories(vikey_card_record_io_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_card_record_io_tests PRIVATE
+  usb_vault_vikey_sdk
+)
+
+usb_vault_configure_target(vikey_card_record_io_tests)
+
+add_test(NAME vikey_card_record_io_tests
+  COMMAND vikey_card_record_io_tests)
+
 add_executable(vikey_development_test_blob_tests
   vikey_development_test_blob_tests.cpp
   ${PROJECT_SOURCE_DIR}/tools/vikey_development_session_probe/random_test_blob.cpp

@@ -234,6 +234,7 @@ usb_vault_configure_target(usb_vault_vikey_card_store)
 add_library(usb_vault_vikey_sdk STATIC
   src/card/vikey/vikey_artifact.cpp
   src/card/vikey/vikey_blob_round_trip.cpp
+  src/card/vikey/vikey_card_record_io.cpp
   src/card/vikey/vikey_module.cpp
   src/card/vikey/vikey_session.cpp
 )

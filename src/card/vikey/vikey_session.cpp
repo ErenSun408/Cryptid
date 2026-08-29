@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <system_error>
 
 namespace usb_vault::card::vikey {
@@ -282,6 +283,53 @@ void VikeySession::write_user_blob(
           static_cast<sdk::Length>(argument.size()),
           reinterpret_cast<sdk::Byte*>(argument.data())),
       "write ViKey user blob");
+}
+
+std::size_t VikeySession::user_data_capacity() {
+  require_active(active());
+  sdk::Length bytes = 0;
+  require_success(functions_.get_user_data_size(index_, &bytes),
+                  "read ViKey card journal capacity");
+  return bytes;
+}
+
+security::SecureBuffer VikeySession::read_user_data(
+    const std::size_t offset, const std::size_t length) {
+  require_active(active());
+  if (offset > std::numeric_limits<sdk::Address>::max() ||
+      length > std::numeric_limits<sdk::Length>::max() ||
+      offset > std::numeric_limits<std::size_t>::max() - length) {
+    fail(CardError::invalid_operation,
+         "ViKey card journal read range is invalid");
+  }
+  security::SecureBuffer result(length);
+  require_success(
+      functions_.read_data(
+          index_, static_cast<sdk::Address>(offset),
+          static_cast<sdk::Length>(length),
+          reinterpret_cast<sdk::Byte*>(result.data())),
+      "read ViKey card journal range");
+  return result;
+}
+
+void VikeySession::write_user_data(
+    const std::size_t offset,
+    const std::span<const std::byte> bytes) {
+  require_active(active());
+  if (offset > std::numeric_limits<sdk::Address>::max() ||
+      bytes.size() > std::numeric_limits<sdk::Length>::max() ||
+      offset > std::numeric_limits<std::size_t>::max() - bytes.size()) {
+    fail(CardError::invalid_operation,
+         "ViKey card journal write range is invalid");
+  }
+  security::SecureBuffer argument(bytes.size());
+  std::ranges::copy(bytes, argument.bytes().begin());
+  require_success(
+      functions_.write_data(
+          index_, static_cast<sdk::Address>(offset),
+          static_cast<sdk::Length>(argument.size()),
+          reinterpret_cast<sdk::Byte*>(argument.data())),
+      "write ViKey card journal range");
 }
 
 }  // namespace usb_vault::card::vikey

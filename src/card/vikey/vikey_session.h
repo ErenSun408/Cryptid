@@ -4,9 +4,12 @@
 #include "usb_vault/security/secure_buffer.h"
 
 #include <cstddef>
+#include <span>
 #include <system_error>
 
 namespace usb_vault::card::vikey {
+
+class VikeyCardRecordStorage;
 
 constexpr std::size_t kVikeyUserSnBytes = 32;
 constexpr std::size_t kVikeyApiKeyBytes = 128;
@@ -46,6 +49,13 @@ class VikeySession final {
   VikeySession(sdk::Functions functions, sdk::Index index,
                sdk::Byte attempts_remaining,
                sdk::Byte attempts_maximum) noexcept;
+
+  friend class VikeyCardRecordStorage;
+  [[nodiscard]] std::size_t user_data_capacity();
+  [[nodiscard]] security::SecureBuffer read_user_data(
+      std::size_t offset, std::size_t length);
+  void write_user_data(std::size_t offset,
+                       std::span<const std::byte> bytes);
 
   sdk::Functions functions_{};
   sdk::Index index_{};
