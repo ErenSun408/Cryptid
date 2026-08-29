@@ -1057,7 +1057,8 @@ namespace {
     std::uint32_t* const success_detail,
     const HelperBoundary boundary,
     const std::chrono::milliseconds timeout,
-    security::SecureBuffer* const blob_response = nullptr) {
+    security::SecureBuffer* const blob_response = nullptr,
+    std::uint32_t* const success_result = nullptr) {
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");
@@ -1065,6 +1066,7 @@ namespace {
   const bool session_required =
       operation == helper::Operation::development_session_probe ||
       operation == helper::Operation::card_identity_probe ||
+      operation == helper::Operation::card_media_probe ||
       operation ==
           helper::Operation::development_blob_round_trip_probe ||
       operation == helper::Operation::development_blob_read ||
@@ -1086,7 +1088,10 @@ namespace {
       operation == helper::Operation::card_record_write;
   const bool success_detail_required =
       operation == helper::Operation::development_session_probe ||
-      operation == helper::Operation::card_identity_probe;
+      operation == helper::Operation::card_identity_probe ||
+      operation == helper::Operation::card_media_probe;
+  const bool success_result_required =
+      operation == helper::Operation::card_media_probe;
   if (vendor_required !=
       (vendor_path != nullptr && vendor_digest != nullptr)) {
     throw_card(CardError::invalid_configuration,
@@ -1094,6 +1099,7 @@ namespace {
   }
   if (session_required != (session_inputs != nullptr) ||
       success_detail_required != (success_detail != nullptr) ||
+      success_result_required != (success_result != nullptr) ||
       blob_output_required != (blob_response != nullptr) ||
       (session_required &&
        boundary != HelperBoundary::network_enabled_development)) {
@@ -1323,6 +1329,12 @@ namespace {
             request_pipe.parent_end.get(), request, *vendor_digest,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin);
+      } else if (operation == helper::Operation::card_media_probe) {
+        request.payload_bytes = helper::kCardMediaProbePayloadBytes;
+        helper::write_card_media_probe_request(
+            request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->user_sn, session_inputs->api_key,
+            session_inputs->user_pin);
       } else {
         request.payload_bytes = helper::kDevelopmentSessionPayloadBytes;
         helper::write_development_session_request(
@@ -1364,6 +1376,9 @@ namespace {
                        deadline);
     if (success_detail != nullptr) {
       *success_detail = response.detail;
+    }
+    if (success_result != nullptr) {
+      *success_result = response.result;
     }
     result.security_properties = security_properties;
   } catch (...) {
@@ -1518,6 +1533,62 @@ probe_vikey_development_card_identity_with_network_access(
   }
   return {.security_properties = probe.security_properties,
           .hardware_id = hardware_id};
+}
+
+VikeyCardMediaProbe
+probe_vikey_development_card_media_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = nullptr,
+      .expected_hardware_id = 0};
+  std::uint32_t hardware_id = 0;
+  std::uint32_t wire_state = 0;
+  const VikeyHelperProbe probe = probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::card_media_probe, &vendor_path,
+      &expected_vendor_digest, &inputs, &hardware_id,
+      HelperBoundary::network_enabled_development, timeout, nullptr,
+      &wire_state);
+
+  VikeyCardMediaState media_state{};
+  switch (static_cast<helper::CardMediaState>(wire_state)) {
+    case helper::CardMediaState::blank:
+      media_state = VikeyCardMediaState::blank;
+      break;
+    case helper::CardMediaState::legacy_p1_or_foreign_prefix:
+      media_state = VikeyCardMediaState::legacy_p1_or_foreign_prefix;
+      break;
+    case helper::CardMediaState::foreign_data:
+      media_state = VikeyCardMediaState::foreign_data;
+      break;
+    case helper::CardMediaState::provisioning_interrupted:
+      media_state = VikeyCardMediaState::provisioning_interrupted;
+      break;
+    case helper::CardMediaState::conflicting_evidence:
+      media_state = VikeyCardMediaState::conflicting_evidence;
+      break;
+    case helper::CardMediaState::product_evidence:
+      media_state = VikeyCardMediaState::product_evidence;
+      break;
+    default:
+      throw_card(CardError::communication_failed,
+                 "ViKey helper returned an invalid card media state");
+  }
+  return {.security_properties = probe.security_properties,
+          .hardware_id = hardware_id,
+          .media_state = media_state};
 }
 
 VikeyHelperProbe

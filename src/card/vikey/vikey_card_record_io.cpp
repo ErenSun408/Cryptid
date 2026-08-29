@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <system_error>
 
 namespace usb_vault::card::vikey {
@@ -22,7 +23,8 @@ class VikeyCardRecordStorage final : public ICardRecordJournalStorage {
       : session_(session) {}
 
   [[nodiscard]] std::size_t capacity() override {
-    return session_.user_data_capacity();
+    if (!capacity_) capacity_ = session_.user_data_capacity();
+    return *capacity_;
   }
 
   [[nodiscard]] security::SecureBuffer read(const std::size_t offset,
@@ -37,6 +39,7 @@ class VikeyCardRecordStorage final : public ICardRecordJournalStorage {
 
  private:
   VikeySession& session_;
+  std::optional<std::size_t> capacity_;
 };
 
 namespace {

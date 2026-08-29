@@ -1,6 +1,7 @@
 #pragma once
 
 #include "card/verified_local_artifact.h"
+#include "card/vikey/vikey_card_record_io.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <chrono>
@@ -24,6 +25,12 @@ struct VikeyDevelopmentSessionProbe final {
 struct VikeyCardIdentityProbe final {
   std::uint32_t security_properties{};
   std::uint32_t hardware_id{};
+};
+
+struct VikeyCardMediaProbe final {
+  std::uint32_t security_properties{};
+  std::uint32_t hardware_id{};
+  VikeyCardMediaState media_state{VikeyCardMediaState::foreign_data};
 };
 
 // Verifies the helper against the required digest, holds its file identity
@@ -99,6 +106,20 @@ probe_vikey_development_session_with_network_access(
 // does not read or write the card user-data area.
 [[nodiscard]] VikeyCardIdentityProbe
 probe_vikey_development_card_identity_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+// Establishes one insertion context atomically: the helper authenticates one
+// stable card, classifies its user-data area without writing, returns that
+// hardware identity and state, closes the session, and exits.
+[[nodiscard]] VikeyCardMediaProbe
+probe_vikey_development_card_media_with_network_access(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_helper_digest,
     const std::filesystem::path& vendor_directory,

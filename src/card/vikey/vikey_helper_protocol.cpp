@@ -73,11 +73,13 @@ bool valid_request(const Request& request) noexcept {
       request.operation == Operation::development_blob_write ||
       request.operation == Operation::card_record_read ||
       request.operation == Operation::card_record_write ||
-      request.operation == Operation::card_identity_probe;
+      request.operation == Operation::card_identity_probe ||
+      request.operation == Operation::card_media_probe;
   std::uint32_t required_payload = 0;
   if (request.operation == Operation::development_session_probe ||
       request.operation == Operation::development_blob_read ||
-      request.operation == Operation::card_identity_probe) {
+      request.operation == Operation::card_identity_probe ||
+      request.operation == Operation::card_media_probe) {
     required_payload = kDevelopmentSessionPayloadBytes;
   } else if (request.operation ==
                  Operation::development_blob_round_trip_probe ||
@@ -110,18 +112,24 @@ bool valid_response(const Response& response,
     }
     if (response.payload_bytes != required_payload) return false;
     if (expected_operation == Operation::development_session_probe) {
-      return valid_development_session_observation(
-          unpack_development_session_observation(response.detail));
+      return response.result == 0 &&
+             valid_development_session_observation(
+                 unpack_development_session_observation(response.detail));
     }
     if (expected_operation == Operation::card_identity_probe) {
-      return response.detail != 0;
+      return response.detail != 0 && response.result == 0;
     }
-    return response.detail == 0;
+    if (expected_operation == Operation::card_media_probe) {
+      return response.detail != 0 &&
+             valid_card_media_state(response.result);
+    }
+    return response.detail == 0 && response.result == 0;
   }
   const auto first = static_cast<std::int32_t>(CardError::backend_unavailable);
   const auto last = static_cast<std::int32_t>(CardError::device_failure);
   return response.status >= first && response.status <= last &&
-         response.security_properties == 0 && response.payload_bytes == 0;
+         response.security_properties == 0 && response.payload_bytes == 0 &&
+         response.result == 0;
 }
 
 void write_request(const HANDLE pipe, const Request& request) {
@@ -227,6 +235,40 @@ DevelopmentSessionRequest read_card_identity_probe_request(
   if (!valid_request(request) ||
       request.operation != Operation::card_identity_probe) {
     throw_protocol("reject invalid ViKey card identity request");
+  }
+  DevelopmentSessionRequest result;
+  read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, result.user_sn.bytes());
+  read_exact(pipe, result.api_key.bytes());
+  read_exact(pipe, result.user_pin.bytes());
+  return result;
+}
+
+void write_card_media_probe_request(
+    const HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin) {
+  if (!valid_request(request) ||
+      request.operation != Operation::card_media_probe ||
+      user_sn.size() != kVikeyUserSnBytes ||
+      api_key.size() != kVikeyApiKeyBytes ||
+      user_pin.size() != kVikeyUserPinBytes) {
+    throw_protocol("refuse invalid ViKey card media request");
+  }
+  write_exact(pipe, message_bytes(request));
+  write_exact(pipe, vendor_digest);
+  write_exact(pipe, user_sn.bytes());
+  write_exact(pipe, api_key.bytes());
+  write_exact(pipe, user_pin.bytes());
+}
+
+DevelopmentSessionRequest read_card_media_probe_request(
+    const HANDLE pipe, const Request& request) {
+  if (!valid_request(request) ||
+      request.operation != Operation::card_media_probe) {
+    throw_protocol("reject invalid ViKey card media request");
   }
   DevelopmentSessionRequest result;
   read_exact(pipe, result.vendor_digest);

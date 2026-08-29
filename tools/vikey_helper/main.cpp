@@ -148,6 +148,7 @@ class File final {
 struct OperationResult final {
   std::int32_t status{};
   std::uint32_t detail{};
+  std::uint32_t result{};
 };
 
 struct BlobReadResult final {
@@ -262,6 +263,79 @@ struct BlobReadResult final {
     const std::error_code close_error = session.close();
     if (close_error) return {.status = close_error.value()};
     return {.detail = hardware_id};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
+[[nodiscard]] std::uint32_t wire_card_media_state(
+    const usb_vault::card::vikey::VikeyCardMediaState state) {
+  switch (state) {
+    case usb_vault::card::vikey::VikeyCardMediaState::blank:
+      return static_cast<std::uint32_t>(CardMediaState::blank);
+    case usb_vault::card::vikey::VikeyCardMediaState::
+        legacy_p1_or_foreign_prefix:
+      return static_cast<std::uint32_t>(
+          CardMediaState::legacy_p1_or_foreign_prefix);
+    case usb_vault::card::vikey::VikeyCardMediaState::foreign_data:
+      return static_cast<std::uint32_t>(CardMediaState::foreign_data);
+    case usb_vault::card::vikey::VikeyCardMediaState::
+        provisioning_interrupted:
+      return static_cast<std::uint32_t>(
+          CardMediaState::provisioning_interrupted);
+    case usb_vault::card::vikey::VikeyCardMediaState::conflicting_evidence:
+      return static_cast<std::uint32_t>(
+          CardMediaState::conflicting_evidence);
+    case usb_vault::card::vikey::VikeyCardMediaState::product_evidence:
+      return static_cast<std::uint32_t>(CardMediaState::product_evidence);
+  }
+  throw std::system_error(
+      usb_vault::card::make_error_code(CardError::device_failure),
+      "ViKey helper observed an invalid card media state");
+}
+
+[[nodiscard]] OperationResult card_media_probe(
+    const DevelopmentSessionRequest& request) {
+  try {
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+    const std::uint32_t hardware_id = session.hardware_id();
+
+    OperationResult result{};
+    try {
+      result.result = wire_card_media_state(
+          usb_vault::card::vikey::inspect_vikey_card_media(session));
+    } catch (const std::system_error& error) {
+      result.status = error.code().category() == card_error_category()
+                          ? error.code().value()
+                          : static_cast<std::int32_t>(
+                                CardError::backend_unavailable);
+    } catch (...) {
+      result.status =
+          static_cast<std::int32_t>(CardError::backend_unavailable);
+    }
+
+    const std::error_code close_error = session.close();
+    if (result.status != 0) {
+      result.result = 0;
+      return result;
+    }
+    if (close_error) return {.status = close_error.value()};
+    result.detail = hardware_id;
+    return result;
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
       return {.status = error.code().value()};
@@ -547,6 +621,12 @@ void require_expected_hardware_identity(
                  : OperationResult{
                        .status = static_cast<std::int32_t>(
                            CardError::invalid_operation)};
+    case Operation::card_media_probe:
+      return session_request != nullptr
+                 ? card_media_probe(*session_request)
+                 : OperationResult{
+                       .status = static_cast<std::int32_t>(
+                           CardError::invalid_operation)};
     case Operation::development_blob_round_trip_probe:
     case Operation::development_blob_read:
     case Operation::development_blob_write:
@@ -590,7 +670,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
             request.operation == Operation::development_blob_write ||
             request.operation == Operation::card_record_read ||
             request.operation == Operation::card_record_write ||
-            request.operation == Operation::card_identity_probe) {
+            request.operation == Operation::card_identity_probe ||
+            request.operation == Operation::card_media_probe) {
           if (environment !=
               EnvironmentBoundary::network_enabled_development) {
             result.status =
@@ -606,6 +687,12 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                   read_card_identity_probe_request(request_handle, request);
               result = operation_result(request.operation,
                                         &identity_request);
+            } else if (request.operation ==
+                       Operation::card_media_probe) {
+              DevelopmentSessionRequest media_request =
+                  read_card_media_probe_request(request_handle, request);
+              result = operation_result(request.operation,
+                                        &media_request);
             } else {
               if (request.operation ==
                   Operation::development_blob_round_trip_probe) {
@@ -649,6 +736,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         }
         response.status = result.status;
         response.detail = result.detail;
+        response.result = result.result;
       } else {
         response.status =
             static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -669,7 +757,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
       response.security_properties = 0;
+      response.payload_bytes = 0;
       response.detail = ERROR_GEN_FAILURE;
+      response.result = 0;
     }
     if (request.operation == Operation::development_blob_read &&
         response.status == 0) {

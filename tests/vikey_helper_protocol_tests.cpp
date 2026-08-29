@@ -116,20 +116,28 @@ void test_request_validation() {
   request.operation = Operation::card_identity_probe;
   request.payload_bytes = kCardIdentityProbePayloadBytes;
   expect(valid_request(request), "card identity request was rejected");
+  request.operation = Operation::card_media_probe;
+  request.payload_bytes = kCardMediaProbePayloadBytes;
+  expect(valid_request(request), "card media request was rejected");
+  request.payload_bytes = 0;
+  expect(!valid_request(request),
+         "card media request without credentials was accepted");
   request.operation = Operation::card_record_read;
   request.payload_bytes = kDevelopmentSessionPayloadBytes;
   expect(!valid_request(request),
-         "v7 card record read accepted the v6 payload shape");
+         "v8 card record read accepted the v6 payload shape");
   request.operation = Operation::card_record_write;
   request.payload_bytes =
       kDevelopmentSessionPayloadBytes +
       static_cast<std::uint32_t>(kCardRecordV1Size);
   expect(!valid_request(request),
-         "v7 card record write accepted the v6 payload shape");
+         "v8 card record write accepted the v6 payload shape");
   request.operation = Operation::card_identity_probe;
   request.payload_bytes = kCardIdentityProbePayloadBytes;
   request.version = static_cast<std::uint16_t>(kVersion + 1);
   expect(!valid_request(request), "unknown request version was accepted");
+  request.version = static_cast<std::uint16_t>(kVersion - 1);
+  expect(!valid_request(request), "downgraded request version was accepted");
   request = Request{};
   request.operation = static_cast<Operation>(99);
   expect(!valid_request(request), "unknown request operation was accepted");
@@ -219,6 +227,32 @@ void test_card_identity_request_round_trip() {
                       "card identity API key did not round-trip");
   expect_fixed_secret(body.user_pin, std::byte{'P'},
                       "card identity PIN did not round-trip");
+}
+
+void test_card_media_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  Request sent{};
+  sent.operation = Operation::card_media_probe;
+  sent.payload_bytes = kCardMediaProbePayloadBytes;
+  Sha256Digest digest{};
+  digest[4] = std::byte{0x72};
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+
+  write_card_media_probe_request(pipe.write.get(), sent, digest, user_sn,
+                                 api_key, user_pin);
+  const Request received = read_request(pipe.read.get());
+  DevelopmentSessionRequest body =
+      read_card_media_probe_request(pipe.read.get(), received);
+  expect(body.vendor_digest == digest,
+         "card media digest did not round-trip");
+  expect_fixed_secret(body.user_sn, std::byte{'A'},
+                      "card media UserSN did not round-trip");
+  expect_fixed_secret(body.api_key, std::byte{'B'},
+                      "card media API key did not round-trip");
+  expect_fixed_secret(body.user_pin, std::byte{'P'},
+                      "card media PIN did not round-trip");
 }
 
 void test_development_session_request_rejects_wrong_sizes() {
@@ -420,6 +454,22 @@ void test_response_round_trip() {
          "response security properties did not round-trip");
 }
 
+void test_card_media_response_round_trip() {
+  const Pipe pipe = make_pipe();
+  Response sent{};
+  sent.security_properties = kDevelopmentCompatibilitySecurityProperties;
+  sent.detail = 0x12345678U;
+  sent.result = static_cast<std::uint32_t>(CardMediaState::product_evidence);
+  sent.nonce[3] = std::byte{0x6a};
+  write_response(pipe.write.get(), sent, Operation::card_media_probe);
+  const Response received = read_response(
+      pipe.read.get(), sent.nonce, Operation::card_media_probe);
+  expect(received.detail == sent.detail,
+         "card media hardware identity did not round-trip");
+  expect(received.result == sent.result,
+         "card media state did not round-trip");
+}
+
 void test_development_blob_response_round_trip() {
   const Pipe pipe = make_pipe();
   Response sent{};
@@ -483,6 +533,23 @@ void test_response_validation() {
   response.detail = 0x12345678U;
   expect(valid_response(response, Operation::card_identity_probe),
          "nonzero card identity response was rejected");
+  response.result = static_cast<std::uint32_t>(CardMediaState::blank);
+  expect(valid_response(response, Operation::card_media_probe),
+         "valid card media response was rejected");
+  expect(!valid_response(response, Operation::card_identity_probe),
+         "card identity response retained a media result");
+  response.result = 0;
+  expect(!valid_response(response, Operation::card_media_probe),
+         "card media response without a state was accepted");
+  response.result =
+      static_cast<std::uint32_t>(CardMediaState::product_evidence) + 1U;
+  expect(!valid_response(response, Operation::card_media_probe),
+         "card media response with an unknown state was accepted");
+  response.result = static_cast<std::uint32_t>(CardMediaState::blank);
+  response.detail = 0;
+  expect(!valid_response(response, Operation::card_media_probe),
+         "card media response without a hardware identity was accepted");
+  response.result = 0;
   response.detail = 0;
   expect(!valid_response(response, Operation::development_blob_read),
          "blob read response without a payload was accepted");
@@ -530,6 +597,10 @@ void test_response_validation() {
   response.detail = ERROR_ACCESS_DENIED;
   expect(valid_response(response, Operation::probe),
          "known helper error was rejected");
+  response.result = static_cast<std::uint32_t>(CardMediaState::blank);
+  expect(!valid_response(response, Operation::card_media_probe),
+         "failed card media response retained a state");
+  response.result = 0;
   response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
   expect(!valid_response(response, Operation::development_blob_read),
          "failed blob read response retained a payload");
@@ -538,6 +609,11 @@ void test_response_validation() {
       property_bit(SecurityProperty::filtered_token);
   expect(!valid_response(response, Operation::probe),
          "error response with security properties was accepted");
+  response = Response{};
+  response.version = static_cast<std::uint16_t>(kVersion - 1);
+  response.security_properties = kRequiredSecurityProperties;
+  expect(!valid_response(response, Operation::probe),
+         "downgraded response version was accepted");
   response = Response{};
   response.status = 999;
   expect(!valid_response(response, Operation::probe),
@@ -567,12 +643,14 @@ int main() {
     test_request_validation();
     test_development_session_request_round_trip();
     test_card_identity_request_round_trip();
+    test_card_media_request_round_trip();
     test_development_session_request_rejects_wrong_sizes();
     test_development_blob_request_round_trip();
     test_development_blob_request_rejects_wrong_sizes();
     test_development_blob_read_write_requests();
     test_card_record_read_write_requests();
     test_response_round_trip();
+    test_card_media_response_round_trip();
     test_development_blob_response_round_trip();
     test_card_record_response_round_trip();
     test_response_validation();

@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 7;
+constexpr std::uint16_t kVersion = 8;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kDevelopmentSessionPayloadBytes =
@@ -35,6 +35,8 @@ constexpr std::uint32_t kCardRecordWritePayloadBytes =
     static_cast<std::uint32_t>(kCardRecordV1Size);
 constexpr std::uint32_t kCardIdentityProbePayloadBytes =
     kDevelopmentSessionPayloadBytes;
+constexpr std::uint32_t kCardMediaProbePayloadBytes =
+    kDevelopmentSessionPayloadBytes;
 
 enum class Operation : std::uint32_t {
   probe = 1,
@@ -47,7 +49,24 @@ enum class Operation : std::uint32_t {
   card_record_read = 8,
   card_record_write = 9,
   card_identity_probe = 10,
+  card_media_probe = 11,
 };
+
+enum class CardMediaState : std::uint32_t {
+  blank = 1,
+  legacy_p1_or_foreign_prefix = 2,
+  foreign_data = 3,
+  provisioning_interrupted = 4,
+  conflicting_evidence = 5,
+  product_evidence = 6,
+};
+
+[[nodiscard]] constexpr bool valid_card_media_state(
+    const std::uint32_t value) noexcept {
+  return value >= static_cast<std::uint32_t>(CardMediaState::blank) &&
+         value <= static_cast<std::uint32_t>(
+                      CardMediaState::product_evidence);
+}
 
 enum class SecurityProperty : std::uint32_t {
   filtered_token = 1U << 0,
@@ -245,14 +264,18 @@ struct Response final {
   std::uint32_t security_properties{};
   std::uint32_t payload_bytes{};
   // Non-secret Win32 or vendor status on failure. A successful development
-  // session packs its before/after PIN-attempt observation here. It never
-  // carries paths, identifiers, credentials, or card data.
+  // session packs its before/after PIN-attempt observation here; identity and
+  // media probes return the authenticated card's non-secret hardware ID.
+  // It never carries paths, credentials, or card data.
   std::uint32_t detail{};
+  // A successful card-media probe returns a validated CardMediaState here.
+  // All other responses keep this field zero.
+  std::uint32_t result{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 
 static_assert(sizeof(Request) == 32);
-static_assert(sizeof(Response) == 40);
+static_assert(sizeof(Response) == 44);
 
 [[nodiscard]] bool valid_request(const Request& request) noexcept;
 [[nodiscard]] bool valid_response(const Response& response,
@@ -273,6 +296,13 @@ void write_card_identity_probe_request(
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin);
 [[nodiscard]] DevelopmentSessionRequest read_card_identity_probe_request(
+    HANDLE pipe, const Request& request);
+void write_card_media_probe_request(
+    HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] DevelopmentSessionRequest read_card_media_probe_request(
     HANDLE pipe, const Request& request);
 void write_development_blob_round_trip_request(
     HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
