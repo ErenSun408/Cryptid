@@ -22,9 +22,6 @@ namespace {
 constexpr std::array<std::byte, 8> kInitializedMagic{
     std::byte{'U'}, std::byte{'V'}, std::byte{'C'}, std::byte{'R'},
     std::byte{'D'}, std::byte{'2'}, std::byte{0},   std::byte{0}};
-constexpr std::array<std::byte, 8> kProvisioningMagic{
-    std::byte{'U'}, std::byte{'V'}, std::byte{'B'}, std::byte{'L'},
-    std::byte{'N'}, std::byte{'K'}, std::byte{'2'}, std::byte{0}};
 constexpr std::array<std::byte, 16> kPayloadMarker{
     std::byte{'U'}, std::byte{'V'}, std::byte{'R'}, std::byte{'O'},
     std::byte{'O'}, std::byte{'T'}, std::byte{'S'}, std::byte{'E'},
@@ -417,12 +414,6 @@ build_record(const security::SecureBuffer &root_secret,
 
 CardCredentialRejected::CardCredentialRejected()
     : std::runtime_error("card credential was rejected") {}
-
-security::SecureBuffer provision_uninitialized_card_record_v1() {
-  security::SecureBuffer result(kCardRecordV1Size);
-  std::ranges::copy(kProvisioningMagic, result.bytes().begin());
-  return result;
-}
 
 security::SecureBuffer
 initialize_card_record_v1(security::SecureBuffer password_utf8) {

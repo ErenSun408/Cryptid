@@ -28,6 +28,7 @@ using usb_vault::card::kCardRecordV1Size;
 using usb_vault::card::make_error_code;
 using usb_vault::card::provision_card_record_journal_v1;
 using usb_vault::card::provision_uninitialized_card_record_v1;
+using usb_vault::card::vikey::bootstrap_vikey_card_media;
 using usb_vault::card::vikey::inspect_vikey_card_media;
 using usb_vault::card::vikey::read_vikey_card_record;
 using usb_vault::card::vikey::VikeyCardMediaState;
@@ -331,12 +332,93 @@ void test_read_only_media_classification() {
   active_fake = nullptr;
 }
 
+void test_media_bootstrap_revalidates_before_writing() {
+  FakeSdk state;
+  active_fake = &state;
+
+  SecureBuffer user_sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer api_key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer user_pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(user_sn.bytes(), std::byte{'A'});
+  std::ranges::fill(api_key.bytes(), std::byte{'B'});
+  std::ranges::fill(user_pin.bytes(), std::byte{'P'});
+  VikeySession session =
+      VikeySession::open(functions(), user_sn, api_key, user_pin);
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+
+  bootstrap_vikey_card_media(session, VikeyCardMediaState::blank);
+  SecureBuffer observed = read_vikey_card_record(session);
+  require(same(observed, marker),
+          "blank ViKey bootstrap did not publish the marker");
+  require(std::ranges::all_of(
+              std::span(state.data).subspan(
+                  kCardRecordJournalV1StorageSize),
+              [](const std::byte value) { return value == std::byte{}; }),
+          "blank ViKey bootstrap changed data outside the journal");
+
+  state.data.fill(std::byte{});
+  std::ranges::copy(marker.bytes(),
+                    state.data.begin() + kCardRecordJournalV1Slot0Offset);
+  bootstrap_vikey_card_media(
+      session, VikeyCardMediaState::provisioning_interrupted);
+  observed = read_vikey_card_record(session);
+  require(same(observed, marker),
+          "interrupted ViKey bootstrap did not resume the marker");
+
+  state.data.fill(std::byte{});
+  std::ranges::copy(marker.bytes(),
+                    state.data.begin() + kCardRecordJournalV1Slot0Offset);
+  const std::size_t writes_before_mismatch = state.writes;
+  require_card_error(
+      [&] {
+        bootstrap_vikey_card_media(session, VikeyCardMediaState::blank);
+      },
+      CardError::device_failure,
+      "changed ViKey bootstrap state was accepted");
+  require(state.writes == writes_before_mismatch,
+          "changed ViKey bootstrap state was written");
+
+  state.data.fill(std::byte{});
+  state.data.back() = std::byte{0x7e};
+  const std::size_t writes_before_foreign = state.writes;
+  require_card_error(
+      [&] {
+        bootstrap_vikey_card_media(session, VikeyCardMediaState::blank);
+      },
+      CardError::device_failure,
+      "foreign ViKey media was bootstrapped");
+  require(state.writes == writes_before_foreign,
+          "foreign ViKey media was written");
+
+  state.data.fill(std::byte{});
+  const std::array<VikeyCardMediaState, 4> ineligible_states{
+      VikeyCardMediaState::legacy_p1_or_foreign_prefix,
+      VikeyCardMediaState::foreign_data,
+      VikeyCardMediaState::conflicting_evidence,
+      VikeyCardMediaState::product_evidence,
+  };
+  for (const VikeyCardMediaState ineligible : ineligible_states) {
+    const std::size_t reads_before = state.reads;
+    const std::size_t writes_before = state.writes;
+    require_card_error(
+        [&] { bootstrap_vikey_card_media(session, ineligible); },
+        CardError::invalid_configuration,
+        "ineligible expected ViKey bootstrap state was accepted");
+    require(state.reads == reads_before && state.writes == writes_before,
+            "ineligible expected state touched ViKey media");
+  }
+
+  require(!session.close(), "ViKey media bootstrap session did not close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
   try {
     test_random_access_card_record_path();
     test_read_only_media_classification();
+    test_media_bootstrap_revalidates_before_writing();
     std::cout << "vikey card record IO tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

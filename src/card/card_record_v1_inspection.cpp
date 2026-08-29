@@ -77,4 +77,10 @@ inspect_card_record(const std::span<const std::byte> record) noexcept {
   return CardRecordState::malformed;
 }
 
+security::SecureBuffer provision_uninitialized_card_record_v1() {
+  security::SecureBuffer result(kCardRecordV1Size);
+  std::ranges::copy(kProvisioningMagic, result.bytes().begin());
+  return result;
+}
+
 } // namespace usb_vault::card

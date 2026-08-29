@@ -21,6 +21,13 @@ enum class VikeyCardMediaState {
 [[nodiscard]] VikeyCardMediaState inspect_vikey_card_media(
     VikeySession& session);
 
+// Revalidates the exact adapter-authorized initial state in the same stable
+// session, then establishes the recoverable provisioning journal. Only blank
+// media and a clean interrupted bootstrap are eligible; every other state is
+// rejected before a vendor write.
+void bootstrap_vikey_card_media(VikeySession& session,
+                                VikeyCardMediaState expected_state);
+
 [[nodiscard]] security::SecureBuffer read_vikey_card_record(
     VikeySession& session);
 

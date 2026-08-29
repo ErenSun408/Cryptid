@@ -3,6 +3,7 @@
 #include "card/card_record_journal_v1.h"
 #include "card/vikey/vikey_session.h"
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/card/card_record_v1.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -61,10 +62,8 @@ namespace {
   return true;
 }
 
-}  // namespace
-
-VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
-  VikeyCardRecordStorage storage(session);
+[[nodiscard]] VikeyCardMediaState inspect_vikey_card_media(
+    VikeyCardRecordStorage& storage) {
   const std::size_t capacity = storage.capacity();
   if (capacity < kCardRecordJournalV1StorageSize) {
     throw std::system_error(
@@ -85,8 +84,7 @@ VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
                : VikeyCardMediaState::conflicting_evidence;
   }
 
-  const bool prefix_blank =
-      range_is_blank(storage, 0, kVikeyBlobBytes);
+  const bool prefix_blank = range_is_blank(storage, 0, kVikeyBlobBytes);
   const bool remainder_blank =
       range_is_blank(storage, kVikeyBlobBytes, capacity);
   if (prefix_blank && remainder_blank) {
@@ -96,6 +94,42 @@ VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
     return VikeyCardMediaState::legacy_p1_or_foreign_prefix;
   }
   return VikeyCardMediaState::foreign_data;
+}
+
+}  // namespace
+
+VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
+  VikeyCardRecordStorage storage(session);
+  return inspect_vikey_card_media(storage);
+}
+
+void bootstrap_vikey_card_media(
+    VikeySession& session,
+    const VikeyCardMediaState expected_state) {
+  if (expected_state != VikeyCardMediaState::blank &&
+      expected_state != VikeyCardMediaState::provisioning_interrupted) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey bootstrap requires an eligible expected media state");
+  }
+
+  VikeyCardRecordStorage storage(session);
+  if (inspect_vikey_card_media(storage) != expected_state) {
+    throw std::system_error(
+        make_error_code(CardError::device_failure),
+        "ViKey card media changed before bootstrap");
+  }
+
+  security::SecureBuffer marker =
+      provision_uninitialized_card_record_v1();
+  bootstrap_uninitialized_card_record_journal_v1(storage,
+                                                  marker.bytes());
+  if (!range_is_blank(storage, kCardRecordJournalV1StorageSize,
+                      storage.capacity())) {
+    throw std::system_error(
+        make_error_code(CardError::device_failure),
+        "ViKey card media changed during bootstrap");
+  }
 }
 
 security::SecureBuffer read_vikey_card_record(VikeySession& session) {
