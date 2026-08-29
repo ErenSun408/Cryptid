@@ -24,7 +24,7 @@ namespace {
 }  // namespace
 
 VikeyHelperBlobBackend::VikeyHelperBlobBackend(
-    VikeyHelperBlobBackendConfig config,
+    VikeyHelperBackendConfig config,
     IVikeyCredentialProvider& credential_provider)
     : config_(std::move(config)),
       credential_provider_(credential_provider) {}

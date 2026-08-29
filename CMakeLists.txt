@@ -213,11 +213,12 @@ target_link_libraries(usb_vault_verified_local_artifact PRIVATE
 )
 usb_vault_configure_target(usb_vault_verified_local_artifact)
 
-# The formal ViKey ICardStore adapter is kept independent from both the vendor
-# SDK and helper transport. The separate helper-backed implementation below
-# supplies the private blob backend without changing the application-facing
-# card contract.
+# The formal ViKey ICardStore adapters are kept independent from both the
+# vendor SDK and helper transport. Separate helper-backed implementations below
+# supply the private legacy-blob and P2 card-record backends without changing
+# the application-facing single-blob contract.
 add_library(usb_vault_vikey_card_store STATIC
+  src/card/vikey/vikey_card_record_store.cpp
   src/card/vikey/vikey_card_store.cpp
 )
 
@@ -310,6 +311,24 @@ target_link_libraries(usb_vault_vikey_helper_blob_backend
     usb_vault_vikey_helper_client
 )
 usb_vault_configure_target(usb_vault_vikey_helper_blob_backend)
+
+add_library(usb_vault_vikey_helper_card_record_backend STATIC
+  src/card/vikey/vikey_helper_card_record_backend.cpp
+)
+
+target_include_directories(usb_vault_vikey_helper_card_record_backend
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(usb_vault_vikey_helper_card_record_backend
+  PUBLIC
+    usb_vault_vikey_card_store
+  PRIVATE
+    usb_vault_vikey_helper_client
+)
+usb_vault_configure_target(
+  usb_vault_vikey_helper_card_record_backend)
 
 # Development-only Windows Credential Manager implementation of the formal
 # helper backend's credential-provider boundary. Production provisioning is a

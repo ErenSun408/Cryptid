@@ -14,7 +14,7 @@ inline constexpr std::wstring_view
 // Parses the complete process argument vector for the separate development
 // application. All values are non-secret deployment data. Relative paths,
 // malformed digests, missing acknowledgement, and extra arguments fail closed.
-[[nodiscard]] VikeyHelperBlobBackendConfig parse_app_config(
+[[nodiscard]] VikeyHelperBackendConfig parse_app_config(
     std::span<const std::wstring_view> arguments);
 
 }  // namespace usb_vault::card::vikey::development

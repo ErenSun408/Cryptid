@@ -56,7 +56,7 @@ namespace {
 
 }  // namespace
 
-VikeyHelperBlobBackendConfig parse_app_config(
+VikeyHelperBackendConfig parse_app_config(
     const std::span<const std::wstring_view> arguments) {
   if (arguments.size() != 6 || arguments[0].empty() ||
       arguments[1] != kNetworkEnabledDevelopmentAcknowledgement) {

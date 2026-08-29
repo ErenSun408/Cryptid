@@ -3022,3 +3022,49 @@
   错误后的正式状态机仍必须重新读取再判断，不能假设失败发生在提交点之前。
 - 当前提交状态：未提交，等待用户审阅。下一独立切片才设计并切换正式 216 字节 `ICardStore`
   后端；联网开发 helper 仍不得承载生产材料，实体开发卡迁移或重新配卡仍未授权、未执行。
+- 提交：`35130b5 [P2.4]execute journaled card record IPC`。
+
+### 小切片 5：正式 216 字节 ICardStore 适配与 helper 后端
+
+#### 需求、架构与实现
+
+- 重新审计 N-02 单一不透明 blob 合约、N-06 的 216 字节逻辑记录、现有 `ICardStore`、P1
+  `VikeyCardStore/VikeyHelperBlobBackend` 和 `ApplicationSession`。公共接口无需增加记录类型、状态
+  或厂商概念；但旧 ViKey 适配器静态绑定 32 字节并被 P1 开发应用用于裸根秘密，不能原地改成
+  216 字节，否则当前应用会把完整 Card Record 当作 KDF 输入并破坏既有真卡恢复证据。
+- 新增独立 `IVikeyCardRecordBackend` 与 `VikeyCardRecordStore`。它们继续实现同一个 `ICardStore`
+  get/put/capabilities 合约，但读结果和写输入严格要求 **216 字节**；短读/长读映射为
+  `device_failure`，短写/长写在触达后端前以 `invalid_configuration` 拒绝，调用方缓冲所有权不变。
+  旧 `IVikeyBlobBackend/VikeyCardStore` 保持 32 字节，不改变 P1 探针、旧 helper backend 或开发应用。
+- 抽出共享 `vikey_helper_backend.h`，集中一次操作的三项锁页凭据、凭据提供者和非秘密制品配置；
+  原 `VikeyHelperBlobBackendConfig` 更名为不绑定载荷形状的 `VikeyHelperBackendConfig`，开发配置解析、
+  Windows 凭据提供者和旧 backend 共用该边界，未改变命令行或凭据目标。
+- 新增 `VikeyHelperCardRecordBackend`：每次 get/put 都重新获取一组凭据，分别调用 P2.4b 的
+  216 字节客户端 API，保留公共卡错误；凭据提供者、制品验证或非卡错误统一收敛为
+  `backend_unavailable`。该目标与 helper IPC 单独链接，不进入当前产品可执行文件。
+- 跨进程伪 SDK 测试改为走完整
+  `ICardStore → VikeyCardRecordStore → VikeyHelperCardRecordBackend → helper → journal` 链，覆盖
+  provisioning marker 读取、完整 initialized 记录提交、调用方数据不变、短记录在加载凭据前拒绝、
+  每次操作重新取凭据、凭据提供者失败不启动 helper，以及暂存目录清理。旧 32 字节正式链测试
+  保留并继续独立执行。
+
+#### 验证、安全复核与剩余边界
+
+- 新增 `vikey_card_record_store_tests`，覆盖 216 字节二进制透传、调用方所有权、215/217 字节写前
+  拒绝、215/217 字节后端读失败关闭、公共错误域保持和 capability 不虚报。旧
+  `vikey_card_store_tests`、开发配置测试及新适配器测试均针对性构建并通过。
+- Debug、MSVC `/analyze`、ASan 三套全量构建均通过；三套 CTest 均为 **32/32**：30 项执行通过、
+  2 项按既有受限父进程令牌约束跳过。静态分析无项目诊断，ASan 未报告内存错误；
+  `git diff --check` 通过（仅既有 LF→CRLF 提示）。跨进程测试在三套配置中均已重新编译，但因
+  Codex 父令牌受限而按设计跳过。用户随后从普通、非管理员 PowerShell 运行最新 Debug
+  `vikey_helper_process_tests`，完整输出 `vikey_helper_process_tests passed`，证明正式 216 字节
+  `ICardStore` 组合链、旧 32 字节链、凭据生命周期、helper 隔离和暂存清理均在桌面令牌下通过。
+- 安全复核确认公共 `ICardStore` 仍只暴露不透明 blob 和 capability，不暴露物理日志槽、提交 ID、
+  供应商地址、凭据或错误码。适配器和 helper 后端不检查密码、不保存命中信封、不持久化记录，
+  每次操作后凭据和记录由 `SecureBuffer` 清零；没有新增档位、模式、诱饵启用或更新计数状态。
+- 当前产品 `usb_vault_app` 仍只链接旧 P1 32 字节桩/开发装配；本切片不改变登录、挂载或 UI，因而
+  不会把 216 字节记录误传给 `derive_volume_password_v1`。下一切片应在产品层新增卡记录状态机：
+  先分类 provisioning/initialized/legacy/损坏，再实现初始化和登录，不能直接替换现有
+  `ApplicationSession` 的 32 字节读取。
+- 当前提交状态：未提交，等待用户审阅。未读取 Windows 开发凭据、未加载
+  官方 SDK、未连接或改写实体卡；联网开发 helper 仍不得承载生产材料。

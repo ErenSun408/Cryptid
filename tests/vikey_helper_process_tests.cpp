@@ -1,5 +1,6 @@
 #include "card/vikey/vikey_helper_client.h"
 #include "card/vikey/vikey_helper_blob_backend.h"
+#include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_protocol.h"
 #include "vikey_network_probe.h"
 
@@ -34,17 +35,15 @@ using usb_vault::card::vikey::
     probe_vikey_development_session_with_network_access;
 using usb_vault::card::vikey::
     probe_vikey_development_vendor_runtime_with_network_access;
-using usb_vault::card::vikey::
-    read_vikey_development_card_record_with_network_access;
-using usb_vault::card::vikey::
-    write_vikey_development_card_record_with_network_access;
 using usb_vault::card::vikey::probe_vikey_helper;
 using usb_vault::card::vikey::probe_vikey_vendor_runtime;
 using usb_vault::card::vikey::IVikeyCredentialProvider;
+using usb_vault::card::vikey::VikeyCardRecordStore;
 using usb_vault::card::vikey::VikeyCardStore;
 using usb_vault::card::vikey::VikeyCredentialSet;
 using usb_vault::card::vikey::VikeyHelperBlobBackend;
-using usb_vault::card::vikey::VikeyHelperBlobBackendConfig;
+using usb_vault::card::vikey::VikeyHelperBackendConfig;
+using usb_vault::card::vikey::VikeyHelperCardRecordBackend;
 using usb_vault::security::SecureBuffer;
 
 [[noreturn]] void fail(const char* const message) {
@@ -524,24 +523,23 @@ void store_u32(SecureBuffer& destination, const std::size_t offset,
   return record;
 }
 
-void test_development_card_record_staging(
+void test_formal_card_record_backend_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
   const std::size_t directories_before =
       development_helper_directory_count();
-  const auto user_sn = fixed_secret(
-      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
-  const auto api_key = fixed_secret(
-      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
-  const auto user_pin = fixed_secret(
-      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
-  const Sha256Digest helper_digest = file_digest(helper);
-  const Sha256Digest vendor_digest = file_digest(vendor);
+  VikeyHelperBackendConfig config{
+      .helper_path = helper,
+      .helper_digest = file_digest(helper),
+      .vendor_directory = vendor.parent_path(),
+      .vendor_digest = file_digest(vendor),
+      .timeout = 5s,
+  };
+  CountingCredentialProvider provider;
+  VikeyHelperCardRecordBackend backend(config, provider);
+  VikeyCardRecordStore store(backend);
 
-  SecureBuffer observed =
-      read_vikey_development_card_record_with_network_access(
-          helper, helper_digest, vendor.parent_path(), vendor_digest,
-          user_sn, api_key, user_pin, 5s);
+  SecureBuffer observed = store.get_blob();
   expect(observed.size() == usb_vault::card::kCardRecordV1Size,
          "development card-record read returned the wrong size");
   expect(usb_vault::card::inspect_card_record(observed.bytes()) ==
@@ -551,25 +549,41 @@ void test_development_card_record_staging(
   SecureBuffer record = initialized_record_fixture();
   const std::vector<std::byte> original(record.bytes().begin(),
                                         record.bytes().end());
-  write_vikey_development_card_record_with_network_access(
-      helper, helper_digest, vendor.parent_path(), vendor_digest, user_sn,
-      api_key, user_pin, record, 5s);
+  store.put_blob(record);
   expect(std::ranges::equal(record.bytes(), original),
          "development card-record write changed caller data");
 
   SecureBuffer short_record(usb_vault::card::kCardRecordV1Size - 1);
   try {
-    write_vikey_development_card_record_with_network_access(
-        helper, helper_digest, vendor.parent_path(), vendor_digest, user_sn,
-        api_key, user_pin, short_record, 5s);
+    store.put_blob(short_record);
     fail("short development card record was accepted");
   } catch (const std::system_error& error) {
     expect(error.code() == usb_vault::card::make_error_code(
                                CardError::invalid_configuration),
            "short development card record returned the wrong error");
   }
+  expect(provider.loads == 2,
+         "formal card-record backend cached or reused credentials");
   expect(development_helper_directory_count() == directories_before,
          "development card-record operations left staging residue");
+
+  CountingCredentialProvider failing_provider;
+  failing_provider.fail_load = true;
+  VikeyHelperCardRecordBackend failing_backend(std::move(config),
+                                                failing_provider);
+  VikeyCardRecordStore failing_store(failing_backend);
+  try {
+    static_cast<void>(failing_store.get_blob());
+    fail("card-record credential provider failure was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::backend_unavailable),
+           "card-record credential failure returned the wrong error");
+  }
+  expect(failing_provider.loads == 1,
+         "card-record credential provider failure was retried");
+  expect(development_helper_directory_count() == directories_before,
+         "card-record credential failure staged a helper directory");
 }
 
 void test_formal_blob_backend_staging(
@@ -577,7 +591,7 @@ void test_formal_blob_backend_staging(
     const std::filesystem::path& vendor) {
   const std::size_t directories_before =
       development_helper_directory_count();
-  VikeyHelperBlobBackendConfig config{
+  VikeyHelperBackendConfig config{
       .helper_path = helper,
       .helper_digest = file_digest(helper),
       .vendor_directory = vendor.parent_path(),
@@ -840,8 +854,8 @@ int wmain(const int argc, wchar_t** const argv) {
     run_test("development blob round trip", [&] {
       test_development_blob_round_trip_staging(helper, vendor);
     });
-    run_test("development card record", [&] {
-      test_development_card_record_staging(helper, vendor);
+    run_test("formal card-record backend", [&] {
+      test_formal_card_record_backend_staging(helper, vendor);
     });
     run_test("formal blob backend", [&] {
       test_formal_blob_backend_staging(helper, vendor);
