@@ -3,6 +3,9 @@
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 
+#include <Windows.h>
+#include <bcrypt.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -19,6 +22,9 @@
 namespace {
 
 using usb_vault::card::CardError;
+using usb_vault::card::CardRecordJournalMediaState;
+using usb_vault::card::CardRecordState;
+using usb_vault::card::bootstrap_uninitialized_card_record_journal_v1;
 using usb_vault::card::commit_card_record_journal_v1;
 using usb_vault::card::ICardRecordJournalStorage;
 using usb_vault::card::kCardRecordJournalV1Descriptor0Offset;
@@ -29,6 +35,8 @@ using usb_vault::card::kCardRecordJournalV1Slot1Offset;
 using usb_vault::card::kCardRecordJournalV1StorageSize;
 using usb_vault::card::kCardRecordV1Size;
 using usb_vault::card::make_error_code;
+using usb_vault::card::inspect_card_record;
+using usb_vault::card::inspect_card_record_journal_media_v1;
 using usb_vault::card::provision_card_record_journal_v1;
 using usb_vault::card::provision_uninitialized_card_record_v1;
 using usb_vault::card::read_card_record_journal_v1;
@@ -42,6 +50,25 @@ using usb_vault::security::SecureBuffer;
 void expect(const bool condition, const char *const message) {
   if (!condition)
     fail(message);
+}
+
+[[nodiscard]] std::array<std::byte, 32>
+sha256(const std::span<const std::byte> input) {
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  if (!BCRYPT_SUCCESS(::BCryptOpenAlgorithmProvider(
+          &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0))) {
+    fail("open test SHA-256 provider");
+  }
+  std::array<std::byte, 32> result{};
+  const NTSTATUS status = ::BCryptHash(
+      algorithm, nullptr, 0,
+      const_cast<PUCHAR>(reinterpret_cast<const UCHAR *>(input.data())),
+      static_cast<ULONG>(input.size()),
+      reinterpret_cast<PUCHAR>(result.data()),
+      static_cast<ULONG>(result.size()));
+  static_cast<void>(::BCryptCloseAlgorithmProvider(algorithm, 0));
+  if (!BCRYPT_SUCCESS(status)) fail("hash test journal bytes");
+  return result;
 }
 
 template <typename Action>
@@ -77,6 +104,12 @@ void store_u32(const std::span<std::byte> bytes, const std::size_t offset,
   store_u32(result.bytes(), 52, 2);
   store_u32(result.bytes(), 56, 1);
   store_u32(result.bytes(), 60, 0x13);
+  return result;
+}
+
+[[nodiscard]] SecureBuffer future_record() {
+  SecureBuffer result = framed_record(std::byte{0x47});
+  store_u32(result.bytes(), 8, 2);
   return result;
 }
 
@@ -160,6 +193,193 @@ public:
 void provision(FakeStorage &storage, const SecureBuffer &marker) {
   provision_card_record_journal_v1(storage, marker.bytes());
   storage.reset_observation();
+}
+
+void replace_active_record_and_rehash_descriptors(
+    FakeStorage &storage, const SecureBuffer &old_record,
+    const SecureBuffer &replacement) {
+  const std::size_t active_slot =
+      same_record_at(storage.data_, kCardRecordJournalV1Slot0Offset,
+                     old_record)
+          ? kCardRecordJournalV1Slot0Offset
+          : kCardRecordJournalV1Slot1Offset;
+  std::ranges::copy(replacement.bytes(),
+                    storage.data_.begin() + active_slot);
+
+  constexpr std::size_t kRecordDigestOffset = 56;
+  constexpr std::size_t kDescriptorDigestOffset = 120;
+  const auto record_digest = sha256(replacement.bytes());
+  for (const std::size_t descriptor_offset :
+       {kCardRecordJournalV1Descriptor0Offset,
+        kCardRecordJournalV1Descriptor1Offset}) {
+    std::ranges::copy(
+        record_digest,
+        storage.data_.begin() + descriptor_offset + kRecordDigestOffset);
+    const auto descriptor_digest = sha256(
+        std::span(storage.data_)
+            .subspan(descriptor_offset, kDescriptorDigestOffset));
+    std::ranges::copy(
+        descriptor_digest,
+        storage.data_.begin() + descriptor_offset +
+            kDescriptorDigestOffset);
+  }
+}
+
+void test_media_inspection_is_read_only() {
+  FakeStorage storage;
+  expect(inspect_card_record_journal_media_v1(storage) ==
+             CardRecordJournalMediaState::no_product_evidence,
+         "blank journal reported product evidence");
+  expect(storage.write_calls_ == 0,
+         "media inspection wrote blank storage");
+
+  storage.data_[kCardRecordJournalV1Descriptor0Offset] = std::byte{'U'};
+  storage.data_[kCardRecordJournalV1Descriptor0Offset + 1] = std::byte{'V'};
+  storage.data_[kCardRecordJournalV1Descriptor0Offset + 2] = std::byte{'J'};
+  storage.data_[kCardRecordJournalV1Descriptor0Offset + 3] = std::byte{'R'};
+  storage.reset_observation();
+  expect(inspect_card_record_journal_media_v1(storage) ==
+             CardRecordJournalMediaState::product_evidence,
+         "torn descriptor prefix was treated as unclaimed");
+  expect(storage.write_calls_ == 0,
+         "media inspection normalized damaged product evidence");
+
+  storage.data_.fill(std::byte{});
+  storage.data_[kCardRecordJournalV1Slot0Offset] = std::byte{'U'};
+  storage.data_[kCardRecordJournalV1Slot0Offset + 1] = std::byte{'V'};
+  storage.data_[kCardRecordJournalV1Slot0Offset + 2] = std::byte{'B'};
+  storage.data_[kCardRecordJournalV1Slot0Offset + 3] = std::byte{'L'};
+  storage.reset_observation();
+  expect(inspect_card_record_journal_media_v1(storage) ==
+             CardRecordJournalMediaState::product_evidence,
+         "partial provisioning marker was treated as resumable");
+  expect(storage.write_calls_ == 0,
+         "media inspection wrote an interrupted bootstrap");
+
+  storage.data_.fill(std::byte{});
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  std::ranges::copy(marker.bytes(),
+                    storage.data_.begin() +
+                        kCardRecordJournalV1Slot0Offset);
+  storage.reset_observation();
+  expect(inspect_card_record_journal_media_v1(storage) ==
+             CardRecordJournalMediaState::provisioning_interrupted,
+         "complete provisioning marker was not resumable");
+}
+
+void test_bootstrap_is_resumable_and_non_destructive() {
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  FakeStorage partial_marker;
+  partial_marker.write_fault_ = {.call = 1, .bytes_before_failure = 4};
+  expect_card_error(
+      [&] {
+        bootstrap_uninitialized_card_record_journal_v1(partial_marker,
+                                                        marker.bytes());
+      },
+      CardError::communication_failed,
+      "partial marker bootstrap returned the wrong error");
+  partial_marker.reset_observation();
+  expect_card_error(
+      [&] {
+        bootstrap_uninitialized_card_record_journal_v1(partial_marker,
+                                                        marker.bytes());
+      },
+      CardError::device_failure,
+      "unprovable partial marker was resumed destructively");
+  expect(partial_marker.write_calls_ == 0,
+         "partial marker retry wrote damaged product evidence");
+
+  FakeStorage interrupted;
+  interrupted.write_fault_ = {.call = 2, .bytes_before_failure = 4};
+  expect_card_error(
+      [&] {
+        bootstrap_uninitialized_card_record_journal_v1(interrupted,
+                                                        marker.bytes());
+      },
+      CardError::communication_failed,
+      "partial descriptor bootstrap returned the wrong error");
+  expect(inspect_card_record_journal_media_v1(interrupted) ==
+             CardRecordJournalMediaState::provisioning_interrupted,
+         "complete marker bootstrap lost its resumable evidence");
+
+  interrupted.reset_observation();
+  bootstrap_uninitialized_card_record_journal_v1(interrupted,
+                                                  marker.bytes());
+  SecureBuffer observed = read_card_record_journal_v1(interrupted);
+  expect(same(observed, marker),
+         "resumed bootstrap did not publish the marker");
+
+  interrupted.reset_observation();
+  bootstrap_uninitialized_card_record_journal_v1(interrupted,
+                                                  marker.bytes());
+  expect(interrupted.write_calls_ == 0,
+         "idempotent bootstrap rewrote a valid marker journal");
+  expect_card_error(
+      [&] {
+        provision_card_record_journal_v1(interrupted, marker.bytes());
+      },
+      CardError::invalid_operation,
+      "direct provisioning overwrote existing product evidence");
+  expect(interrupted.write_calls_ == 0,
+         "rejected direct provisioning touched existing product data");
+
+  SecureBuffer initialized = framed_record(std::byte{0x62});
+  commit_card_record_journal_v1(interrupted, initialized.bytes());
+  interrupted.reset_observation();
+  expect_card_error(
+      [&] {
+        bootstrap_uninitialized_card_record_journal_v1(interrupted,
+                                                        marker.bytes());
+      },
+      CardError::invalid_operation,
+      "bootstrap replaced an initialized record");
+  expect(interrupted.write_calls_ == 0,
+         "rejected bootstrap wrote an initialized journal");
+
+  const std::size_t initialized_slot =
+      same_record_at(interrupted.data_, kCardRecordJournalV1Slot0Offset,
+                     initialized)
+          ? kCardRecordJournalV1Slot0Offset
+          : kCardRecordJournalV1Slot1Offset;
+  interrupted.data_[initialized_slot + 73] ^= std::byte{1};
+  interrupted.reset_observation();
+  expect_card_error(
+      [&] {
+        bootstrap_uninitialized_card_record_journal_v1(interrupted,
+                                                        marker.bytes());
+      },
+      CardError::device_failure,
+      "bootstrap replaced damaged initialized product evidence");
+  expect(interrupted.write_calls_ == 0,
+         "damaged initialized journal was written by bootstrap");
+}
+
+void test_complete_future_record_reaches_product_classification() {
+  FakeStorage storage;
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  provision(storage, marker);
+  SecureBuffer future = future_record();
+  replace_active_record_and_rehash_descriptors(storage, marker, future);
+  storage.reset_observation();
+
+  SecureBuffer observed = read_card_record_journal_v1(storage);
+  expect(same(observed, future),
+         "complete future record was rejected by the physical journal");
+  expect(inspect_card_record(observed.bytes()) ==
+             CardRecordState::unsupported_version,
+         "future record did not reach unsupported-version classification");
+  expect(storage.write_calls_ == 0,
+         "stable future record was normalized or rewritten");
+  storage.reset_observation();
+  expect_card_error(
+      [&] {
+        bootstrap_uninitialized_card_record_journal_v1(storage,
+                                                        marker.bytes());
+      },
+      CardError::invalid_operation,
+      "bootstrap replaced a complete future product record");
+  expect(storage.write_calls_ == 0,
+         "future product record was written by bootstrap");
 }
 
 void test_provision_and_alternating_commits() {
@@ -474,6 +694,9 @@ void test_invalid_inputs_do_not_touch_storage() {
 
 int main() {
   try {
+    test_media_inspection_is_read_only();
+    test_bootstrap_is_resumable_and_non_destructive();
+    test_complete_future_record_reaches_product_classification();
     test_provision_and_alternating_commits();
     test_staging_failures_preserve_active_commit();
     test_descriptor_failures_recover_old_or_complete_new();

@@ -21,6 +21,12 @@ namespace {
 constexpr std::array<std::byte, 8> kDescriptorMagic{
     std::byte{'U'}, std::byte{'V'}, std::byte{'J'}, std::byte{'R'},
     std::byte{'N'}, std::byte{'2'}, std::byte{},    std::byte{}};
+constexpr std::array<std::byte, 4> kDescriptorPrefix{
+    std::byte{'U'}, std::byte{'V'}, std::byte{'J'}, std::byte{'R'}};
+constexpr std::array<std::byte, 4> kProvisioningPrefix{
+    std::byte{'U'}, std::byte{'V'}, std::byte{'B'}, std::byte{'L'}};
+constexpr std::array<std::byte, 4> kInitializedPrefix{
+    std::byte{'U'}, std::byte{'V'}, std::byte{'C'}, std::byte{'R'}};
 constexpr std::uint32_t kDescriptorVersion = 1;
 constexpr std::size_t kDescriptorPrefixSize = 120;
 constexpr std::size_t kDigestSize = 32;
@@ -124,6 +130,14 @@ equal_bytes(const std::span<const std::byte> left,
     difference |= std::to_integer<unsigned int>(left[index] ^ right[index]);
   }
   return difference == 0;
+}
+
+template <std::size_t Size>
+[[nodiscard]] bool starts_with(
+    const std::span<const std::byte> bytes,
+    const std::array<std::byte, Size> &prefix) noexcept {
+  return bytes.size() >= prefix.size() &&
+         equal_bytes(bytes.first(prefix.size()), prefix);
 }
 
 [[nodiscard]] Digest sha256(const std::span<const std::byte> input) {
@@ -387,7 +401,6 @@ void write_verified(ICardRecordJournalStorage &storage,
 security::SecureBuffer
 read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
   LoadedJournal journal = load_journal(storage);
-  validate_logical_record(journal.record.bytes());
   if (!journal.mirrored) {
     security::SecureBuffer filler(kCardRecordV1Size);
     fill_random(filler.bytes());
@@ -401,7 +414,6 @@ read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
                    normalized_descriptor);
 
     LoadedJournal normalized = load_journal(storage);
-    validate_logical_record(normalized.record.bytes());
     if (!normalized.mirrored ||
         !equal_bytes(normalized.commit_id, journal.commit_id) ||
         normalized.slot != journal.slot ||
@@ -414,6 +426,53 @@ read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
   return std::move(journal.record);
 }
 
+CardRecordJournalMediaState inspect_card_record_journal_media_v1(
+    ICardRecordJournalStorage &storage) {
+  require_capacity(storage);
+  std::array<security::SecureBuffer, 2> descriptors{
+      read_exact(storage, kCardRecordJournalV1Descriptor0Offset,
+                 kCardRecordJournalV1DescriptorSize),
+      read_exact(storage, kCardRecordJournalV1Descriptor1Offset,
+                 kCardRecordJournalV1DescriptorSize)};
+  std::array<security::SecureBuffer, 2> slots{
+      read_exact(storage, kCardRecordJournalV1Slot0Offset,
+                 kCardRecordV1Size),
+      read_exact(storage, kCardRecordJournalV1Slot1Offset,
+                 kCardRecordV1Size)};
+  const std::array<Digest, 2> slot_digests{
+      sha256(slots[0].bytes()), sha256(slots[1].bytes())};
+  const std::array<ParsedDescriptor, 2> parsed{
+      parse_descriptor(descriptors[0].bytes(), slot_digests),
+      parse_descriptor(descriptors[1].bytes(), slot_digests)};
+
+  const bool valid_descriptor = parsed[0].valid || parsed[1].valid;
+  const bool descriptor_evidence =
+      starts_with(descriptors[0].bytes(), kDescriptorPrefix) ||
+      starts_with(descriptors[1].bytes(), kDescriptorPrefix);
+  const bool provisioning_evidence =
+      starts_with(slots[0].bytes(), kProvisioningPrefix) ||
+      starts_with(slots[1].bytes(), kProvisioningPrefix);
+  const bool complete_provisioning_marker =
+      inspect_card_record(slots[0].bytes()) ==
+          CardRecordState::provisioned_uninitialized ||
+      inspect_card_record(slots[1].bytes()) ==
+          CardRecordState::provisioned_uninitialized;
+  const bool initialized_evidence =
+      starts_with(slots[0].bytes(), kInitializedPrefix) ||
+      starts_with(slots[1].bytes(), kInitializedPrefix);
+
+  if (valid_descriptor || initialized_evidence) {
+    return CardRecordJournalMediaState::product_evidence;
+  }
+  if (complete_provisioning_marker) {
+    return CardRecordJournalMediaState::provisioning_interrupted;
+  }
+  if (descriptor_evidence || provisioning_evidence) {
+    return CardRecordJournalMediaState::product_evidence;
+  }
+  return CardRecordJournalMediaState::no_product_evidence;
+}
+
 void provision_card_record_journal_v1(
     ICardRecordJournalStorage &storage,
     const std::span<const std::byte> provisioning_record) {
@@ -422,6 +481,11 @@ void provision_card_record_journal_v1(
       CardRecordState::provisioned_uninitialized) {
     fail(CardError::invalid_configuration,
          "journal provisioning requires the exact uninitialized marker");
+  }
+  if (inspect_card_record_journal_media_v1(storage) ==
+      CardRecordJournalMediaState::product_evidence) {
+    fail(CardError::invalid_operation,
+         "journal provisioning refuses existing product evidence");
   }
 
   const CommitId commit_id = random_commit_id();
@@ -439,6 +503,34 @@ void provision_card_record_journal_v1(
                       filler.bytes());
   write_verified(storage, kCardRecordJournalV1Descriptor0Offset, descriptor);
   write_verified(storage, kCardRecordJournalV1Descriptor1Offset, descriptor);
+}
+
+void bootstrap_uninitialized_card_record_journal_v1(
+    ICardRecordJournalStorage &storage,
+    const std::span<const std::byte> provisioning_record) {
+  require_capacity(storage);
+  if (inspect_card_record(provisioning_record) !=
+      CardRecordState::provisioned_uninitialized) {
+    fail(CardError::invalid_configuration,
+         "journal bootstrap requires the exact uninitialized marker");
+  }
+
+  const CardRecordJournalMediaState state =
+      inspect_card_record_journal_media_v1(storage);
+  if (state == CardRecordJournalMediaState::product_evidence) {
+    security::SecureBuffer existing =
+        read_card_record_journal_v1(storage);
+    if (equal_bytes(existing.bytes(), provisioning_record)) return;
+    fail(CardError::invalid_operation,
+         "journal bootstrap refuses an existing product record");
+  }
+
+  provision_card_record_journal_v1(storage, provisioning_record);
+  security::SecureBuffer observed = read_card_record_journal_v1(storage);
+  if (!equal_bytes(observed.bytes(), provisioning_record)) {
+    fail(CardError::device_failure,
+         "journal bootstrap did not publish the provisioning marker");
+  }
 }
 
 void commit_card_record_journal_v1(

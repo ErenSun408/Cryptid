@@ -3136,3 +3136,38 @@
   下一实现切片先做厂商无关的介质足迹检查和可恢复 bootstrap，再接 ViKey 硬件 ID/helper IPC，
   最后接主 App 初始化 UI。
 - 当前提交状态：用户已批准提交；本地提交将在本记录后创建。
+- 提交：`e8186a8 [docs]rebaseline automatic card enrollment`。
+
+### 小切片 7b：厂商无关介质足迹与可恢复 bootstrap
+
+#### 实现与兼容性修正
+
+- 在 736 字节日志私有边界新增只读 `CardRecordJournalMediaState`：`no_product_evidence` 只表示固定
+  位置没有已知产品前缀，不自行授权覆盖；`provisioning_interrupted` 只接受槽内完整精确 marker 且
+  尚无有效描述符；有效描述符、当前/未来记录前缀、撕裂描述符前缀以及不完整 marker 均归入
+  `product_evidence`。检查固定读取两份描述符和两个槽，不执行日志归一化或任何写入。
+- 新增幂等 `bootstrap_uninitialized_card_record_journal_v1`：无产品足迹或可证明的完整 marker 中断可
+  建立/重建日志；已有可恢复 provisioning 日志直接成功且不重写；initialized、未来版本或损坏产品
+  证据拒绝覆盖。底层 provisioning 原语也增加产品证据门，不能再直接覆盖已有有效日志。
+- 首次写 marker 若只落下部分前缀，下一次按损坏产品证据失败关闭，不猜测其来源；只有完整 marker
+  已回读、后续描述符撕裂时才自动继续。首笔随机闲置槽写在任何产品意图落盘前中断时仍可从调用方
+  已授权的无足迹状态重新开始，符合非原子介质无法证明更早意图的物理边界。
+- 修正物理日志读取和逻辑版本分类的层次：只要 v1 日志描述符及活动槽摘要完整，读取就返回固定
+  216 字节逻辑记录，不再提前限制其必须是当前 provisioning/initialized v1；写入仍只接受当前完整
+  格式。由此未来版本记录能到达 P2.6 `unsupported_version`，旧 App 可提示升级而不是误报损坏或
+  把卡送入接纳路径。
+
+#### 测试与安全复核
+
+- 扩展日志故障测试，覆盖：空白介质只读无足迹、撕裂描述符/部分 marker 作为产品证据、完整 marker
+  中断可恢复、部分 marker 重试零写入失败、描述符中断后 bootstrap 恢复、有效 marker 幂等零写入、
+  直接重复 provisioning 拒绝、initialized/损坏 initialized/未来版本零覆盖，以及人工构造摘要完整
+  的未来逻辑记录可原样上送 `unsupported_version`。
+- Debug、MSVC `/analyze`、ASan 三套全量构建均通过；三套 CTest 均为 **33/33**：31 项执行通过、
+  2 项按既有受限父令牌约束跳过。静态分析无项目诊断，ASan 未报告内存错误；`git diff --check`
+  通过（仅既有 LF→CRLF 提示）。本切片没有读取开发凭据、加载厂商 DLL、启动 helper 或访问实体卡。
+- 安全复核确认介质无产品足迹状态不包含厂商、设备、档位、模式、信封命中或诱饵启用信息，也不
+  持久化到本地；它只是后续硬件适配器判定待接纳卡的一个输入。当前仍未解决检查与写入之间的换卡
+  窗口，也未识别 ViKey P1/外来非空数据；这两项明确留给下一独立切片的稳定硬件 ID 和 ViKey 私有
+  介质策略，主 App 尚不能据此自动接纳实体卡。
+- 当前提交状态：用户已批准提交；本地提交将在本记录后创建。

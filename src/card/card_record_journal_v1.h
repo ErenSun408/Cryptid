@@ -25,6 +25,16 @@ static_assert(kCardRecordJournalV1Slot1Offset ==
 static_assert(kCardRecordJournalV1StorageSize ==
               kCardRecordJournalV1Slot1Offset + 216);
 
+// Read-only evidence visible in the reserved journal range. None is not by
+// itself authorization to erase or adopt a card: a hardware adapter must also
+// prove that the target media is accessible, stable, and contains no legacy
+// or foreign data according to that adapter's contract.
+enum class CardRecordJournalMediaState {
+  no_product_evidence,
+  provisioning_interrupted,
+  product_evidence,
+};
+
 // Vendor-private random-access boundary used to make the application's single
 // logical card record recoverable. Implementations must either return exactly
 // the requested byte count or fail; partial writes may occur before failure.
@@ -55,10 +65,27 @@ protected:
 [[nodiscard]] security::SecureBuffer
 read_card_record_journal_v1(ICardRecordJournalStorage &storage);
 
-// Controlled provisioning entry point. Product initialization must not call
-// this function: it accepts only the exact non-secret provisioning record,
-// randomly selects its physical slot, and randomizes the inactive slot.
+// Reads the complete reserved range without normalizing or writing it.
+// Recognizable current/future product prefixes and valid descriptors are
+// product evidence even when damaged. An exact complete provisioning marker
+// without a valid descriptor is the only resumable bootstrap state.
+[[nodiscard]] CardRecordJournalMediaState
+inspect_card_record_journal_media_v1(
+    ICardRecordJournalStorage &storage);
+
+// Low-level controlled provisioning primitive. It accepts only the exact
+// non-secret provisioning record, refuses existing product evidence, randomly
+// selects its physical slot, and randomizes the inactive slot. Product code
+// uses the idempotent bootstrap wrapper below after adapter authorization.
 void provision_card_record_journal_v1(
+    ICardRecordJournalStorage &storage,
+    std::span<const std::byte> provisioning_record);
+
+// Idempotent product bootstrap. It may start only after the adapter has
+// authorized no-product-evidence media, resume an interrupted provisioning
+// marker, or accept an already recoverable provisioning journal. Existing,
+// damaged, initialized, and unsupported product records are never replaced.
+void bootstrap_uninitialized_card_record_journal_v1(
     ICardRecordJournalStorage &storage,
     std::span<const std::byte> provisioning_record);
 
