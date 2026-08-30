@@ -145,6 +145,7 @@ add_library(usb_vault_core STATIC
   src/security/confirmed_password.cpp
   src/security/kdf_v1.cpp
   src/security/offline_card_password_policy.cpp
+  src/security/password_normalization.cpp
   src/security/secure_buffer.cpp
   src/ui/password_ingress.cpp
   src/ui/ui_close_guard.cpp

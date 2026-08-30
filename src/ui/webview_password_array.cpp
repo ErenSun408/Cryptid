@@ -1,11 +1,11 @@
 #include "usb_vault/ui/webview_password_array.h"
 
+#include "usb_vault/security/password_normalization.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <Windows.h>
 
 #include <cstddef>
-#include <limits>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -135,6 +135,9 @@ void submit_variant_byte_array(SAFEARRAY& array, const std::size_t size,
   }
 
   VariantPasswordAccess access(array, size);
+  if (size > security::kMaximumPasswordUtf8InputBytes) {
+    throw std::length_error("WebView2 password array is too long");
+  }
   for (std::size_t index = 0; index < size; ++index) {
     const VARIANT& element = access[index];
     if (element.vt != VT_I4 || element.lVal < 0 || element.lVal > 255) {
@@ -142,10 +145,6 @@ void submit_variant_byte_array(SAFEARRAY& array, const std::size_t size,
           "WebView2 variant password array must contain byte-range integers");
     }
   }
-  if (size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-    throw std::length_error("WebView2 password array is too long");
-  }
-
   security::SecureBuffer normalized(size);
   for (std::size_t index = 0; index < size; ++index) {
     normalized.bytes()[index] =

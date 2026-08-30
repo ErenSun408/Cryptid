@@ -1,5 +1,8 @@
 #include "usb_vault/ui/password_ingress.h"
 
+#include "usb_vault/security/password_normalization.h"
+
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <iostream>
@@ -69,6 +72,18 @@ void test_non_ascii_and_embedded_nul_are_preserved() {
   require_wiped(input);
 }
 
+void test_input_is_normalized_to_nfc_before_return() {
+  constexpr std::array input{
+      std::byte{'e'}, std::byte{0xCC}, std::byte{0x81}};
+  constexpr std::array expected{std::byte{0xC3}, std::byte{0xA9}};
+  auto mutable_input = input;
+
+  SecureBuffer password = consume_password_utf8(mutable_input);
+
+  require_password(password, expected);
+  require_wiped(mutable_input);
+}
+
 void test_invalid_sequences_are_rejected_and_wiped() {
   std::array overlong{std::byte{0xC0}, std::byte{0xAF}};
   require_rejected_and_wiped<std::invalid_argument>(
@@ -93,13 +108,24 @@ void test_empty_input_is_rejected() {
   throw std::runtime_error("empty UI password was accepted");
 }
 
+void test_oversized_input_is_rejected_and_wiped() {
+  std::array<std::byte,
+             usb_vault::security::kMaximumPasswordUtf8InputBytes + 1>
+      input{};
+  std::ranges::fill(input, std::byte{'a'});
+  require_rejected_and_wiped<std::length_error>(
+      input, "oversized UI password was accepted");
+}
+
 }  // namespace
 
 int main() {
   test_ascii_is_copied_then_source_is_wiped();
   test_non_ascii_and_embedded_nul_are_preserved();
+  test_input_is_normalized_to_nfc_before_return();
   test_invalid_sequences_are_rejected_and_wiped();
   test_empty_input_is_rejected();
+  test_oversized_input_is_rejected_and_wiped();
 
   std::cout << "password_ingress_tests: PASS\n";
   return 0;

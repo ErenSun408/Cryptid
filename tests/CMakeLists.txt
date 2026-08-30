@@ -173,6 +173,19 @@ usb_vault_configure_target(offline_card_password_policy_tests)
 add_test(NAME offline_card_password_policy_tests
   COMMAND offline_card_password_policy_tests)
 
+add_executable(password_normalization_tests
+  password_normalization_tests.cpp
+)
+
+target_link_libraries(password_normalization_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(password_normalization_tests)
+
+add_test(NAME password_normalization_tests
+  COMMAND password_normalization_tests)
+
 add_executable(card_initialization_service_tests
   card_initialization_service_tests.cpp
 )

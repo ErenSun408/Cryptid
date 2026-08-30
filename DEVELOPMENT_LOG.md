@@ -3566,3 +3566,44 @@
   后续仍需统一 NFC 归一化，再把策略接入初始化与未来诱饵密码设置。遗忘风险确认文案和双输入
   WebView 安全传输仍未实现。本切片已完成实现、测试和安全复核，用户已批准提交；本地提交将在
   本记录后创建。
+- 提交：`758668e [P2.12]add offline card password baseline`。
+
+### 小切片 12c：共享 Unicode NFC 密码入口
+
+#### 需求审计与实现
+
+- 审计现有 `password_ingress`、WebView 两类 SAFEARRAY、P2.12a 确认证明和 P2.12b Unicode 码点
+  策略后确认：若只在初始化或只在登录一侧规范化，视觉相同的预组字符／组合字符会得到不同 KDF
+  输入并永久锁死数据。规范化因此必须位于两条产品路径将来都会复用的 UI 密码入口，并发生在
+  双输入比较、强度计数和任何 KDF 之前；具体初始化页面尚未接入，但不得另建第二套入口。
+- 对照 Microsoft `NormalizeString` 的显式长度和缓冲区估算语义，新增消费式
+  `normalize_password_utf8_nfc`。它拒绝空输入、畸形 UTF-8 和超过 4096 字节的原始桥接值，通过
+  `MultiByteToWideChar` → `NormalizeString(NormalizationC)` → `WideCharToMultiByte` 得到唯一 NFC
+  UTF-8 字节。所有调用都传显式长度，不依赖 NUL 结尾，因而嵌入 U+0000 不会截断。
+- 原始 UTF-8、解码 UTF-16、NFC UTF-16 和输出 UTF-8 均使用 `SecureBuffer` 的锁页分配；每一阶段
+  完成后立即清零上一阶段，异常路径由析构继续清零。转换过程不创建 `std::string`、
+  `std::wstring`、普通向量或可持久化密码副本，错误只暴露固定类别和系统操作名。
+- 既有 `consume_password_utf8` 现固定先检查 4096 字节上限，再复制并擦除可变桥接区，最后消费式
+  返回 NFC 密码。现有登录 `UiSessionController` 已自然获得该语义；未来初始化两次输入和诱饵设密
+  必须各自通过该入口后再交给 `confirm_password`。WebView 的 `VT_VARIANT` 路径也在分配锁页副本前
+  执行同一上限，`VT_UI1` 路径由共享入口执行；两类超限源数组都仍会被原地清零。
+
+#### 测试、安全复核与剩余边界
+
+- 新增 `password_normalization_tests`，覆盖 ASCII 幂等、`e + U+0301` 与预组 `é` 收敛为相同字节、
+  韩文 Jamo 合成为 NFC 音节、嵌入 NUL 后的 emoji 保留、过长编码／截断／代理项失败关闭、空输入
+  拒绝和 4097 字节前置拒绝。`password_ingress_tests` 另验证桥接源在 NFC 成功、畸形和超限路径
+  均清零；WebView 测试验证 4097 元素的 `VT_UI1` 与 `VT_VARIANT` 数组均拒绝、擦除且不触达会话。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **37/37**：35 项实际通过、2 项按受限
+  父令牌约束跳过。新增规范化测试、密码入口、UI 控制器和两类 WebView 数组测试在三套配置中均
+  实际通过；`/analyze` 无项目诊断，ASan 未报告内存错误。本切片不修改 helper、IPC、ViKey 或
+  跨进程调用，故无需用户额外补跑桌面 PowerShell 测试。
+- 安全复核确认所有字符数、乘法和 Windows `int` 转换均受 4096 上限约束；`NormalizeString` 的
+  估算不足按官方负返回值重试，重试次数和最大容量均受限。原始超限值在任何锁页分配前拒绝，
+  UTF-16 中间区使用 `VirtualAlloc` 对齐且全部清零；没有日志、网络、文件、注册表或模式／档位
+  状态。规范化不降低 P2.12b 的 12 码点门槛，强度策略将来观察的是 NFC 后的真实码点数。
+- 兼容边界是 NFC 现在改变产品 UI 登录的 KDF 输入语义：ASCII 和已经是 NFC 的密码字节不变；
+  尚未发布的非 NFC P2 测试记录以及人为用组合形式创建的旧开发记录不承诺可继续登录。正式 P2
+  产品记录尚未部署，因此本切片在初始化 UI 接入前锁定规范化协议，不增加迁移或双重尝试旁路。
+  仍待实现遗忘风险确认、双输入 WebView 提交和未初始化页面路由；弱密码检测按客户决定暂缓。
+  本切片已完成实现、测试和安全复核，用户已批准提交；本地提交将在本记录后创建。

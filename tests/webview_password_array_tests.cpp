@@ -1,5 +1,7 @@
 #include "usb_vault/ui/webview_password_array.h"
 
+#include "usb_vault/security/password_normalization.h"
+
 #include <Windows.h>
 #include <OleAuto.h>
 
@@ -74,6 +76,29 @@ class ByteArrayVariant final {
     }
     require(SUCCEEDED(::SafeArrayUnaccessData(value_.parray)),
             "could not release test SAFEARRAY");
+    size_ = bytes.size();
+  }
+
+  ByteArrayVariant(const std::size_t size, const std::byte value) {
+    ::VariantInit(&value_);
+    SAFEARRAY* const array = ::SafeArrayCreateVector(
+        VT_UI1, 0, static_cast<ULONG>(size));
+    if (array == nullptr) {
+      throw std::runtime_error("could not allocate sized test SAFEARRAY");
+    }
+    value_.vt = VT_ARRAY | VT_UI1;
+    value_.parray = array;
+    size_ = size;
+
+    void* raw_data = nullptr;
+    require(SUCCEEDED(::SafeArrayAccessData(value_.parray, &raw_data)),
+            "could not access sized test SAFEARRAY");
+    auto* data = static_cast<std::byte*>(raw_data);
+    for (std::size_t index = 0; index < size_; ++index) {
+      data[index] = value;
+    }
+    require(SUCCEEDED(::SafeArrayUnaccessData(value_.parray)),
+            "could not release sized test SAFEARRAY");
   }
 
   ~ByteArrayVariant() noexcept { static_cast<void>(::VariantClear(&value_)); }
@@ -88,7 +113,7 @@ class ByteArrayVariant final {
     require(SUCCEEDED(::SafeArrayAccessData(value_.parray, &raw_data)),
             "could not inspect test SAFEARRAY");
     const auto* data = static_cast<const std::byte*>(raw_data);
-    for (std::size_t index = 0; index < 4; ++index) {
+    for (std::size_t index = 0; index < size_; ++index) {
       require(data[index] == std::byte{0}, "SAFEARRAY was not wiped");
     }
     require(SUCCEEDED(::SafeArrayUnaccessData(value_.parray)),
@@ -97,6 +122,7 @@ class ByteArrayVariant final {
 
  private:
   VARIANT value_{};
+  std::size_t size_{0};
 };
 
 class IntegerVariantArray final {
@@ -112,10 +138,27 @@ class IntegerVariantArray final {
     value_.vt = VT_ARRAY | VT_VARIANT;
     value_.parray = array;
     lower_bound_ = lower_bound;
+    size_ = bytes.size();
 
     for (std::size_t index = 0; index < bytes.size(); ++index) {
       set_integer(index, static_cast<LONG>(
                              std::to_integer<unsigned char>(bytes[index])));
+    }
+  }
+
+  IntegerVariantArray(const std::size_t size, const LONG value) {
+    ::VariantInit(&value_);
+    SAFEARRAY* const array = ::SafeArrayCreateVector(
+        VT_VARIANT, 0, static_cast<ULONG>(size));
+    if (array == nullptr) {
+      throw std::runtime_error(
+          "could not allocate sized variant test SAFEARRAY");
+    }
+    value_.vt = VT_ARRAY | VT_VARIANT;
+    value_.parray = array;
+    size_ = size;
+    for (std::size_t index = 0; index < size_; ++index) {
+      set_integer(index, value);
     }
   }
 
@@ -145,7 +188,7 @@ class IntegerVariantArray final {
   }
 
   void require_i4_values_wiped() const {
-    for (std::size_t index = 0; index < 4; ++index) {
+    for (std::size_t index = 0; index < size_; ++index) {
       VARIANT element{};
       ::VariantInit(&element);
       LONG array_index = lower_bound_ + static_cast<LONG>(index);
@@ -170,6 +213,7 @@ class IntegerVariantArray final {
 
   VARIANT value_{};
   LONG lower_bound_{0};
+  std::size_t size_{0};
 };
 
 void test_array_is_forwarded_and_wiped() {
@@ -267,6 +311,44 @@ void test_variant_integer_range_is_enforced_and_wiped() {
   }
 }
 
+void test_oversized_arrays_are_rejected_and_wiped() {
+  constexpr std::size_t oversized =
+      usb_vault::security::kMaximumPasswordUtf8InputBytes + 1;
+  {
+    FakeSession session;
+    UiSessionController controller(session);
+    ByteArrayVariant password(oversized, std::byte{'a'});
+    bool rejected = false;
+    try {
+      submit_webview_password_array(password.get(), controller);
+    } catch (const std::length_error&) {
+      rejected = true;
+      password.require_wiped();
+      require(session.submit_calls == 0,
+              "oversized byte SAFEARRAY reached the session");
+    }
+    require(rejected && session.submit_calls == 0,
+            "oversized byte SAFEARRAY was accepted");
+  }
+
+  {
+    FakeSession session;
+    UiSessionController controller(session);
+    IntegerVariantArray password(oversized, static_cast<LONG>('a'));
+    bool rejected = false;
+    try {
+      submit_webview_password_array(password.get(), controller);
+    } catch (const std::length_error&) {
+      rejected = true;
+      password.require_i4_values_wiped();
+      require(session.submit_calls == 0,
+              "oversized variant SAFEARRAY reached the session");
+    }
+    require(rejected && session.submit_calls == 0,
+            "oversized variant SAFEARRAY was accepted");
+  }
+}
+
 void test_direct_integer_safearray_is_rejected() {
   FakeSession session;
   UiSessionController controller(session);
@@ -315,6 +397,7 @@ int main() {
   test_variant_session_failure_still_wipes_array();
   test_variant_element_type_is_rejected_and_i4_values_are_wiped();
   test_variant_integer_range_is_enforced_and_wiped();
+  test_oversized_arrays_are_rejected_and_wiped();
   test_direct_integer_safearray_is_rejected();
   test_non_array_variant_is_rejected();
 
