@@ -3798,3 +3798,47 @@
   `ICardEntryInspectionSource` 的 ViKey 组合、HID 到达/拔卡调用顺序以及 WebView route 查询尚未接入；
   当前开发 EXE 仍是 P1 兼容路径，不能宣称页面已经识别或初始化 P2 卡。本切片已完成实现、测试和
   安全复核，用户已批准提交；本地提交随本记录创建。
+- 提交：`180a446 [P2.13]own volatile card entry context`。
+
+### 小切片 13f：ViKey 来源与 HID 生命周期组合
+
+#### 需求审计与实现
+
+- 审计 P2.13e 上下文所有者、正式 ViKey enrollment、P1.7 presence／强制卸载和 Windows HID 广播
+  过滤后确认：P2 不能另写一套设备路径解析，也不能在拔卡卸载失败时恢复已经失效的卡上下文；同时
+  重复 HID arrival 不应被当作失败后的自动重试。现有 P1 重载仍须保留，以免在 P2 页面尚未接入时
+  破坏唯一旧开发卡的回归程序。
+- `VikeyHelperCardEnrollment` 现在实现厂商无关 `ICardEntryInspectionSource`。通用入口调用仍复用
+  既有 `inspect_entry()`，只加载一套新鲜锁页开发凭据、启动一个 v10 helper，并把具体 ViKey 上下文
+  以只读基类独占指针交给应用层；不增加第二次介质检查或写卡入口。
+- 新增 `CardDeviceLifecycleController`，组合 `CardPresenceController` 与
+  `CardEntryContextController`。首次到达先标记物理 presence，再执行一次只读来源并发布固定 route；
+  重复到达返回原 route 且不再次调用来源。拔卡固定先销毁入口上下文和 route，再调用原 P1.7
+  `force_unmount_active()`；即使强制卸载抛异常且会话仍残留，也绝不恢复已移除卡的上下文。
+- 新增不含厂商细节的 `CardDeviceLifecycleTransition`，只公开原 presence 转换、可选三态入口 route 和
+  `entry_changed` 刷新位。该结构不携带 VID/PID、硬件 ID、介质细分、错误码、密码、信封或模式。
+- Windows HID 解析提取为单一内部只读过滤器，P1 旧重载和 P2 新重载共享完全相同的事件类型、
+  payload 长度、HID class、UTF-16 终止和精确 VID/PID token 检查。无关或畸形广播不会触发来源、
+  清理上下文或卸载；P1 公开行为和函数签名保持不变。
+- 本切片仍不修改 `tools/app/main.cpp`、WebView host object 或页面；P2 组合已具备接线条件，但当前
+  开发 EXE 继续走 P1 路径。下一切片应决定独立 P2 开发组合的对象构造／销毁顺序和 route 查询边界，
+  不应在初始化双输入页面完成前直接覆盖现有 P1 真卡回归入口。
+
+#### 测试、安全复核与剩余边界
+
+- 新增 `card_device_lifecycle_controller_tests`，覆盖首次到达顺序、重复到达不重试、来源失败仍保留
+  物理 presence 但 route 为 unavailable、拔卡先销毁上下文再普通／强制卸载、重复拔卡幂等，以及
+  强制卸载抛异常后会话虽残留但上下文不恢复。扩展 HID 测试验证 P2 重载仅接受同一严格目标，外来
+  HID 不改变既有 route；扩展伪 DLL 进程测试，使正式 enrollment 经通用来源接口返回同一个具体
+  ViKey 上下文并继续绑定初始化目标。
+- 第一次 `/analyze` 构建只报告进程测试的 `dynamic_cast` 结果由自定义断言检查、分析器无法证明
+  非空；已改成显式 `if (nullptr) [[noreturn]] fail()`。修正后三套完整构建无项目诊断。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **41/41**：39 项实际通过、2 项因 Codex
+  父令牌已受限而按规则跳过；新增生命周期和扩展 HID 测试三套均实际通过，ASan 未报告内存错误。
+  用户随后在普通非管理员桌面 PowerShell 补跑最新 Debug `vikey_helper_process_tests` 并得到
+  `passed`；该测试只使用伪 `ViKey.dll`，未访问实体卡。
+- 安全复核确认拔卡时入口上下文的销毁先于任何可能失败的卸载调用，防止物理卡已离开后 UI 仍持有
+  可登录／初始化 route；重复 arrival 不会把 unavailable 状态静默重试成可用。共享 HID 过滤没有
+  放宽边界，来源异常继续由 P2.13e 收敛为 unavailable。剩余风险是同步 helper 调用未来接入窗口
+  线程时最多会阻塞到既有超时，且主 App/WebView 尚未实际使用该组合。本切片已完成实现、测试和
+  安全复核，用户已批准提交；本地提交随本记录创建。

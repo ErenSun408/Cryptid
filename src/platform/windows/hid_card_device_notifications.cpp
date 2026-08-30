@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <optional>
 #include <vector>
 
 namespace usb_vault::platform::windows {
@@ -149,6 +150,51 @@ class DeviceInformation final {
   }
 }
 
+[[nodiscard]] std::optional<bool> target_card_arrival(
+    const WPARAM event, const LPARAM payload,
+    const HidDeviceIdentity identity) noexcept {
+  if (event != DBT_DEVICEARRIVAL && event != DBT_DEVICEREMOVECOMPLETE) {
+    return std::nullopt;
+  }
+  if (payload == 0) return std::nullopt;
+
+  const auto* const header =
+      reinterpret_cast<const DEV_BROADCAST_HDR*>(payload);
+  constexpr std::size_t name_offset =
+      offsetof(DEV_BROADCAST_DEVICEINTERFACE_W, dbcc_name);
+  if (header->dbch_devicetype != DBT_DEVTYP_DEVICEINTERFACE ||
+      header->dbch_size < name_offset + sizeof(wchar_t) ||
+      header->dbch_size >
+          name_offset +
+              kMaximumInterfacePathCharacters * sizeof(wchar_t)) {
+    return std::nullopt;
+  }
+
+  const auto* const interface_data =
+      reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W*>(payload);
+  GUID hid_class{};
+  ::HidD_GetHidGuid(&hid_class);
+  if (::IsEqualGUID(interface_data->dbcc_classguid, hid_class) == FALSE) {
+    return std::nullopt;
+  }
+
+  const std::size_t path_bytes = header->dbch_size - name_offset;
+  if (path_bytes % sizeof(wchar_t) != 0) return std::nullopt;
+  const std::size_t maximum_characters = path_bytes / sizeof(wchar_t);
+  const wchar_t* const terminator = static_cast<const wchar_t*>(std::wmemchr(
+      interface_data->dbcc_name, L'\0', maximum_characters));
+  if (terminator == nullptr ||
+      !matches_hid_device_path(
+          std::wstring_view(
+              interface_data->dbcc_name,
+              static_cast<std::size_t>(terminator -
+                                       interface_data->dbcc_name)),
+          identity)) {
+    return std::nullopt;
+  }
+  return event == DBT_DEVICEARRIVAL;
+}
+
 }  // namespace
 
 bool matches_hid_device_path(const std::wstring_view path,
@@ -197,52 +243,31 @@ bool HidCardDeviceNotificationRegistration::target_present() const noexcept {
 application::CardPresenceTransition handle_hid_device_change(
     application::CardPresenceController& controller, const WPARAM event,
     const LPARAM payload, const HidDeviceIdentity identity) noexcept {
-  if (event != DBT_DEVICEARRIVAL && event != DBT_DEVICEREMOVECOMPLETE) {
-    return application::CardPresenceTransition::no_change;
-  }
-  if (payload == 0) {
-    return application::CardPresenceTransition::no_change;
-  }
-
-  const auto* const header =
-      reinterpret_cast<const DEV_BROADCAST_HDR*>(payload);
-  constexpr std::size_t name_offset =
-      offsetof(DEV_BROADCAST_DEVICEINTERFACE_W, dbcc_name);
-  if (header->dbch_devicetype != DBT_DEVTYP_DEVICEINTERFACE ||
-      header->dbch_size < name_offset + sizeof(wchar_t) ||
-      header->dbch_size >
-          name_offset +
-              kMaximumInterfacePathCharacters * sizeof(wchar_t)) {
+  const std::optional<bool> arrival =
+      target_card_arrival(event, payload, identity);
+  if (!arrival.has_value()) {
     return application::CardPresenceTransition::no_change;
   }
 
-  const auto* const interface_data =
-      reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W*>(payload);
-  GUID hid_class{};
-  ::HidD_GetHidGuid(&hid_class);
-  if (::IsEqualGUID(interface_data->dbcc_classguid, hid_class) == FALSE) {
-    return application::CardPresenceTransition::no_change;
-  }
+  return *arrival ? controller.handle_arrival()
+                  : controller.handle_removal();
+}
 
-  const std::size_t path_bytes = header->dbch_size - name_offset;
-  if (path_bytes % sizeof(wchar_t) != 0) {
-    return application::CardPresenceTransition::no_change;
+application::CardDeviceLifecycleTransition handle_hid_device_change(
+    application::CardDeviceLifecycleController& controller,
+    const WPARAM event, const LPARAM payload,
+    const HidDeviceIdentity identity) noexcept {
+  const std::optional<bool> arrival =
+      target_card_arrival(event, payload, identity);
+  if (!arrival.has_value()) {
+    return application::CardDeviceLifecycleTransition{
+        .presence = application::CardPresenceTransition::no_change,
+        .entry_route = controller.current_route(),
+        .entry_changed = false,
+    };
   }
-  const std::size_t maximum_characters = path_bytes / sizeof(wchar_t);
-  const wchar_t* const terminator = static_cast<const wchar_t*>(std::wmemchr(
-      interface_data->dbcc_name, L'\0', maximum_characters));
-  if (terminator == nullptr ||
-      !matches_hid_device_path(
-          std::wstring_view(
-              interface_data->dbcc_name,
-              static_cast<std::size_t>(terminator -
-                                       interface_data->dbcc_name)),
-          identity)) {
-    return application::CardPresenceTransition::no_change;
-  }
-
-  return event == DBT_DEVICEARRIVAL ? controller.handle_arrival()
-                                    : controller.handle_removal();
+  return *arrival ? controller.handle_arrival()
+                  : controller.handle_removal();
 }
 
 }  // namespace usb_vault::platform::windows

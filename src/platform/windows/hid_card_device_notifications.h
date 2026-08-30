@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/application/card_device_lifecycle_controller.h"
 #include "usb_vault/application/card_presence_controller.h"
 
 #include <Windows.h>
@@ -49,6 +50,14 @@ class HidCardDeviceNotificationRegistration final {
 // malformed payloads, and unrelated HID devices are ignored.
 [[nodiscard]] application::CardPresenceTransition handle_hid_device_change(
     application::CardPresenceController& controller, WPARAM event,
+    LPARAM payload, HidDeviceIdentity identity) noexcept;
+
+// P2 overload: applies the same strict HID payload filter, then coordinates
+// entry-context lifetime and existing forced-unmount behavior in their fixed
+// security order.
+[[nodiscard]] application::CardDeviceLifecycleTransition
+handle_hid_device_change(
+    application::CardDeviceLifecycleController& controller, WPARAM event,
     LPARAM payload, HidDeviceIdentity identity) noexcept;
 
 }  // namespace usb_vault::platform::windows

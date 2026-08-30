@@ -4,6 +4,7 @@
 #include "card/vikey/vikey_helper_backend.h"
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_client.h"
+#include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/card/card_initialization_service.h"
 
 #include <memory>
@@ -14,13 +15,16 @@ namespace usb_vault::card::vikey {
 // helper. It stores only non-secret artifact configuration and borrows the
 // credential provider; every probe/bootstrap operation obtains a fresh
 // locked credential set and destroys it after the one-shot helper exits.
-class VikeyHelperCardEnrollment final {
+class VikeyHelperCardEnrollment final
+    : public application::ICardEntryInspectionSource {
  public:
   VikeyHelperCardEnrollment(
       VikeyHelperBackendConfig config,
       IVikeyCredentialProvider& credential_provider);
 
   [[nodiscard]] std::unique_ptr<VikeyCardInsertionContext> inspect_entry();
+  [[nodiscard]] std::unique_ptr<application::IReadOnlyCardEntryInspection>
+  inspect_inserted_card() override;
   void bootstrap(const VikeyCardMediaProbe& context);
 
  private:

@@ -65,6 +65,11 @@ VikeyHelperCardEnrollment::inspect_entry() {
   return std::make_unique<VikeyCardInsertionContext>(probe());
 }
 
+std::unique_ptr<application::IReadOnlyCardEntryInspection>
+VikeyHelperCardEnrollment::inspect_inserted_card() {
+  return inspect_entry();
+}
+
 void VikeyHelperCardEnrollment::bootstrap(
     const VikeyCardMediaProbe& context) {
   if (context.hardware_id == 0 ||

@@ -132,6 +132,7 @@ endif()
 
 add_library(usb_vault_core STATIC
   src/application/application_session.cpp
+  src/application/card_device_lifecycle_controller.cpp
   src/application/card_entry_context_controller.cpp
   src/application/card_entry_router.cpp
   src/application/card_presence_controller.cpp

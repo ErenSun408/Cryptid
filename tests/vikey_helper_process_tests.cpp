@@ -739,7 +739,13 @@ void test_formal_card_enrollment_staging(
   provider.pin_value = std::byte{'Q'};
   VikeyHelperCardEnrollment enrollment(config, provider);
 
-  auto insertion = enrollment.inspect_entry();
+  auto inspection = enrollment.inspect_inserted_card();
+  auto* const insertion = dynamic_cast<
+      usb_vault::card::vikey::VikeyCardInsertionContext*>(
+      inspection.get());
+  if (insertion == nullptr) {
+    fail("formal enrollment source returned the wrong context type");
+  }
   const auto& context = insertion->probe();
   expect(context.hardware_id == 1 &&
              context.media_state ==
@@ -748,7 +754,7 @@ void test_formal_card_enrollment_staging(
          "formal enrollment returned the wrong insertion context");
   expect(provider.loads == 1,
          "formal enrollment probe did not load one credential set");
-  expect(CardEntryRouter::route(*insertion) ==
+  expect(CardEntryRouter::route(*inspection) ==
              CardEntryRoute::initialization_required,
          "formal enrollment insertion context reached the wrong route");
   expect(provider.loads == 1,

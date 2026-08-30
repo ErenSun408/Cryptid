@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 
@@ -13,7 +14,14 @@ namespace {
 
 using usb_vault::application::CardPresenceController;
 using usb_vault::application::CardPresenceTransition;
+using usb_vault::application::CardDeviceLifecycleController;
+using usb_vault::application::CardEntryContextController;
+using usb_vault::application::CardEntryMediaEvidence;
+using usb_vault::application::CardEntryRoute;
 using usb_vault::application::IApplicationSessionActions;
+using usb_vault::application::ICardEntryInspectionSource;
+using usb_vault::application::IReadOnlyCardEntryInspection;
+using usb_vault::card::CardRecordState;
 using usb_vault::platform::windows::HidDeviceIdentity;
 using usb_vault::platform::windows::handle_hid_device_change;
 using usb_vault::platform::windows::matches_hid_device_path;
@@ -46,6 +54,29 @@ class FakeSession final : public IApplicationSessionActions {
   int authenticate_calls{};
   int unmount_calls{};
   int force_unmount_calls{};
+};
+
+class FakeInspection final : public IReadOnlyCardEntryInspection {
+ public:
+  [[nodiscard]] CardEntryMediaEvidence inspect_media() override {
+    return CardEntryMediaEvidence::product_record;
+  }
+
+  [[nodiscard]] CardRecordState
+  inspect_product_record_read_only() override {
+    return CardRecordState::initialized_v1;
+  }
+};
+
+class FakeSource final : public ICardEntryInspectionSource {
+ public:
+  [[nodiscard]] std::unique_ptr<IReadOnlyCardEntryInspection>
+  inspect_inserted_card() override {
+    ++calls;
+    return std::make_unique<FakeInspection>();
+  }
+
+  int calls{};
 };
 
 class BroadcastPayload final {
@@ -184,6 +215,42 @@ void test_unrelated_and_malformed_payloads_are_ignored() {
           "unrelated device event was routed");
 }
 
+void test_p2_lifecycle_overload_uses_the_same_strict_filter() {
+  FakeSession session;
+  FakeSource source;
+  CardPresenceController presence(session);
+  CardEntryContextController entry(source);
+  CardDeviceLifecycleController lifecycle(presence, entry);
+  BroadcastPayload target(
+      LR"(\\?\hid#vid_1987&pid_0331&mi_00#fixture)");
+
+  const auto arrival = handle_hid_device_change(
+      lifecycle, DBT_DEVICEARRIVAL, target.parameter(), kTarget);
+  require(arrival.presence == CardPresenceTransition::card_available &&
+              arrival.entry_route == CardEntryRoute::login_required &&
+              arrival.entry_changed && source.calls == 1,
+          "P2 target arrival did not establish one entry context");
+
+  BroadcastPayload unrelated(
+      LR"(\\?\hid#vid_1234&pid_0331&mi_00#fixture)");
+  const auto ignored = handle_hid_device_change(
+      lifecycle, DBT_DEVICEREMOVECOMPLETE, unrelated.parameter(), kTarget);
+  require(ignored.presence == CardPresenceTransition::no_change &&
+              ignored.entry_route == CardEntryRoute::login_required &&
+              !ignored.entry_changed && source.calls == 1 &&
+              entry.has_context(),
+          "unrelated HID event changed the P2 entry lifecycle");
+
+  session.mounted_state = true;
+  const auto removal = handle_hid_device_change(
+      lifecycle, DBT_DEVICEREMOVECOMPLETE, target.parameter(), kTarget);
+  require(removal.presence ==
+              CardPresenceTransition::active_session_unmounted &&
+              !removal.entry_route.has_value() && removal.entry_changed &&
+              !entry.has_context() && session.force_unmount_calls == 1,
+          "P2 target removal did not clear entry and unmount once");
+}
+
 }  // namespace
 
 int main() {
@@ -191,6 +258,7 @@ int main() {
     test_exact_case_insensitive_path_matching();
     test_target_arrival_and_removal_are_routed();
     test_unrelated_and_malformed_payloads_are_ignored();
+    test_p2_lifecycle_overload_uses_the_same_strict_filter();
     std::cout << "hid_card_device_notifications_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
