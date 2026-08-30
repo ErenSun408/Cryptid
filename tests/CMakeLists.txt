@@ -160,6 +160,19 @@ usb_vault_configure_target(confirmed_password_tests)
 add_test(NAME confirmed_password_tests
   COMMAND confirmed_password_tests)
 
+add_executable(offline_card_password_policy_tests
+  offline_card_password_policy_tests.cpp
+)
+
+target_link_libraries(offline_card_password_policy_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(offline_card_password_policy_tests)
+
+add_test(NAME offline_card_password_policy_tests
+  COMMAND offline_card_password_policy_tests)
+
 add_executable(card_initialization_service_tests
   card_initialization_service_tests.cpp
 )
