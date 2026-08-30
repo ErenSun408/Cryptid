@@ -3842,3 +3842,39 @@
   放宽边界，来源异常继续由 P2.13e 收敛为 unavailable。剩余风险是同步 helper 调用未来接入窗口
   线程时最多会阻塞到既有超时，且主 App/WebView 尚未实际使用该组合。本切片已完成实现、测试和
   安全复核，用户已批准提交；本地提交随本记录创建。
+- 提交：`64325da [P2.13]coordinate card device lifecycle`。
+
+### 小切片 13g：精确 provisioning marker 恢复目标
+
+#### 需求审计与实现
+
+- 审计 WebView host、P2.13e 上下文所有权、P2.11 初始化目标和需求中“重新探测发现精确
+  provisioning 日志后直接继续、不得再次 bootstrap”后发现：现有
+  `VikeyHelperCardInitializationTarget` 只接受 blank／provisioning interrupted。若初始化在 marker
+  已提交后中断，下一次严格只读探针会正确进入 initialization route，但动作层无法构造目标，页面
+  接线会形成死路。因此先补该恢复边界，再做通用所有者到初始化动作的交接。
+- 初始化目标上下文验证现接受且仅接受两类状态：非零硬件 ID 的 blank／provisioning interrupted
+  且不携带逻辑状态；或 `product_evidence + provisioned_uninitialized` 的精确组合。后者来自同一次
+  v10 原子只读探针，目标构造后直接把易失 `ProvisioningState` 设为 verified。
+- 对 verified marker 调用 `ensure_provisioning_record()` 立即返回，不取得厂商凭据、不启动 helper、
+  不重写 marker；随后暴露的正式 216 字节 store 仍绑定原探针硬件 ID。产品初始化服务后续会通过
+  该 store 重新读取并确认 marker，再执行最终双信封记录事务，因此没有把只读 route 当作写授权。
+- blank／provisioning interrupted 保持既有 pending → v9 bootstrap → verified 语义；零 ID、bare
+  介质夹带逻辑状态、产品缺逻辑状态、initialized／unsupported／malformed、P1 同形前缀、外来／
+  冲突及未知枚举继续在凭据加载和任何外部副作用前按 invalid configuration 拒绝。
+- 本切片不修改 helper、IPC、HID、主 App、WebView 或实体卡内容。下一切片可安全地设计通用入口
+  所有者到初始化目标的短生命周期交接，而无需对 marker 恢复另设本地进度标志或第二次 bootstrap。
+
+#### 测试、安全复核与剩余边界
+
+- 新增 `vikey_card_initialization_target_tests`：使用会在任何凭据请求时抛错的 provider，验证精确
+  marker 连续两次 ensure 均零凭据加载、正式 store 仍可取得；验证两种 bare 上下文仍可构造；并
+  覆盖零 ID、矛盾组合、其余产品状态、P1／外来／冲突和未知枚举全部拒绝且零凭据加载。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **42/42**：40 项实际通过、2 项因 Codex
+  父令牌已受限而按规则跳过；新增目标测试三套均实际通过，`/analyze` 无项目诊断，ASan 未报告
+  内存错误。本切片没有修改 helper／IPC／进程测试或实体卡路径，无需用户补跑普通 PowerShell。
+- 安全复核确认 marker 组合必须精确匹配，不会把 initialized、未来、损坏或非产品介质降级为可
+  覆盖状态；skip-bootstrap 只避免重复 marker 写，最终初始化仍通过硬件 ID 绑定 store 和产品服务的
+  marker 复读，探针与提交之间换卡会失败。目标不缓存凭据或卡记录，新增状态仅在进程内易失。
+  剩余边界是通用上下文所有者尚不能请求该目标，主 App/WebView 也尚未接线。本切片已完成实现、
+  测试和安全复核，用户已批准提交；本地提交随本记录创建。

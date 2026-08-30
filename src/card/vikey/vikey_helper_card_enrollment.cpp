@@ -26,11 +26,19 @@ namespace {
          state == VikeyCardMediaState::provisioning_interrupted;
 }
 
+[[nodiscard]] bool verified_provisioning_marker(
+    const VikeyCardMediaProbe& context) noexcept {
+  return context.media_state == VikeyCardMediaState::product_evidence &&
+         context.logical_state == CardRecordState::provisioned_uninitialized;
+}
+
 [[nodiscard]] VikeyCardMediaProbe validate_initialization_context(
     const VikeyCardMediaProbe context) {
+  const bool eligible_bare_media =
+      eligible_bootstrap_state(context.media_state) &&
+      !context.logical_state.has_value();
   if (context.hardware_id == 0 ||
-      !eligible_bootstrap_state(context.media_state) ||
-      context.logical_state.has_value()) {
+      (!eligible_bare_media && !verified_provisioning_marker(context))) {
     throw std::system_error(
         make_error_code(CardError::invalid_configuration),
         "ViKey initialization target requires eligible insertion context");
@@ -100,7 +108,11 @@ VikeyHelperCardInitializationTarget::VikeyHelperCardInitializationTarget(
       enrollment_(config, credential_provider),
       backend_(std::move(config), credential_provider,
                context_.hardware_id),
-      store_(backend_) {}
+      store_(backend_) {
+  if (verified_provisioning_marker(context_)) {
+    provisioning_state_ = ProvisioningState::verified;
+  }
+}
 
 void VikeyHelperCardInitializationTarget::ensure_provisioning_record() {
   if (provisioning_state_ == ProvisioningState::verified) return;

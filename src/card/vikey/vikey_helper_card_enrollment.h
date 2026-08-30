@@ -34,12 +34,13 @@ class VikeyHelperCardEnrollment final
   IVikeyCredentialProvider& credential_provider_;
 };
 
-// Binds one adapter-approved bare-media insertion context to both the v9
-// bootstrap operation and the formal 216-byte ICardStore used immediately
-// afterward. Only a verified bootstrap success is cached, in volatile process
-// memory, so a failed Card Record write can be retried without rewriting the
-// marker. Every store operation still re-authenticates and checks the original
-// hardware identity in the helper.
+// Binds one adapter-approved initializable insertion context to the formal
+// 216-byte ICardStore. Bare media first uses the v9 bootstrap operation; an
+// exact provisioning marker observed by the same atomic probe starts already
+// verified and skips bootstrap. Only verified state is cached in volatile
+// process memory, so a failed Card Record write can be retried without
+// rewriting the marker. Every store operation still re-authenticates and
+// checks the original hardware identity in the helper.
 class VikeyHelperCardInitializationTarget final
     : public ICardInitializationTarget {
  public:
