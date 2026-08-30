@@ -21,6 +21,7 @@ namespace {
 
 namespace sdk = usb_vault::card::vikey::sdk;
 using usb_vault::card::CardError;
+using usb_vault::card::CardRecordState;
 using usb_vault::card::ICardRecordJournalStorage;
 using usb_vault::card::kCardRecordJournalV1Slot0Offset;
 using usb_vault::card::kCardRecordJournalV1StorageSize;
@@ -30,6 +31,7 @@ using usb_vault::card::provision_card_record_journal_v1;
 using usb_vault::card::provision_uninitialized_card_record_v1;
 using usb_vault::card::vikey::bootstrap_vikey_card_media;
 using usb_vault::card::vikey::inspect_vikey_card_media;
+using usb_vault::card::vikey::inspect_vikey_card_record_state_read_only;
 using usb_vault::card::vikey::read_vikey_card_record;
 using usb_vault::card::vikey::VikeyCardMediaState;
 using usb_vault::card::vikey::VikeySession;
@@ -315,8 +317,11 @@ void test_read_only_media_classification() {
   require(inspect_vikey_card_media(session) ==
               VikeyCardMediaState::product_evidence,
           "existing ViKey product media was not recognized");
+  require(inspect_vikey_card_record_state_read_only(session) ==
+              CardRecordState::provisioned_uninitialized,
+          "ViKey product marker returned the wrong logical state");
   require(state.writes == writes_before,
-          "ViKey media inspection wrote through the SDK");
+          "ViKey media or logical-state inspection wrote through the SDK");
 
   state.reported_capacity =
       static_cast<sdk::Length>(kCardRecordJournalV1StorageSize - 1);

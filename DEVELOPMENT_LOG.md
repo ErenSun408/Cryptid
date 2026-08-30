@@ -3676,3 +3676,45 @@
   状态，物理损坏不被降级为可覆盖状态。剩余边界是 ViKey 尚未在一次原子探针中携带该状态，主 App
   也尚未持有并清理对应插卡上下文。本切片已完成实现、测试和安全复核，用户已批准提交；本地提交
   随本记录创建。
+- 提交：`2563918 [P2.13]inspect journal state without writes`。
+
+### 小切片 13c：ViKey helper v10 原子入口状态探针
+
+#### 需求审计与实现
+
+- 审计 helper v9 `card_media_probe`、客户端响应校验、P2.13b 日志只读原语和正式 enrollment 适配器
+  后确认：若主 App 在收到 `product_evidence` 后再通过 `ICardStore` 或第二个独立 helper 调用判断
+  记录状态，会分别引入恢复写入或跨会话换卡／状态漂移窗口。逻辑记录状态必须作为既有原子介质
+  探针的受限结果，在同一认证 ViKey session 和同一响应中返回。
+- helper IPC 升级为 v10，响应头由 44 字节增至 48 字节并新增显式 wire `CardLogicalState`。它不直接
+  序列化 C++ 枚举，只允许 provisioning、initialized v1、unsupported 和 malformed 四值。协议
+  固定关系为：仅 `product_evidence` 必须携带一个合法逻辑状态；blank、P1 同形前缀、foreign、
+  provisioning interrupted、conflicting 均必须为零；所有失败响应和其他操作也必须为零。
+- helper 在同一稳定硬件 ID 的已认证会话中先执行完整 ViKey 私有介质分类；仅产品证据继续调用
+  P2.13b 只读日志选择，映射公开 framing 后才关闭 session。逻辑检查不调用正常 record read，因而
+  不随机覆盖闲置槽或镜像描述符；任一步骤失败先清零介质／逻辑结果，再返回固定错误。
+- 客户端把 v10 逻辑 wire 值映射为可选 `CardRecordState`：产品证据必须有值，非产品状态必须无值；
+  未知或不一致组合在返回 `VikeyCardMediaProbe` 前按通信失败拒绝。结果仍只保存非秘密安全属性、
+  硬件 ID、ViKey 私有介质枚举及可选公开记录状态，不携带记录字节、摘要、槽位或提交链信息。
+- 本切片尚未让 ViKey 探针对象实现 P2.13a 的通用路由接口，也未接入主 App/WebView；下一切片应
+  建立持有该不可变探针结果的一次插卡上下文，映射成通用三态，并在拔卡时销毁。唯一实体开发卡
+  未被访问，本切片进程测试只使用伪 `ViKey.dll`。
+
+#### 测试、安全复核与剩余边界
+
+- 协议测试覆盖 v10 响应往返及全部关系约束：产品证据缺少逻辑状态、非产品介质夹带逻辑状态、
+  未知逻辑枚举、失败响应残留逻辑状态均拒绝。ViKey IO 测试验证产品 marker 的只读状态为
+  provisioning 且供应商写计数不变。进程测试新增 provisioned、独立 initialized 夹具记录的原子
+  返回，以及 blank 探针不携带逻辑状态三条端到端断言。第一次普通桌面补跑暴露伪 DLL 的日志只存
+  于单个 helper 进程全局内存，不能在下一 helper 中复读前一进程写入；原断言错误地把夹具当成
+  真实持久卡。现用专用 `R` PIN 让新进程生成 initialized 日志来验证 wire 映射，写入持久性仍由
+  同进程 ViKey IO／journal 测试覆盖，不虚构夹具不具备的跨进程持久能力。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **38/38**：36 项实际通过、2 项因 Codex
+  父令牌已受限而按规则跳过；协议与 ViKey IO 测试三套均实际通过，`/analyze` 无项目诊断，ASan
+  未报告内存错误。用户随后在普通非管理员桌面 PowerShell 补跑修正后的最新 Debug
+  `vikey_helper_process_tests` 并得到 `passed`；该测试只使用伪 DLL，未访问实体卡。
+- 安全复核确认 v10 版本、48 字节头长、nonce、安全属性、payload 长度、非零 ID、介质枚举、逻辑
+  枚举及二者关系都在客户端接受响应前校验；降级 helper、尾随 IPC 数据及错误响应残留字段继续
+  失败关闭。逻辑状态只描述公开产品生命周期，未增加密码命中、信封槽位、隐藏盘形态、恢复动作或
+  写卡入口。验证项已全部闭环，本切片完成实现、测试和安全复核，用户已批准提交；本地提交随本
+  记录创建。

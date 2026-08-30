@@ -53,6 +53,7 @@ constexpr std::size_t kUserDataSize = 8192;
 std::array<BYTE, kUserDataSize> journal_data{};
 bool journal_initialized = false;
 bool blank_media_session = false;
+bool initialized_media_session = false;
 
 void store_u32(const std::size_t offset,
                const std::uint32_t value,
@@ -81,10 +82,27 @@ void store_u32(const std::size_t offset,
 [[nodiscard]] bool initialize_journal() noexcept {
   if (journal_initialized) return true;
   journal_data.fill(0);
-  constexpr std::array<BYTE, 8> kMarkerMagic{
-      'U', 'V', 'B', 'L', 'N', 'K', '2', 0};
-  std::ranges::copy(kMarkerMagic,
-                    journal_data.begin() + kSlot0Offset);
+  if (initialized_media_session) {
+    std::fill_n(journal_data.begin() + kSlot0Offset, kRecordSize,
+                static_cast<BYTE>(0x7b));
+    constexpr std::array<BYTE, 8> kRecordMagic{
+        'U', 'V', 'C', 'R', 'D', '2', 0, 0};
+    std::ranges::copy(kRecordMagic,
+                      journal_data.begin() + kSlot0Offset);
+    const std::span active_record =
+        std::span(journal_data).subspan(kSlot0Offset, kRecordSize);
+    store_u32(8, 1, active_record);
+    store_u32(12, static_cast<std::uint32_t>(kRecordSize), active_record);
+    store_u32(48, 512U * 1024U, active_record);
+    store_u32(52, 2, active_record);
+    store_u32(56, 1, active_record);
+    store_u32(60, 0x13, active_record);
+  } else {
+    constexpr std::array<BYTE, 8> kMarkerMagic{
+        'U', 'V', 'B', 'L', 'N', 'K', '2', 0};
+    std::ranges::copy(kMarkerMagic,
+                      journal_data.begin() + kSlot0Offset);
+  }
   std::fill_n(journal_data.begin() + kSlot1Offset, kRecordSize,
               static_cast<BYTE>(0xa5));
 
@@ -183,11 +201,13 @@ extern "C" __declspec(dllexport) DWORD __stdcall
 VikeyUserLogin(const WORD index, char* const user_pin) {
   const bool product_session = fixed_argument_matches(user_pin, 'P', 8);
   const bool bootstrap_session = fixed_argument_matches(user_pin, 'Q', 8);
+  const bool initialized_session = fixed_argument_matches(user_pin, 'R', 8);
   if (session_state != SessionState::attempts_read || index != 0 ||
-      (!product_session && !bootstrap_session)) {
+      (!product_session && !bootstrap_session && !initialized_session)) {
     return kInvalidValue;
   }
   blank_media_session = bootstrap_session;
+  initialized_media_session = initialized_session;
   session_state = SessionState::logged_in;
   return ERROR_SUCCESS;
 }

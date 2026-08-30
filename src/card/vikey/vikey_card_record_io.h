@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/secure_buffer.h"
 
 namespace usb_vault::card::vikey {
@@ -20,6 +21,12 @@ enum class VikeyCardMediaState {
 
 [[nodiscard]] VikeyCardMediaState inspect_vikey_card_media(
     VikeySession& session);
+
+// Selects and classifies the current logical product record without invoking
+// journal normalization or any vendor write. Call only after the same session
+// has classified the media as product_evidence.
+[[nodiscard]] CardRecordState
+inspect_vikey_card_record_state_read_only(VikeySession& session);
 
 // Revalidates the exact adapter-authorized initial state in the same stable
 // session, then establishes the recoverable provisioning journal. Only blank

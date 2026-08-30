@@ -115,24 +115,34 @@ bool valid_response(const Response& response,
     }
     if (response.payload_bytes != required_payload) return false;
     if (expected_operation == Operation::development_session_probe) {
-      return response.result == 0 &&
+      return response.result == 0 && response.logical_state == 0 &&
              valid_development_session_observation(
                  unpack_development_session_observation(response.detail));
     }
     if (expected_operation == Operation::card_identity_probe) {
-      return response.detail != 0 && response.result == 0;
+      return response.detail != 0 && response.result == 0 &&
+             response.logical_state == 0;
     }
     if (expected_operation == Operation::card_media_probe) {
-      return response.detail != 0 &&
-             valid_card_media_state(response.result);
+      if (response.detail == 0 ||
+          !valid_card_media_state(response.result)) {
+        return false;
+      }
+      const bool product_evidence =
+          response.result == static_cast<std::uint32_t>(
+                                 CardMediaState::product_evidence);
+      return product_evidence
+                 ? valid_card_logical_state(response.logical_state)
+                 : response.logical_state == 0;
     }
-    return response.detail == 0 && response.result == 0;
+    return response.detail == 0 && response.result == 0 &&
+           response.logical_state == 0;
   }
   const auto first = static_cast<std::int32_t>(CardError::backend_unavailable);
   const auto last = static_cast<std::int32_t>(CardError::device_failure);
   return response.status >= first && response.status <= last &&
          response.security_properties == 0 && response.payload_bytes == 0 &&
-         response.result == 0;
+         response.result == 0 && response.logical_state == 0;
 }
 
 void write_request(const HANDLE pipe, const Request& request) {

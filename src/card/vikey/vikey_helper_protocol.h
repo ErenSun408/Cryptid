@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 9;
+constexpr std::uint16_t kVersion = 10;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -67,6 +67,22 @@ enum class CardMediaState : std::uint32_t {
 };
 
 static_assert(sizeof(CardMediaState) == kCardMediaStateBytes);
+
+// Public logical-record framing returned only alongside product_evidence.
+// Values are explicit wire constants and do not serialize the C++ enum.
+enum class CardLogicalState : std::uint32_t {
+  provisioned_uninitialized = 1,
+  initialized_v1 = 2,
+  unsupported_version = 3,
+  malformed = 4,
+};
+
+[[nodiscard]] constexpr bool valid_card_logical_state(
+    const std::uint32_t value) noexcept {
+  return value >= static_cast<std::uint32_t>(
+                      CardLogicalState::provisioned_uninitialized) &&
+         value <= static_cast<std::uint32_t>(CardLogicalState::malformed);
+}
 
 [[nodiscard]] constexpr bool valid_card_media_state(
     const std::uint32_t value) noexcept {
@@ -302,11 +318,14 @@ struct Response final {
   // A successful card-media probe returns a validated CardMediaState here.
   // All other responses keep this field zero.
   std::uint32_t result{};
+  // A successful card-media probe returns a validated CardLogicalState only
+  // when result is product_evidence. Every other response keeps this zero.
+  std::uint32_t logical_state{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 
 static_assert(sizeof(Request) == 32);
-static_assert(sizeof(Response) == 44);
+static_assert(sizeof(Response) == 48);
 
 [[nodiscard]] bool valid_request(const Request& request) noexcept;
 [[nodiscard]] bool valid_response(const Response& response,

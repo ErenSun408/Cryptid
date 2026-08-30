@@ -103,6 +103,12 @@ VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
   return inspect_vikey_card_media(storage);
 }
 
+CardRecordState inspect_vikey_card_record_state_read_only(
+    VikeySession& session) {
+  VikeyCardRecordStorage storage(session);
+  return inspect_card_record_journal_logical_state_v1_read_only(storage);
+}
+
 void bootstrap_vikey_card_media(
     VikeySession& session,
     const VikeyCardMediaState expected_state) {

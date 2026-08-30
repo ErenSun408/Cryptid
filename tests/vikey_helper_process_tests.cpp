@@ -558,6 +558,9 @@ void test_formal_card_record_backend_staging(
   expect(media.media_state ==
              usb_vault::card::vikey::VikeyCardMediaState::product_evidence,
          "card media probe returned the wrong media state");
+  expect(media.logical_state ==
+             usb_vault::card::CardRecordState::provisioned_uninitialized,
+         "card media probe returned the wrong logical record state");
   expect(media.security_properties ==
              usb_vault::card::vikey::helper::
                  kDevelopmentCompatibilitySecurityProperties,
@@ -580,6 +583,19 @@ void test_formal_card_record_backend_staging(
   store.put_blob(record);
   expect(std::ranges::equal(record.bytes(), original),
          "development card-record write changed caller data");
+  const auto initialized_user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'R'});
+  const auto initialized_media =
+      probe_vikey_development_card_media_with_network_access(
+          helper, config.helper_digest, vendor.parent_path(),
+          config.vendor_digest, user_sn, api_key, initialized_user_pin, 5s);
+  expect(initialized_media.hardware_id == media.hardware_id &&
+             initialized_media.media_state ==
+                 usb_vault::card::vikey::
+                     VikeyCardMediaState::product_evidence &&
+             initialized_media.logical_state ==
+                 usb_vault::card::CardRecordState::initialized_v1,
+         "card media probe did not classify the initialized fixture record");
 
   SecureBuffer short_record(usb_vault::card::kCardRecordV1Size - 1);
   try {
@@ -722,7 +738,8 @@ void test_formal_card_enrollment_staging(
   const auto context = enrollment.probe();
   expect(context.hardware_id == 1 &&
              context.media_state ==
-                 usb_vault::card::vikey::VikeyCardMediaState::blank,
+                 usb_vault::card::vikey::VikeyCardMediaState::blank &&
+             !context.logical_state.has_value(),
          "formal enrollment returned the wrong insertion context");
   expect(provider.loads == 1,
          "formal enrollment probe did not load one credential set");

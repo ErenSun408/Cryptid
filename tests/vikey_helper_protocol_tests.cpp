@@ -507,6 +507,8 @@ void test_card_media_response_round_trip() {
   sent.security_properties = kDevelopmentCompatibilitySecurityProperties;
   sent.detail = 0x12345678U;
   sent.result = static_cast<std::uint32_t>(CardMediaState::product_evidence);
+  sent.logical_state = static_cast<std::uint32_t>(
+      CardLogicalState::provisioned_uninitialized);
   sent.nonce[3] = std::byte{0x6a};
   write_response(pipe.write.get(), sent, Operation::card_media_probe);
   const Response received = read_response(
@@ -515,6 +517,8 @@ void test_card_media_response_round_trip() {
          "card media hardware identity did not round-trip");
   expect(received.result == sent.result,
          "card media state did not round-trip");
+  expect(received.logical_state == sent.logical_state,
+         "card logical state did not round-trip");
 }
 
 void test_development_blob_response_round_trip() {
@@ -581,6 +585,7 @@ void test_response_validation() {
   expect(valid_response(response, Operation::card_identity_probe),
          "nonzero card identity response was rejected");
   response.result = static_cast<std::uint32_t>(CardMediaState::blank);
+  response.logical_state = 0;
   expect(valid_response(response, Operation::card_media_probe),
          "valid card media response was rejected");
   expect(!valid_response(response, Operation::card_identity_probe),
@@ -596,7 +601,26 @@ void test_response_validation() {
   response.detail = 0;
   expect(!valid_response(response, Operation::card_media_probe),
          "card media response without a hardware identity was accepted");
+  response.detail = 0x12345678U;
+  response.result = static_cast<std::uint32_t>(
+      CardMediaState::product_evidence);
+  expect(!valid_response(response, Operation::card_media_probe),
+         "product media response without a logical state was accepted");
+  response.logical_state = static_cast<std::uint32_t>(
+      CardLogicalState::initialized_v1);
+  expect(valid_response(response, Operation::card_media_probe),
+         "product media response with a logical state was rejected");
+  response.logical_state =
+      static_cast<std::uint32_t>(CardLogicalState::malformed) + 1U;
+  expect(!valid_response(response, Operation::card_media_probe),
+         "unknown logical card state was accepted");
+  response.result = static_cast<std::uint32_t>(CardMediaState::blank);
+  response.logical_state = static_cast<std::uint32_t>(
+      CardLogicalState::initialized_v1);
+  expect(!valid_response(response, Operation::card_media_probe),
+         "non-product media retained a logical card state");
   response.result = 0;
+  response.logical_state = 0;
   response.detail = 0;
   expect(valid_response(response, Operation::card_media_bootstrap),
          "valid card media bootstrap response was rejected");
@@ -650,6 +674,11 @@ void test_response_validation() {
   expect(!valid_response(response, Operation::card_media_probe),
          "failed card media response retained a state");
   response.result = 0;
+  response.logical_state = static_cast<std::uint32_t>(
+      CardLogicalState::malformed);
+  expect(!valid_response(response, Operation::card_media_probe),
+         "failed card media response retained a logical state");
+  response.logical_state = 0;
   response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
   expect(!valid_response(response, Operation::development_blob_read),
          "failed blob read response retained a payload");

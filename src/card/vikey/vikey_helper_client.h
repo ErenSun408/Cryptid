@@ -2,11 +2,13 @@
 
 #include "card/verified_local_artifact.h"
 #include "card/vikey/vikey_card_record_io.h"
+#include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace usb_vault::card::vikey {
 
@@ -31,6 +33,7 @@ struct VikeyCardMediaProbe final {
   std::uint32_t security_properties{};
   std::uint32_t hardware_id{};
   VikeyCardMediaState media_state{VikeyCardMediaState::foreign_data};
+  std::optional<CardRecordState> logical_state;
 };
 
 // Verifies the helper against the required digest, holds its file identity

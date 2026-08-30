@@ -1059,7 +1059,8 @@ namespace {
     const HelperBoundary boundary,
     const std::chrono::milliseconds timeout,
     security::SecureBuffer* const blob_response = nullptr,
-    std::uint32_t* const success_result = nullptr) {
+    std::uint32_t* const success_result = nullptr,
+    std::uint32_t* const success_logical_state = nullptr) {
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");
@@ -1097,6 +1098,8 @@ namespace {
       operation == helper::Operation::card_media_probe;
   const bool success_result_required =
       operation == helper::Operation::card_media_probe;
+  const bool success_logical_state_required =
+      operation == helper::Operation::card_media_probe;
   if (vendor_required !=
       (vendor_path != nullptr && vendor_digest != nullptr)) {
     throw_card(CardError::invalid_configuration,
@@ -1105,6 +1108,8 @@ namespace {
   if (session_required != (session_inputs != nullptr) ||
       success_detail_required != (success_detail != nullptr) ||
       success_result_required != (success_result != nullptr) ||
+      success_logical_state_required !=
+          (success_logical_state != nullptr) ||
       blob_output_required != (blob_response != nullptr) ||
       (session_required &&
        boundary != HelperBoundary::network_enabled_development)) {
@@ -1396,6 +1401,9 @@ namespace {
     if (success_result != nullptr) {
       *success_result = response.result;
     }
+    if (success_logical_state != nullptr) {
+      *success_logical_state = response.logical_state;
+    }
     result.security_properties = security_properties;
   } catch (...) {
     const std::exception_ptr failure = std::current_exception();
@@ -1571,12 +1579,13 @@ probe_vikey_development_card_media_with_network_access(
       .expected_hardware_id = 0};
   std::uint32_t hardware_id = 0;
   std::uint32_t wire_state = 0;
+  std::uint32_t wire_logical_state = 0;
   const VikeyHelperProbe probe = probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
       helper::Operation::card_media_probe, &vendor_path,
       &expected_vendor_digest, &inputs, &hardware_id,
       HelperBoundary::network_enabled_development, timeout, nullptr,
-      &wire_state);
+      &wire_state, &wire_logical_state);
 
   VikeyCardMediaState media_state{};
   switch (static_cast<helper::CardMediaState>(wire_state)) {
@@ -1602,9 +1611,34 @@ probe_vikey_development_card_media_with_network_access(
       throw_card(CardError::communication_failed,
                  "ViKey helper returned an invalid card media state");
   }
+
+  std::optional<CardRecordState> logical_state;
+  if (media_state == VikeyCardMediaState::product_evidence) {
+    switch (static_cast<helper::CardLogicalState>(wire_logical_state)) {
+      case helper::CardLogicalState::provisioned_uninitialized:
+        logical_state = CardRecordState::provisioned_uninitialized;
+        break;
+      case helper::CardLogicalState::initialized_v1:
+        logical_state = CardRecordState::initialized_v1;
+        break;
+      case helper::CardLogicalState::unsupported_version:
+        logical_state = CardRecordState::unsupported_version;
+        break;
+      case helper::CardLogicalState::malformed:
+        logical_state = CardRecordState::malformed;
+        break;
+      default:
+        throw_card(CardError::communication_failed,
+                   "ViKey helper returned an invalid logical card state");
+    }
+  } else if (wire_logical_state != 0) {
+    throw_card(CardError::communication_failed,
+               "ViKey helper returned a logical state without product evidence");
+  }
   return {.security_properties = probe.security_properties,
           .hardware_id = hardware_id,
-          .media_state = media_state};
+          .media_state = media_state,
+          .logical_state = logical_state};
 }
 
 void bootstrap_vikey_development_card_media_with_network_access(

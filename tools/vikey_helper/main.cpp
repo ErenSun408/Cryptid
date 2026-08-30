@@ -149,6 +149,7 @@ struct OperationResult final {
   std::int32_t status{};
   std::uint32_t detail{};
   std::uint32_t result{};
+  std::uint32_t logical_state{};
 };
 
 struct BlobReadResult final {
@@ -316,8 +317,36 @@ struct BlobReadResult final {
 
     OperationResult result{};
     try {
-      result.result = wire_card_media_state(
-          usb_vault::card::vikey::inspect_vikey_card_media(session));
+      const auto media_state =
+          usb_vault::card::vikey::inspect_vikey_card_media(session);
+      result.result = wire_card_media_state(media_state);
+      if (media_state == usb_vault::card::vikey::
+                             VikeyCardMediaState::product_evidence) {
+        switch (usb_vault::card::vikey::
+                    inspect_vikey_card_record_state_read_only(session)) {
+          case usb_vault::card::CardRecordState::provisioned_uninitialized:
+            result.logical_state = static_cast<std::uint32_t>(
+                CardLogicalState::provisioned_uninitialized);
+            break;
+          case usb_vault::card::CardRecordState::initialized_v1:
+            result.logical_state = static_cast<std::uint32_t>(
+                CardLogicalState::initialized_v1);
+            break;
+          case usb_vault::card::CardRecordState::unsupported_version:
+            result.logical_state = static_cast<std::uint32_t>(
+                CardLogicalState::unsupported_version);
+            break;
+          case usb_vault::card::CardRecordState::malformed:
+            result.logical_state = static_cast<std::uint32_t>(
+                CardLogicalState::malformed);
+            break;
+          case usb_vault::card::CardRecordState::legacy_p1_blob:
+          default:
+            throw std::system_error(
+                usb_vault::card::make_error_code(CardError::device_failure),
+                "ViKey journal returned an impossible logical record state");
+        }
+      }
     } catch (const std::system_error& error) {
       result.status = error.code().category() == card_error_category()
                           ? error.code().value()
@@ -331,6 +360,7 @@ struct BlobReadResult final {
     const std::error_code close_error = session.close();
     if (result.status != 0) {
       result.result = 0;
+      result.logical_state = 0;
       return result;
     }
     if (close_error) return {.status = close_error.value()};
@@ -805,6 +835,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         response.status = result.status;
         response.detail = result.detail;
         response.result = result.result;
+        response.logical_state = result.logical_state;
       } else {
         response.status =
             static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -828,6 +859,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.payload_bytes = 0;
       response.detail = ERROR_GEN_FAILURE;
       response.result = 0;
+      response.logical_state = 0;
     }
     if (request.operation == Operation::development_blob_read &&
         response.status == 0) {
