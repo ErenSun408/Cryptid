@@ -25,7 +25,10 @@ using usb_vault::card::ICardStore;
 using usb_vault::card::kCardRecordV1RootSecretSize;
 using usb_vault::card::make_error_code;
 using usb_vault::card::provision_uninitialized_card_record_v1;
+using usb_vault::security::IPasswordStrengthPolicy;
+using usb_vault::security::PasswordStrength;
 using usb_vault::security::SecureBuffer;
+using usb_vault::security::confirm_password;
 
 void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);
@@ -91,10 +94,24 @@ class FakeInitializationTarget final : public ICardInitializationTarget {
   std::size_t store_requests{};
 };
 
+class AcceptingPolicy final : public IPasswordStrengthPolicy {
+ public:
+  [[nodiscard]] PasswordStrength assess(
+      const SecureBuffer&) const noexcept override {
+    return PasswordStrength::acceptable;
+  }
+};
+
+[[nodiscard]] usb_vault::security::ConfirmedPassword confirmed_text(
+    const std::string_view text) {
+  AcceptingPolicy policy;
+  return confirm_password(policy, secure_text(text), secure_text(text));
+}
+
 void test_bootstrap_precedes_initialized_record() {
   FakeInitializationTarget target;
   SecureBuffer root = CardInitializationService::initialize_and_authenticate(
-      target, secure_text("validated-daily-password-v1"));
+      target, confirmed_text("validated-daily-password-v1"));
 
   require(root.size() == kCardRecordV1RootSecretSize,
           "initialization transaction returned the wrong root size");
@@ -113,7 +130,7 @@ void test_bootstrap_failure_never_reaches_store() {
   target.fail_bootstrap = true;
   try {
     static_cast<void>(CardInitializationService::initialize_and_authenticate(
-        target, secure_text("must-not-reach-card-record-kdf")));
+        target, confirmed_text("must-not-reach-card-record-kdf")));
     throw std::runtime_error("failed bootstrap was accepted");
   } catch (const std::system_error& error) {
     require(error.code() == make_error_code(CardError::device_failure),
@@ -129,7 +146,7 @@ void test_malformed_bootstrap_result_fails_before_password_work() {
   target.publish_malformed = true;
   try {
     static_cast<void>(CardInitializationService::initialize_and_authenticate(
-        target, secure_text("must-not-reach-malformed-record-kdf")));
+        target, confirmed_text("must-not-reach-malformed-record-kdf")));
     throw std::runtime_error("malformed provisioning record was accepted");
   } catch (const usb_vault::card::UnexpectedCardRecordState& error) {
     require(error.observed() == CardRecordState::malformed,
@@ -139,6 +156,21 @@ void test_malformed_bootstrap_result_fails_before_password_work() {
           "malformed provisioning reached Card Record write");
 }
 
+void test_consumed_proof_fails_before_bootstrap() {
+  FakeInitializationTarget target;
+  auto original = confirmed_text("one-shot-proof");
+  auto retained = std::move(original);
+  try {
+    static_cast<void>(CardInitializationService::initialize_and_authenticate(
+        target, std::move(original)));
+    throw std::runtime_error("consumed proof reached initialization");
+  } catch (const std::logic_error&) {
+  }
+  require(target.ensure_calls == 0 && target.store_requests == 0,
+          "consumed proof reached the card target");
+  static_cast<void>(std::move(retained).take());
+}
+
 }  // namespace
 
 int main() {
@@ -146,6 +178,7 @@ int main() {
     test_bootstrap_precedes_initialized_record();
     test_bootstrap_failure_never_reaches_store();
     test_malformed_bootstrap_result_fails_before_password_work();
+    test_consumed_proof_fails_before_bootstrap();
     std::cout << "card_initialization_service_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

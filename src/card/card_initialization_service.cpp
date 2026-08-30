@@ -8,17 +8,19 @@ namespace usb_vault::card {
 
 security::SecureBuffer CardInitializationService::initialize_and_authenticate(
     ICardInitializationTarget& target,
-    security::SecureBuffer validated_daily_password_utf8) {
+    security::ConfirmedPassword confirmed_daily_password) {
+  security::SecureBuffer daily_password_utf8 =
+      std::move(confirmed_daily_password).take();
   try {
     target.ensure_provisioning_record();
   } catch (...) {
-    validated_daily_password_utf8.clear();
+    daily_password_utf8.clear();
     throw;
   }
 
   CardRecordService record_service(target.card_store());
   return record_service.initialize_and_authenticate(
-      std::move(validated_daily_password_utf8));
+      std::move(daily_password_utf8));
 }
 
 }  // namespace usb_vault::card

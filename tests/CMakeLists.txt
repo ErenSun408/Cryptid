@@ -147,6 +147,19 @@ usb_vault_configure_target(card_record_service_tests)
 add_test(NAME card_record_service_tests
   COMMAND card_record_service_tests)
 
+add_executable(confirmed_password_tests
+  confirmed_password_tests.cpp
+)
+
+target_link_libraries(confirmed_password_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(confirmed_password_tests)
+
+add_test(NAME confirmed_password_tests
+  COMMAND confirmed_password_tests)
+
 add_executable(card_initialization_service_tests
   card_initialization_service_tests.cpp
 )

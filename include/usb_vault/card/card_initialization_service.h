@@ -1,7 +1,7 @@
 #pragma once
 
 #include "usb_vault/card/card_store.h"
-#include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/security/confirmed_password.h"
 
 namespace usb_vault::card {
 
@@ -29,15 +29,15 @@ class ICardInitializationTarget {
 };
 
 // Executes only the product-level write transaction for an adapter-approved
-// new card. The password is consumed and must already have been confirmed and
-// accepted by the UI password policy. This layer deliberately does not know a
+// new card. The unforgeable password proof is consumed; raw unchecked password
+// buffers cannot call this API. This layer deliberately does not know a
 // vendor, hardware identity representation, media classification, UI state,
 // volume shape, or password role beyond "daily login password".
 class CardInitializationService final {
  public:
   [[nodiscard]] static security::SecureBuffer initialize_and_authenticate(
       ICardInitializationTarget& target,
-      security::SecureBuffer validated_daily_password_utf8);
+      security::ConfirmedPassword confirmed_daily_password);
 };
 
 }  // namespace usb_vault::card
