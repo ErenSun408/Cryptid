@@ -18,6 +18,7 @@ using usb_vault::card::vikey::VikeyCardMediaProbe;
 using usb_vault::card::vikey::VikeyCardMediaState;
 using usb_vault::card::vikey::VikeyCredentialSet;
 using usb_vault::card::vikey::VikeyHelperBackendConfig;
+using usb_vault::card::vikey::VikeyHelperCardEnrollment;
 using usb_vault::card::vikey::VikeyHelperCardInitializationTarget;
 
 void require(const bool condition, const char* const message) {
@@ -32,6 +33,20 @@ class RejectingCredentialProvider final : public IVikeyCredentialProvider {
   }
 
   int loads{};
+};
+
+class ForeignInspection final
+    : public usb_vault::application::IReadOnlyCardEntryInspection {
+ public:
+  [[nodiscard]] usb_vault::application::CardEntryMediaEvidence
+  inspect_media() override {
+    return usb_vault::application::CardEntryMediaEvidence::initializable_media;
+  }
+
+  [[nodiscard]] CardRecordState
+  inspect_product_record_read_only() override {
+    return CardRecordState::malformed;
+  }
 };
 
 [[nodiscard]] VikeyCardMediaProbe probe(
@@ -93,6 +108,32 @@ void test_bare_initializable_contexts_remain_constructible() {
   }
 }
 
+void test_enrollment_factory_accepts_only_its_concrete_context() {
+  RejectingCredentialProvider provider;
+  VikeyHelperCardEnrollment enrollment(VikeyHelperBackendConfig{}, provider);
+  usb_vault::card::vikey::VikeyCardInsertionContext insertion(
+      probe(VikeyCardMediaState::product_evidence,
+            CardRecordState::provisioned_uninitialized));
+
+  std::unique_ptr<usb_vault::card::ICardInitializationTarget> target =
+      enrollment.make_initialization_target(insertion);
+  require(target != nullptr && provider.loads == 0,
+          "factory did not create a side-effect-free bound target");
+
+  ForeignInspection foreign;
+  try {
+    static_cast<void>(enrollment.make_initialization_target(foreign));
+  } catch (const std::system_error& error) {
+    require(error.code() == usb_vault::card::make_error_code(
+                                CardError::invalid_configuration),
+            "foreign context returned the wrong factory error");
+    require(provider.loads == 0,
+            "foreign context loaded vendor credentials");
+    return;
+  }
+  throw std::runtime_error("foreign insertion context was accepted");
+}
+
 void test_all_other_contexts_are_rejected() {
   auto zero_id = probe(VikeyCardMediaState::blank);
   zero_id.hardware_id = 0;
@@ -139,6 +180,7 @@ int main() {
   try {
     test_verified_marker_skips_bootstrap_and_credentials();
     test_bare_initializable_contexts_remain_constructible();
+    test_enrollment_factory_accepts_only_its_concrete_context();
     test_all_other_contexts_are_rejected();
     std::cout << "vikey_card_initialization_target_tests passed\n";
     return 0;

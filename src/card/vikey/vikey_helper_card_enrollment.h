@@ -25,6 +25,9 @@ class VikeyHelperCardEnrollment final
   [[nodiscard]] std::unique_ptr<VikeyCardInsertionContext> inspect_entry();
   [[nodiscard]] std::unique_ptr<application::IReadOnlyCardEntryInspection>
   inspect_inserted_card() override;
+  [[nodiscard]] std::unique_ptr<ICardInitializationTarget>
+  make_initialization_target(
+      const application::IReadOnlyCardEntryInspection& context) override;
   void bootstrap(const VikeyCardMediaProbe& context);
 
  private:

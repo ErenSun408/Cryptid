@@ -78,6 +78,20 @@ VikeyHelperCardEnrollment::inspect_inserted_card() {
   return inspect_entry();
 }
 
+std::unique_ptr<ICardInitializationTarget>
+VikeyHelperCardEnrollment::make_initialization_target(
+    const application::IReadOnlyCardEntryInspection& context) {
+  const auto* const insertion =
+      dynamic_cast<const VikeyCardInsertionContext*>(&context);
+  if (insertion == nullptr) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey initialization requires its original insertion context");
+  }
+  return std::make_unique<VikeyHelperCardInitializationTarget>(
+      config_, credential_provider_, insertion->probe());
+}
+
 void VikeyHelperCardEnrollment::bootstrap(
     const VikeyCardMediaProbe& context) {
   if (context.hardware_id == 0 ||

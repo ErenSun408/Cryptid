@@ -1,5 +1,8 @@
 #include "usb_vault/application/card_entry_context_controller.h"
 
+#include "usb_vault/card/card_error.h"
+
+#include <system_error>
 #include <utility>
 
 namespace usb_vault::application {
@@ -27,6 +30,30 @@ CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
 void CardEntryContextController::handle_removal() noexcept {
   context_.reset();
   route_.reset();
+}
+
+security::SecureBuffer
+CardEntryContextController::initialize_and_authenticate(
+    security::ConfirmedPassword confirmed_daily_password) {
+  if (route_ != CardEntryRoute::initialization_required || !context_) {
+    throw std::system_error(
+        card::make_error_code(card::CardError::invalid_operation),
+        "card initialization requires a fresh eligible insertion");
+  }
+
+  route_ = CardEntryRoute::unavailable;
+  std::unique_ptr<IReadOnlyCardEntryInspection> context =
+      std::move(context_);
+  std::unique_ptr<card::ICardInitializationTarget> target =
+      source_.make_initialization_target(*context);
+  if (!target) {
+    throw std::system_error(
+        card::make_error_code(card::CardError::backend_unavailable),
+        "card adapter cannot initialize this insertion");
+  }
+
+  return card::CardInitializationService::initialize_and_authenticate(
+      *target, std::move(confirmed_daily_password));
 }
 
 std::optional<CardEntryRoute>

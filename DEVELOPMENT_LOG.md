@@ -3878,3 +3878,42 @@
   marker 复读，探针与提交之间换卡会失败。目标不缓存凭据或卡记录，新增状态仅在进程内易失。
   剩余边界是通用上下文所有者尚不能请求该目标，主 App/WebView 也尚未接线。本切片已完成实现、
   测试和安全复核，用户已批准提交；本地提交随本记录创建。
+
+### 小切片 13h：一次性同步初始化动作
+
+#### 需求审计与实现
+
+- 审计 P2.13e～P2.13g、`ConfirmedPassword`、厂商无关初始化服务与需求中“不确定失败必须作废
+  上下文”后确认：不能把可写初始化目标返回给 UI 长期保存，也不能在目标构造或写卡失败后继续
+  使用原 route。否则拔卡事件与 UI 持有对象之间会形成悬空写授权，并可能绕过新一次只读探测。
+- `ICardEntryInspectionSource` 新增可替换的目标工厂边界。默认实现返回空目标并失败关闭；工厂只可
+  根据来源此前返回的精确只读上下文构造短生命周期目标，不得在构造阶段加载凭据或执行卡 I/O。
+- `CardEntryContextController::initialize_and_authenticate()` 只接受当前精确
+  `initialization_required` route 和非空上下文。它在调用来源工厂前先把 route 降为 unavailable，
+  再把独占上下文移入局部变量；随后目标与上下文都只存在于同步调用栈，目标先销毁、上下文后销毁。
+- 动作把不可复制的 `ConfirmedPassword` 直接移动给既有 `CardInitializationService`，固定沿用
+  bootstrap → marker 复读 → KDF／根秘密生成 → 最终记录写入与复读验证。成功返回根秘密给未来
+  已认证状态；工厂异常、空目标、bootstrap／记录失败和成功都不会恢复 route 或上下文，重复调用
+  只能得到 invalid operation，必须物理拔卡后重新插入并完成新探测。
+- `VikeyHelperCardEnrollment` 的目标工厂只接受由自身适配类型表达的
+  `VikeyCardInsertionContext`，把同一个原子探针快照复制给正式初始化目标。外来通用上下文在凭据
+  加载和任何外部副作用前拒绝；目标构造本身不启动 helper，实际操作仍按原 ID 和精确状态复验。
+- 本切片不修改 WebView、页面、HID、helper IPC、实体卡数据或现有 P1 开发入口。下一切片可接入
+  初始化双输入页面提交与已认证无卷状态，但首次建卷向导继续暂缓。
+
+#### 测试、安全复核与剩余边界
+
+- 新增 `card_entry_initialization_controller_tests`，通过正式 Card Record 初始化事务覆盖成功路径，
+  并验证控制器在目标工厂运行前已经失效、上下文持续存活到事务结束、目标先于上下文销毁、最终
+  记录为 initialized v1；另覆盖无卡、登录／不可用 route、工厂异常、空目标、bootstrap 失败和
+  重复调用，确认不合格 route 不消耗只读上下文，而已开始的初始化在任何结果下都不可重试。
+- 扩展 `vikey_card_initialization_target_tests`，验证 enrollment 工厂接受原始 ViKey 插入上下文且
+  零凭据加载，并在外来上下文上返回 invalid configuration、仍不加载凭据。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **43/43**：41 项实际通过、2 项因 Codex
+  父令牌已受限而按规则跳过；新增测试三套均实际通过，`/analyze` 无项目诊断，ASan 未报告内存
+  错误。本切片没有修改 helper／IPC／伪 DLL 进程测试或实体卡路径，无需用户补跑普通 PowerShell。
+- 安全复核确认写目标不会逃逸到 UI 或事件循环，控制器在任何外部初始化动作前不可逆撤销授权；
+  密码证明只向正式服务移动一次，目标构造不接触凭据，正式服务继续在 bootstrap 失败时清除密码。
+  未发现本地状态、硬件 ID、密码、信封、模式或档位信息新增落盘。剩余边界是主 App/WebView 尚未
+  提供初始化双输入页面，也尚未消费成功返回的根秘密进入已认证无卷状态。本切片已完成实现、测试
+  和安全复核，用户已批准提交；本地提交随本记录创建。
