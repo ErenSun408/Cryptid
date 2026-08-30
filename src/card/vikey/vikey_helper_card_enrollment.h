@@ -28,6 +28,8 @@ class VikeyHelperCardEnrollment final
   [[nodiscard]] std::unique_ptr<ICardInitializationTarget>
   make_initialization_target(
       const application::IReadOnlyCardEntryInspection& context) override;
+  [[nodiscard]] std::unique_ptr<ICardLoginTarget> make_login_target(
+      const application::IReadOnlyCardEntryInspection& context) override;
   void bootstrap(const VikeyCardMediaProbe& context);
 
  private:
@@ -67,6 +69,25 @@ class VikeyHelperCardInitializationTarget final
   VikeyHelperCardRecordBackend backend_;
   VikeyCardRecordStore store_;
   ProvisioningState provisioning_state_{ProvisioningState::pending};
+};
+
+// Binds an adapter-approved initialized insertion to a formal Card Record
+// store for one login attempt. Construction is side-effect free; each later
+// read obtains fresh vendor credentials and rechecks the captured hardware ID
+// through the helper backend.
+class VikeyHelperCardLoginTarget final : public ICardLoginTarget {
+ public:
+  VikeyHelperCardLoginTarget(
+      VikeyHelperBackendConfig config,
+      IVikeyCredentialProvider& credential_provider,
+      VikeyCardMediaProbe context);
+
+  [[nodiscard]] security::SecureBuffer read_record() override;
+
+ private:
+  VikeyCardMediaProbe context_;
+  VikeyHelperCardRecordBackend backend_;
+  VikeyCardRecordStore store_;
 };
 
 }  // namespace usb_vault::card::vikey

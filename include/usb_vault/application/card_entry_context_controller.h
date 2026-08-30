@@ -3,6 +3,7 @@
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_router.h"
 #include "usb_vault/card/card_initialization_service.h"
+#include "usb_vault/card/card_login_target.h"
 
 #include <memory>
 #include <optional>
@@ -33,6 +34,14 @@ class ICardEntryInspectionSource {
   [[nodiscard]] virtual std::unique_ptr<card::ICardInitializationTarget>
   make_initialization_target(
       const IReadOnlyCardEntryInspection&) {
+    return nullptr;
+  }
+
+  // Creates a read-only login target bound to the exact initialized context
+  // previously returned by this source. Construction must not load credentials
+  // or perform card I/O. Unsupported sources fail closed by returning null.
+  [[nodiscard]] virtual std::unique_ptr<card::ICardLoginTarget>
+  make_login_target(const IReadOnlyCardEntryInspection&) {
     return nullptr;
   }
 

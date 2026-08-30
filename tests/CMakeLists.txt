@@ -246,6 +246,23 @@ usb_vault_configure_target(vikey_card_initialization_target_tests)
 add_test(NAME vikey_card_initialization_target_tests
   COMMAND vikey_card_initialization_target_tests)
 
+add_executable(vikey_card_login_target_tests
+  vikey_card_login_target_tests.cpp
+)
+
+target_include_directories(vikey_card_login_target_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_card_login_target_tests PRIVATE
+  usb_vault_vikey_helper_card_record_backend
+)
+
+usb_vault_configure_target(vikey_card_login_target_tests)
+
+add_test(NAME vikey_card_login_target_tests
+  COMMAND vikey_card_login_target_tests)
+
 add_executable(confirmed_password_tests
   confirmed_password_tests.cpp
 )

@@ -46,6 +46,18 @@ namespace {
   return context;
 }
 
+[[nodiscard]] VikeyCardMediaProbe validate_login_context(
+    const VikeyCardMediaProbe context) {
+  if (context.hardware_id == 0 ||
+      context.media_state != VikeyCardMediaState::product_evidence ||
+      context.logical_state != CardRecordState::initialized_v1) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey login target requires initialized insertion context");
+  }
+  return context;
+}
+
 }  // namespace
 
 VikeyHelperCardEnrollment::VikeyHelperCardEnrollment(
@@ -89,6 +101,20 @@ VikeyHelperCardEnrollment::make_initialization_target(
         "ViKey initialization requires its original insertion context");
   }
   return std::make_unique<VikeyHelperCardInitializationTarget>(
+      config_, credential_provider_, insertion->probe());
+}
+
+std::unique_ptr<ICardLoginTarget>
+VikeyHelperCardEnrollment::make_login_target(
+    const application::IReadOnlyCardEntryInspection& context) {
+  const auto* const insertion =
+      dynamic_cast<const VikeyCardInsertionContext*>(&context);
+  if (insertion == nullptr) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey login requires its original insertion context");
+  }
+  return std::make_unique<VikeyHelperCardLoginTarget>(
       config_, credential_provider_, insertion->probe());
 }
 
@@ -142,6 +168,19 @@ void VikeyHelperCardInitializationTarget::ensure_provisioning_record() {
 
 ICardStore& VikeyHelperCardInitializationTarget::card_store() noexcept {
   return store_;
+}
+
+VikeyHelperCardLoginTarget::VikeyHelperCardLoginTarget(
+    VikeyHelperBackendConfig config,
+    IVikeyCredentialProvider& credential_provider,
+    const VikeyCardMediaProbe context)
+    : context_(validate_login_context(context)),
+      backend_(std::move(config), credential_provider,
+               context_.hardware_id),
+      store_(backend_) {}
+
+security::SecureBuffer VikeyHelperCardLoginTarget::read_record() {
+  return store_.get_blob();
 }
 
 }  // namespace usb_vault::card::vikey
