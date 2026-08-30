@@ -2,6 +2,7 @@
 
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_router.h"
+#include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/card/card_initialization_service.h"
 #include "usb_vault/card/card_login_target.h"
 
@@ -69,6 +70,15 @@ class CardEntryContextController final {
   void initialize_and_authenticate(
       CardAuthenticationSession& authentication,
       security::ConfirmedPassword confirmed_daily_password);
+
+  // Attempts one login against the exact initialized insertion. A credential
+  // rejection preserves the route and context for another user attempt. Any
+  // adapter, read, public-state, or cryptographic-system failure invalidates
+  // the insertion. Success invalidates it before moving S and the original
+  // login input into the synchronous non-UI consumer.
+  void authenticate_login(
+      ICardLoginSuccessConsumer& success_consumer,
+      security::SecureBuffer login_password_utf8);
 
   // No value means no accepted physical insertion is currently present.
   [[nodiscard]] std::optional<CardEntryRoute> current_route() const noexcept;
