@@ -36,6 +36,7 @@ using usb_vault::card::kCardRecordJournalV1StorageSize;
 using usb_vault::card::kCardRecordV1Size;
 using usb_vault::card::make_error_code;
 using usb_vault::card::inspect_card_record;
+using usb_vault::card::inspect_card_record_journal_logical_state_v1_read_only;
 using usb_vault::card::inspect_card_record_journal_media_v1;
 using usb_vault::card::provision_card_record_journal_v1;
 using usb_vault::card::provision_uninitialized_card_record_v1;
@@ -382,6 +383,137 @@ void test_complete_future_record_reaches_product_classification() {
          "future product record was written by bootstrap");
 }
 
+void test_logical_state_inspection_is_strictly_read_only() {
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+
+  {
+    FakeStorage storage;
+    provision(storage, marker);
+    expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+               CardRecordState::provisioned_uninitialized,
+           "stable marker journal returned the wrong logical state");
+    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+           "stable logical-state inspection was not one read-only snapshot");
+  }
+
+  {
+    FakeStorage storage;
+    provision(storage, marker);
+    SecureBuffer initialized = framed_record(std::byte{0x58});
+    commit_card_record_journal_v1(storage, initialized.bytes());
+    storage.reset_observation();
+    expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+               CardRecordState::initialized_v1,
+           "initialized journal returned the wrong logical state");
+    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+           "initialized logical-state inspection wrote storage");
+  }
+
+  {
+    FakeStorage storage;
+    provision(storage, marker);
+    SecureBuffer future = future_record();
+    replace_active_record_and_rehash_descriptors(storage, marker, future);
+    storage.reset_observation();
+    expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+               CardRecordState::unsupported_version,
+           "future journal did not reach public version classification");
+    expect(storage.write_calls_ == 0,
+           "future logical-state inspection wrote storage");
+  }
+
+  {
+    FakeStorage storage;
+    provision(storage, marker);
+    SecureBuffer malformed(kCardRecordV1Size);
+    std::ranges::fill(malformed.bytes(), std::byte{0x91});
+    replace_active_record_and_rehash_descriptors(storage, marker, malformed);
+    storage.reset_observation();
+    expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+               CardRecordState::malformed,
+           "authenticated malformed framing returned the wrong state");
+    expect(storage.write_calls_ == 0,
+           "malformed logical-state inspection wrote storage");
+  }
+}
+
+void test_logical_state_inspection_selects_without_normalizing() {
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  SecureBuffer replacement = framed_record(std::byte{0x69});
+
+  {
+    FakeStorage storage;
+    provision(storage, marker);
+    storage.write_fault_ = {.call = 0, .bytes_before_failure = 37};
+    expect_card_error(
+        [&] { commit_card_record_journal_v1(storage, replacement.bytes()); },
+        CardError::communication_failed,
+        "partial staging setup returned the wrong error");
+    storage.reset_observation();
+
+    expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+               CardRecordState::provisioned_uninitialized,
+           "read-only inspection selected partial staging bytes");
+    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+           "read-only staging inspection normalized the inactive slot");
+  }
+
+  {
+    FakeStorage storage;
+    provision(storage, marker);
+    storage.write_fault_ = {.call = 2, .bytes_before_failure = 17};
+    expect_card_error(
+        [&] { commit_card_record_journal_v1(storage, replacement.bytes()); },
+        CardError::communication_failed,
+        "published cleanup setup returned the wrong error");
+    storage.reset_observation();
+
+    expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+               CardRecordState::initialized_v1,
+           "read-only inspection did not select the published commit");
+    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+           "read-only published-commit inspection normalized storage");
+  }
+}
+
+void test_logical_state_inspection_fails_closed_without_writes() {
+  {
+    FakeStorage storage;
+    expect_card_error(
+        [&] {
+          static_cast<void>(
+              inspect_card_record_journal_logical_state_v1_read_only(
+                  storage));
+        },
+        CardError::device_failure,
+        "blank journal returned a logical record state");
+    expect(storage.write_calls_ == 0,
+           "blank logical-state inspection wrote storage");
+  }
+
+  {
+    FakeStorage storage;
+    SecureBuffer marker = provision_uninitialized_card_record_v1();
+    provision(storage, marker);
+    const std::size_t active_slot =
+        same_record_at(storage.data_, kCardRecordJournalV1Slot0Offset, marker)
+            ? kCardRecordJournalV1Slot0Offset
+            : kCardRecordJournalV1Slot1Offset;
+    storage.data_[active_slot + 73] ^= std::byte{1};
+    storage.reset_observation();
+    expect_card_error(
+        [&] {
+          static_cast<void>(
+              inspect_card_record_journal_logical_state_v1_read_only(
+                  storage));
+        },
+        CardError::device_failure,
+        "damaged active record returned a logical state");
+    expect(storage.write_calls_ == 0,
+           "damaged logical-state inspection wrote storage");
+  }
+}
+
 void test_provision_and_alternating_commits() {
   FakeStorage storage;
   SecureBuffer marker = provision_uninitialized_card_record_v1();
@@ -697,6 +829,9 @@ int main() {
     test_media_inspection_is_read_only();
     test_bootstrap_is_resumable_and_non_destructive();
     test_complete_future_record_reaches_product_classification();
+    test_logical_state_inspection_is_strictly_read_only();
+    test_logical_state_inspection_selects_without_normalizing();
+    test_logical_state_inspection_fails_closed_without_writes();
     test_provision_and_alternating_commits();
     test_staging_failures_preserve_active_commit();
     test_descriptor_failures_recover_old_or_complete_new();

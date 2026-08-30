@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <cstddef>
@@ -71,6 +72,16 @@ read_card_record_journal_v1(ICardRecordJournalStorage &storage);
 // without a valid descriptor is the only resumable bootstrap state.
 [[nodiscard]] CardRecordJournalMediaState
 inspect_card_record_journal_media_v1(
+    ICardRecordJournalStorage &storage);
+
+// Selects the authoritative logical record using the same descriptor and
+// commit-chain validation as a normal journal read, then classifies only its
+// public framing. This operation never repairs, normalizes, or writes storage,
+// even when the selected commit is recoverable but not yet mirrored. Missing,
+// ambiguous, or damaged active commits fail instead of becoming malformed or
+// uninitialized product records.
+[[nodiscard]] CardRecordState
+inspect_card_record_journal_logical_state_v1_read_only(
     ICardRecordJournalStorage &storage);
 
 // Low-level controlled provisioning primitive. It accepts only the exact

@@ -473,6 +473,12 @@ CardRecordJournalMediaState inspect_card_record_journal_media_v1(
   return CardRecordJournalMediaState::no_product_evidence;
 }
 
+CardRecordState inspect_card_record_journal_logical_state_v1_read_only(
+    ICardRecordJournalStorage &storage) {
+  const LoadedJournal journal = load_journal(storage);
+  return inspect_card_record(journal.record.bytes());
+}
+
 void provision_card_record_journal_v1(
     ICardRecordJournalStorage &storage,
     const std::span<const std::byte> provisioning_record) {
