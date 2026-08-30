@@ -20,6 +20,7 @@ using usb_vault::application::CardEntryMediaEvidence;
 using usb_vault::application::CardEntryRoute;
 using usb_vault::application::IApplicationSessionActions;
 using usb_vault::application::ICardEntryInspectionSource;
+using usb_vault::application::IVolatileCardAuthenticationSession;
 using usb_vault::application::IReadOnlyCardEntryInspection;
 using usb_vault::card::CardRecordState;
 using usb_vault::platform::windows::HidDeviceIdentity;
@@ -66,6 +67,22 @@ class FakeInspection final : public IReadOnlyCardEntryInspection {
   inspect_product_record_read_only() override {
     return CardRecordState::initialized_v1;
   }
+};
+
+class FakeAuthenticationSession final
+    : public IVolatileCardAuthenticationSession {
+ public:
+  void clear_authentication() noexcept override {
+    authenticated_state = false;
+    ++clear_calls;
+  }
+
+  [[nodiscard]] bool authenticated() const noexcept override {
+    return authenticated_state;
+  }
+
+  bool authenticated_state{};
+  int clear_calls{};
 };
 
 class FakeSource final : public ICardEntryInspectionSource {
@@ -217,10 +234,11 @@ void test_unrelated_and_malformed_payloads_are_ignored() {
 
 void test_p2_lifecycle_overload_uses_the_same_strict_filter() {
   FakeSession session;
+  FakeAuthenticationSession authentication;
   FakeSource source;
   CardPresenceController presence(session);
   CardEntryContextController entry(source);
-  CardDeviceLifecycleController lifecycle(presence, entry);
+  CardDeviceLifecycleController lifecycle(presence, entry, authentication);
   BroadcastPayload target(
       LR"(\\?\hid#vid_1987&pid_0331&mi_00#fixture)");
 
@@ -228,7 +246,8 @@ void test_p2_lifecycle_overload_uses_the_same_strict_filter() {
       lifecycle, DBT_DEVICEARRIVAL, target.parameter(), kTarget);
   require(arrival.presence == CardPresenceTransition::card_available &&
               arrival.entry_route == CardEntryRoute::login_required &&
-              arrival.entry_changed && source.calls == 1,
+              arrival.entry_changed && source.calls == 1 &&
+              authentication.clear_calls == 1,
           "P2 target arrival did not establish one entry context");
 
   BroadcastPayload unrelated(
@@ -238,16 +257,19 @@ void test_p2_lifecycle_overload_uses_the_same_strict_filter() {
   require(ignored.presence == CardPresenceTransition::no_change &&
               ignored.entry_route == CardEntryRoute::login_required &&
               !ignored.entry_changed && source.calls == 1 &&
-              entry.has_context(),
+              entry.has_context() && authentication.clear_calls == 1,
           "unrelated HID event changed the P2 entry lifecycle");
 
   session.mounted_state = true;
+  authentication.authenticated_state = true;
   const auto removal = handle_hid_device_change(
       lifecycle, DBT_DEVICEREMOVECOMPLETE, target.parameter(), kTarget);
   require(removal.presence ==
               CardPresenceTransition::active_session_unmounted &&
               !removal.entry_route.has_value() && removal.entry_changed &&
-              !entry.has_context() && session.force_unmount_calls == 1,
+              !entry.has_context() && session.force_unmount_calls == 1 &&
+              !authentication.authenticated() &&
+              authentication.clear_calls == 2,
           "P2 target removal did not clear entry and unmount once");
 }
 

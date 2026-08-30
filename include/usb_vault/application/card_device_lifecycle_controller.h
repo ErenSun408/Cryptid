@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/application/card_presence_controller.h"
 
@@ -17,14 +18,16 @@ struct CardDeviceLifecycleTransition final {
 };
 
 // Coordinates P2 entry-context lifetime with the existing P1.7 presence and
-// forced-unmount semantics. Arrival marks presence before one read-only
-// inspection. Duplicate arrival is ignored. Removal always invalidates the
-// entry context before attempting to unmount an active session.
+// forced-unmount semantics. Arrival marks presence, clears stale volatile
+// authentication, then performs one read-only inspection. Duplicate arrival
+// is ignored. Removal always invalidates the entry context, clears the root
+// secret, and only then attempts to unmount an active session.
 class CardDeviceLifecycleController final {
  public:
   CardDeviceLifecycleController(
       CardPresenceController& presence,
-      CardEntryContextController& entry) noexcept;
+      CardEntryContextController& entry,
+      IVolatileCardAuthenticationSession& authentication) noexcept;
 
   [[nodiscard]] CardDeviceLifecycleTransition handle_arrival() noexcept;
   [[nodiscard]] CardDeviceLifecycleTransition handle_removal() noexcept;
@@ -33,6 +36,7 @@ class CardDeviceLifecycleController final {
  private:
   CardPresenceController& presence_;
   CardEntryContextController& entry_;
+  IVolatileCardAuthenticationSession& authentication_;
 };
 
 }  // namespace usb_vault::application

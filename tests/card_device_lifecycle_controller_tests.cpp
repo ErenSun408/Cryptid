@@ -17,6 +17,7 @@ using usb_vault::application::CardPresenceController;
 using usb_vault::application::CardPresenceTransition;
 using usb_vault::application::IApplicationSessionActions;
 using usb_vault::application::ICardEntryInspectionSource;
+using usb_vault::application::IVolatileCardAuthenticationSession;
 using usb_vault::application::IReadOnlyCardEntryInspection;
 using usb_vault::card::CardRecordState;
 using usb_vault::security::SecureBuffer;
@@ -73,6 +74,27 @@ class FakeInspection final : public IReadOnlyCardEntryInspection {
   std::vector<std::string>& calls_;
 };
 
+class FakeAuthenticationSession final
+    : public IVolatileCardAuthenticationSession {
+ public:
+  explicit FakeAuthenticationSession(std::vector<std::string>& calls)
+      : calls_(calls) {}
+
+  void clear_authentication() noexcept override {
+    calls_.push_back("clear-authentication");
+    authenticated_state = false;
+  }
+
+  [[nodiscard]] bool authenticated() const noexcept override {
+    return authenticated_state;
+  }
+
+  bool authenticated_state{};
+
+ private:
+  std::vector<std::string>& calls_;
+};
+
 class FakeSource final : public ICardEntryInspectionSource {
  public:
   explicit FakeSource(std::vector<std::string>& calls) : calls_(calls) {}
@@ -94,11 +116,13 @@ class FakeSource final : public ICardEntryInspectionSource {
 
 struct Fixture final {
   Fixture()
-      : session(calls), source(calls), presence(session), entry(source),
-        lifecycle(presence, entry) {}
+      : session(calls), authentication(calls), source(calls),
+        presence(session), entry(source),
+        lifecycle(presence, entry, authentication) {}
 
   std::vector<std::string> calls;
   FakeSession session;
+  FakeAuthenticationSession authentication;
   FakeSource source;
   CardPresenceController presence;
   CardEntryContextController entry;
@@ -107,6 +131,7 @@ struct Fixture final {
 
 void test_arrival_marks_present_and_inspects_once() {
   Fixture fixture;
+  fixture.authentication.authenticated_state = true;
   const auto transition = fixture.lifecycle.handle_arrival();
   require(transition.presence == CardPresenceTransition::card_available &&
               transition.entry_route == CardEntryRoute::login_required &&
@@ -114,10 +139,12 @@ void test_arrival_marks_present_and_inspects_once() {
           "first arrival returned the wrong lifecycle transition");
   require(fixture.presence.card_present() && fixture.entry.has_context(),
           "first arrival did not retain presence and context");
-  require(fixture.calls ==
-              std::vector<std::string>{"source", "inspect-media",
-                                       "inspect-record"},
-          "arrival performed operations in the wrong order");
+  require(fixture.calls == std::vector<std::string>{
+                               "clear-authentication", "source",
+                               "inspect-media", "inspect-record"},
+          "arrival did not clear stale authentication before inspection");
+  require(!fixture.authentication.authenticated(),
+          "arrival retained stale authentication");
 
   const auto duplicate = fixture.lifecycle.handle_arrival();
   require(duplicate.presence == CardPresenceTransition::no_change &&
@@ -128,6 +155,7 @@ void test_arrival_marks_present_and_inspects_once() {
 
 void test_source_failure_is_unavailable_but_present() {
   Fixture fixture;
+  fixture.authentication.authenticated_state = true;
   fixture.source.fail = true;
   const auto transition = fixture.lifecycle.handle_arrival();
   require(transition.presence == CardPresenceTransition::card_available &&
@@ -135,7 +163,8 @@ void test_source_failure_is_unavailable_but_present() {
               transition.entry_changed,
           "source failure returned the wrong transition");
   require(fixture.presence.card_present() && !fixture.entry.has_context() &&
-              fixture.source.calls_count == 1,
+              fixture.source.calls_count == 1 &&
+              !fixture.authentication.authenticated(),
           "source failure retried or lost physical presence");
   const auto duplicate = fixture.lifecycle.handle_arrival();
   require(duplicate.presence == CardPresenceTransition::no_change &&
@@ -149,6 +178,7 @@ void test_removal_destroys_context_before_forced_unmount() {
   static_cast<void>(fixture.lifecycle.handle_arrival());
   fixture.calls.clear();
   fixture.session.mounted_state = true;
+  fixture.authentication.authenticated_state = true;
   fixture.session.force_required = true;
 
   const auto transition = fixture.lifecycle.handle_removal();
@@ -158,10 +188,14 @@ void test_removal_destroys_context_before_forced_unmount() {
               transition.entry_changed,
           "removal returned the wrong lifecycle transition");
   require(fixture.calls ==
-              std::vector<std::string>{"destroy-context", "force-unmount"},
-          "removal did not invalidate context before unmounting");
+              std::vector<std::string>{"destroy-context",
+                                       "clear-authentication",
+                                       "force-unmount"},
+          "removal used the wrong context, secret, and unmount order");
   require(!fixture.presence.card_present() && !fixture.entry.has_context(),
           "removal retained presence or context");
+  require(!fixture.authentication.authenticated(),
+          "removal retained root authentication");
 }
 
 void test_duplicate_removal_is_idempotent() {
@@ -173,7 +207,10 @@ void test_duplicate_removal_is_idempotent() {
   const auto transition = fixture.lifecycle.handle_removal();
   require(transition.presence == CardPresenceTransition::no_change &&
               !transition.entry_route.has_value() &&
-              !transition.entry_changed && fixture.calls.empty(),
+              !transition.entry_changed &&
+              fixture.calls ==
+                  std::vector<std::string>{"clear-authentication"} &&
+              !fixture.authentication.authenticated(),
           "duplicate removal changed cleared lifecycle state");
 }
 
@@ -182,6 +219,7 @@ void test_failed_unmount_cannot_restore_removed_context() {
   static_cast<void>(fixture.lifecycle.handle_arrival());
   fixture.calls.clear();
   fixture.session.mounted_state = true;
+  fixture.authentication.authenticated_state = true;
   fixture.session.throw_on_force = true;
 
   const auto transition = fixture.lifecycle.handle_removal();
@@ -191,9 +229,12 @@ void test_failed_unmount_cannot_restore_removed_context() {
               transition.entry_changed,
           "failed unmount returned the wrong lifecycle transition");
   require(fixture.calls ==
-              std::vector<std::string>{"destroy-context", "force-unmount"} &&
-              !fixture.entry.has_context() && fixture.session.mounted_state,
-          "failed unmount restored or retained the removed card context");
+              std::vector<std::string>{"destroy-context",
+                                       "clear-authentication",
+                                       "force-unmount"} &&
+              !fixture.entry.has_context() && fixture.session.mounted_state &&
+              !fixture.authentication.authenticated(),
+          "failed unmount restored removed context or root authentication");
 }
 
 }  // namespace

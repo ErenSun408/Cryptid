@@ -32,10 +32,11 @@ void CardEntryContextController::handle_removal() noexcept {
   route_.reset();
 }
 
-security::SecureBuffer
-CardEntryContextController::initialize_and_authenticate(
+void CardEntryContextController::initialize_and_authenticate(
+    CardAuthenticationSession& authentication,
     security::ConfirmedPassword confirmed_daily_password) {
-  if (route_ != CardEntryRoute::initialization_required || !context_) {
+  if (route_ != CardEntryRoute::initialization_required || !context_ ||
+      authentication.authenticated()) {
     throw std::system_error(
         card::make_error_code(card::CardError::invalid_operation),
         "card initialization requires a fresh eligible insertion");
@@ -52,8 +53,9 @@ CardEntryContextController::initialize_and_authenticate(
         "card adapter cannot initialize this insertion");
   }
 
-  return card::CardInitializationService::initialize_and_authenticate(
-      *target, std::move(confirmed_daily_password));
+  authentication.establish(
+      card::CardInitializationService::initialize_and_authenticate(
+          *target, std::move(confirmed_daily_password)));
 }
 
 std::optional<CardEntryRoute>

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_router.h"
 #include "usb_vault/card/card_initialization_service.h"
 
@@ -52,10 +53,12 @@ class CardEntryContextController final {
   void handle_removal() noexcept;
 
   // Consumes the current initialization route and context before invoking any
-  // adapter or card operation. Success and every failure leave this controller
-  // unusable until a physical removal and fresh arrival establish a new
-  // read-only context.
-  [[nodiscard]] security::SecureBuffer initialize_and_authenticate(
+  // adapter or card operation, then moves the verified root directly into an
+  // empty volatile authentication session. Success and every attempted card
+  // operation leave this controller unusable until a physical removal and
+  // fresh arrival establish a new read-only context.
+  void initialize_and_authenticate(
+      CardAuthenticationSession& authentication,
       security::ConfirmedPassword confirmed_daily_password);
 
   // No value means no accepted physical insertion is currently present.

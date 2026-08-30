@@ -20,6 +20,7 @@ namespace {
 using usb_vault::application::CardEntryContextController;
 using usb_vault::application::CardEntryMediaEvidence;
 using usb_vault::application::CardEntryRoute;
+using usb_vault::application::CardAuthenticationSession;
 using usb_vault::application::ICardEntryInspectionSource;
 using usb_vault::application::IReadOnlyCardEntryInspection;
 using usb_vault::card::CardCapabilities;
@@ -206,16 +207,17 @@ void require_card_error(const CardError expected,
 void test_success_consumes_context_before_factory_and_destroys_locals() {
   FakeSource source;
   CardEntryContextController controller(source);
+  CardAuthenticationSession authentication;
   source.controller = &controller;
   require(controller.handle_arrival() ==
               CardEntryRoute::initialization_required,
           "success fixture reached the wrong route");
 
-  SecureBuffer root =
-      controller.initialize_and_authenticate(confirmed_password());
+  controller.initialize_and_authenticate(authentication,
+                                         confirmed_password());
 
-  require(root.size() == usb_vault::card::kCardRecordV1RootSecretSize,
-          "initialization action returned the wrong root size");
+  require(authentication.authenticated(),
+          "initialization action did not establish authentication");
   require(controller.current_route() == CardEntryRoute::unavailable &&
               !controller.has_context(),
           "successful action retained its route or context");
@@ -240,8 +242,8 @@ void test_success_consumes_context_before_factory_and_destroys_locals() {
   require_card_error(
       CardError::invalid_operation,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "duplicate initialization action was accepted");
   require(source.state.factory_calls == 1,
@@ -252,11 +254,12 @@ void test_wrong_routes_reject_without_consuming_context() {
   {
     FakeSource source;
     CardEntryContextController controller(source);
+    CardAuthenticationSession authentication;
     require_card_error(
         CardError::invalid_operation,
         [&] {
-          static_cast<void>(controller.initialize_and_authenticate(
-              confirmed_password()));
+          controller.initialize_and_authenticate(authentication,
+                                                 confirmed_password());
         },
         "initialization without a card was accepted");
     require(!controller.current_route().has_value() &&
@@ -275,13 +278,14 @@ void test_wrong_routes_reject_without_consuming_context() {
     source.media = media;
     source.record = record;
     CardEntryContextController controller(source);
+    CardAuthenticationSession authentication;
     const CardEntryRoute original_route = controller.handle_arrival();
 
     require_card_error(
         CardError::invalid_operation,
         [&] {
-          static_cast<void>(controller.initialize_and_authenticate(
-              confirmed_password()));
+          controller.initialize_and_authenticate(authentication,
+                                                 confirmed_password());
         },
         "non-initialization route was accepted");
     require(controller.current_route() == original_route &&
@@ -292,10 +296,36 @@ void test_wrong_routes_reject_without_consuming_context() {
   }
 }
 
+void test_active_authentication_rejects_before_consuming_context() {
+  FakeSource source;
+  CardEntryContextController controller(source);
+  CardAuthenticationSession authentication;
+  authentication.establish(
+      SecureBuffer(usb_vault::card::kCardRecordV1RootSecretSize));
+  require(controller.handle_arrival() ==
+              CardEntryRoute::initialization_required,
+          "active-session fixture reached the wrong route");
+
+  require_card_error(
+      CardError::invalid_operation,
+      [&] {
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
+      },
+      "active authentication was silently replaced");
+  require(authentication.authenticated() && controller.has_context() &&
+              controller.current_route() ==
+                  CardEntryRoute::initialization_required &&
+              source.state.factory_calls == 0 &&
+              source.state.inspections_destroyed == 0,
+          "active-session rejection consumed context or authentication");
+}
+
 void test_factory_failure_consumes_authorization_without_retry() {
   FakeSource source;
   source.throw_during_factory = true;
   CardEntryContextController controller(source);
+  CardAuthenticationSession authentication;
   source.controller = &controller;
   require(controller.handle_arrival() ==
               CardEntryRoute::initialization_required,
@@ -304,8 +334,8 @@ void test_factory_failure_consumes_authorization_without_retry() {
   require_card_error(
       CardError::device_failure,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "factory failure was accepted");
   require(source.state.factory_calls == 1 &&
@@ -319,8 +349,8 @@ void test_factory_failure_consumes_authorization_without_retry() {
   require_card_error(
       CardError::invalid_operation,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "factory failure was retried");
   require(source.state.factory_calls == 1,
@@ -331,6 +361,7 @@ void test_missing_target_consumes_authorization_without_retry() {
   FakeSource source;
   source.return_null_target = true;
   CardEntryContextController controller(source);
+  CardAuthenticationSession authentication;
   source.controller = &controller;
   require(controller.handle_arrival() ==
               CardEntryRoute::initialization_required,
@@ -339,8 +370,8 @@ void test_missing_target_consumes_authorization_without_retry() {
   require_card_error(
       CardError::backend_unavailable,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "null initialization target was accepted");
   require(source.state.factory_calls == 1 &&
@@ -353,8 +384,8 @@ void test_missing_target_consumes_authorization_without_retry() {
   require_card_error(
       CardError::invalid_operation,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "null-target failure was retried");
   require(source.state.factory_calls == 1,
@@ -365,6 +396,7 @@ void test_target_failure_consumes_authorization_without_retry() {
   FakeSource source;
   source.fail_target = true;
   CardEntryContextController controller(source);
+  CardAuthenticationSession authentication;
   source.controller = &controller;
   require(controller.handle_arrival() ==
               CardEntryRoute::initialization_required,
@@ -373,8 +405,8 @@ void test_target_failure_consumes_authorization_without_retry() {
   require_card_error(
       CardError::device_failure,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "target failure was accepted");
   require(source.state.factory_calls == 1 &&
@@ -390,8 +422,8 @@ void test_target_failure_consumes_authorization_without_retry() {
   require_card_error(
       CardError::invalid_operation,
       [&] {
-        static_cast<void>(controller.initialize_and_authenticate(
-            confirmed_password()));
+        controller.initialize_and_authenticate(authentication,
+                                               confirmed_password());
       },
       "failed target was retried");
   require(source.state.factory_calls == 1 && source.state.ensure_calls == 1,
@@ -404,6 +436,7 @@ int main() {
   try {
     test_success_consumes_context_before_factory_and_destroys_locals();
     test_wrong_routes_reject_without_consuming_context();
+    test_active_authentication_rejects_before_consuming_context();
     test_factory_failure_consumes_authorization_without_retry();
     test_missing_target_consumes_authorization_without_retry();
     test_target_failure_consumes_authorization_without_retry();

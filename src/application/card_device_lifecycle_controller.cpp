@@ -4,8 +4,11 @@ namespace usb_vault::application {
 
 CardDeviceLifecycleController::CardDeviceLifecycleController(
     CardPresenceController& presence,
-    CardEntryContextController& entry) noexcept
-    : presence_(presence), entry_(entry) {}
+    CardEntryContextController& entry,
+    IVolatileCardAuthenticationSession& authentication) noexcept
+    : presence_(presence),
+      entry_(entry),
+      authentication_(authentication) {}
 
 CardDeviceLifecycleTransition
 CardDeviceLifecycleController::handle_arrival() noexcept {
@@ -18,6 +21,8 @@ CardDeviceLifecycleController::handle_arrival() noexcept {
     };
   }
 
+  authentication_.clear_authentication();
+
   return CardDeviceLifecycleTransition{
       .presence = presence,
       .entry_route = entry_.handle_arrival(),
@@ -29,6 +34,7 @@ CardDeviceLifecycleTransition
 CardDeviceLifecycleController::handle_removal() noexcept {
   const bool entry_changed = entry_.current_route().has_value();
   entry_.handle_removal();
+  authentication_.clear_authentication();
   return CardDeviceLifecycleTransition{
       .presence = presence_.handle_removal(),
       .entry_route = std::nullopt,
