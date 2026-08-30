@@ -3718,3 +3718,43 @@
   失败关闭。逻辑状态只描述公开产品生命周期，未增加密码命中、信封槽位、隐藏盘形态、恢复动作或
   写卡入口。验证项已全部闭环，本切片完成实现、测试和安全复核，用户已批准提交；本地提交随本
   记录创建。
+
+### 小切片 13d：ViKey 不可变一次插卡上下文
+
+#### 需求审计与实现
+
+- 审计 P2.13a 通用入口路由、P2.13c v10 原子探针、正式 enrollment 生命周期和初始化目标后确认：
+  helper 已能在同一会话返回硬件 ID、介质证据及可选逻辑状态，但原始 `probe()` 仍由 enrollment
+  公开，主 App 若分别查询页面路由和初始化目标，可能重复启动 helper 并制造跨会话状态漂移。
+  本切片须把一次原子结果封装成明确所有权对象；主 App/WebView 接线及拔卡销毁留给后一切片。
+- 新增 ViKey 私有 `VikeyCardInsertionContext`，独占持有不可变 `VikeyCardMediaProbe` 并实现
+  `IReadOnlyCardEntryInspection`。blank／provisioning interrupted 映射为可初始化，产品证据映射为
+  产品记录，P1 同形前缀、外来数据和冲突证据统一映射为 blocked；产品记录的 provisioning、
+  initialized、unsupported、malformed 状态直接读取同一缓存，不调用 helper、store 或日志恢复读。
+- 上下文构造时重新验证非零硬件 ID、六态介质枚举及“仅产品证据携带受限逻辑状态”的关系；产品
+  缺状态、非产品夹带状态、P1／未知逻辑状态和未知介质枚举均按 `invalid_configuration` 拒绝，不能
+  进入路由。非产品上下文若被错误调用逻辑记录接口则按 `invalid_operation` 失败关闭。
+- `VikeyHelperCardEnrollment` 现在只公开 `inspect_entry()`，内部恰好执行一次既有原子探针并返回
+  `unique_ptr` 独占上下文；原始 `probe()` 已降为私有，减少调用者绕开生命周期对象重复探测的入口。
+  上下文仍保留原始探针的 const 引用，供路由选择初始化后把同一硬件 ID 和精确介质状态复制给
+  `VikeyHelperCardInitializationTarget`。初始化适配器同时拒绝任何夹带逻辑状态的 blank／中断上下文，
+  并保证在取得厂商凭据或启动 helper 前拒绝矛盾输入。
+- 本切片不接入 P1 HID 到达处理、主 App、WebView 页面或拔卡事件，也不访问唯一实体开发卡；当前
+  开发 EXE 可见行为保持不变。下一切片应由应用层会话独占该上下文，依据通用路由展示初始化／登录／
+  不可用页，并在拔卡或新到达事件时先销毁旧上下文。
+
+#### 测试、安全复核与剩余边界
+
+- 新增 `vikey_card_insertion_context_tests`，覆盖六种 ViKey 介质状态、四种允许的产品逻辑状态、
+  通用初始化／登录／不可用路由、缓存快照保留，以及零 ID、缺失／夹带／P1／未知状态组合和错误
+  非产品逻辑检查。扩展伪 DLL 进程测试，验证正式 enrollment 只加载一套凭据，缓存路由不会启动
+  第二个 helper，矛盾初始化上下文也不会加载凭据。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **39/39**：37 项实际通过、2 项因 Codex
+  父令牌已受限而按规则跳过；新增上下文测试三套均实际通过，`/analyze` 无项目诊断，ASan 未报告
+  内存错误。用户随后在普通非管理员桌面 PowerShell 补跑最新 Debug `vikey_helper_process_tests`
+  并得到 `passed`；该测试只使用伪 `ViKey.dll`，未访问实体卡。
+- 安全复核确认路由对象只持有非秘密硬件 ID、安全属性、厂商介质枚举及公开生命周期状态，不含卡内
+  原文、密码、摘要、槽位、commit id、信封命中或模式信息；路由只读 const 快照，不能写卡、恢复
+  日志或静默改绑。`unique_ptr` 与不可拷贝基类避免上下文被无意复制，删除对象即可清除一次插入绑定。
+  剩余风险是主 App 尚未实际持有并在拔卡时销毁对象；当前结果不能宣称页面已经识别 P2 卡。
+  本切片已完成实现、测试和安全复核，用户已批准提交；本地提交随本记录创建。

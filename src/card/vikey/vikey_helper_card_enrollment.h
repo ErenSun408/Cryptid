@@ -1,9 +1,12 @@
 #pragma once
 
+#include "card/vikey/vikey_card_insertion_context.h"
 #include "card/vikey/vikey_helper_backend.h"
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_client.h"
 #include "usb_vault/card/card_initialization_service.h"
+
+#include <memory>
 
 namespace usb_vault::card::vikey {
 
@@ -17,10 +20,12 @@ class VikeyHelperCardEnrollment final {
       VikeyHelperBackendConfig config,
       IVikeyCredentialProvider& credential_provider);
 
-  [[nodiscard]] VikeyCardMediaProbe probe();
+  [[nodiscard]] std::unique_ptr<VikeyCardInsertionContext> inspect_entry();
   void bootstrap(const VikeyCardMediaProbe& context);
 
  private:
+  [[nodiscard]] VikeyCardMediaProbe probe();
+
   VikeyHelperBackendConfig config_;
   IVikeyCredentialProvider& credential_provider_;
 };

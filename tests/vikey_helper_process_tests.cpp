@@ -5,6 +5,7 @@
 #include "card/vikey/vikey_helper_protocol.h"
 #include "vikey_network_probe.h"
 
+#include "usb_vault/application/card_entry_router.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 
@@ -26,7 +27,10 @@
 namespace {
 
 using namespace std::chrono_literals;
+using usb_vault::application::CardEntryRoute;
+using usb_vault::application::CardEntryRouter;
 using usb_vault::card::CardError;
+using usb_vault::card::CardRecordState;
 using usb_vault::card::Sha256Digest;
 using usb_vault::card::vikey::
     bootstrap_vikey_development_card_media_with_network_access;
@@ -735,7 +739,8 @@ void test_formal_card_enrollment_staging(
   provider.pin_value = std::byte{'Q'};
   VikeyHelperCardEnrollment enrollment(config, provider);
 
-  const auto context = enrollment.probe();
+  auto insertion = enrollment.inspect_entry();
+  const auto& context = insertion->probe();
   expect(context.hardware_id == 1 &&
              context.media_state ==
                  usb_vault::card::vikey::VikeyCardMediaState::blank &&
@@ -743,6 +748,11 @@ void test_formal_card_enrollment_staging(
          "formal enrollment returned the wrong insertion context");
   expect(provider.loads == 1,
          "formal enrollment probe did not load one credential set");
+  expect(CardEntryRouter::route(*insertion) ==
+             CardEntryRoute::initialization_required,
+         "formal enrollment insertion context reached the wrong route");
+  expect(provider.loads == 1,
+         "formal insertion routing started another helper operation");
   VikeyHelperCardInitializationTarget target(config, provider, context);
   target.ensure_provisioning_record();
   expect(provider.loads == 2,
@@ -781,6 +791,31 @@ void test_formal_card_enrollment_staging(
   expect(provider.loads == 2,
          "formal enrollment loaded credentials for foreign media");
 
+  auto contradictory = context;
+  contradictory.logical_state = CardRecordState::initialized_v1;
+  try {
+    enrollment.bootstrap(contradictory);
+    fail("formal enrollment accepted contradictory logical state");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "contradictory enrollment context returned the wrong error");
+  }
+  expect(provider.loads == 2,
+         "formal enrollment loaded credentials for contradictory context");
+  try {
+    VikeyHelperCardInitializationTarget contradictory_target(
+        config, provider, contradictory);
+    static_cast<void>(contradictory_target);
+    fail("formal initialization target accepted contradictory state");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "contradictory initialization target returned the wrong error");
+  }
+  expect(provider.loads == 2,
+         "formal target loaded credentials for contradictory context");
+
   auto stale_context = context;
   stale_context.media_state =
       usb_vault::card::vikey::VikeyCardMediaState::
@@ -813,7 +848,7 @@ void test_formal_card_enrollment_staging(
   VikeyHelperCardEnrollment failing_enrollment(std::move(config),
                                                 failing_provider);
   try {
-    static_cast<void>(failing_enrollment.probe());
+    static_cast<void>(failing_enrollment.inspect_entry());
     fail("formal enrollment accepted a credential-provider failure");
   } catch (const std::system_error& error) {
     expect(error.code() == usb_vault::card::make_error_code(

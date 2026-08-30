@@ -29,7 +29,8 @@ namespace {
 [[nodiscard]] VikeyCardMediaProbe validate_initialization_context(
     const VikeyCardMediaProbe context) {
   if (context.hardware_id == 0 ||
-      !eligible_bootstrap_state(context.media_state)) {
+      !eligible_bootstrap_state(context.media_state) ||
+      context.logical_state.has_value()) {
     throw std::system_error(
         make_error_code(CardError::invalid_configuration),
         "ViKey initialization target requires eligible insertion context");
@@ -59,10 +60,16 @@ VikeyCardMediaProbe VikeyHelperCardEnrollment::probe() {
   }
 }
 
+std::unique_ptr<VikeyCardInsertionContext>
+VikeyHelperCardEnrollment::inspect_entry() {
+  return std::make_unique<VikeyCardInsertionContext>(probe());
+}
+
 void VikeyHelperCardEnrollment::bootstrap(
     const VikeyCardMediaProbe& context) {
   if (context.hardware_id == 0 ||
-      !eligible_bootstrap_state(context.media_state)) {
+      !eligible_bootstrap_state(context.media_state) ||
+      context.logical_state.has_value()) {
     throw std::system_error(
         make_error_code(CardError::invalid_configuration),
         "ViKey enrollment context is not eligible for bootstrap");

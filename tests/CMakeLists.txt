@@ -160,6 +160,23 @@ usb_vault_configure_target(card_entry_router_tests)
 add_test(NAME card_entry_router_tests
   COMMAND card_entry_router_tests)
 
+add_executable(vikey_card_insertion_context_tests
+  vikey_card_insertion_context_tests.cpp
+)
+
+target_include_directories(vikey_card_insertion_context_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(vikey_card_insertion_context_tests PRIVATE
+  usb_vault_vikey_helper_card_record_backend
+)
+
+usb_vault_configure_target(vikey_card_insertion_context_tests)
+
+add_test(NAME vikey_card_insertion_context_tests
+  COMMAND vikey_card_insertion_context_tests)
+
 add_executable(confirmed_password_tests
   confirmed_password_tests.cpp
 )
