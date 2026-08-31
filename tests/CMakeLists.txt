@@ -797,6 +797,20 @@ usb_vault_configure_target(ui_page_contract_tests)
 
 add_test(NAME ui_page_contract_tests COMMAND ui_page_contract_tests)
 
+add_executable(card_product_ui_page_contract_tests
+  card_product_ui_page_contract_tests.cpp
+)
+
+target_compile_definitions(card_product_ui_page_contract_tests PRIVATE
+  USB_VAULT_CARD_PRODUCT_UI_PAGE="${PROJECT_SOURCE_DIR}/ui/card_session.html"
+  USB_VAULT_CARD_PRODUCT_UI_SCRIPT="${PROJECT_SOURCE_DIR}/ui/card_session.js"
+)
+
+usb_vault_configure_target(card_product_ui_page_contract_tests)
+
+add_test(NAME card_product_ui_page_contract_tests
+  COMMAND card_product_ui_page_contract_tests)
+
 add_executable(webview_password_array_tests
   webview_password_array_tests.cpp
 )
@@ -824,6 +838,42 @@ usb_vault_configure_target(webview_host_object_tests)
 add_test(NAME webview_host_object_tests COMMAND webview_host_object_tests)
 
 if(USB_VAULT_BUILD_UI)
+  add_executable(card_product_webview_integration_tests WIN32 EXCLUDE_FROM_ALL
+    card_product_webview_integration_tests.cpp
+  )
+
+  target_include_directories(card_product_webview_integration_tests PRIVATE
+    "${webview2_sdk_SOURCE_DIR}/build/native/include"
+  )
+
+  target_link_libraries(card_product_webview_integration_tests PRIVATE
+    usb_vault_core
+    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+    Ole32
+    Shlwapi
+  )
+
+  usb_vault_configure_target(card_product_webview_integration_tests)
+
+  add_custom_command(TARGET card_product_webview_integration_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/card_product_webview_integration.html"
+            "$<TARGET_FILE_DIR:card_product_webview_integration_tests>/card_product_webview_integration.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/ui/card_session.js"
+            "$<TARGET_FILE_DIR:card_product_webview_integration_tests>/card_session.js"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/card_product_webview_integration.js"
+            "$<TARGET_FILE_DIR:card_product_webview_integration_tests>/card_product_webview_integration.js"
+    VERBATIM
+  )
+  set_property(TARGET card_product_webview_integration_tests APPEND PROPERTY
+    LINK_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/card_product_webview_integration.html"
+      "${CMAKE_CURRENT_SOURCE_DIR}/card_product_webview_integration.js"
+      "${PROJECT_SOURCE_DIR}/ui/card_session.js"
+  )
+
   add_executable(webview_typed_array_integration_tests WIN32 EXCLUDE_FROM_ALL
     webview_typed_array_integration_tests.cpp
   )

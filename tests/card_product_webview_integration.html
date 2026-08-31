@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self';">
+  <title>Card product WebView integration</title>
+</head>
+<body>
+  <main id="card-session-surface" data-session-state="initializing"
+        data-busy="true">
+    <p id="card-state-title">正在连接安全组件</p>
+    <section id="password-fields" hidden>
+      <label id="card-password-label" for="card-password">密码</label>
+      <input id="card-password" type="password" disabled>
+      <div id="confirmation-field" hidden>
+        <label for="card-password-confirmation">确认密码</label>
+        <input id="card-password-confirmation" type="password" disabled>
+      </div>
+      <output id="password-strength" hidden></output>
+    </section>
+    <button id="card-session-action" type="button" disabled hidden>
+      正在初始化
+    </button>
+    <output id="card-session-status">正在连接安全组件</output>
+  </main>
+  <script src="card_session.js?v=p2-15c-five-state"></script>
+  <script src="card_product_webview_integration.js?v=p2-15c-five-state"></script>
+</body>
+</html>

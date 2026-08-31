@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'none'; base-uri 'none'">
+  <title>USB Vault</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111827; color: #f9fafb; }
+    main { width: min(30rem, calc(100vw - 3rem)); padding: 2rem; border: 1px solid #374151; border-radius: 1rem; background: #1f2937; }
+    h1 { margin: 0 0 .5rem; font-size: 1.75rem; text-align: center; }
+    .intro { margin: 0 0 1.5rem; color: #9ca3af; line-height: 1.6; text-align: center; }
+    .field + .field { margin-top: 1rem; }
+    label { display: block; margin-bottom: .5rem; font-size: .9rem; font-weight: 600; }
+    input, button { width: 100%; min-height: 2.75rem; border-radius: .5rem; font: inherit; }
+    input { border: 1px solid #4b5563; padding: 0 .75rem; background: #111827; color: #f9fafb; }
+    input:focus { outline: 2px solid #60a5fa; outline-offset: 2px; }
+    button { margin-top: 1rem; border: 0; background: #2563eb; color: white; font-weight: 600; }
+    input:disabled, button:disabled { cursor: wait; opacity: .55; }
+    output { display: block; min-height: 1.5rem; margin-top: 1rem; color: #9ca3af; font-size: .9rem; text-align: center; }
+    #password-strength[data-level="acceptable"] { color: #93c5fd; }
+    #password-strength[data-level="strong"] { color: #86efac; }
+    #password-strength[data-level="invalid"] { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <main id="card-session-surface" data-session-state="initializing"
+        data-busy="true">
+    <h1>USB Vault</h1>
+    <p id="card-state-title" class="intro">正在连接安全组件</p>
+    <section id="password-fields" hidden>
+      <div class="field">
+        <label id="card-password-label" for="card-password">密码</label>
+        <input id="card-password" type="password" autocomplete="off"
+               autocapitalize="off" spellcheck="false" disabled>
+      </div>
+      <div id="confirmation-field" class="field" hidden>
+        <label for="card-password-confirmation">确认密码</label>
+        <input id="card-password-confirmation" type="password"
+               autocomplete="off" autocapitalize="off" spellcheck="false"
+               disabled>
+      </div>
+      <output id="password-strength" aria-live="polite" hidden></output>
+    </section>
+    <button id="card-session-action" type="button" disabled hidden>
+      正在初始化
+    </button>
+    <output id="card-session-status" aria-live="polite">
+      正在连接安全组件
+    </output>
+  </main>
+  <script src="card_session.js?v=p2-15c-five-state"></script>
+</body>
+</html>
