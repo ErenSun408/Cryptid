@@ -158,9 +158,11 @@ struct CardLoginMountSession::Impl final {
   Impl(CardAuthenticationSession& authentication,
        const volume::VolumeProvider& provider,
        ContainerLayout layout,
-       std::filesystem::path volume_creator_helper_path)
+       std::filesystem::path volume_creator_helper_path,
+       LoginMountPolicy login_mount_policy)
       : runtime(provider, std::move(volume_creator_helper_path)),
-        core(authentication, runtime, std::move(layout)) {}
+        core(authentication, runtime, std::move(layout),
+             login_mount_policy) {}
 
   ProductionCardLoginMountSessionRuntime runtime;
   detail::CardLoginMountSessionCore core;
@@ -170,10 +172,12 @@ CardLoginMountSession::CardLoginMountSession(
     CardAuthenticationSession& authentication,
     const volume::VolumeProvider& provider,
     ContainerLayout layout,
-    std::filesystem::path volume_creator_helper_path)
+    std::filesystem::path volume_creator_helper_path,
+    const LoginMountPolicy login_mount_policy)
     : impl_(std::make_unique<Impl>(authentication, provider,
                                    std::move(layout),
-                                   std::move(volume_creator_helper_path))) {}
+                                   std::move(volume_creator_helper_path),
+                                   login_mount_policy)) {}
 
 CardLoginMountSession::~CardLoginMountSession() noexcept = default;
 
@@ -250,10 +254,12 @@ void record_residual_mount(const ContainerLayout& layout,
 CardLoginMountSessionCore::CardLoginMountSessionCore(
     CardAuthenticationSession& authentication,
     CardLoginMountSessionRuntime& runtime,
-    ContainerLayout layout)
+    ContainerLayout layout,
+    const LoginMountPolicy login_mount_policy)
     : authentication_(authentication),
       runtime_(runtime),
-      layout_(std::move(layout)) {}
+      layout_(std::move(layout)),
+      login_mount_policy_(login_mount_policy) {}
 
 void CardLoginMountSessionCore::consume_authenticated_login(
     security::SecureBuffer root_secret,
@@ -267,6 +273,12 @@ void CardLoginMountSessionCore::consume_authenticated_login(
 
   try {
     authentication_.establish(std::move(root_secret));
+    if (login_mount_policy_ == LoginMountPolicy::manual) {
+      // The login input only ever existed for the synchronous mount call, so
+      // the manual policy releases it as soon as authentication is volatile.
+      login_password_utf8.clear();
+      return;
+    }
     const MountSessionResult result = runtime_.mount_authenticated(
         layout_, login_password_utf8, authentication_.root_secret_);
     state_.container_a_mounted = result.container_a.has_value();

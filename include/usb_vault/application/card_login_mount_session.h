@@ -14,6 +14,15 @@ namespace usb_vault::application {
 
 class CardAuthenticationSession;
 
+// Whether a successful login also mounts the containers that already exist.
+// The product default is `manual`: login establishes authentication only, and
+// every mount is a separate, explicitly requested action. `mount_on_login` is
+// opt-in and reinstates the P2.14 behaviour of mounting during login.
+enum class LoginMountPolicy {
+  manual,
+  mount_on_login,
+};
+
 struct ContainerAStatus final {
   bool exists{};
   bool mounted{};
@@ -74,7 +83,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   CardLoginMountSession(CardAuthenticationSession& authentication,
                         const volume::VolumeProvider& provider,
                         ContainerLayout layout,
-                        std::filesystem::path volume_creator_helper_path);
+                        std::filesystem::path volume_creator_helper_path,
+                        LoginMountPolicy login_mount_policy);
   ~CardLoginMountSession() noexcept override;
 
   CardLoginMountSession(const CardLoginMountSession&) = delete;

@@ -19,6 +19,7 @@ namespace {
 using usb_vault::application::CardAuthenticationSession;
 using usb_vault::application::CardLoginMountSession;
 using usb_vault::application::ContainerLayout;
+using usb_vault::application::LoginMountPolicy;
 using usb_vault::application::ContainerCreationCleanupError;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::MountSessionResult;
@@ -272,7 +273,8 @@ void test_all_container_shapes_establish_authentication() {
     FakeRuntime runtime;
     runtime.mount_a = mount_a;
     runtime.mount_b = mount_b;
-    CardLoginMountSessionCore session(authentication, runtime, layout());
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
     SecureBuffer root = root_secret();
     SecureBuffer password = bytes("login-password");
 
@@ -293,7 +295,8 @@ void test_mount_failures_do_not_revoke_card_authentication() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
   runtime.fail_mount = true;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
 
   require_throws<std::runtime_error>(
       [&] {
@@ -311,7 +314,8 @@ void test_failed_rollback_retains_only_residual_mount() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
   runtime.leave_b_after_failure = true;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
 
   require_throws<MountRollbackError>(
       [&] {
@@ -331,7 +335,8 @@ void test_failed_rollback_retains_only_residual_mount() {
 void test_invalid_or_duplicate_handoff_fails_before_mount() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
 
   require_throws<std::invalid_argument>(
       [&] {
@@ -359,7 +364,8 @@ void test_unmount_state_is_precise_and_forced_order_is_b_then_a() {
   FakeRuntime runtime;
   runtime.mount_a = true;
   runtime.mount_b = true;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
   session.consume_authenticated_login(root_secret(),
                                       bytes("login-password"));
   runtime.events.clear();
@@ -393,7 +399,8 @@ void establish_empty_authenticated_session(
 void test_container_a_creation_requires_authentication_and_valid_size() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
 
   require_throws<std::logic_error>(
       [&] { session.create_container_a(64ULL * 1024ULL * 1024ULL); },
@@ -411,7 +418,8 @@ void test_container_a_creation_requires_authentication_and_valid_size() {
 void test_container_a_creation_publishes_then_mounts() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
   establish_empty_authenticated_session(authentication, runtime, session);
 
   session.create_container_a(64ULL * 1024ULL * 1024ULL);
@@ -433,7 +441,8 @@ void test_container_a_creation_rejects_existing_targets() {
   for (const bool final_exists : {true, false}) {
     CardAuthenticationSession authentication;
     FakeRuntime runtime;
-    CardLoginMountSessionCore session(authentication, runtime, layout());
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
     establish_empty_authenticated_session(authentication, runtime, session);
     runtime.container_a_exists = final_exists;
     runtime.staging_exists = !final_exists;
@@ -455,7 +464,8 @@ void test_container_a_creation_cleans_prepublication_failures() {
   for (const bool publish_failure : {false, true}) {
     CardAuthenticationSession authentication;
     FakeRuntime runtime;
-    CardLoginMountSessionCore session(authentication, runtime, layout());
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
     establish_empty_authenticated_session(authentication, runtime, session);
     runtime.fail_create = !publish_failure;
     runtime.fail_publish = publish_failure;
@@ -480,7 +490,8 @@ void test_container_a_creation_cleans_prepublication_failures() {
 void test_container_a_creation_reports_cleanup_failure() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
   establish_empty_authenticated_session(authentication, runtime, session);
   runtime.fail_publish = true;
   runtime.fail_remove = true;
@@ -500,7 +511,8 @@ void test_container_a_creation_reports_cleanup_failure() {
 void test_container_a_mount_failure_keeps_published_container() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
   establish_empty_authenticated_session(authentication, runtime, session);
   runtime.fail_created_mount = true;
 
@@ -518,7 +530,8 @@ void test_container_a_mount_failure_keeps_published_container() {
 void test_container_a_notify_failure_retains_mount_state() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
   establish_empty_authenticated_session(authentication, runtime, session);
   runtime.fail_notify = true;
 
@@ -536,7 +549,8 @@ void test_container_a_notify_failure_retains_mount_state() {
 void test_container_a_status_projects_live_file_and_mount_facts() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
-  CardLoginMountSessionCore session(authentication, runtime, layout());
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
   establish_empty_authenticated_session(authentication, runtime, session);
 
   const auto absent = session.container_a_status();
@@ -560,7 +574,8 @@ void test_container_a_status_projects_live_file_and_mount_facts() {
   mounted_runtime.mount_a = true;
   mounted_runtime.container_a_exists = true;
   CardLoginMountSessionCore mounted_session(
-      mounted_authentication, mounted_runtime, layout());
+      mounted_authentication, mounted_runtime, layout(),
+      LoginMountPolicy::mount_on_login);
   mounted_session.consume_authenticated_login(root_secret(),
                                                bytes("login-password"));
   mounted_runtime.events.clear();
@@ -574,6 +589,51 @@ void test_container_a_status_projects_live_file_and_mount_facts() {
   require_throws<std::runtime_error>(
       [&] { static_cast<void>(mounted_session.container_a_status()); },
       "missing backing file was hidden for a recorded A mount");
+}
+
+void test_manual_policy_authenticates_without_mounting() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.mount_a = true;
+  runtime.mount_b = true;
+  runtime.container_a_exists = true;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  require(authentication.authenticated(),
+          "the manual policy did not establish card authentication");
+  require(runtime.events.empty(),
+          "the manual policy reached the mount runtime during login");
+  require(!session.mounted(),
+          "the manual policy reported an active volume after login");
+
+  const auto status = session.container_a_status();
+  require(status.exists && !status.mounted && status.drive_letter == wchar_t{},
+          "an existing container was projected as mounted after manual login");
+}
+
+void test_manual_policy_still_serializes_and_allows_creation() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  require_throws<std::logic_error>(
+      [&] {
+        session.consume_authenticated_login(root_secret(),
+                                            bytes("login-password"));
+      },
+      "a second handoff was accepted after a manual login");
+
+  session.create_container_a(64ULL * 1024ULL * 1024ULL);
+  require(session.mounted(),
+          "creation after a manual login did not mount the new container");
+  const auto status = session.container_a_status();
+  require(status.exists && status.mounted && status.drive_letter == L'X',
+          "creation after a manual login did not project the mounted volume");
 }
 
 }  // namespace
@@ -593,6 +653,8 @@ int main() {
     test_container_a_mount_failure_keeps_published_container();
     test_container_a_notify_failure_retains_mount_state();
     test_container_a_status_projects_live_file_and_mount_facts();
+    test_manual_policy_authenticates_without_mounting();
+    test_manual_policy_still_serializes_and_allows_creation();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

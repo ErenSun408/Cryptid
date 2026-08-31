@@ -10,6 +10,7 @@
 
 namespace usb_vault::application {
 struct ContainerAStatus;
+enum class LoginMountPolicy;
 }
 
 namespace usb_vault::application::detail {
@@ -62,7 +63,8 @@ class CardLoginMountSessionCore final {
   CardLoginMountSessionCore(
       CardAuthenticationSession& authentication,
       CardLoginMountSessionRuntime& runtime,
-      ContainerLayout layout);
+      ContainerLayout layout,
+      ::usb_vault::application::LoginMountPolicy login_mount_policy);
 
   void consume_authenticated_login(
       security::SecureBuffer root_secret,
@@ -78,6 +80,7 @@ class CardLoginMountSessionCore final {
   CardAuthenticationSession& authentication_;
   CardLoginMountSessionRuntime& runtime_;
   ContainerLayout layout_;
+  ::usb_vault::application::LoginMountPolicy login_mount_policy_;
   CardLoginMountSessionState state_;
 };
 

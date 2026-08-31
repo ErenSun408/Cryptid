@@ -4358,7 +4358,7 @@
   的 `vikey_helper_process_tests` 是既有网络隔离限制（`network isolation: ViKey helper exited without a
   complete response`），与本次改动无关。P2 开发应用窗口仍打开导致 EXE 无法重链接，但本次只改
   HTML／JavaScript，两个资源已直接复制到 `out/build/dev`。
-- 提交：待定（`[P2.15]refine initialization password feedback`）。
+- 提交：`896e3f0 [P2.15]refine initialization password feedback`。
 
 ### 小切片 16a：认证后仪表盘外壳
 
@@ -4527,6 +4527,8 @@
 - 实体 ViKey 联调随后确认修复后的 P2 应用已成功创建并挂载 A；用户由成功界面继续提出容量与盘符
   展示需求。提交：`792bc06 [P2.16]connect container A creation UI`。
 
+- 提交：`792bc06 [P2.16]connect container A creation UI`。
+
 ### 小切片 16d：加密盘 A 实时信息投影
 
 #### 需求、计划与既有实现审计
@@ -4571,4 +4573,44 @@
   状态／容量／盘符组合并转入既有失败关闭路径，外部变化仍由合并刷新恢复，不会显示拼接出的错误
   盘符。剩余功能限制是安全卸载后的当前会话没有“重新挂载”动作，界面会明确要求重新插卡登录；
   本切片也尚未在实体应用中目测新版信息区，自动 WebView2 只使用假后端的固定 `X:`。
-- 提交：已获用户批准（题目：`[P2.16]show live container A status`）。
+- 提交：`12c6b82 [P2.16]show live container A status`。
+
+### 小切片 16e：登录挂载策略化与手动挂载默认
+
+#### 需求、计划与既有实现审计
+
+- 本切片起于 2026-09-01 关于多容器形态的讨论，结论已写入《需求梳理清单 v2》**8.7**。
+  8.7.5 定：**默认不自动挂载**，"登录后自动挂载"是用户可开的单一布尔设置；该布尔对模式与档位
+  完全不敏感（同 N-07 挂载计数器的论证），不构成 8.4 意义上的档位痕迹。
+- 审计 `CardLoginMountSessionCore::consume_authenticated_login` 后确认：挂载此前写死在登录成功
+  路径里，`mount_authenticated` 与 `MountRollbackError` 残留记账都只服务于该路径。多容器下
+  "登录挂载全部容器"本就不成立，且 Spike 6 的五秒预算在三个以上卷时必然超线，而并行挂载已于
+  2026-08-17 四增补实测作废。故先把登录与挂载解耦，不在本切片引入容器集合。
+- 本切片只改策略，不删除既有 B 挂载、回滚与残留处理，也不新增按容器挂载动作。
+
+#### 实现
+
+- 新增 `LoginMountPolicy { manual, mount_on_login }`，由 `CardLoginMountSession` 构造参数显式传入，
+  无默认值，调用点必须表态。`manual` 为产品默认，P2 ViKey 开发应用已改为传 `manual`。
+- `consume_authenticated_login` 在 `manual` 下只建立易失认证即返回，完全不进入挂载运行时。
+  登录输入本就只为那一次同步挂载而存在，因此该路径在认证建立后立即 `clear()`，明文存活时间
+  较此前缩短，R-03 的可擦除副本面收窄。
+- `mount_on_login` 完整保留 P2.14 行为：挂载结果记账、`MountRollbackError` 残留盘符记录与
+  失败关闭路径均未改动，B 容器链路原样保留待后续切片使用。
+
+#### 测试、安全复核与提交状态
+
+- 会话测试原有 28 处构造全部改为显式 `mount_on_login`，既有断言无一放宽；新增两个 `manual`
+  用例：一个断言登录后运行时事件为空、`mounted()` 为假且已存在的容器投影为"存在未挂载"，
+  一个断言 `manual` 登录后仍拒绝二次交接、且建卷路径照常发布并挂载。
+- Debug **49/50**、MSVC `/analyze` **50/50**（无项目诊断）、ASan **48/50**。三处失败均为
+  `vikey_helper_process_tests` 与 `vikey_helper_hid_compatibility_tests` 的既有环境限制
+  （网络隔离；ASan 下为 `0xC0000135` DLL not found），位于 ViKey helper 进程链，与本切片
+  改动的 `card_login_mount_session` 与 `tools/app/main.cpp` 无关。`git diff --check` 通过。
+  未访问实体卡或真实凭据。
+- 安全复核确认策略是纯进程内构造参数，不写配置、注册表或日志，不新增任何可推出档位的产物；
+  默认值方向是收紧（少挂载、密码更早清除），不放宽任何既有校验。
+- 🔴 **已知功能缺口（本切片刻意留下）**：登录不再挂载，而"按容器挂载"动作尚不存在，故安全卸载
+  后的容器在本切片状态下无法重新挂载。该缺口由下一切片（容器集合与分别挂载）关闭；本切片
+  单独不构成可用形态。
+- 提交：待定（`[P2.16]make login mounting opt-in`）。
