@@ -1,8 +1,10 @@
 #include "usb_vault/ui/ui_close_guard.h"
 
 namespace usb_vault::ui {
+namespace {
 
-bool prepare_ui_session_for_close(UiSessionController& controller) noexcept {
+template <typename Controller>
+[[nodiscard]] bool prepare_for_close(Controller& controller) noexcept {
   if (!controller.mounted()) {
     return true;
   }
@@ -12,6 +14,17 @@ bool prepare_ui_session_for_close(UiSessionController& controller) noexcept {
   } catch (...) {
     return false;
   }
+}
+
+}  // namespace
+
+bool prepare_ui_session_for_close(UiSessionController& controller) noexcept {
+  return prepare_for_close(controller);
+}
+
+bool prepare_ui_session_for_close(
+    CardProductUiSessionController& controller) noexcept {
+  return prepare_for_close(controller);
 }
 
 }  // namespace usb_vault::ui

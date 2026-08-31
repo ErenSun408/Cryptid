@@ -359,7 +359,7 @@ target_include_directories(usb_vault_vikey_development_credentials
 
 target_link_libraries(usb_vault_vikey_development_credentials
   PUBLIC
-    usb_vault_vikey_helper_blob_backend
+    usb_vault_core
   PRIVATE
     Advapi32
 )
@@ -611,6 +611,52 @@ if(USB_VAULT_BUILD_UI)
     LINK_DEPENDS
     "${CMAKE_SOURCE_DIR}/ui/index.html"
     "${CMAKE_SOURCE_DIR}/ui/session.js"
+  )
+
+  # Separate opt-in P2 application. It reuses the development credential and
+  # network-enabled helper deployment boundary, but composes only the formal
+  # 216-byte Card Record entry/login chain and the five-state product page.
+  add_executable(usb_vault_vikey_p2_development_app WIN32 EXCLUDE_FROM_ALL
+    tools/app/main.cpp
+  )
+  target_include_directories(usb_vault_vikey_p2_development_app PRIVATE
+    "${webview2_sdk_SOURCE_DIR}/build/native/include"
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(usb_vault_vikey_p2_development_app PRIVATE
+    usb_vault_core
+    usb_vault_vikey_development_credentials
+    usb_vault_vikey_helper_card_record_backend
+    usb_vault_windows_hid_notifications
+    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+    Ole32
+    Shell32
+    Shlwapi
+  )
+  target_compile_definitions(usb_vault_vikey_p2_development_app PRIVATE
+    UNICODE
+    _UNICODE
+    USB_VAULT_VIKEY_P2_DEVELOPMENT_APP
+  )
+  add_dependencies(usb_vault_vikey_p2_development_app
+    usb_vault_vikey_helper
+    usb_vault_volume_creator
+  )
+  usb_vault_configure_target(usb_vault_vikey_p2_development_app)
+
+  add_custom_command(TARGET usb_vault_vikey_p2_development_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/ui/card_session.html"
+            "$<TARGET_FILE_DIR:usb_vault_vikey_p2_development_app>/card_session.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/ui/card_session.js"
+            "$<TARGET_FILE_DIR:usb_vault_vikey_p2_development_app>/card_session.js"
+    VERBATIM
+  )
+  set_property(TARGET usb_vault_vikey_p2_development_app APPEND PROPERTY
+    LINK_DEPENDS
+    "${CMAKE_SOURCE_DIR}/ui/card_session.html"
+    "${CMAKE_SOURCE_DIR}/ui/card_session.js"
   )
 endif()
 

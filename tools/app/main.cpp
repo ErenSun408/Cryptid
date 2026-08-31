@@ -2,11 +2,26 @@
 #include <Shlwapi.h>
 #include <WebView2.h>
 #include <wrl.h>
-#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP) || \
+    defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
 #include <shellapi.h>
 #endif
 
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+#include "card/vikey/vikey_development_app_config.h"
+#include "card/vikey/vikey_development_credentials.h"
+#include "card/vikey/vikey_helper_card_enrollment.h"
+#include "platform/windows/hid_card_device_notifications.h"
+#include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/application/card_device_lifecycle_controller.h"
+#include "usb_vault/application/card_entry_context_controller.h"
+#include "usb_vault/application/card_login_mount_session.h"
+#include "usb_vault/security/offline_card_password_policy.h"
+#include "usb_vault/ui/card_product_ui_session_controller.h"
+#include "usb_vault/ui/card_product_webview_host_object.h"
+#else
 #include "usb_vault/application/application_session.h"
+#endif
 #include "usb_vault/application/container_layout_v1.h"
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
 #include "card/vikey/vikey_card_store.h"
@@ -15,7 +30,9 @@
 #include "card/vikey/vikey_helper_blob_backend.h"
 #include "platform/windows/hid_card_device_notifications.h"
 #else
+#if !defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
 #include "usb_vault/card/fixed_blob_card_store.h"
+#endif
 #endif
 #include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/webview_host_object.h"
@@ -37,9 +54,14 @@ using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
-#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP) || \
+    defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
 constexpr wchar_t kWindowTitle[] =
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+    L"USB Vault - P2 ViKey 联网开发模式";
+#else
     L"USB Vault - ViKey 联网开发模式";
+#endif
 constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 #else
@@ -51,10 +73,24 @@ ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
 std::wstring g_page_uri;
 std::unique_ptr<usb_vault::volume::VolumeProvider> g_volume_provider;
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+std::unique_ptr<usb_vault::card::vikey::VikeyHelperCardEnrollment>
+    g_card_enrollment;
+std::unique_ptr<usb_vault::application::CardEntryContextController>
+    g_card_entry;
+std::unique_ptr<usb_vault::application::CardAuthenticationSession>
+    g_authentication;
+std::unique_ptr<usb_vault::application::CardLoginMountSession>
+    g_card_volume_session;
+std::unique_ptr<usb_vault::security::OfflineCardPasswordPolicy>
+    g_password_policy;
+std::unique_ptr<usb_vault::ui::CardProductUiSessionController> g_ui_session;
+#else
 std::unique_ptr<usb_vault::application::IApplicationSessionActions>
     g_application_session;
 std::unique_ptr<usb_vault::ui::UiSessionController> g_ui_session;
 std::unique_ptr<usb_vault::card::ICardStore> g_card_store;
+#endif
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
 std::unique_ptr<
     usb_vault::card::vikey::development::WindowsCredentialProvider>
@@ -63,6 +99,17 @@ std::unique_ptr<usb_vault::card::vikey::VikeyHelperBlobBackend>
     g_vikey_backend;
 std::unique_ptr<usb_vault::application::CardPresenceController>
     g_card_presence_controller;
+std::unique_ptr<
+    usb_vault::platform::windows::HidCardDeviceNotificationRegistration>
+    g_card_device_notifications;
+#elif defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+std::unique_ptr<
+    usb_vault::card::vikey::development::WindowsCredentialProvider>
+    g_vikey_credential_provider;
+std::unique_ptr<usb_vault::application::CardPresenceController>
+    g_card_presence_controller;
+std::unique_ptr<usb_vault::application::CardDeviceLifecycleController>
+    g_card_lifecycle_controller;
 std::unique_ptr<
     usb_vault::platform::windows::HidCardDeviceNotificationRegistration>
     g_card_device_notifications;
@@ -103,7 +150,11 @@ void show_warning(const wchar_t* const message) noexcept {
 
 [[nodiscard]] std::wstring local_page_uri() {
   const std::wstring page_path =
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+      child_path(executable_directory(), L"card_session.html");
+#else
       child_path(executable_directory(), L"index.html");
+#endif
 
   std::vector<wchar_t> uri(32768);
   DWORD uri_size = static_cast<DWORD>(uri.size());
@@ -135,7 +186,8 @@ void show_warning(const wchar_t* const message) noexcept {
   return result;
 }
 
-#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP) || \
+    defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
 class LocalArguments final {
  public:
   LocalArguments() {
@@ -167,6 +219,7 @@ class LocalArguments final {
 };
 #endif
 
+#if !defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
 void initialize_card_store() {
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
   const LocalArguments arguments;
@@ -187,9 +240,12 @@ void initialize_card_store() {
       std::make_unique<usb_vault::card::FixedBlobCardStore>();
 #endif
 }
+#endif
 
 void initialize_application_session([[maybe_unused]] const HWND window) {
+#if !defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
   initialize_card_store();
+#endif
   const std::wstring directory = executable_directory();
   const auto drives = unused_drive_letters();
   namespace layout_v1 = usb_vault::application;
@@ -205,6 +261,50 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   };
   g_volume_provider =
       std::make_unique<usb_vault::volume::VolumeProvider>();
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+  const LocalArguments arguments;
+  const std::vector<std::wstring_view> views = arguments.views();
+  auto credential_provider = std::make_unique<
+      usb_vault::card::vikey::development::WindowsCredentialProvider>();
+  auto enrollment = std::make_unique<
+      usb_vault::card::vikey::VikeyHelperCardEnrollment>(
+          usb_vault::card::vikey::development::parse_app_config(views),
+          *credential_provider);
+  auto entry = std::make_unique<
+      usb_vault::application::CardEntryContextController>(*enrollment);
+  auto authentication = std::make_unique<
+      usb_vault::application::CardAuthenticationSession>();
+  auto volume_session = std::make_unique<
+      usb_vault::application::CardLoginMountSession>(
+          *authentication, *g_volume_provider, std::move(layout));
+  auto password_policy = std::make_unique<
+      usb_vault::security::OfflineCardPasswordPolicy>();
+  auto ui_session = std::make_unique<
+      usb_vault::ui::CardProductUiSessionController>(
+          *entry, *authentication, *volume_session, *password_policy);
+  auto presence =
+      std::make_unique<usb_vault::application::CardPresenceController>(
+          *volume_session);
+  auto lifecycle = std::make_unique<
+      usb_vault::application::CardDeviceLifecycleController>(
+          *presence, *entry, *authentication);
+  auto notifications = std::make_unique<
+      usb_vault::platform::windows::HidCardDeviceNotificationRegistration>(
+      window, kDevelopmentCardIdentity);
+  if (notifications->target_present()) {
+    static_cast<void>(lifecycle->handle_arrival());
+  }
+  g_vikey_credential_provider = std::move(credential_provider);
+  g_card_enrollment = std::move(enrollment);
+  g_card_entry = std::move(entry);
+  g_authentication = std::move(authentication);
+  g_card_volume_session = std::move(volume_session);
+  g_password_policy = std::move(password_policy);
+  g_ui_session = std::move(ui_session);
+  g_card_presence_controller = std::move(presence);
+  g_card_lifecycle_controller = std::move(lifecycle);
+  g_card_device_notifications = std::move(notifications);
+#else
   g_application_session =
       std::make_unique<usb_vault::application::ApplicationSession>(
           *g_card_store, *g_volume_provider, std::move(layout));
@@ -223,9 +323,23 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   g_card_presence_controller = std::move(presence);
   g_card_device_notifications = std::move(notifications);
 #endif
+#endif
 }
 
 void clear_application_session() noexcept {
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+  g_card_device_notifications.reset();
+  g_card_lifecycle_controller.reset();
+  g_card_presence_controller.reset();
+  g_ui_session.reset();
+  g_password_policy.reset();
+  g_card_volume_session.reset();
+  g_authentication.reset();
+  g_card_entry.reset();
+  g_card_enrollment.reset();
+  g_volume_provider.reset();
+  g_vikey_credential_provider.reset();
+#else
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
   g_card_device_notifications.reset();
   g_card_presence_controller.reset();
@@ -237,6 +351,7 @@ void clear_application_session() noexcept {
 #if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
   g_vikey_backend.reset();
   g_vikey_credential_provider.reset();
+#endif
 #endif
 }
 
@@ -347,8 +462,14 @@ void initialize_webview(const HWND window) {
                       }
 
                       ComPtr<IDispatch> host_object;
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+                      current = usb_vault::ui::
+                          create_card_product_webview_host_object(
+                              *g_ui_session, &host_object);
+#else
                       current = usb_vault::ui::create_webview_host_object(
                           *g_ui_session, &host_object);
+#endif
                       if (FAILED(current)) {
                         return current;
                       }
@@ -402,9 +523,33 @@ void initialize_webview(const HWND window) {
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
-#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP) || \
+    defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
     case WM_DEVICECHANGE:
       if (g_card_device_notifications != nullptr &&
+#if defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
+          g_card_lifecycle_controller != nullptr) {
+        const auto transition =
+            usb_vault::platform::windows::handle_hid_device_change(
+                *g_card_lifecycle_controller, wparam, lparam,
+                kDevelopmentCardIdentity);
+        using Transition = usb_vault::application::CardPresenceTransition;
+        if (transition.entry_changed ||
+            transition.presence != Transition::no_change) {
+          notify_webview_session_changed();
+        }
+        if (transition.presence ==
+            Transition::active_session_force_unmounted) {
+          show_warning(
+              L"安全卡已拔出，磁盘正在被占用，已强制卸载。"
+              L"未写入磁盘的数据可能已丢失。");
+        }
+        if (transition.presence == Transition::active_session_remains) {
+          show_failure(
+              L"安全卡已拔出，强制卸载当前磁盘仍然失败。"
+              L"请立即关闭占用该磁盘的程序并重试安全卸载。");
+        }
+#else
           g_card_presence_controller != nullptr) {
         const auto transition =
             usb_vault::platform::windows::handle_hid_device_change(
@@ -426,6 +571,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
               L"安全卡已拔出，强制卸载当前磁盘仍然失败。"
               L"请立即关闭占用该磁盘的程序并重试安全卸载。");
         }
+#endif
       }
       return 0;
 #endif
@@ -441,7 +587,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
-#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP)
+#if defined(USB_VAULT_VIKEY_DEVELOPMENT_APP) || \
+    defined(USB_VAULT_VIKEY_P2_DEVELOPMENT_APP)
       g_card_device_notifications.reset();
 #endif
       g_webview.Reset();

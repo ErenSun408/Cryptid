@@ -1,6 +1,6 @@
 #pragma once
 
-#include "card/vikey/vikey_helper_blob_backend.h"
+#include "card/vikey/vikey_helper_backend.h"
 
 #include <cstddef>
 #include <span>

@@ -4211,3 +4211,43 @@
   DOM/WebView2/COM 内部副本的既有 R-03 剩余风险仍在；可控字节数组均已清零，插拔也会立即删除
   可见 DOM 值。正式 App 尚未组合本页面，因此当前“带 UI 全流程”只完成假后端验收，不代表实体卡
   或真实容器已通过。本切片已完成实现、测试和安全复核，用户已批准提交；本地提交随本记录创建。
+
+### 小切片 15d：P2 ViKey 开发主程序组合
+
+#### 需求审计与实现
+
+- P2.15c 已提交为 `c281211 [P2.15]add five-state product UI`，未推送。审计 Q-07、8.6、R-03、
+  P2.11～P2.15 全链、现有 P1／ViKey 开发应用 composition root、HID 回调、窗口关闭守卫和 CMake
+  依赖后确认：正式组合必须另建默认排除的 P2 开发目标，不能把尚需保留的 P1 开发入口原地替换，
+  也不能从旧 `ApplicationSession` 或 32 字节 blob store 借用登录能力。
+- 新增 `usb_vault_vikey_p2_development_app`，标题明确标记“P2 ViKey 联网开发模式”，继续要求既有
+  网络开发确认开关、helper／供应商目录绝对路径及两个 SHA-256。它只组合
+  `VikeyHelperCardEnrollment -> CardEntryContextController -> CardAuthenticationSession ->
+  CardLoginMountSession`，再接入 `CardProductUiSessionController`、P2 host object、五态页面、
+  `CardDeviceLifecycleController` 和严格 VID/PID HID 通知。
+- 启动枚举发现卡时只执行一次原子只读探测；页面提交初始化后才可能进入 marker／Card Record 写
+  事务。HID 到达、移除、认证撤销和活动卷变化均刷新页面；拔卡沿既有控制器固定先销毁入口上下文、
+  清根秘密，再普通／强制卸载。窗口关闭守卫新增 P2 重载：无卷认证可直接退出，活动或遗留卷只有
+  成功清理后才允许关闭，失败保留状态供重试。
+- 开发凭据和配置头文件从 P1 `vikey_helper_blob_backend` 改为只依赖通用 `vikey_helper_backend`；
+  CMake PUBLIC 依赖相应降为 `usb_vault_core`。P1 开发应用仍显式链接自己的 blob backend，P2 目标
+  的 Ninja 链接查询已不含它。默认应用、P1 ViKey 开发应用和 P2 ViKey 开发应用三者保持独立。
+- P2 应用打包 `card_session.html`／`card_session.js`，注册 P2 `IDispatch`；默认和 P1 开发应用仍
+  打包原 `index.html`／`session.js` 并注册 P1 host object。本切片没有启动任何开发 GUI，没有读取
+  Windows 凭据、启动 helper、访问实体卡或容器，也没有写卡授权扩张。
+
+#### 测试、安全复核与提交状态
+
+- 扩展 `ui_close_guard_tests` 覆盖 P2 无卷直接关闭、卸载失败阻止关闭并保留状态、重试成功后允许
+  关闭。开发配置／凭据聚焦测试、默认应用、P1 开发应用和 P2 开发应用的定向构建均通过。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **50/50**：48 项实际通过、2 项因 Codex
+  父令牌受限按既有规则跳过；三个应用目标在三套配置均构建成功，`/analyze` 无项目诊断，ASan 未
+  报告内存错误。P2 链接图只含 Card Record backend、helper client／protocol、正式 card store、
+  HID 和 WebView2 等预期依赖；导入表含开发凭据所需 `CredReadW` 及 HID／SetupAPI，不含
+  `ViKey.dll`。不涉及伪 DLL 进程变更，无需用户手动补跑 PowerShell。
+- 安全复核确认 P2 composition root 不构造 P1 裸卡读取链；凭据仍由每次 helper 操作新鲜加载到锁页
+  所有者，命令行只承载非秘密路径、摘要和显式开发确认。联网 helper、Windows Credential Manager
+  开发部署和仓库外未签名厂商 DLL 仍不满足生产隔离要求。实体卡 UI 全流程、当前容器状态及新卡
+  出厂全零口径尚未验证；下一切片应先用现有非空白开发卡做只读入口／不可用页冒烟，再由用户选择
+  是否准备专用空白卡进行有写入的初始化验收。本切片已完成实现、测试和安全复核，尚待用户决定
+  是否提交。
