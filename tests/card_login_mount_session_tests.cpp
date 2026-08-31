@@ -84,6 +84,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool fail_remove{};
   bool fail_created_mount{};
   bool fail_notify{};
+  std::uint64_t container_a_size_bytes{64ULL * 1024ULL * 1024ULL};
   std::vector<std::string> events;
 
   [[nodiscard]] MountSessionResult mount_authenticated(
@@ -153,6 +154,16 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     throw std::runtime_error("unexpected creation path");
   }
 
+  [[nodiscard]] std::optional<std::uint64_t> container_size_if_present(
+      const std::wstring_view path) override {
+    events.emplace_back("size:A");
+    require(path == L"C:\\vault\\a.hc",
+            "status inspected the wrong container path");
+    return container_a_exists
+               ? std::optional<std::uint64_t>{container_a_size_bytes}
+               : std::nullopt;
+  }
+
   [[nodiscard]] SecureBuffer derive_container_password(
       const SecureBuffer& password_input,
       const SecureBuffer& root,
@@ -184,6 +195,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     require(volume_password.size() == 28,
             "creation received the wrong derived password");
     if (fail_create) throw std::runtime_error("create failed");
+    container_a_size_bytes = size_bytes;
     staging_exists = true;
   }
 
@@ -521,6 +533,49 @@ void test_container_a_notify_failure_retains_mount_state() {
   require_events(runtime, {"unmount:A"});
 }
 
+void test_container_a_status_projects_live_file_and_mount_facts() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  establish_empty_authenticated_session(authentication, runtime, session);
+
+  const auto absent = session.container_a_status();
+  require(!absent.exists && !absent.mounted && absent.size_bytes == 0 &&
+              absent.drive_letter == wchar_t{},
+          "absent A status exposed invented metadata");
+  require_events(runtime, {"size:A"});
+
+  runtime.events.clear();
+  runtime.container_a_exists = true;
+  runtime.container_a_size_bytes = 96ULL * 1024ULL * 1024ULL;
+  const auto present = session.container_a_status();
+  require(present.exists && !present.mounted &&
+              present.size_bytes == 96ULL * 1024ULL * 1024ULL &&
+              present.drive_letter == wchar_t{},
+          "unmounted A status lost live capacity or invented a drive");
+  require_events(runtime, {"size:A"});
+
+  CardAuthenticationSession mounted_authentication;
+  FakeRuntime mounted_runtime;
+  mounted_runtime.mount_a = true;
+  mounted_runtime.container_a_exists = true;
+  CardLoginMountSessionCore mounted_session(
+      mounted_authentication, mounted_runtime, layout());
+  mounted_session.consume_authenticated_login(root_secret(),
+                                               bytes("login-password"));
+  mounted_runtime.events.clear();
+  const auto mounted = mounted_session.container_a_status();
+  require(mounted.exists && mounted.mounted &&
+              mounted.size_bytes == 64ULL * 1024ULL * 1024ULL &&
+              mounted.drive_letter == L'X',
+          "mounted A status did not project its fixed drive and capacity");
+
+  mounted_runtime.container_a_exists = false;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(mounted_session.container_a_status()); },
+      "missing backing file was hidden for a recorded A mount");
+}
+
 }  // namespace
 
 int main() {
@@ -537,6 +592,7 @@ int main() {
     test_container_a_creation_reports_cleanup_failure();
     test_container_a_mount_failure_keeps_published_container();
     test_container_a_notify_failure_retains_mount_state();
+    test_container_a_status_projects_live_file_and_mount_facts();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

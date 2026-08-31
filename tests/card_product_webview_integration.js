@@ -19,12 +19,22 @@ chrome.webview.postMessage("driver-loaded");
   const dashboardUnmount = document.getElementById("dashboard-unmount");
   const dashboardVolumeState =
     document.getElementById("dashboard-volume-state");
+  const dashboardContainerAState =
+    document.getElementById("dashboard-container-a-state");
   const encryptedNavigation =
     document.querySelector('[data-section="encrypted"]');
   const encryptedSection =
     document.getElementById("dashboard-section-encrypted");
   const encryptedCreate = encryptedSection.querySelector(
     '[data-create-kind="encrypted"]');
+  const encryptedContainerATitle = encryptedSection.querySelector(
+    "[data-container-a-title]");
+  const encryptedContainerAFacts = encryptedSection.querySelector(
+    "[data-container-a-facts]");
+  const encryptedContainerASize = encryptedSection.querySelector(
+    "[data-container-a-size]");
+  const encryptedContainerADrive = encryptedSection.querySelector(
+    "[data-container-a-drive]");
   const creationDialog = document.getElementById("create-volume-dialog");
   const creationTitle = document.getElementById("create-volume-title");
   const creationCancel = document.getElementById("create-volume-cancel");
@@ -146,7 +156,9 @@ chrome.webview.postMessage("driver-loaded");
       passwordVisibility.getAttribute("aria-pressed") !== "false" ||
       confirmationVisibility.getAttribute("aria-pressed") !== "false" ||
       !action.hidden || !surface.hidden || dashboard.hidden ||
-      !dashboardUnmount.hidden || dashboardVolumeState.textContent !== "未挂载") {
+      !dashboardUnmount.hidden || dashboardVolumeState.textContent !== "未挂载" ||
+      dashboardContainerAState.textContent !== "未创建" ||
+      encryptedCreate.hidden || !encryptedContainerAFacts.hidden) {
     request("fail-initialization-submit");
     return;
   }
@@ -184,7 +196,13 @@ chrome.webview.postMessage("driver-loaded");
       dashboardVolumeState.textContent === "已挂载" &&
       !dashboardUnmount.hidden && creationCapacity.disabled &&
       creationContinue.disabled && creationCancel.textContent === "完成" &&
-      creationStatus.dataset.tone === "success")) {
+      creationStatus.dataset.tone === "success" &&
+      dashboardContainerAState.textContent === "已挂载" &&
+      encryptedContainerATitle.textContent === "加密盘已挂载" &&
+      !encryptedContainerAFacts.hidden &&
+      encryptedContainerASize.textContent === "64 MiB" &&
+      encryptedContainerADrive.textContent === "X:" &&
+      encryptedCreate.hidden)) {
     request("fail-creation-submit");
     return;
   }
@@ -221,7 +239,10 @@ chrome.webview.postMessage("driver-loaded");
   if (!await waitForState("authenticated") || password.value !== "" ||
       !action.hidden || !surface.hidden || dashboard.hidden ||
       dashboardUnmount.hidden ||
-      dashboardVolumeState.textContent !== "已挂载") {
+      dashboardVolumeState.textContent !== "已挂载" ||
+      dashboardContainerAState.textContent !== "已挂载" ||
+      encryptedContainerASize.textContent !== "64 MiB" ||
+      encryptedContainerADrive.textContent !== "X:") {
     request("fail-login-success");
     return;
   }

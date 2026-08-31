@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -23,6 +24,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 using usb_vault::application::CardAuthenticationSession;
 using usb_vault::application::CardEntryRoute;
+using usb_vault::application::ContainerAStatus;
 using usb_vault::application::IAuthenticatedCardVolumeSession;
 using usb_vault::application::ICardEntryActions;
 using usb_vault::security::ConfirmedPassword;
@@ -71,7 +73,17 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++create_a_calls;
     created_a_size_bytes = size_bytes;
     if (reject_create_a) throw std::runtime_error("creation failed");
+    container_a_exists = true;
+    container_a_size_bytes = size_bytes;
+    container_a_mounted = true;
     mounted_state = true;
+  }
+
+  [[nodiscard]] ContainerAStatus container_a_status() override {
+    return {.exists = container_a_exists,
+            .mounted = container_a_mounted,
+            .size_bytes = container_a_size_bytes,
+            .drive_letter = container_a_mounted ? L'X' : wchar_t{}};
   }
 
   void consume_authenticated_login(
@@ -87,6 +99,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   void unmount_active() override {
     ++unmount_calls;
     if (reject_unmount) throw std::runtime_error("unmount failed");
+    container_a_mounted = false;
     mounted_state = false;
   }
 
@@ -104,6 +117,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool mounted_state{};
   bool reject_unmount{};
   bool reject_create_a{};
+  bool container_a_exists{};
+  bool container_a_mounted{};
+  std::uint64_t container_a_size_bytes{};
   std::uint64_t created_a_size_bytes{};
   int consume_calls{};
   int create_a_calls{};
@@ -350,6 +366,51 @@ class InitializationArguments final {
   return host.Invoke(member_id(host, L"createContainerAMib"), IID_NULL,
                      LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
                      nullptr, argument_error);
+}
+
+[[nodiscard]] LONG invoke_container_a_state(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerAState"),
+                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                                &parameters, &result, nullptr, nullptr)),
+          "container A state query failed");
+  require(result.vt == VT_I4,
+          "container A state query returned the wrong type");
+  const LONG state = result.lVal;
+  static_cast<void>(::VariantClear(&result));
+  return state;
+}
+
+[[nodiscard]] ULONG invoke_container_a_size(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerASizeMib"),
+                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                                &parameters, &result, nullptr, nullptr)),
+          "container A capacity query failed");
+  require(result.vt == VT_UI4,
+          "container A capacity query returned the wrong type");
+  const ULONG size = result.ulVal;
+  static_cast<void>(::VariantClear(&result));
+  return size;
+}
+
+[[nodiscard]] std::wstring invoke_container_a_drive(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerADriveLetter"),
+                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                                &parameters, &result, nullptr, nullptr)),
+          "container A drive query failed");
+  require(result.vt == VT_BSTR && result.bstrVal != nullptr,
+          "container A drive query returned the wrong type");
+  const std::wstring drive(result.bstrVal, ::SysStringLen(result.bstrVal));
+  static_cast<void>(::VariantClear(&result));
+  return drive;
 }
 
 void test_surface_and_state_projection_are_fixed() {
@@ -599,6 +660,30 @@ void test_container_a_creation_preserves_route_and_failure_semantics() {
           "host accepted missing creation capacity");
 }
 
+void test_container_a_display_facts_are_narrow_and_route_gated() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  require(invoke_container_a_state(*host.Get()) == 0L &&
+              invoke_container_a_size(*host.Get()) == 0UL &&
+              invoke_container_a_drive(*host.Get()).empty(),
+          "unauthenticated host exposed container A facts");
+
+  fixture.authentication.establish(root_secret());
+  fixture.volume.container_a_exists = true;
+  fixture.volume.container_a_size_bytes = 96ULL * 1024ULL * 1024ULL;
+  require(invoke_container_a_state(*host.Get()) == 1L &&
+              invoke_container_a_size(*host.Get()) == 96UL &&
+              invoke_container_a_drive(*host.Get()).empty(),
+          "host lost present, unmounted container A facts");
+
+  fixture.volume.container_a_mounted = true;
+  require(invoke_container_a_state(*host.Get()) == 2L &&
+              invoke_container_a_size(*host.Get()) == 96UL &&
+              invoke_container_a_drive(*host.Get()) == L"X:",
+          "host did not expose mounted A capacity and fixed drive");
+}
+
 }  // namespace
 
 int main() {
@@ -611,6 +696,7 @@ int main() {
     test_unmount_and_property_rejection();
     test_container_a_creation_accepts_only_exact_bounded_numbers();
     test_container_a_creation_preserves_route_and_failure_semantics();
+    test_container_a_display_facts_are_narrow_and_route_gated();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

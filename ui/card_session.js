@@ -15,6 +15,11 @@
     "authenticated",
     "unavailable",
   ]);
+  const containerAState = Object.freeze({
+    absent: 0,
+    present: 1,
+    mounted: 2,
+  });
 
   const surface = document.getElementById("card-session-surface");
   const stateTitle = document.getElementById("card-state-title");
@@ -38,6 +43,18 @@
   const dashboardUnmountButton = document.getElementById("dashboard-unmount");
   const dashboardVolumeState =
     document.getElementById("dashboard-volume-state");
+  const dashboardContainerAState =
+    document.getElementById("dashboard-container-a-state");
+  const containerATitles =
+    Array.from(document.querySelectorAll("[data-container-a-title]"));
+  const containerASummaries =
+    Array.from(document.querySelectorAll("[data-container-a-summary]"));
+  const containerAFacts =
+    Array.from(document.querySelectorAll("[data-container-a-facts]"));
+  const containerASizes =
+    Array.from(document.querySelectorAll("[data-container-a-size]"));
+  const containerADrives =
+    Array.from(document.querySelectorAll("[data-container-a-drive]"));
   const dashboardNavigation =
     Array.from(document.querySelectorAll(".dashboard-nav"));
   const dashboardSections =
@@ -60,6 +77,9 @@
   let bridge = null;
   let currentState = null;
   let activeVolumes = false;
+  let currentContainerAState = containerAState.absent;
+  let currentContainerASizeMib = 0;
+  let currentContainerADrive = "";
   let busy = true;
   let externalRefreshPending = false;
   let creationKind = null;
@@ -178,6 +198,9 @@
       return;
     }
     const hiddenVolume = kind === "hidden";
+    if (!hiddenVolume && currentContainerAState !== containerAState.absent) {
+      return;
+    }
     creationKind = hiddenVolume ? "hidden" : "encrypted";
     creationCompleted = false;
     creationStatus.textContent = "";
@@ -203,10 +226,40 @@
     dashboard.hidden = !showDashboard;
     document.body.dataset.view = showDashboard ? "dashboard" : "session";
     dashboardVolumeState.textContent = activeVolumes ? "已挂载" : "未挂载";
+    const containerAExists =
+      currentContainerAState !== containerAState.absent;
+    const containerAMounted =
+      currentContainerAState === containerAState.mounted;
+    dashboardContainerAState.textContent = containerAMounted
+      ? "已挂载"
+      : containerAExists ? "未挂载" : "未创建";
+    for (const title of containerATitles) {
+      title.textContent = containerAMounted
+        ? "加密盘已挂载"
+        : containerAExists ? "加密盘已创建" : "尚未创建加密盘";
+    }
+    for (const summary of containerASummaries) {
+      summary.textContent = containerAMounted
+        ? "加密盘已安全挂载，可以从对应盘符访问。"
+        : containerAExists
+          ? "加密盘当前未挂载，请重新插卡并登录后打开。"
+          : "点击“新建”创建并挂载加密盘。";
+    }
+    for (const facts of containerAFacts) facts.hidden = !containerAExists;
+    const capacity = currentContainerASizeMib > 0
+      ? `${currentContainerASizeMib.toLocaleString("zh-CN")} MiB`
+      : "不可用";
+    for (const size of containerASizes) size.textContent = capacity;
+    for (const drive of containerADrives) {
+      drive.textContent = containerAMounted ? currentContainerADrive : "未挂载";
+    }
     dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
     dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
     for (const button of creationButtons) {
-      button.disabled = busy || !showDashboard;
+      const existingContainerA = button.dataset.createKind === "encrypted" &&
+        containerAExists;
+      button.hidden = existingContainerA;
+      button.disabled = busy || !showDashboard || existingContainerA;
     }
     if (!showDashboard) {
       closeCreationFlow(true);
@@ -332,12 +385,40 @@
         (nextActiveVolumes !== true && nextActiveVolumes !== false)) {
       throw new Error("invalid native session state");
     }
+    let nextContainerAState = containerAState.absent;
+    let nextContainerASizeMib = 0;
+    let nextContainerADrive = "";
+    if (nextState === nativeState.authenticated) {
+      nextContainerAState = await bridge.getContainerAState();
+      nextContainerASizeMib = await bridge.getContainerASizeMib();
+      nextContainerADrive = await bridge.getContainerADriveLetter();
+      const validState = Number.isInteger(nextContainerAState) &&
+        nextContainerAState >= containerAState.absent &&
+        nextContainerAState <= containerAState.mounted;
+      const validSize = Number.isInteger(nextContainerASizeMib) &&
+        ((nextContainerAState === containerAState.absent &&
+          nextContainerASizeMib === 0) ||
+         (nextContainerAState !== containerAState.absent &&
+          nextContainerASizeMib >= 20 &&
+          nextContainerASizeMib <= 1048576));
+      const validDrive = typeof nextContainerADrive === "string" &&
+        ((nextContainerAState === containerAState.mounted &&
+          /^[A-Z]:$/.test(nextContainerADrive) && nextActiveVolumes) ||
+         (nextContainerAState !== containerAState.mounted &&
+          nextContainerADrive === ""));
+      if (!validState || !validSize || !validDrive) {
+        throw new Error("invalid container A status");
+      }
+    }
     currentState = nextActiveVolumes &&
         nextState !== nativeState.authenticated &&
         nextState !== nativeState.unavailable
       ? nativeState.unavailable
       : nextState;
     activeVolumes = nextActiveVolumes;
+    currentContainerAState = nextContainerAState;
+    currentContainerASizeMib = nextContainerASizeMib;
+    currentContainerADrive = nextContainerADrive;
   };
 
   const messageForCurrentState = () => {

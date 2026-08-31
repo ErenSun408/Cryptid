@@ -20,6 +20,7 @@ namespace {
 using usb_vault::application::CardAuthenticationSession;
 using usb_vault::application::CardEntryContextController;
 using usb_vault::application::CardEntryRoute;
+using usb_vault::application::ContainerAStatus;
 using usb_vault::application::IAuthenticatedCardVolumeSession;
 using usb_vault::application::ICardEntryActions;
 using usb_vault::security::ConfirmedPassword;
@@ -27,6 +28,7 @@ using usb_vault::security::OfflineCardPasswordPolicy;
 using usb_vault::security::SecureBuffer;
 using usb_vault::ui::CardProductUiSessionController;
 using usb_vault::ui::CardProductUiState;
+using usb_vault::ui::ContainerAUiState;
 using usb_vault::ui::kContainerACreationMaximumMib;
 using usb_vault::ui::kContainerACreationMinimumMib;
 
@@ -80,7 +82,18 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++create_a_calls;
     created_a_size_bytes = size_bytes;
     if (reject_create_a) throw std::runtime_error("creation failed");
+    container_a_exists = true;
+    container_a_size_bytes = size_bytes;
+    container_a_mounted = true;
     mounted_state = true;
+  }
+
+  [[nodiscard]] ContainerAStatus container_a_status() override {
+    ++container_a_status_calls;
+    return {.exists = container_a_exists,
+            .mounted = container_a_mounted,
+            .size_bytes = container_a_size_bytes,
+            .drive_letter = container_a_mounted ? L'X' : wchar_t{}};
   }
 
   void consume_authenticated_login(
@@ -100,6 +113,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   void unmount_active() override {
     ++unmount_calls;
     if (reject_unmount) throw std::runtime_error("unmount failed");
+    container_a_mounted = false;
     mounted_state = false;
   }
 
@@ -118,9 +132,13 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool mounted_state{};
   bool reject_unmount{};
   bool reject_create_a{};
+  bool container_a_exists{};
+  bool container_a_mounted{};
+  std::uint64_t container_a_size_bytes{};
   std::uint64_t created_a_size_bytes{};
   int consume_calls{};
   int create_a_calls{};
+  int container_a_status_calls{};
   int unmount_calls{};
 };
 
@@ -433,6 +451,39 @@ void test_container_a_creation_failure_preserves_authentication() {
           "container A creation failure changed UI authentication or mount");
 }
 
+void test_container_a_status_is_authenticated_and_normalized_for_ui() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  require(fixture.controller.container_a_status().state ==
+                  ContainerAUiState::absent &&
+              fixture.volume.container_a_status_calls == 0,
+          "unauthenticated UI queried or exposed container A");
+
+  fixture.authentication.establish(root_secret());
+  fixture.volume.container_a_exists = true;
+  fixture.volume.container_a_size_bytes = 96ULL * 1024ULL * 1024ULL;
+  auto status = fixture.controller.container_a_status();
+  require(status.state == ContainerAUiState::present &&
+              status.size_mib == 96 && status.drive_letter == wchar_t{},
+          "UI lost unmounted A capacity or invented a drive");
+
+  fixture.volume.container_a_mounted = true;
+  status = fixture.controller.container_a_status();
+  require(status.state == ContainerAUiState::mounted &&
+              status.size_mib == 96 && status.drive_letter == L'X',
+          "UI did not project mounted A metadata");
+
+  fixture.volume.container_a_size_bytes += 1;
+  status = fixture.controller.container_a_status();
+  require(status.size_mib == 0,
+          "UI rounded a non-MiB container size into misleading capacity");
+
+  fixture.volume.container_a_exists = false;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.container_a_status()); },
+      "UI accepted a mounted A that did not exist");
+}
+
 }  // namespace
 
 int main() {
@@ -448,6 +499,7 @@ int main() {
     test_unmount_forwards_only_unified_active_state();
     test_container_a_creation_requires_authenticated_bounded_capacity();
     test_container_a_creation_failure_preserves_authentication();
+    test_container_a_status_is_authenticated_and_normalized_for_ui();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

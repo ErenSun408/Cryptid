@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -50,26 +51,35 @@ class ProductionCardLoginMountSessionRuntime final
 
   [[nodiscard]] bool container_exists(
       const std::wstring_view path) override {
+    return container_size_if_present(path).has_value();
+  }
+
+  [[nodiscard]] std::optional<std::uint64_t> container_size_if_present(
+      const std::wstring_view path) override {
     volume::detail::validate_volume_path(path);
     const std::wstring owned_path(path);
-    const DWORD attributes = ::GetFileAttributesW(owned_path.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES) {
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (::GetFileAttributesExW(owned_path.c_str(), GetFileExInfoStandard,
+                               &attributes) == FALSE) {
       const DWORD error = ::GetLastError();
       if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-        return false;
+        return std::nullopt;
       }
       throw std::system_error(static_cast<int>(error), std::system_category(),
-                              "inspect container creation path");
+                              "inspect container status path");
     }
-    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    if ((attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
       throw std::invalid_argument(
-          "container creation path refers to a directory");
+          "container status path refers to a directory");
     }
-    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    if ((attributes.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
       throw std::invalid_argument(
-          "container creation path must not be a reparse point");
+          "container status path must not be a reparse point");
     }
-    return true;
+    ULARGE_INTEGER size{};
+    size.HighPart = attributes.nFileSizeHigh;
+    size.LowPart = attributes.nFileSizeLow;
+    return size.QuadPart;
   }
 
   [[nodiscard]] security::SecureBuffer derive_container_password(
@@ -177,6 +187,10 @@ void CardLoginMountSession::consume_authenticated_login(
 void CardLoginMountSession::create_container_a(
     const std::uint64_t size_bytes) {
   impl_->core.create_container_a(size_bytes);
+}
+
+ContainerAStatus CardLoginMountSession::container_a_status() {
+  return impl_->core.container_a_status();
 }
 
 void CardLoginMountSession::unmount_active() {
@@ -326,6 +340,24 @@ void CardLoginMountSessionCore::create_container_a(
     }
     throw;
   }
+}
+
+ContainerAStatus CardLoginMountSessionCore::container_a_status() {
+  const std::optional<std::uint64_t> size =
+      runtime_.container_size_if_present(layout_.container_a.path);
+  if (!size.has_value()) {
+    if (state_.container_a_mounted) {
+      throw std::runtime_error(
+          "mounted container A backing file is unavailable");
+    }
+    return {};
+  }
+  return {.exists = true,
+          .mounted = state_.container_a_mounted,
+          .size_bytes = *size,
+          .drive_letter = state_.container_a_mounted
+                              ? layout_.container_a.drive_letter
+                              : wchar_t{}};
 }
 
 void CardLoginMountSessionCore::unmount_active() {

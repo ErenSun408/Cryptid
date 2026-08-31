@@ -72,6 +72,10 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   void consume_authenticated_login(SecureBuffer, SecureBuffer) override {
     throw std::logic_error("not used by close guard");
   }
+  [[nodiscard]] usb_vault::application::ContainerAStatus
+  container_a_status() override {
+    throw std::logic_error("not used by close guard");
+  }
   void unmount_active() override {
     ++unmount_calls;
     if (reject_unmount) throw std::runtime_error("busy");

@@ -5,7 +5,12 @@
 #include "usb_vault/volume/unmount_retry.h"
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
+
+namespace usb_vault::application {
+struct ContainerAStatus;
+}
 
 namespace usb_vault::application::detail {
 
@@ -22,6 +27,8 @@ class CardLoginMountSessionRuntime {
   [[nodiscard]] virtual volume::UnmountEscalationResult unmount_forced(
       wchar_t drive_letter) = 0;
   [[nodiscard]] virtual bool container_exists(std::wstring_view path) = 0;
+  [[nodiscard]] virtual std::optional<std::uint64_t>
+  container_size_if_present(std::wstring_view path) = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -61,6 +68,8 @@ class CardLoginMountSessionCore final {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8);
   void create_container_a(std::uint64_t size_bytes);
+  [[nodiscard]] ::usb_vault::application::ContainerAStatus
+  container_a_status();
   void unmount_active();
   [[nodiscard]] bool force_unmount_active();
   [[nodiscard]] bool mounted() const noexcept;

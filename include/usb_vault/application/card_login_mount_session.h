@@ -14,6 +14,13 @@ namespace usb_vault::application {
 
 class CardAuthenticationSession;
 
+struct ContainerAStatus final {
+  bool exists{};
+  bool mounted{};
+  std::uint64_t size_bytes{};
+  wchar_t drive_letter{};
+};
+
 class ContainerCreationCleanupError final : public std::runtime_error {
  public:
   ContainerCreationCleanupError(std::exception_ptr operation_failure,
@@ -49,6 +56,11 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // bytes and derived passwords never cross this boundary.
   virtual void create_container_a(std::uint64_t size_bytes) = 0;
 
+  // Returns only the live, non-secret A-container facts required by the
+  // authenticated product UI. No path, password, root, tier, B-container
+  // shape, or historical state crosses this boundary.
+  [[nodiscard]] virtual ContainerAStatus container_a_status() = 0;
+
  protected:
   IAuthenticatedCardVolumeSession() noexcept = default;
 };
@@ -74,6 +86,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8) override;
   void create_container_a(std::uint64_t size_bytes) override;
+  [[nodiscard]] ContainerAStatus container_a_status() override;
 
   void unmount_active() override;
   [[nodiscard]] bool force_unmount_active() override;

@@ -184,6 +184,9 @@
     .overview-icon.hidden-volume { color: #fbbf24; background: rgba(245, 158, 11, .12); }
     .overview-copy h4 { margin: 0 0 .35rem; font-size: .95rem; }
     .overview-copy p { margin: 0; color: var(--text-secondary); font-size: .82rem; line-height: 1.55; }
+    .volume-facts { display: flex; flex-wrap: wrap; gap: .55rem 1.25rem; margin-top: .75rem; }
+    .volume-fact { color: var(--text-secondary); font-size: .78rem; }
+    .volume-fact strong { margin-left: .35rem; color: var(--text); font-weight: 600; }
 
     .modal-overlay {
       position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
@@ -380,14 +383,21 @@
             </article>
             <article class="stat-card">
               <div class="stat-icon neutral"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M12 4v16"></path></svg></div>
-              <div class="stat-value">可创建</div><div class="stat-label">建卷入口</div>
+              <div id="dashboard-container-a-state" class="stat-value">未创建</div><div class="stat-label">加密盘状态</div>
             </article>
           </div>
           <div class="overview-group">
             <div class="overview-heading"><h3>加密盘概览</h3><button class="create-button" type="button" data-create-kind="encrypted">新建</button></div>
             <article class="overview-card">
               <div class="overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 018 0v3"></path></svg></div>
-              <div class="overview-copy"><h4>加密盘信息</h4><p>建卷能力接入后，这里会显示加密盘的挂载与容量信息。</p></div>
+              <div class="overview-copy">
+                <h4 data-container-a-title>尚未创建加密盘</h4>
+                <p data-container-a-summary>点击“新建”创建并挂载加密盘。</p>
+                <div class="volume-facts" data-container-a-facts hidden>
+                  <span class="volume-fact">容量<strong data-container-a-size>—</strong></span>
+                  <span class="volume-fact">盘符<strong data-container-a-drive>—</strong></span>
+                </div>
+              </div>
             </article>
           </div>
           <div class="overview-group">
@@ -401,7 +411,7 @@
 
         <section id="dashboard-section-encrypted" class="dashboard-section" aria-labelledby="encrypted-title">
           <div class="section-header"><div><h2 id="encrypted-title">加密盘管理</h2><p>创建、挂载和管理加密盘</p></div><button class="create-button" type="button" data-create-kind="encrypted">新建加密盘</button></div>
-          <article class="overview-card"><div class="overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 018 0v3"></path></svg></div><div class="overview-copy"><h4>等待建卷功能接入</h4><p>本页已经接入认证会话；下一切片将连接真实建卷、挂载和失败清理链路。</p></div></article>
+          <article class="overview-card"><div class="overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 018 0v3"></path></svg></div><div class="overview-copy"><h4 data-container-a-title>尚未创建加密盘</h4><p data-container-a-summary>创建后将在这里显示实时挂载信息。</p><div class="volume-facts" data-container-a-facts hidden><span class="volume-fact">容量<strong data-container-a-size>—</strong></span><span class="volume-fact">盘符<strong data-container-a-drive>—</strong></span></div></div></article>
         </section>
 
         <section id="dashboard-section-hidden" class="dashboard-section" aria-labelledby="hidden-title">
@@ -444,6 +454,6 @@
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-16c-container-a-ui"></script>
+  <script src="card_session.js?v=p2-16d-container-a-status"></script>
 </body>
 </html>

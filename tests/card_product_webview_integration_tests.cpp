@@ -25,6 +25,7 @@ using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 using usb_vault::application::CardAuthenticationSession;
 using usb_vault::application::CardEntryRoute;
+using usb_vault::application::ContainerAStatus;
 using usb_vault::application::IAuthenticatedCardVolumeSession;
 using usb_vault::application::ICardEntryActions;
 using usb_vault::security::ConfirmedPassword;
@@ -67,7 +68,16 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
       fail_next_create_a = false;
       throw std::runtime_error("injected container A creation failure");
     }
+    container_a_exists = true;
+    container_a_mounted = true;
     mounted_state = true;
+  }
+
+  [[nodiscard]] ContainerAStatus container_a_status() override {
+    return {.exists = container_a_exists,
+            .mounted = container_a_mounted,
+            .size_bytes = container_a_exists ? created_a_size_bytes : 0,
+            .drive_letter = container_a_mounted ? L'X' : wchar_t{}};
   }
 
   void consume_authenticated_login(
@@ -77,6 +87,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     login_payload_matched = equals(login_password_utf8.bytes(), kExpected);
     authentication_.establish(std::move(root));
     login_password_utf8.clear();
+    container_a_mounted = container_a_exists;
     mounted_state = true;
     ++consume_calls;
   }
@@ -85,6 +96,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     if (!mounted_state) {
       throw std::runtime_error("unmount called without a fake volume");
     }
+    container_a_mounted = false;
     mounted_state = false;
     ++unmount_calls;
   }
@@ -101,6 +113,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool mounted_state{};
   bool login_payload_matched{};
   bool fail_next_create_a{true};
+  bool container_a_exists{};
+  bool container_a_mounted{};
   std::uint64_t created_a_size_bytes{};
   int create_a_calls{};
   int consume_calls{};
@@ -265,12 +279,14 @@ HRESULT handle_message(const HWND window,
   }
   if (std::wcscmp(raw_message, L"request-initialization") == 0) {
     g_authentication.clear_authentication();
+    g_volume.container_a_mounted = false;
     g_volume.mounted_state = false;
     g_entry.route = CardEntryRoute::initialization_required;
     return finish(dispatch_session_change(window));
   }
   if (std::wcscmp(raw_message, L"request-login") == 0) {
     g_authentication.clear_authentication();
+    g_volume.container_a_mounted = false;
     g_volume.mounted_state = false;
     g_entry.route = CardEntryRoute::login_required;
     return finish(dispatch_session_change(window));
@@ -282,6 +298,7 @@ HRESULT handle_message(const HWND window,
   }
   if (std::wcscmp(raw_message, L"request-no-card") == 0) {
     g_authentication.clear_authentication();
+    g_volume.container_a_mounted = false;
     g_volume.mounted_state = false;
     g_entry.route.reset();
     return finish(dispatch_session_change(window));

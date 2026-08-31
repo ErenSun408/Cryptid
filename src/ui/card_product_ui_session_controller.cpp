@@ -148,4 +148,34 @@ bool CardProductUiSessionController::mounted() const noexcept {
   return volume_session_.mounted();
 }
 
+ContainerAUiStatus CardProductUiSessionController::container_a_status() {
+  if (state() != CardProductUiState::authenticated) return {};
+
+  const application::ContainerAStatus status =
+      volume_session_.container_a_status();
+  if ((!status.exists &&
+       (status.mounted || status.size_bytes != 0 ||
+        status.drive_letter != wchar_t{})) ||
+      (status.exists && status.mounted &&
+       (status.drive_letter < L'A' || status.drive_letter > L'Z')) ||
+      (status.exists && !status.mounted &&
+       status.drive_letter != wchar_t{})) {
+    throw std::runtime_error("container A status is inconsistent");
+  }
+  constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
+  std::uint32_t size_mib = 0;
+  if (status.exists && status.size_bytes % kBytesPerMib == 0) {
+    const std::uint64_t quotient = status.size_bytes / kBytesPerMib;
+    if (quotient <= kContainerACreationMaximumMib) {
+      size_mib = static_cast<std::uint32_t>(quotient);
+    }
+  }
+  return {.state = status.mounted
+                       ? ContainerAUiState::mounted
+                       : status.exists ? ContainerAUiState::present
+                                       : ContainerAUiState::absent,
+          .size_mib = size_mib,
+          .drive_letter = status.mounted ? status.drive_letter : wchar_t{}};
+}
+
 }  // namespace usb_vault::ui

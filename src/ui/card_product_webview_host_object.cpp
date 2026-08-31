@@ -21,6 +21,9 @@ constexpr DISPID kUnmountId = 3;
 constexpr DISPID kHasActiveSessionId = 4;
 constexpr DISPID kGetSessionStateId = 5;
 constexpr DISPID kCreateContainerAMibId = 6;
+constexpr DISPID kGetContainerAStateId = 7;
+constexpr DISPID kGetContainerASizeMibId = 8;
+constexpr DISPID kGetContainerADriveLetterId = 9;
 constexpr wchar_t kSubmitLoginPasswordBytesName[] =
     L"submitLoginPasswordBytes";
 constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
@@ -29,6 +32,10 @@ constexpr wchar_t kUnmountName[] = L"unmount";
 constexpr wchar_t kHasActiveSessionName[] = L"hasActiveSession";
 constexpr wchar_t kGetSessionStateName[] = L"getSessionState";
 constexpr wchar_t kCreateContainerAMibName[] = L"createContainerAMib";
+constexpr wchar_t kGetContainerAStateName[] = L"getContainerAState";
+constexpr wchar_t kGetContainerASizeMibName[] = L"getContainerASizeMib";
+constexpr wchar_t kGetContainerADriveLetterName[] =
+    L"getContainerADriveLetter";
 
 class PasswordArgumentsWiper final {
  public:
@@ -134,6 +141,18 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kCreateContainerAMibId;
       return S_OK;
     }
+    if (matches(names[0], kGetContainerAStateName)) {
+      ids[0] = kGetContainerAStateId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerASizeMibName)) {
+      ids[0] = kGetContainerASizeMibId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerADriveLetterName)) {
+      ids[0] = kGetContainerADriveLetterId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -158,6 +177,12 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_initialization(parameters, argument_error);
       case kCreateContainerAMibId:
         return invoke_create_container_a(parameters, argument_error);
+      case kGetContainerAStateId:
+        return invoke_container_a_state(parameters, result);
+      case kGetContainerASizeMibId:
+        return invoke_container_a_size(parameters, result);
+      case kGetContainerADriveLetterId:
+        return invoke_container_a_drive(parameters, result);
       default:
         return DISP_E_MEMBERNOTFOUND;
     }
@@ -206,6 +231,55 @@ class CardProductWebViewHostObject final : public IDispatch {
           controller_.mounted() ? VARIANT_TRUE : VARIANT_FALSE;
     }
     return S_OK;
+  }
+
+  HRESULT invoke_container_a_state(DISPPARAMS* const parameters,
+                                   VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (result == nullptr) return S_OK;
+    try {
+      const ContainerAUiStatus status = controller_.container_a_status();
+      ::VariantInit(result);
+      result->vt = VT_I4;
+      result->lVal = static_cast<LONG>(status.state);
+      return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_container_a_size(DISPPARAMS* const parameters,
+                                  VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (result == nullptr) return S_OK;
+    try {
+      const ContainerAUiStatus status = controller_.container_a_status();
+      ::VariantInit(result);
+      result->vt = VT_UI4;
+      result->ulVal = status.size_mib;
+      return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_container_a_drive(DISPPARAMS* const parameters,
+                                   VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (result == nullptr) return S_OK;
+    try {
+      const ContainerAUiStatus status = controller_.container_a_status();
+      wchar_t drive[] = {status.drive_letter, L':'};
+      const UINT length = status.drive_letter == wchar_t{} ? 0U : 2U;
+      BSTR value = ::SysAllocStringLen(drive, length);
+      if (value == nullptr) return E_OUTOFMEMORY;
+      ::VariantInit(result);
+      result->vt = VT_BSTR;
+      result->bstrVal = value;
+      return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
   }
 
   HRESULT invoke_unmount(DISPPARAMS* const parameters) noexcept {
