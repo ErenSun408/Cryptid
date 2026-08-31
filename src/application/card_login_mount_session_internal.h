@@ -6,10 +6,13 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace usb_vault::application {
 struct ContainerAStatus;
+struct ContainerStatus;
 enum class LoginMountPolicy;
 }
 
@@ -45,14 +48,33 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& volume_password,
       const volume::MountOptions& options) = 0;
   virtual void notify_mounted(wchar_t drive_letter) = 0;
+  // Returns a drive letter that the operating system currently reports as
+  // free. Letters already recorded by this session are rejected by the caller.
+  [[nodiscard]] virtual wchar_t allocate_drive_letter() = 0;
+};
+
+// One container adopted by the session. Nothing here is persisted: a restart
+// leaves the user reselecting the container files, which is what keeps the
+// 8.4 local-state layer free of a container inventory.
+struct SessionContainer final {
+  std::uint32_t id{};
+  std::wstring path;
+  std::wstring name;
+  wchar_t drive_letter{};
+  bool mounted{};
 };
 
 struct CardLoginMountSessionState final {
-  bool container_a_mounted{};
+  std::vector<SessionContainer> containers;
+  std::uint32_t next_container_id{1};
   bool container_b_mounted{};
 
   [[nodiscard]] bool mounted() const noexcept {
-    return container_a_mounted || container_b_mounted;
+    if (container_b_mounted) return true;
+    for (const SessionContainer& container : containers) {
+      if (container.mounted) return true;
+    }
+    return false;
   }
 };
 
@@ -70,6 +92,12 @@ class CardLoginMountSessionCore final {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8);
   void create_container_a(std::uint64_t size_bytes);
+  std::uint32_t create_container(std::wstring_view path,
+                                 std::uint64_t size_bytes);
+  std::uint32_t mount_container(std::wstring_view path);
+  void unmount_container(std::uint32_t id);
+  [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
+  container_statuses();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus
   container_a_status();
   void unmount_active();
@@ -77,6 +105,9 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] bool mounted() const noexcept;
 
  private:
+  [[nodiscard]] security::SecureBuffer derive_standard_password();
+  [[nodiscard]] wchar_t reserve_drive_letter();
+
   CardAuthenticationSession& authentication_;
   CardLoginMountSessionRuntime& runtime_;
   ContainerLayout layout_;

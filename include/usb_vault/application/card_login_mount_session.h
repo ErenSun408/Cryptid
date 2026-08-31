@@ -9,6 +9,9 @@
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace usb_vault::application {
 
@@ -25,6 +28,19 @@ enum class LoginMountPolicy {
 
 struct ContainerAStatus final {
   bool exists{};
+  bool mounted{};
+  std::uint64_t size_bytes{};
+  wchar_t drive_letter{};
+};
+
+// One standard container adopted by the current authenticated session. The
+// identifier is session scoped and never persisted, and only the file name
+// crosses this boundary so the UI can tell two containers apart without the
+// full path, the salt, the password, or any tier or volume-type fact leaving
+// the session.
+struct ContainerStatus final {
+  std::uint32_t id{};
+  std::wstring name;
   bool mounted{};
   std::uint64_t size_bytes{};
   wchar_t drive_letter{};
@@ -65,6 +81,26 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // bytes and derived passwords never cross this boundary.
   virtual void create_container_a(std::uint64_t size_bytes) = 0;
 
+  // Creates an independent standard container at the caller-selected path,
+  // publishes it without replacement, mounts it on a freshly allocated drive
+  // letter, and adopts it into the session. Every standard container derives
+  // its volume password from the card root alone, so the returned identifier
+  // is the only handle the caller needs afterwards.
+  virtual std::uint32_t create_container(std::wstring_view path,
+                                         std::uint64_t size_bytes) = 0;
+
+  // Adopts and mounts an existing standard container at the caller-selected
+  // path. The session refuses a path it has already adopted.
+  virtual std::uint32_t mount_container(std::wstring_view path) = 0;
+
+  // Unmounts one adopted container. The container stays adopted and unmounted
+  // so it can be mounted again without reselecting its file.
+  virtual void unmount_container(std::uint32_t id) = 0;
+
+  // Returns the live, non-secret facts for every container adopted by this
+  // session, in adoption order. Nothing is persisted between sessions.
+  [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
+
   // Returns only the live, non-secret A-container facts required by the
   // authenticated product UI. No path, password, root, tier, B-container
   // shape, or historical state crosses this boundary.
@@ -96,6 +132,11 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8) override;
   void create_container_a(std::uint64_t size_bytes) override;
+  std::uint32_t create_container(std::wstring_view path,
+                                 std::uint64_t size_bytes) override;
+  std::uint32_t mount_container(std::wstring_view path) override;
+  void unmount_container(std::uint32_t id) override;
+  [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
 
   void unmount_active() override;

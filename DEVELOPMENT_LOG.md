@@ -4613,4 +4613,54 @@
 - 🔴 **已知功能缺口（本切片刻意留下）**：登录不再挂载，而"按容器挂载"动作尚不存在，故安全卸载
   后的容器在本切片状态下无法重新挂载。该缺口由下一切片（容器集合与分别挂载）关闭；本切片
   单独不构成可用形态。
-- 提交：待定（`[P2.16]make login mounting opt-in`）。
+- 提交：`4547fd9 [P2.16]make login mounting opt-in`。
+
+### 小切片 16f：会话内容器集合与按容器挂载
+
+#### 需求、计划与既有实现审计
+
+- 承接 8.7.1。用户已在 2026-09-01 拍板：**多个 A 类容器全部共用固定 salt**，即继续使用
+  `kContainerASalt` 与固定 `"diskA"` 输入。该决定使卷密码派生不再需要任何 per-container 材料，
+  因此**容器清单不必持久化**，8.7.4 的分层列表在本切片可以完全绕开：会话内记住本次接管的容器，
+  重启后由用户重新选择文件。这同时让 8.4 本地状态层不出现任何容器清单。
+- 审计现有 `CardLoginMountSessionState` 后确认：`container_a_mounted` / `container_b_mounted`
+  两个布尔无法表达多容器，但 N-06 第 5 条「先 B 后 A」的卸载顺序必须保住。故 B 继续单独记账，
+  A 类改为集合。
+- 本切片只做 native 边界，不动 UI；`create_container_a` 与 `container_a_status` 保留为适配器，
+  16a～16d 的页面与桥接在本切片内保持编译与行为不变。
+
+#### 实现
+
+- `CardLoginMountSessionState` 由两个布尔改为 `std::vector<SessionContainer>` 加 B 的单独标志。
+  `SessionContainer` 只存在于进程内，含会话内自增 id、路径、文件名、盘符与挂载标志；接管是
+  幂等的，登录挂载、残留记录与显式挂载都收敛到同一条目。
+- `IAuthenticatedCardVolumeSession` 新增 `create_container(path, size)`、`mount_container(path)`、
+  `unmount_container(id)` 与 `container_statuses()`。新增 `ContainerStatus` 只投影
+  id、**文件名**、挂载标志、容量与盘符 —— 完整路径、salt、卷密码、S、档位与卷类型仍不跨边界；
+  入站路径由用户在文件对话框中选定，出站只给 id 与文件名。
+- 盘符改为挂载时分配：运行时新增 `allocate_drive_letter()`，生产实现用 `GetLogicalDrives()`
+  自 Z 向 D 取第一个空闲盘符；核心再排除本会话已记账的盘符，双重校验后才下发挂载。
+- `create_container` 复用原 A 事务：staging → publish → 分配盘符 → 挂载 → 接管，失败清理与
+  `ContainerCreationCleanupError` 原样保留。`unmount_container` 卸载后**保留条目为"已创建、
+  未挂载"**，可直接重新挂载而无需再次选择文件 —— 这关闭了 16e 刻意留下的功能缺口。
+- `unmount_active` / `force_unmount_active` 仍先释放容器 B，再遍历全部已接管容器，
+  N-06 第 5 条顺序未变。
+
+#### 测试、安全复核与提交状态
+
+- 会话测试的假运行时改为路径无关：存在性、容量、建卷、发布、清理、挂载与卸载都能应答任意路径，
+  同时保留全部既有 A 断言（事件序列仅按实现顺序插入 `allocate`）。新增五个用例覆盖：两个容器
+  取得不同盘符且按接管顺序投影文件名与容量、同一路径只接管一次且已挂载不可重复挂载、卸载后
+  条目保留并可重新挂载且分配新盘符、未认证与文件缺失时拒绝挂载且不接管、`unmount_active`
+  释放全部已接管容器但不丢弃条目。
+- 另有三个只用到 A 表面的假实现（关闭守卫、UI 控制器、COM 宿主）补齐四个新纯虚方法，
+  均以 `logic_error` 明示本切片不使用，避免沉默的默认实现。
+- Debug **49/50**、MSVC `/analyze` **50/50**（无项目诊断）、ASan **48/50**。三处失败仍是
+  `vikey_helper_process_tests` 与 `vikey_helper_hid_compatibility_tests` 的既有环境限制，
+  与本切片无关。`git diff --check` 通过。未访问实体卡或真实凭据。
+- 安全复核确认容器集合只存在于进程内，不写配置、注册表、日志或任何清单；跨边界字段不含完整
+  路径与任何可推出档位的信息。所有 A 类容器共用固定 salt 是用户明示决定，代价是同一密码下各
+  容器卷密码相同（8.7.1 已记录），本切片按该决定实现。
+- 🟡 遗留：UI 仍只显示固定容器 A（走适配器），多容器列表、按容器挂载入口与"登录后自动挂载"
+  设置开关由下一切片接线。
+- 提交：待定（`[P2.16]adopt containers per session`）。

@@ -13,6 +13,7 @@
 #include <iostream>
 #include <optional>
 #include <span>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -77,6 +78,20 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     container_a_size_bytes = size_bytes;
     container_a_mounted = true;
     mounted_state = true;
+  }
+
+  std::uint32_t create_container(std::wstring_view, std::uint64_t) override {
+    throw std::logic_error("the container collection is not part of this slice");
+  }
+  std::uint32_t mount_container(std::wstring_view) override {
+    throw std::logic_error("the container collection is not part of this slice");
+  }
+  void unmount_container(std::uint32_t) override {
+    throw std::logic_error("the container collection is not part of this slice");
+  }
+  [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
+  container_statuses() override {
+    throw std::logic_error("the container collection is not part of this slice");
   }
 
   [[nodiscard]] ContainerAStatus container_a_status() override {

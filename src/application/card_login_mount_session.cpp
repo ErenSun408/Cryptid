@@ -125,6 +125,22 @@ class ProductionCardLoginMountSessionRuntime final
     return provider_.mount_file(path, volume_password, options);
   }
 
+  [[nodiscard]] wchar_t allocate_drive_letter() override {
+    const DWORD drives = ::GetLogicalDrives();
+    if (drives == 0) {
+      throw std::system_error(static_cast<int>(::GetLastError()),
+                              std::system_category(),
+                              "inspect available drive letters");
+    }
+    for (wchar_t letter = L'Z'; letter >= L'D'; --letter) {
+      const DWORD mask = 1UL << static_cast<DWORD>(letter - L'A');
+      if ((drives & mask) == 0) return letter;
+    }
+    throw std::system_error(
+        std::make_error_code(std::errc::no_space_on_device),
+        "no free drive letter is available for a container mount");
+  }
+
   void notify_mounted(const wchar_t drive_letter) override {
     provider_.notify_mounted(drive_letter);
   }
@@ -193,6 +209,24 @@ void CardLoginMountSession::create_container_a(
   impl_->core.create_container_a(size_bytes);
 }
 
+std::uint32_t CardLoginMountSession::create_container(
+    const std::wstring_view path, const std::uint64_t size_bytes) {
+  return impl_->core.create_container(path, size_bytes);
+}
+
+std::uint32_t CardLoginMountSession::mount_container(
+    const std::wstring_view path) {
+  return impl_->core.mount_container(path);
+}
+
+void CardLoginMountSession::unmount_container(const std::uint32_t id) {
+  impl_->core.unmount_container(id);
+}
+
+std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
+  return impl_->core.container_statuses();
+}
+
 ContainerAStatus CardLoginMountSession::container_a_status() {
   return impl_->core.container_a_status();
 }
@@ -218,11 +252,21 @@ namespace {
   return input;
 }
 
-[[nodiscard]] std::wstring container_a_staging_path(
-    const ContainerLayout& layout) {
-  std::wstring path(layout.container_a.path);
+[[nodiscard]] std::wstring staging_path_for(
+    const std::wstring_view container_path) {
+  std::wstring path(container_path);
   path += L".preparing";
   return path;
+}
+
+[[nodiscard]] std::wstring file_name_of(
+    const std::wstring_view container_path) {
+  const std::size_t separator = container_path.find_last_of(L"\\/");
+  const std::wstring_view name =
+      separator == std::wstring_view::npos
+          ? container_path
+          : container_path.substr(separator + 1);
+  return std::wstring(name);
 }
 
 [[noreturn]] void cleanup_incomplete_container(
@@ -238,11 +282,45 @@ namespace {
   std::rethrow_exception(operation_failure);
 }
 
+[[nodiscard]] SessionContainer* find_by_path(
+    CardLoginMountSessionState& state,
+    const std::wstring_view path) noexcept {
+  for (SessionContainer& container : state.containers) {
+    if (container.path == path) return &container;
+  }
+  return nullptr;
+}
+
+// Adoption is idempotent so a login mount, a residual-mount record and an
+// explicit mount all converge on one entry per container path.
+SessionContainer& adopt(CardLoginMountSessionState& state,
+                        const std::wstring_view path,
+                        const wchar_t drive_letter, const bool mounted) {
+  if (SessionContainer* const existing = find_by_path(state, path)) {
+    existing->drive_letter = drive_letter;
+    existing->mounted = mounted;
+    return *existing;
+  }
+  state.containers.push_back({.id = state.next_container_id,
+                              .path = std::wstring(path),
+                              .name = file_name_of(path),
+                              .drive_letter = drive_letter,
+                              .mounted = mounted});
+  ++state.next_container_id;
+  return state.containers.back();
+}
+
 void record_residual_mount(const ContainerLayout& layout,
                            CardLoginMountSessionState& state,
                            const wchar_t drive_letter) noexcept {
-  if (drive_letter == layout.container_a.drive_letter) {
-    state.container_a_mounted = true;
+  try {
+    if (drive_letter == layout.container_a.drive_letter) {
+      static_cast<void>(adopt(state, layout.container_a.path, drive_letter,
+                              true));
+    }
+  } catch (...) {
+    // A residual mount must still be reported through container_b below even
+    // if the A entry cannot be recorded; the drive letter is never lost.
   }
   if (drive_letter == layout.container_b.drive_letter) {
     state.container_b_mounted = true;
@@ -281,7 +359,10 @@ void CardLoginMountSessionCore::consume_authenticated_login(
     }
     const MountSessionResult result = runtime_.mount_authenticated(
         layout_, login_password_utf8, authentication_.root_secret_);
-    state_.container_a_mounted = result.container_a.has_value();
+    if (result.container_a.has_value()) {
+      static_cast<void>(adopt(state_, layout_.container_a.path,
+                              layout_.container_a.drive_letter, true));
+    }
     state_.container_b_mounted = result.container_b.has_value();
     login_password_utf8.clear();
   } catch (const MountRollbackError& error) {
@@ -296,54 +377,85 @@ void CardLoginMountSessionCore::consume_authenticated_login(
 
 void CardLoginMountSessionCore::create_container_a(
     const std::uint64_t size_bytes) {
-  if (!authentication_.authenticated()) {
-    throw std::logic_error(
-        "container creation requires an authenticated card session");
-  }
-  if (state_.container_a_mounted) {
-    throw std::logic_error("container A is already mounted");
-  }
-  if (size_bytes == 0 || size_bytes % 512ULL != 0) {
-    throw std::invalid_argument(
-        "container A size must be a non-zero multiple of 512 bytes");
-  }
+  static_cast<void>(create_container(layout_.container_a.path, size_bytes));
+}
 
-  const std::wstring staging_path = container_a_staging_path(layout_);
-  if (runtime_.container_exists(layout_.container_a.path) ||
-      runtime_.container_exists(staging_path)) {
-    throw std::system_error(std::make_error_code(std::errc::file_exists),
-                            "container A creation target already exists");
-  }
-
+security::SecureBuffer CardLoginMountSessionCore::derive_standard_password() {
   security::SecureBuffer fixed_input = container_a_password_input();
-  security::SecureBuffer volume_password;
   try {
-    volume_password = runtime_.derive_container_password(
-        fixed_input, authentication_.root_secret_, layout_.container_a.salt);
+    security::SecureBuffer volume_password =
+        runtime_.derive_container_password(
+            fixed_input, authentication_.root_secret_,
+            layout_.container_a.salt);
     fixed_input.clear();
+    return volume_password;
   } catch (...) {
     fixed_input.clear();
     throw;
   }
+}
 
+wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
+  const wchar_t letter = runtime_.allocate_drive_letter();
+  if (letter < L'A' || letter > L'Z') {
+    throw std::runtime_error("allocated drive letter is out of range");
+  }
+  for (const SessionContainer& container : state_.containers) {
+    if (container.mounted && container.drive_letter == letter) {
+      throw std::runtime_error(
+          "allocated drive letter is already held by this session");
+    }
+  }
+  if (state_.container_b_mounted &&
+      layout_.container_b.drive_letter == letter) {
+    throw std::runtime_error(
+        "allocated drive letter is already held by this session");
+  }
+  return letter;
+}
+
+std::uint32_t CardLoginMountSessionCore::create_container(
+    const std::wstring_view path, const std::uint64_t size_bytes) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "container creation requires an authenticated card session");
+  }
+  if (size_bytes == 0 || size_bytes % 512ULL != 0) {
+    throw std::invalid_argument(
+        "container size must be a non-zero multiple of 512 bytes");
+  }
+  if (find_by_path(state_, path) != nullptr) {
+    throw std::logic_error("container path is already adopted");
+  }
+
+  const std::wstring staging_path = staging_path_for(path);
+  if (runtime_.container_exists(path) ||
+      runtime_.container_exists(staging_path)) {
+    throw std::system_error(std::make_error_code(std::errc::file_exists),
+                            "container creation target already exists");
+  }
+
+  security::SecureBuffer volume_password = derive_standard_password();
   bool staging_owned = false;
   bool published = false;
   try {
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
-    runtime_.publish_created(staging_path, layout_.container_a.path);
+    runtime_.publish_created(staging_path, path);
     published = true;
 
+    const wchar_t drive_letter = reserve_drive_letter();
     static_cast<void>(runtime_.mount_created(
-        layout_.container_a.path, volume_password,
-        {.drive_letter = layout_.container_a.drive_letter,
+        path, volume_password,
+        {.drive_letter = drive_letter,
          .prf = volume::Pkcs5Prf::sha512,
          .pim = 0,
          .read_only = false,
          .notify_shell = false}));
-    state_.container_a_mounted = true;
+    const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
     volume_password.clear();
-    runtime_.notify_mounted(layout_.container_a.drive_letter);
+    runtime_.notify_mounted(drive_letter);
+    return id;
   } catch (...) {
     volume_password.clear();
     if (staging_owned && !published) {
@@ -354,32 +466,114 @@ void CardLoginMountSessionCore::create_container_a(
   }
 }
 
+std::uint32_t CardLoginMountSessionCore::mount_container(
+    const std::wstring_view path) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "mounting a container requires an authenticated card session");
+  }
+  if (const SessionContainer* const adopted = find_by_path(state_, path);
+      adopted != nullptr && adopted->mounted) {
+    throw std::logic_error("container is already mounted");
+  }
+  if (!runtime_.container_exists(path)) {
+    throw std::system_error(
+        std::make_error_code(std::errc::no_such_file_or_directory),
+        "container file is unavailable");
+  }
+
+  security::SecureBuffer volume_password = derive_standard_password();
+  try {
+    const wchar_t drive_letter = reserve_drive_letter();
+    static_cast<void>(runtime_.mount_created(
+        path, volume_password,
+        {.drive_letter = drive_letter,
+         .prf = volume::Pkcs5Prf::sha512,
+         .pim = 0,
+         .read_only = false,
+         .notify_shell = false}));
+    const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
+    volume_password.clear();
+    runtime_.notify_mounted(drive_letter);
+    return id;
+  } catch (...) {
+    volume_password.clear();
+    throw;
+  }
+}
+
+void CardLoginMountSessionCore::unmount_container(const std::uint32_t id) {
+  for (SessionContainer& container : state_.containers) {
+    if (container.id != id) continue;
+    if (!container.mounted) return;
+    static_cast<void>(runtime_.unmount(container.drive_letter));
+    container.mounted = false;
+    container.drive_letter = wchar_t{};
+    return;
+  }
+  throw std::invalid_argument("no container is adopted under that identifier");
+}
+
+std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
+  std::vector<ContainerStatus> result;
+  result.reserve(state_.containers.size());
+  for (const SessionContainer& container : state_.containers) {
+    const std::optional<std::uint64_t> size =
+        runtime_.container_size_if_present(container.path);
+    if (!size.has_value()) {
+      if (container.mounted) {
+        throw std::runtime_error(
+            "mounted container backing file is unavailable");
+      }
+      result.push_back({.id = container.id,
+                        .name = container.name,
+                        .mounted = false,
+                        .size_bytes = 0,
+                        .drive_letter = wchar_t{}});
+      continue;
+    }
+    result.push_back({.id = container.id,
+                      .name = container.name,
+                      .mounted = container.mounted,
+                      .size_bytes = *size,
+                      .drive_letter = container.mounted
+                                          ? container.drive_letter
+                                          : wchar_t{}});
+  }
+  return result;
+}
+
 ContainerAStatus CardLoginMountSessionCore::container_a_status() {
   const std::optional<std::uint64_t> size =
       runtime_.container_size_if_present(layout_.container_a.path);
+  const SessionContainer* const adopted =
+      find_by_path(state_, layout_.container_a.path);
+  const bool mounted = adopted != nullptr && adopted->mounted;
   if (!size.has_value()) {
-    if (state_.container_a_mounted) {
+    if (mounted) {
       throw std::runtime_error(
           "mounted container A backing file is unavailable");
     }
     return {};
   }
   return {.exists = true,
-          .mounted = state_.container_a_mounted,
+          .mounted = mounted,
           .size_bytes = *size,
-          .drive_letter = state_.container_a_mounted
-                              ? layout_.container_a.drive_letter
-                              : wchar_t{}};
+          .drive_letter = mounted ? adopted->drive_letter : wchar_t{}};
 }
 
 void CardLoginMountSessionCore::unmount_active() {
+  // The B-before-A order required after authentication still holds: container
+  // B is released first, then every adopted standard container.
   if (state_.container_b_mounted) {
     static_cast<void>(runtime_.unmount(layout_.container_b.drive_letter));
     state_.container_b_mounted = false;
   }
-  if (state_.container_a_mounted) {
-    static_cast<void>(runtime_.unmount(layout_.container_a.drive_letter));
-    state_.container_a_mounted = false;
+  for (SessionContainer& container : state_.containers) {
+    if (!container.mounted) continue;
+    static_cast<void>(runtime_.unmount(container.drive_letter));
+    container.mounted = false;
+    container.drive_letter = wchar_t{};
   }
 }
 
@@ -390,11 +584,11 @@ bool CardLoginMountSessionCore::force_unmount_active() {
         layout_.container_b.drive_letter).forced;
     state_.container_b_mounted = false;
   }
-  if (state_.container_a_mounted) {
-    forced = runtime_.unmount_forced(
-                 layout_.container_a.drive_letter).forced ||
-             forced;
-    state_.container_a_mounted = false;
+  for (SessionContainer& container : state_.containers) {
+    if (!container.mounted) continue;
+    forced = runtime_.unmount_forced(container.drive_letter).forced || forced;
+    container.mounted = false;
+    container.drive_letter = wchar_t{};
   }
   return forced;
 }

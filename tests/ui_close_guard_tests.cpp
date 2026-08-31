@@ -4,6 +4,10 @@
 
 #include <iostream>
 #include <optional>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <stdexcept>
 
 namespace {
@@ -66,6 +70,20 @@ class FakeProductEntry final : public ICardEntryActions {
 class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
  public:
   void create_container_a(std::uint64_t) override {
+    throw std::logic_error("not used by close guard");
+  }
+
+  std::uint32_t create_container(std::wstring_view, std::uint64_t) override {
+    throw std::logic_error("not used by close guard");
+  }
+  std::uint32_t mount_container(std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+  void unmount_container(std::uint32_t) override {
+    throw std::logic_error("not used by close guard");
+  }
+  [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
+  container_statuses() override {
     throw std::logic_error("not used by close guard");
   }
 

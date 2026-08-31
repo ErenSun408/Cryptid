@@ -19,7 +19,9 @@ namespace {
 using usb_vault::application::CardAuthenticationSession;
 using usb_vault::application::CardLoginMountSession;
 using usb_vault::application::ContainerLayout;
+using usb_vault::application::ContainerStatus;
 using usb_vault::application::LoginMountPolicy;
+using usb_vault::application::detail::SessionContainer;
 using usb_vault::application::ContainerCreationCleanupError;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::MountSessionResult;
@@ -86,6 +88,11 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool fail_created_mount{};
   bool fail_notify{};
   std::uint64_t container_a_size_bytes{64ULL * 1024ULL * 1024ULL};
+  std::vector<wchar_t> free_drive_letters{L'X', L'W', L'V'};
+  bool fail_allocate{};
+  std::uint64_t other_size_bytes{};
+  std::vector<std::wstring> other_existing;
+  std::vector<std::wstring> other_staging;
   std::vector<std::string> events;
 
   [[nodiscard]] MountSessionResult mount_authenticated(
@@ -126,7 +133,8 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       if (fail_unmount_a) throw std::runtime_error("unmount A failed");
       return {};
     }
-    throw std::runtime_error("unexpected drive letter");
+    events.emplace_back("unmount:other");
+    return {};
   }
 
   [[nodiscard]] usb_vault::volume::UnmountEscalationResult unmount_forced(
@@ -139,7 +147,8 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       events.emplace_back("force:A");
       return {.result = {}, .forced = force_required_a};
     }
-    throw std::runtime_error("unexpected drive letter");
+    events.emplace_back("force:other");
+    return {.result = {}, .forced = false};
   }
 
   [[nodiscard]] bool container_exists(
@@ -152,17 +161,31 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       events.emplace_back("exists:stage");
       return staging_exists;
     }
-    throw std::runtime_error("unexpected creation path");
+    const bool staging = path.ends_with(L".preparing");
+    events.emplace_back(staging ? "exists:stage-other" : "exists:final-other");
+    const std::vector<std::wstring>& known =
+        staging ? other_staging : other_existing;
+    for (const std::wstring& present : known) {
+      if (present == path) return true;
+    }
+    return false;
   }
 
   [[nodiscard]] std::optional<std::uint64_t> container_size_if_present(
       const std::wstring_view path) override {
-    events.emplace_back("size:A");
-    require(path == L"C:\\vault\\a.hc",
-            "status inspected the wrong container path");
-    return container_a_exists
-               ? std::optional<std::uint64_t>{container_a_size_bytes}
-               : std::nullopt;
+    if (path == L"C:\\vault\\a.hc") {
+      events.emplace_back("size:A");
+      return container_a_exists
+                 ? std::optional<std::uint64_t>{container_a_size_bytes}
+                 : std::nullopt;
+    }
+    events.emplace_back("size:other");
+    for (const std::wstring& present : other_existing) {
+      if (present == path) {
+        return std::optional<std::uint64_t>{other_size_bytes};
+      }
+    }
+    return std::nullopt;
   }
 
   [[nodiscard]] SecureBuffer derive_container_password(
@@ -180,7 +203,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     require(root.size() == usb_vault::card::kCardRecordV1RootSecretSize,
             "creation received the wrong authenticated root");
     require(salt == layout().container_a.salt,
-            "creation received the wrong A salt");
+            "every standard container must share the fixed A salt");
     return bytes("derived-container-a-password");
   }
 
@@ -188,47 +211,61 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       const std::wstring_view target_path,
       const std::uint64_t size_bytes,
       const SecureBuffer& volume_password) override {
-    events.emplace_back("create:A");
-    require(target_path == L"C:\\vault\\a.hc.preparing",
+    const bool is_container_a = target_path == L"C:\\vault\\a.hc.preparing";
+    events.emplace_back(is_container_a ? "create:A" : "create:other");
+    require(target_path.ends_with(L".preparing"),
             "creation did not use the staging path");
-    require(size_bytes == 64ULL * 1024ULL * 1024ULL,
+    require(size_bytes != 0 && size_bytes % 512ULL == 0,
             "creation received the wrong size");
     require(volume_password.size() == 28,
             "creation received the wrong derived password");
     if (fail_create) throw std::runtime_error("create failed");
-    container_a_size_bytes = size_bytes;
-    staging_exists = true;
+    if (is_container_a) {
+      container_a_size_bytes = size_bytes;
+      staging_exists = true;
+    } else {
+      other_size_bytes = size_bytes;
+      other_staging.emplace_back(target_path);
+    }
   }
 
   void publish_created(const std::wstring_view staging_path,
                        const std::wstring_view target_path) override {
-    events.emplace_back("publish:A");
-    require(staging_path == L"C:\\vault\\a.hc.preparing" &&
-                target_path == L"C:\\vault\\a.hc",
+    const bool is_container_a = target_path == L"C:\\vault\\a.hc";
+    events.emplace_back(is_container_a ? "publish:A" : "publish:other");
+    require(staging_path == std::wstring(target_path) + L".preparing",
             "creation published the wrong paths");
     if (fail_publish) throw std::runtime_error("publish failed");
-    staging_exists = false;
-    container_a_exists = true;
+    if (is_container_a) {
+      staging_exists = false;
+      container_a_exists = true;
+    } else {
+      std::erase(other_staging, std::wstring(staging_path));
+      other_existing.emplace_back(target_path);
+    }
   }
 
   void remove_incomplete(const std::wstring_view staging_path) override {
-    events.emplace_back("cleanup:A");
-    require(staging_path == L"C:\\vault\\a.hc.preparing",
+    events.emplace_back(staging_path == L"C:\\vault\\a.hc.preparing" ? "cleanup:A" : "cleanup:other");
+    require(staging_path.ends_with(L".preparing"),
             "creation cleaned the wrong path");
     if (fail_remove) throw std::runtime_error("cleanup failed");
     staging_exists = false;
+    std::erase(other_staging, std::wstring(staging_path));
   }
 
   [[nodiscard]] usb_vault::volume::MountResult mount_created(
       const std::wstring_view path,
       const SecureBuffer& volume_password,
       const usb_vault::volume::MountOptions& options) override {
-    events.emplace_back("mount-created:A");
-    require(path == L"C:\\vault\\a.hc" && container_a_exists,
+    const bool is_container_a = path == L"C:\\vault\\a.hc";
+    events.emplace_back(is_container_a ? "mount-created:A"
+                                       : "mount-created:other");
+    require(!is_container_a || container_a_exists,
             "creation mounted before publication");
     require(volume_password.size() == 28,
             "created mount received the wrong derived password");
-    require(options.drive_letter == L'X' &&
+    require(options.drive_letter == allocated_drive_letter &&
                 options.prf == usb_vault::volume::Pkcs5Prf::sha512 &&
                 options.pim == 0 && !options.read_only &&
                 !options.notify_shell,
@@ -239,9 +276,21 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
 
   void notify_mounted(const wchar_t drive_letter) override {
     events.emplace_back("notify:A");
-    require(drive_letter == L'X', "creation notified the wrong drive");
+    require(drive_letter == allocated_drive_letter,
+            "creation notified the wrong drive");
     if (fail_notify) throw std::runtime_error("notify failed");
   }
+
+  [[nodiscard]] wchar_t allocate_drive_letter() override {
+    events.emplace_back("allocate");
+    if (fail_allocate) throw std::runtime_error("no free drive letter");
+    require(!free_drive_letters.empty(), "the fake ran out of drive letters");
+    allocated_drive_letter = free_drive_letters.front();
+    free_drive_letters.erase(free_drive_letters.begin());
+    return allocated_drive_letter;
+  }
+
+  wchar_t allocated_drive_letter{L'X'};
 };
 
 template <typename Exception, typename Action>
@@ -430,7 +479,7 @@ void test_container_a_creation_publishes_then_mounts() {
           "successful A creation left the wrong published state");
   require_events(runtime,
                  {"exists:final", "exists:stage", "derive:A", "create:A",
-                  "publish:A", "mount-created:A", "notify:A"});
+                  "publish:A", "allocate", "mount-created:A", "notify:A"});
 
   require_throws<std::logic_error>(
       [&] { session.create_container_a(64ULL * 1024ULL * 1024ULL); },
@@ -524,7 +573,7 @@ void test_container_a_mount_failure_keeps_published_container() {
           "post-publication mount failure deleted data or changed auth");
   require_events(runtime,
                  {"exists:final", "exists:stage", "derive:A", "create:A",
-                  "publish:A", "mount-created:A"});
+                  "publish:A", "allocate", "mount-created:A"});
 }
 
 void test_container_a_notify_failure_retains_mount_state() {
@@ -636,6 +685,122 @@ void test_manual_policy_still_serializes_and_allows_creation() {
           "creation after a manual login did not project the mounted volume");
 }
 
+void test_multiple_standard_containers_get_distinct_drive_letters() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  const std::uint32_t first = session.create_container(
+      layout().container_a.path, 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t second = session.create_container(L"C:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL);
+  require(first != second, "two containers were adopted under one identifier");
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2, "the session did not adopt both containers");
+  require(statuses[0].id == first && statuses[1].id == second,
+          "container statuses were not returned in adoption order");
+  require(statuses[0].name == L"a.hc" && statuses[1].name == L"second.hc",
+          "container statuses did not project the file name");
+  require(statuses[0].drive_letter == L'X' &&
+              statuses[1].drive_letter == L'W',
+          "the two containers did not receive distinct drive letters");
+  require(statuses[0].mounted && statuses[1].mounted &&
+              statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL &&
+              statuses[1].size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "created containers were not projected as mounted with capacity");
+  require(session.mounted(), "the session reported no active volume");
+}
+
+void test_container_paths_are_adopted_once() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  static_cast<void>(session.create_container(L"C:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL));
+
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(session.create_container(L"C:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL));
+      },
+      "an adopted container path was created a second time");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.mount_container(L"C:\\vault\\second.hc")); },
+      "an already mounted container was mounted again");
+  require(session.container_statuses().size() == 1,
+          "a rejected creation still changed the adopted collection");
+}
+
+void test_unmounted_container_can_be_mounted_again() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(L"C:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL);
+
+  session.unmount_container(id);
+  require(!session.mounted(), "unmounting one container left the session active");
+  std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && !statuses[0].mounted &&
+              statuses[0].drive_letter == wchar_t{} &&
+              statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "an unmounted container was not retained as present");
+
+  const std::uint32_t again = session.mount_container(L"C:\\vault\\second.hc");
+  require(again == id, "remounting did not reuse the adopted identifier");
+  statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].mounted &&
+              statuses[0].drive_letter == L'W',
+          "remounting did not allocate a fresh drive letter");
+
+  session.unmount_container(id);
+  session.unmount_container(id);
+  require_throws<std::invalid_argument>(
+      [&] { session.unmount_container(id + 100); },
+      "an unknown container identifier was accepted");
+}
+
+void test_mount_requires_authentication_and_an_existing_file() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.mount_container(L"C:\\vault\\second.hc")); },
+      "mounting was accepted before authentication");
+
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(session.mount_container(L"C:\\vault\\third.hc")); },
+      "a missing container file was mounted");
+  require(session.container_statuses().empty(),
+          "a failed mount still adopted the container");
+}
+
+void test_unmount_active_releases_every_adopted_container() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  static_cast<void>(session.create_container(layout().container_a.path,
+                                             64ULL * 1024ULL * 1024ULL));
+  static_cast<void>(session.create_container(L"C:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL));
+
+  session.unmount_active();
+
+  require(!session.mounted(),
+          "unmount_active left an adopted container mounted");
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2 && !statuses[0].mounted &&
+              !statuses[1].mounted,
+          "unmount_active dropped the adopted containers");
+}
+
 }  // namespace
 
 int main() {
@@ -655,6 +820,11 @@ int main() {
     test_container_a_status_projects_live_file_and_mount_facts();
     test_manual_policy_authenticates_without_mounting();
     test_manual_policy_still_serializes_and_allows_creation();
+    test_multiple_standard_containers_get_distinct_drive_letters();
+    test_container_paths_are_adopted_once();
+    test_unmounted_container_can_be_mounted_again();
+    test_mount_requires_authentication_and_an_existing_file();
+    test_unmount_active_releases_every_adopted_container();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
