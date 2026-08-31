@@ -34,6 +34,22 @@
   const actionButton = document.getElementById("card-session-action");
   const statusOutput = document.getElementById("card-session-status");
   const errorOutput = document.getElementById("card-session-error");
+  const dashboard = document.getElementById("authenticated-dashboard");
+  const dashboardUnmountButton = document.getElementById("dashboard-unmount");
+  const dashboardVolumeState =
+    document.getElementById("dashboard-volume-state");
+  const dashboardNavigation =
+    Array.from(document.querySelectorAll(".dashboard-nav"));
+  const dashboardSections =
+    Array.from(document.querySelectorAll(".dashboard-section"));
+  const creationButtons =
+    Array.from(document.querySelectorAll("[data-create-kind]"));
+  const creationDialog = document.getElementById("create-volume-dialog");
+  const creationTitle = document.getElementById("create-volume-title");
+  const creationDescription =
+    document.getElementById("create-volume-description");
+  const creationCloseButton = document.getElementById("create-volume-close");
+  const creationCancelButton = document.getElementById("create-volume-cancel");
 
   let bridge = null;
   let currentState = null;
@@ -99,6 +115,56 @@
     }
   };
 
+  const closeCreationFlow = () => {
+    creationDialog.hidden = true;
+  };
+
+  const showDashboardSection = (sectionName) => {
+    for (const item of dashboardNavigation) {
+      const selected = item.dataset.section === sectionName;
+      item.classList.toggle("active", selected);
+      if (selected) {
+        item.setAttribute("aria-current", "page");
+      } else {
+        item.removeAttribute("aria-current");
+      }
+    }
+    for (const section of dashboardSections) {
+      section.classList.toggle(
+        "active", section.id === `dashboard-section-${sectionName}`);
+    }
+  };
+
+  const openCreationFlow = (kind) => {
+    if (busy || currentState !== nativeState.authenticated) {
+      return;
+    }
+    const hiddenVolume = kind === "hidden";
+    creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
+    creationDescription.textContent = hiddenVolume
+      ? "隐藏盘参数与卡记录事务将在后续切片接入。"
+      : "加密盘参数与原生创建链将在下一切片接入。";
+    creationDialog.hidden = false;
+    creationCloseButton.focus();
+  };
+
+  const updateProductSurface = () => {
+    const showDashboard = currentState === nativeState.authenticated;
+    surface.hidden = showDashboard;
+    dashboard.hidden = !showDashboard;
+    document.body.dataset.view = showDashboard ? "dashboard" : "session";
+    dashboardVolumeState.textContent = activeVolumes ? "已挂载" : "未挂载";
+    dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
+    dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
+    for (const button of creationButtons) {
+      button.disabled = busy || !showDashboard;
+    }
+    if (!showDashboard) {
+      closeCreationFlow();
+      showDashboardSection("dashboard");
+    }
+  };
+
   const render = (message, error = "") => {
     surface.dataset.sessionState = currentState === null
       ? "initializing"
@@ -108,8 +174,7 @@
     const showPassword = acceptsLogin() || acceptsInitialization();
     const showConfirmation = acceptsInitialization();
     const showUnmount = activeVolumes &&
-      (currentState === nativeState.authenticated ||
-       currentState === nativeState.unavailable);
+      currentState === nativeState.unavailable;
     setVisible(passwordFields, showPassword);
     setVisible(confirmationField, showConfirmation);
     setVisible(actionButton, showPassword || showUnmount);
@@ -150,6 +215,7 @@
     statusOutput.textContent = message;
     errorOutput.textContent = error;
     errorOutput.hidden = error.length === 0;
+    updateProductSurface();
   };
 
   const clearError = () => {
@@ -421,6 +487,36 @@
       }
     }
   };
+
+  for (const item of dashboardNavigation) {
+    item.addEventListener("click", () => {
+      if (!busy && currentState === nativeState.authenticated) {
+        showDashboardSection(item.dataset.section);
+      }
+    });
+  }
+  for (const button of creationButtons) {
+    button.addEventListener("click", () => {
+      openCreationFlow(button.dataset.createKind);
+    });
+  }
+  creationCloseButton.addEventListener("click", closeCreationFlow);
+  creationCancelButton.addEventListener("click", closeCreationFlow);
+  creationDialog.addEventListener("click", (event) => {
+    if (event.target === creationDialog) {
+      closeCreationFlow();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !creationDialog.hidden) {
+      closeCreationFlow();
+    }
+  });
+  dashboardUnmountButton.addEventListener("click", async () => {
+    if (!busy && currentState === nativeState.authenticated && activeVolumes) {
+      await unmount();
+    }
+  });
 
   actionButton.addEventListener("click", async () => {
     if (busy) {

@@ -15,6 +15,19 @@ chrome.webview.postMessage("driver-loaded");
   const action = document.getElementById("card-session-action");
   const status = document.getElementById("card-session-status");
   const error = document.getElementById("card-session-error");
+  const dashboard = document.getElementById("authenticated-dashboard");
+  const dashboardUnmount = document.getElementById("dashboard-unmount");
+  const dashboardVolumeState =
+    document.getElementById("dashboard-volume-state");
+  const encryptedNavigation =
+    document.querySelector('[data-section="encrypted"]');
+  const encryptedSection =
+    document.getElementById("dashboard-section-encrypted");
+  const encryptedCreate = encryptedSection.querySelector(
+    '[data-create-kind="encrypted"]');
+  const creationDialog = document.getElementById("create-volume-dialog");
+  const creationTitle = document.getElementById("create-volume-title");
+  const creationClose = document.getElementById("create-volume-close");
   const instruction = "请输入并确认日常密码，至少12字符。";
 
   const waitFor = (condition) => {
@@ -128,14 +141,33 @@ chrome.webview.postMessage("driver-loaded");
       password.type !== "password" || confirmation.type !== "password" ||
       passwordVisibility.getAttribute("aria-pressed") !== "false" ||
       confirmationVisibility.getAttribute("aria-pressed") !== "false" ||
-      !action.hidden) {
+      !action.hidden || !surface.hidden || dashboard.hidden ||
+      !dashboardUnmount.hidden || dashboardVolumeState.textContent !== "未挂载") {
     request("fail-initialization-submit");
+    return;
+  }
+
+  encryptedNavigation.click();
+  if (!encryptedNavigation.classList.contains("active") ||
+      !encryptedSection.classList.contains("active")) {
+    request("fail-dashboard-navigation");
+    return;
+  }
+  encryptedCreate.click();
+  if (creationDialog.hidden || creationTitle.textContent !== "新建加密盘") {
+    request("fail-creation-entry");
+    return;
+  }
+  creationClose.click();
+  if (!creationDialog.hidden) {
+    request("fail-creation-close");
     return;
   }
 
   request("request-login");
   if (!await waitForState("login-required") ||
-      !confirmationField.hidden || password.disabled) {
+      !confirmationField.hidden || password.disabled || surface.hidden ||
+      !dashboard.hidden || !creationDialog.hidden) {
     request("fail-login-route");
     return;
   }
@@ -157,14 +189,17 @@ chrome.webview.postMessage("driver-loaded");
   password.value = "p\u0000ä";
   action.click();
   if (!await waitForState("authenticated") || password.value !== "" ||
-      action.hidden || action.textContent !== "安全卸载") {
+      !action.hidden || !surface.hidden || dashboard.hidden ||
+      dashboardUnmount.hidden ||
+      dashboardVolumeState.textContent !== "已挂载") {
     request("fail-login-success");
     return;
   }
 
   request("request-residual-mount");
   if (!await waitForState("unavailable") || action.hidden ||
-      action.textContent !== "尝试安全卸载") {
+      action.textContent !== "尝试安全卸载" || surface.hidden ||
+      !dashboard.hidden) {
     request("fail-unavailable");
     return;
   }
@@ -180,4 +215,6 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
   request("pass");
-})();
+})().catch(() => {
+  chrome.webview.postMessage("fail-driver-exception");
+});

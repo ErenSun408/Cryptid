@@ -63,7 +63,7 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-15f-init-feedback\"></script>") !=
+              "<script src=\"card_session.js?v=p2-16a-dashboard-shell\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -77,6 +77,55 @@ void test_page_has_route_specific_password_surfaces() {
   require(count_occurrences(page,
                             "class=\"password-strength-segment\"") == 3,
           "product page strength meter must contain exactly three segments");
+}
+
+void test_authenticated_dashboard_is_real_state_only() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string combined = lower_ascii(page + script);
+
+  require(page.find("id=\"authenticated-dashboard\"") !=
+              std::string::npos &&
+              page.find("id=\"dashboard-section-dashboard\"") !=
+                  std::string::npos &&
+              page.find("id=\"dashboard-section-encrypted\"") !=
+                  std::string::npos &&
+              page.find("id=\"dashboard-section-hidden\"") !=
+                  std::string::npos,
+          "authenticated dashboard shell is incomplete");
+  require(count_occurrences(page, "data-create-kind=\"encrypted\"") == 2 &&
+              count_occurrences(page, "data-create-kind=\"hidden\"") == 2,
+          "dashboard and management views lack both creation entries");
+  require(count_occurrences(page, "aria-disabled=\"true\"") == 4 &&
+              count_occurrences(page, "data-tooltip=\"正在开发中\"") == 4 &&
+              page.find("文件管理") != std::string::npos &&
+              page.find("备份中心") != std::string::npos &&
+              page.find("操作历史") != std::string::npos &&
+              page.find("系统设置") != std::string::npos,
+          "unfinished navigation is not visibly present and unavailable");
+  require(script.find(
+              "const showDashboard = currentState === nativeState.authenticated;") !=
+              std::string::npos &&
+              script.find("surface.hidden = showDashboard;") !=
+                  std::string::npos &&
+              script.find("dashboard.hidden = !showDashboard;") !=
+                  std::string::npos &&
+              script.find("dashboardVolumeState.textContent = activeVolumes") !=
+                  std::string::npos,
+          "dashboard is not exclusively derived from native authenticated state");
+  require(page.find("onclick=") == std::string::npos &&
+              combined.find("admin") == std::string::npos &&
+              combined.find("账号") == std::string::npos &&
+              combined.find("用户名") == std::string::npos &&
+              combined.find("encrypteddrives") == std::string::npos &&
+              combined.find("backuptasks") == std::string::npos &&
+              combined.find("historylogs") == std::string::npos,
+          "prototype account, inline, or mock-data behavior reached the product page");
+  for (const std::string_view emoji : {
+           "🔐", "📊", "🔒", "👁️", "📁", "💾", "📋", "⚙️", "➕"}) {
+    require(page.find(emoji) == std::string::npos,
+            "product dashboard still contains an emoji icon");
+  }
 }
 
 void test_five_states_are_complete_and_vendor_neutral() {
@@ -268,6 +317,7 @@ void test_actions_are_serialized_and_external_changes_coalesce() {
 
 int main() {
   test_page_has_route_specific_password_surfaces();
+  test_authenticated_dashboard_is_real_state_only();
   test_five_states_are_complete_and_vendor_neutral();
   test_bridge_calls_are_narrow_and_route_specific();
   test_all_password_copies_have_fallback_wipes();

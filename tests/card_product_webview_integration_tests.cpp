@@ -208,6 +208,9 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-initialization-mismatch",
       L"fail-initialization-error-clear",
       L"fail-initialization-submit",
+      L"fail-dashboard-navigation",
+      L"fail-creation-entry",
+      L"fail-creation-close",
       L"fail-login-route",
       L"fail-external-input-clear",
       L"fail-login-retry",
@@ -215,6 +218,7 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-unavailable",
       L"fail-unmount",
       L"fail-final-no-card",
+      L"fail-driver-exception",
   };
   int code = 10;
   for (const wchar_t* const failure : failures) {
