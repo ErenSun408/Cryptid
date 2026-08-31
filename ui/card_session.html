@@ -214,6 +214,20 @@
       border-radius: 50%; color: var(--primary-light); background: rgba(37, 99, 235, .18);
       font-weight: 700;
     }
+    .creation-form { margin-top: 1rem; }
+    .creation-form label { display: block; margin-bottom: .45rem; font-size: .82rem; font-weight: 600; }
+    .creation-capacity-row { display: flex; align-items: center; gap: .55rem; }
+    .creation-capacity-row input {
+      width: 9rem; min-height: 2.5rem; padding: .55rem .7rem;
+      border: 1px solid var(--border); border-radius: .45rem;
+      color: var(--text); background: #111827; font: inherit;
+    }
+    .creation-capacity-row input:focus { border-color: var(--primary); outline: 2px solid rgba(37, 99, 235, .24); }
+    .creation-capacity-row span, .creation-hint { color: var(--text-secondary); font-size: .8rem; }
+    .creation-hint { margin: .45rem 0 0; }
+    .creation-status { display: block; min-height: 1.25rem; margin-top: .8rem; color: var(--text-secondary); font-size: .82rem; }
+    .creation-status[data-tone="success"] { color: #4ade80; }
+    .creation-status[data-tone="error"] { color: #f87171; }
     .modal-footer { justify-content: flex-end; border-top: 1px solid var(--border); }
     .modal-button:disabled { cursor: not-allowed; opacity: .5; }
     .modal-button.primary { color: white; border-color: var(--primary); background: var(--primary); }
@@ -407,20 +421,29 @@
         </button>
       </div>
       <div class="modal-body">
-        <p id="create-volume-description">建卷参数与原生创建链将在下一切片接入。</p>
+        <p id="create-volume-description">请选择加密盘容量。创建过程将请求管理员权限。</p>
         <div class="workflow-preview" aria-label="建卷流程预览">
           <div class="workflow-step"><span class="step-number">1</span><span>确认卷类型与容量</span></div>
           <div class="workflow-step"><span class="step-number">2</span><span>完成管理员权限确认</span></div>
           <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载加密卷</span></div>
         </div>
+        <div id="create-container-a-form" class="creation-form" hidden>
+          <label for="create-container-a-capacity">加密盘容量</label>
+          <div class="creation-capacity-row">
+            <input id="create-container-a-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="64">
+            <span>MiB</span>
+          </div>
+          <p class="creation-hint">请输入 20 至 1048576 MiB 的整数（1 MiB = 1024×1024 字节）。</p>
+        </div>
+        <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
       </div>
       <div class="modal-footer">
         <button id="create-volume-cancel" class="modal-button" type="button">返回</button>
-        <button id="create-volume-continue" class="modal-button primary" type="button" title="正在开发中" disabled>继续</button>
+        <button id="create-volume-continue" class="modal-button primary" type="button">创建加密盘</button>
       </div>
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-16a-dashboard-shell"></script>
+  <script src="card_session.js?v=p2-16c-container-a-ui"></script>
 </body>
 </html>

@@ -655,7 +655,24 @@ if(USB_VAULT_BUILD_UI)
     _UNICODE
     USB_VAULT_VIKEY_P2_DEVELOPMENT_APP
   )
+
+  if(USB_VAULT_FORMAT_DLL)
+    add_custom_target(usb_vault_p2_format_backend_deployment
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${USB_VAULT_FORMAT_DLL}"
+              "$<TARGET_FILE_DIR:usb_vault_volume_creator>/VeraCryptFormat.dll"
+      VERBATIM
+    )
+  else()
+    add_custom_target(usb_vault_p2_format_backend_deployment
+      COMMAND ${CMAKE_COMMAND} -E echo
+              "P2 development app requires -DUSB_VAULT_FORMAT_DLL=<patched VeraCryptFormat.dll>"
+      COMMAND ${CMAKE_COMMAND} -E false
+      VERBATIM
+    )
+  endif()
   add_dependencies(usb_vault_vikey_p2_development_app
+    usb_vault_p2_format_backend_deployment
     usb_vault_vikey_helper
     usb_vault_volume_creator
   )

@@ -103,6 +103,21 @@ void CardProductUiSessionController::submit_initialization(
   entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
 }
 
+void CardProductUiSessionController::create_container_a(
+    const std::uint32_t size_mib) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "container A creation is not available in the current UI state");
+  }
+  if (size_mib < kContainerACreationMinimumMib ||
+      size_mib > kContainerACreationMaximumMib) {
+    throw std::invalid_argument("container A size is outside the UI range");
+  }
+  constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
+  volume_session_.create_container_a(
+      static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
+}
+
 void CardProductUiSessionController::unmount() {
   volume_session_.unmount_active();
 }

@@ -11,6 +11,9 @@
 
 namespace usb_vault::ui {
 
+inline constexpr std::uint32_t kContainerACreationMinimumMib = 20;
+inline constexpr std::uint32_t kContainerACreationMaximumMib = 1024U * 1024U;
+
 // Complete, vendor-neutral page state. It reveals neither hardware identity,
 // password role, mode, tier, container shape, nor volume type. Mounted state
 // remains a separate unified boolean solely for safe cleanup controls.
@@ -38,6 +41,7 @@ class CardProductUiSessionController final {
   void submit_initialization(
       std::span<std::byte> mutable_password_utf8,
       std::span<std::byte> mutable_confirmation_utf8);
+  void create_container_a(std::uint32_t size_mib);
   void unmount();
 
   [[nodiscard]] CardProductUiState state() const noexcept;

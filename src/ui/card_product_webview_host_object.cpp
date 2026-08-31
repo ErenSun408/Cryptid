@@ -4,8 +4,11 @@
 
 #include <Windows.h>
 
-#include <atomic>
 #include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <new>
 #include <stdexcept>
 
@@ -17,6 +20,7 @@ constexpr DISPID kSubmitInitializationPasswordBytesId = 2;
 constexpr DISPID kUnmountId = 3;
 constexpr DISPID kHasActiveSessionId = 4;
 constexpr DISPID kGetSessionStateId = 5;
+constexpr DISPID kCreateContainerAMibId = 6;
 constexpr wchar_t kSubmitLoginPasswordBytesName[] =
     L"submitLoginPasswordBytes";
 constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
@@ -24,6 +28,7 @@ constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
 constexpr wchar_t kUnmountName[] = L"unmount";
 constexpr wchar_t kHasActiveSessionName[] = L"hasActiveSession";
 constexpr wchar_t kGetSessionStateName[] = L"getSessionState";
+constexpr wchar_t kCreateContainerAMibName[] = L"createContainerAMib";
 
 class PasswordArgumentsWiper final {
  public:
@@ -125,6 +130,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kGetSessionStateId;
       return S_OK;
     }
+    if (matches(names[0], kCreateContainerAMibName)) {
+      ids[0] = kCreateContainerAMibId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -147,6 +156,8 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_login(parameters, argument_error);
       case kSubmitInitializationPasswordBytesId:
         return invoke_initialization(parameters, argument_error);
+      case kCreateContainerAMibId:
+        return invoke_create_container_a(parameters, argument_error);
       default:
         return DISP_E_MEMBERNOTFOUND;
     }
@@ -202,6 +213,51 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       controller_.unmount();
       return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  [[nodiscard]] static bool exact_size_mib(
+      const VARIANTARG& argument,
+      std::uint32_t& result) noexcept {
+    if (argument.vt == VT_I4 && argument.lVal >= 0) {
+      result = static_cast<std::uint32_t>(argument.lVal);
+      return true;
+    }
+    if (argument.vt == VT_UI4) {
+      result = argument.ulVal;
+      return true;
+    }
+    if (argument.vt == VT_R8 && std::isfinite(argument.dblVal) &&
+        argument.dblVal >= 0.0 &&
+        argument.dblVal <=
+            static_cast<double>((std::numeric_limits<std::uint32_t>::max)()) &&
+        std::floor(argument.dblVal) == argument.dblVal) {
+      result = static_cast<std::uint32_t>(argument.dblVal);
+      return true;
+    }
+    return false;
+  }
+
+  HRESULT invoke_create_container_a(
+      DISPPARAMS* const parameters,
+      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t size_mib = 0;
+    if (!exact_size_mib(parameters->rgvarg[0], size_mib)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.create_container_a(size_mib);
+      return S_OK;
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
     } catch (...) {
       return E_FAIL;
     }

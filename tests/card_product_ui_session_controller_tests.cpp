@@ -27,6 +27,8 @@ using usb_vault::security::OfflineCardPasswordPolicy;
 using usb_vault::security::SecureBuffer;
 using usb_vault::ui::CardProductUiSessionController;
 using usb_vault::ui::CardProductUiState;
+using usb_vault::ui::kContainerACreationMaximumMib;
+using usb_vault::ui::kContainerACreationMinimumMib;
 
 static_assert(std::derived_from<CardEntryContextController,
                                 ICardEntryActions>);
@@ -74,8 +76,11 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
       : authentication_(authentication) {}
 
-  void create_container_a(std::uint64_t) override {
-    throw std::logic_error("not used by UI session controller tests");
+  void create_container_a(const std::uint64_t size_bytes) override {
+    ++create_a_calls;
+    created_a_size_bytes = size_bytes;
+    if (reject_create_a) throw std::runtime_error("creation failed");
+    mounted_state = true;
   }
 
   void consume_authenticated_login(
@@ -112,7 +117,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool mount_on_success{};
   bool mounted_state{};
   bool reject_unmount{};
+  bool reject_create_a{};
+  std::uint64_t created_a_size_bytes{};
   int consume_calls{};
+  int create_a_calls{};
   int unmount_calls{};
 };
 
@@ -384,6 +392,47 @@ void test_unmount_forwards_only_unified_active_state() {
           "controller did not forward unmount once");
 }
 
+void test_container_a_creation_requires_authenticated_bounded_capacity() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  require_throws<std::system_error>(
+      [&] { fixture.controller.create_container_a(64); },
+      "unauthenticated UI accepted container A creation");
+  require(fixture.volume.create_a_calls == 0,
+          "wrong-route UI creation reached the volume session");
+
+  fixture.authentication.establish(root_secret());
+  for (const std::uint32_t invalid : {
+           kContainerACreationMinimumMib - 1,
+           kContainerACreationMaximumMib + 1}) {
+    require_throws<std::invalid_argument>(
+        [&] { fixture.controller.create_container_a(invalid); },
+        "out-of-range UI capacity was accepted");
+  }
+  require(fixture.volume.create_a_calls == 0,
+          "invalid UI capacity reached the volume session");
+
+  fixture.controller.create_container_a(64);
+  require(fixture.volume.create_a_calls == 1 &&
+              fixture.volume.created_a_size_bytes ==
+                  64ULL * 1024ULL * 1024ULL &&
+              fixture.controller.mounted(),
+          "UI capacity was not converted to the exact byte count");
+}
+
+void test_container_a_creation_failure_preserves_authentication() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.reject_create_a = true;
+
+  require_throws<std::runtime_error>(
+      [&] { fixture.controller.create_container_a(64); },
+      "container A creation failure was hidden");
+  require(fixture.controller.state() == CardProductUiState::authenticated &&
+              !fixture.controller.mounted(),
+          "container A creation failure changed UI authentication or mount");
+}
+
 }  // namespace
 
 int main() {
@@ -397,6 +446,8 @@ int main() {
     test_overlapping_initialization_inputs_are_rejected_and_wiped();
     test_residual_mount_blocks_new_card_actions_until_cleanup();
     test_unmount_forwards_only_unified_active_state();
+    test_container_a_creation_requires_authenticated_bounded_capacity();
+    test_container_a_creation_failure_preserves_authentication();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

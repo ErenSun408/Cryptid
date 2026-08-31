@@ -50,12 +50,20 @@
     document.getElementById("create-volume-description");
   const creationCloseButton = document.getElementById("create-volume-close");
   const creationCancelButton = document.getElementById("create-volume-cancel");
+  const creationContinueButton =
+    document.getElementById("create-volume-continue");
+  const containerAForm = document.getElementById("create-container-a-form");
+  const containerACapacity =
+    document.getElementById("create-container-a-capacity");
+  const creationStatus = document.getElementById("create-volume-status");
 
   let bridge = null;
   let currentState = null;
   let activeVolumes = false;
   let busy = true;
   let externalRefreshPending = false;
+  let creationKind = null;
+  let creationCompleted = false;
 
   const setVisible = (element, visible) => {
     element.hidden = !visible;
@@ -115,8 +123,38 @@
     }
   };
 
-  const closeCreationFlow = () => {
+  const containerACapacityMib = () => {
+    const raw = containerACapacity.value.trim();
+    if (!/^[0-9]+$/.test(raw)) return null;
+    const value = Number(raw);
+    return Number.isSafeInteger(value) && value >= 20 && value <= 1048576
+      ? value
+      : null;
+  };
+
+  const updateCreationAvailability = () => {
+    const encrypted = creationKind === "encrypted";
+    const authenticated = currentState === nativeState.authenticated;
+    containerAForm.hidden = !encrypted;
+    containerACapacity.disabled = busy || !authenticated || !encrypted ||
+      creationCompleted;
+    creationCloseButton.disabled = busy;
+    creationCancelButton.disabled = busy;
+    creationContinueButton.disabled = busy || !authenticated || !encrypted ||
+      creationCompleted || containerACapacityMib() === null;
+    creationContinueButton.title = encrypted ? "" : "正在开发中";
+    creationContinueButton.textContent = encrypted ? "创建加密盘" : "继续";
+    creationCancelButton.textContent = creationCompleted ? "完成" : "返回";
+  };
+
+  const closeCreationFlow = (force = false) => {
+    if (busy && !force) return;
     creationDialog.hidden = true;
+    creationKind = null;
+    creationCompleted = false;
+    creationStatus.textContent = "";
+    creationStatus.dataset.tone = "";
+    creationCancelButton.textContent = "返回";
   };
 
   const showDashboardSection = (sectionName) => {
@@ -140,12 +178,23 @@
       return;
     }
     const hiddenVolume = kind === "hidden";
+    creationKind = hiddenVolume ? "hidden" : "encrypted";
+    creationCompleted = false;
+    creationStatus.textContent = "";
+    creationStatus.dataset.tone = "";
+    containerACapacity.value = "64";
     creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
     creationDescription.textContent = hiddenVolume
       ? "隐藏盘参数与卡记录事务将在后续切片接入。"
-      : "加密盘参数与原生创建链将在下一切片接入。";
+      : "请选择加密盘容量。创建过程将请求管理员权限。";
     creationDialog.hidden = false;
-    creationCloseButton.focus();
+    updateCreationAvailability();
+    if (hiddenVolume) {
+      creationCloseButton.focus();
+    } else {
+      containerACapacity.focus();
+      containerACapacity.select();
+    }
   };
 
   const updateProductSurface = () => {
@@ -160,9 +209,10 @@
       button.disabled = busy || !showDashboard;
     }
     if (!showDashboard) {
-      closeCreationFlow();
+      closeCreationFlow(true);
       showDashboardSection("dashboard");
     }
+    updateCreationAvailability();
   };
 
   const render = (message, error = "") => {
@@ -488,6 +538,53 @@
     }
   };
 
+  const createContainerA = async () => {
+    const sizeMib = containerACapacityMib();
+    if (sizeMib === null || creationKind !== "encrypted" ||
+        currentState !== nativeState.authenticated) {
+      creationStatus.textContent = "请输入有效的加密盘容量。";
+      creationStatus.dataset.tone = "error";
+      updateCreationAvailability();
+      return;
+    }
+
+    busy = true;
+    creationStatus.textContent = "正在请求管理员权限并创建加密盘。";
+    creationStatus.dataset.tone = "";
+    render(messageForCurrentState());
+    try {
+      await bridge.createContainerAMib(sizeMib);
+      await refreshNativeState();
+      busy = false;
+      creationCompleted = true;
+      render(messageForCurrentState());
+      creationDescription.textContent = "加密盘已经创建并挂载。";
+      creationStatus.textContent = "创建成功，可以开始使用加密盘。";
+      creationStatus.dataset.tone = "success";
+      updateCreationAvailability();
+    } catch (_) {
+      try {
+        await refreshNativeState();
+      } catch (_) {
+        currentState = nativeState.unavailable;
+        activeVolumes = true;
+      }
+      busy = false;
+      render(messageForCurrentState());
+      if (!creationDialog.hidden &&
+          currentState === nativeState.authenticated) {
+        creationStatus.textContent =
+          "创建失败。若容器已完成但未挂载，请重新插卡后重试。";
+        creationStatus.dataset.tone = "error";
+        updateCreationAvailability();
+      }
+    } finally {
+      if (externalRefreshPending) {
+        void refreshAfterExternalChange();
+      }
+    }
+  };
+
   for (const item of dashboardNavigation) {
     item.addEventListener("click", () => {
       if (!busy && currentState === nativeState.authenticated) {
@@ -500,8 +597,18 @@
       openCreationFlow(button.dataset.createKind);
     });
   }
-  creationCloseButton.addEventListener("click", closeCreationFlow);
-  creationCancelButton.addEventListener("click", closeCreationFlow);
+  creationCloseButton.addEventListener("click", () => closeCreationFlow());
+  creationCancelButton.addEventListener("click", () => closeCreationFlow());
+  creationContinueButton.addEventListener("click", async () => {
+    if (!busy && creationKind === "encrypted") {
+      await createContainerA();
+    }
+  });
+  containerACapacity.addEventListener("input", () => {
+    creationStatus.textContent = "";
+    creationStatus.dataset.tone = "";
+    updateCreationAvailability();
+  });
   creationDialog.addEventListener("click", (event) => {
     if (event.target === creationDialog) {
       closeCreationFlow();

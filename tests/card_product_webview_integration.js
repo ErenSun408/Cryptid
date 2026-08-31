@@ -27,7 +27,11 @@ chrome.webview.postMessage("driver-loaded");
     '[data-create-kind="encrypted"]');
   const creationDialog = document.getElementById("create-volume-dialog");
   const creationTitle = document.getElementById("create-volume-title");
-  const creationClose = document.getElementById("create-volume-close");
+  const creationCancel = document.getElementById("create-volume-cancel");
+  const creationContinue = document.getElementById("create-volume-continue");
+  const creationCapacity =
+    document.getElementById("create-container-a-capacity");
+  const creationStatus = document.getElementById("create-volume-status");
   const instruction = "请输入并确认日常密码，至少12字符。";
 
   const waitFor = (condition) => {
@@ -154,11 +158,37 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
   encryptedCreate.click();
-  if (creationDialog.hidden || creationTitle.textContent !== "新建加密盘") {
+  if (creationDialog.hidden || creationTitle.textContent !== "新建加密盘" ||
+      creationCapacity.value !== "64" || creationContinue.disabled) {
     request("fail-creation-entry");
     return;
   }
-  creationClose.click();
+  creationCapacity.value = "19";
+  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  if (!creationContinue.disabled) {
+    request("fail-creation-validation");
+    return;
+  }
+  creationCapacity.value = "64";
+  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  creationContinue.click();
+  if (!await waitFor(() => surface.dataset.busy === "false" &&
+      dashboardVolumeState.textContent === "未挂载" &&
+      creationStatus.dataset.tone === "error" &&
+      !creationCapacity.disabled && !creationContinue.disabled)) {
+    request("fail-creation-failure-feedback");
+    return;
+  }
+  creationContinue.click();
+  if (!await waitFor(() => surface.dataset.busy === "false" &&
+      dashboardVolumeState.textContent === "已挂载" &&
+      !dashboardUnmount.hidden && creationCapacity.disabled &&
+      creationContinue.disabled && creationCancel.textContent === "完成" &&
+      creationStatus.dataset.tone === "success")) {
+    request("fail-creation-submit");
+    return;
+  }
+  creationCancel.click();
   if (!creationDialog.hidden) {
     request("fail-creation-close");
     return;

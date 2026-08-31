@@ -74,10 +74,16 @@
     <h3 id="create-volume-title">新建加密盘</h3>
     <p id="create-volume-description"></p>
     <button id="create-volume-close" type="button">关闭</button>
+    <div id="create-container-a-form" hidden>
+      <label for="create-container-a-capacity">加密盘容量</label>
+      <input id="create-container-a-capacity" type="number" min="20"
+             max="1048576" step="1" value="64">
+    </div>
+    <output id="create-volume-status"></output>
     <button id="create-volume-cancel" type="button">返回</button>
-    <button id="create-volume-continue" type="button" disabled>继续</button>
+    <button id="create-volume-continue" type="button">创建加密盘</button>
   </div>
-  <script src="card_session.js?v=p2-16a-dashboard-shell"></script>
-  <script src="card_product_webview_integration.js?v=p2-16a-dashboard-shell"></script>
+  <script src="card_session.js?v=p2-16c-container-a-ui"></script>
+  <script src="card_product_webview_integration.js?v=p2-16c-container-a-ui"></script>
 </body>
 </html>

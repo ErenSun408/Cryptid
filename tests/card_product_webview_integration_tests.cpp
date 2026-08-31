@@ -60,8 +60,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
       : authentication_(authentication) {}
 
-  void create_container_a(std::uint64_t) override {
-    throw std::logic_error("not used by WebView integration tests");
+  void create_container_a(const std::uint64_t size_bytes) override {
+    created_a_size_bytes = size_bytes;
+    ++create_a_calls;
+    if (fail_next_create_a) {
+      fail_next_create_a = false;
+      throw std::runtime_error("injected container A creation failure");
+    }
+    mounted_state = true;
   }
 
   void consume_authenticated_login(
@@ -94,6 +100,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   CardAuthenticationSession& authentication_;
   bool mounted_state{};
   bool login_payload_matched{};
+  bool fail_next_create_a{true};
+  std::uint64_t created_a_size_bytes{};
+  int create_a_calls{};
   int consume_calls{};
   int unmount_calls{};
 };
@@ -197,6 +206,8 @@ void fail_and_close(const HWND window) noexcept {
   return g_entry.initialization_calls == 1 &&
          g_entry.initialization_payload_matched &&
          g_entry.login_calls == 2 && g_entry.credential_rejections == 1 &&
+         g_volume.create_a_calls == 2 &&
+         g_volume.created_a_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
          g_volume.unmount_calls == 1 && !g_volume.mounted();
 }
@@ -214,6 +225,9 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-initialization-submit",
       L"fail-dashboard-navigation",
       L"fail-creation-entry",
+      L"fail-creation-validation",
+      L"fail-creation-failure-feedback",
+      L"fail-creation-submit",
       L"fail-creation-close",
       L"fail-login-route",
       L"fail-external-input-clear",

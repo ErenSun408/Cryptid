@@ -63,7 +63,7 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-16a-dashboard-shell\"></script>") !=
+              "<script src=\"card_session.js?v=p2-16c-container-a-ui\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -179,8 +179,38 @@ void test_bridge_calls_are_narrow_and_route_specific() {
           "initialization page does not use the independent P2 inputs");
   require(script.find("await bridge.unmount();") != std::string::npos,
           "product page lacks unified cleanup");
+  require(script.find("await bridge.createContainerAMib(sizeMib);") !=
+              std::string::npos,
+          "authenticated A creation does not use the capacity-only bridge");
   require(script.find("bridge.submitPasswordBytes") == std::string::npos,
           "product page reused the incompatible P1 submission method");
+}
+
+void test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("id=\"create-container-a-capacity\"") !=
+              std::string::npos &&
+              page.find("min=\"20\" max=\"1048576\" step=\"1\" value=\"64\"") !=
+                  std::string::npos &&
+              page.find("id=\"create-volume-status\"") !=
+                  std::string::npos,
+          "container A dialog lacks its fixed capacity and status controls");
+  require(script.find("const containerACapacityMib") != std::string::npos &&
+              script.find("value >= 20 && value <= 1048576") !=
+                  std::string::npos &&
+              script.find("creationKind !== \"encrypted\"") !=
+                  std::string::npos &&
+              script.find("creationContinueButton.title = encrypted ? \"\" : \"正在开发中\"") !=
+                  std::string::npos,
+          "creation routing does not bind A capacity or defer hidden volumes");
+  require(script.find("正在请求管理员权限并创建加密盘") !=
+              std::string::npos &&
+              script.find("创建成功，可以开始使用加密盘") !=
+                  std::string::npos &&
+              script.find("若容器已完成但未挂载，请重新插卡后重试") !=
+                  std::string::npos,
+          "container A flow lacks busy, success, or recovery feedback");
 }
 
 void test_all_password_copies_have_fallback_wipes() {
@@ -320,6 +350,7 @@ int main() {
   test_authenticated_dashboard_is_real_state_only();
   test_five_states_are_complete_and_vendor_neutral();
   test_bridge_calls_are_narrow_and_route_specific();
+  test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred();
   test_all_password_copies_have_fallback_wipes();
   test_strength_feedback_matches_the_native_length_baseline();
   test_initialization_feedback_is_stable_and_recoverable();

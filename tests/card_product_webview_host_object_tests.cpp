@@ -67,8 +67,11 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
       : authentication_(authentication) {}
 
-  void create_container_a(std::uint64_t) override {
-    throw std::logic_error("not used by WebView host-object tests");
+  void create_container_a(const std::uint64_t size_bytes) override {
+    ++create_a_calls;
+    created_a_size_bytes = size_bytes;
+    if (reject_create_a) throw std::runtime_error("creation failed");
+    mounted_state = true;
   }
 
   void consume_authenticated_login(
@@ -100,7 +103,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool mount_on_login{};
   bool mounted_state{};
   bool reject_unmount{};
+  bool reject_create_a{};
+  std::uint64_t created_a_size_bytes{};
   int consume_calls{};
+  int create_a_calls{};
   int unmount_calls{};
 };
 
@@ -337,6 +343,15 @@ class InitializationArguments final {
   return mounted;
 }
 
+[[nodiscard]] HRESULT invoke_create_a(
+    IDispatch& host, VARIANTARG& size,
+    UINT* const argument_error = nullptr) {
+  DISPPARAMS parameters{&size, nullptr, 1, 0};
+  return host.Invoke(member_id(host, L"createContainerAMib"), IID_NULL,
+                     LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
+                     nullptr, argument_error);
+}
+
 void test_surface_and_state_projection_are_fixed() {
   Fixture fixture;
   ComPtr<IDispatch> host = make_host(fixture.controller);
@@ -517,6 +532,73 @@ void test_unmount_and_property_rejection() {
           "product state was exposed as a property");
 }
 
+void test_container_a_creation_accepts_only_exact_bounded_numbers() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  VARIANTARG size{};
+  ::VariantInit(&size);
+  size.vt = VT_R8;
+  size.dblVal = 64.0;
+  require(invoke_create_a(*host.Get(), size) == S_OK &&
+              fixture.volume.create_a_calls == 1 &&
+              fixture.volume.created_a_size_bytes ==
+                  64ULL * 1024ULL * 1024ULL &&
+              invoke_mounted(*host.Get()),
+          "host did not forward exact container A capacity");
+
+  for (const double invalid : {19.0, 1048577.0, 64.5}) {
+    size.dblVal = invalid;
+    UINT argument_error = 99;
+    require(invoke_create_a(*host.Get(), size, &argument_error) ==
+                    DISP_E_TYPEMISMATCH &&
+                argument_error == 0,
+            "host accepted an invalid container A capacity");
+  }
+  require(fixture.volume.create_a_calls == 1,
+          "invalid capacity reached the volume session");
+
+  size.vt = VT_BSTR;
+  size.bstrVal = ::SysAllocString(L"64");
+  require(size.bstrVal != nullptr, "BSTR allocation failed");
+  UINT argument_error = 99;
+  require(invoke_create_a(*host.Get(), size, &argument_error) ==
+                  DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "host coerced a string capacity");
+  static_cast<void>(::VariantClear(&size));
+}
+
+void test_container_a_creation_preserves_route_and_failure_semantics() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  VARIANTARG size{};
+  ::VariantInit(&size);
+  size.vt = VT_UI4;
+  size.ulVal = 64;
+
+  require(invoke_create_a(*host.Get(), size) == E_FAIL &&
+              fixture.volume.create_a_calls == 0,
+          "host allowed creation outside authentication");
+
+  fixture.authentication.establish(root_secret());
+  fixture.volume.reject_create_a = true;
+  require(invoke_create_a(*host.Get(), size) == E_FAIL &&
+              fixture.volume.create_a_calls == 1 &&
+              invoke_state(*host.Get()) == 3L &&
+              !invoke_mounted(*host.Get()),
+          "host hid creation failure or changed authentication state");
+
+  DISPPARAMS no_arguments{};
+  require(host->Invoke(member_id(*host.Get(), L"createContainerAMib"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &no_arguments, nullptr, nullptr, nullptr) ==
+              DISP_E_BADPARAMCOUNT,
+          "host accepted missing creation capacity");
+}
+
 }  // namespace
 
 int main() {
@@ -527,6 +609,8 @@ int main() {
     test_initialization_failure_wipes_every_supported_argument();
     test_bad_arity_still_wipes_supplied_password_array();
     test_unmount_and_property_rejection();
+    test_container_a_creation_accepts_only_exact_bounded_numbers();
+    test_container_a_creation_preserves_route_and_failure_semantics();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
