@@ -4126,3 +4126,45 @@
   持久化输入及状态；两个初始化输入不能别名，所有拒绝和异常路径统一清零，残留挂载也不能与新
   插卡授权叠加。剩余边界是 WebView/COM 复制面、页面强度反馈和正式 App 组合尚未实现；本切片已
   完成实现、测试和复核，用户已批准提交；本地提交随本记录创建。
+
+### 小切片 15b：P2 WebView 安全自动化桥接
+
+#### 需求审计与实现
+
+- P2.15a 提交为 `cb8f95d [P2.15]add product UI session boundary`，未推送。继续审计 Q-07、8.6、
+  R-03、P1 WebView 数组适配器／host object、P2.15a 控制器、产品页和 `tools/app/main.cpp` 后确认：
+  现有页面及主程序仍只组合 P1 32 字节裸卡链，不能直接改名复用；本切片只建立独立 P2 COM 边界，
+  不改变开发 EXE 的可见行为。
+- 新增 `CardProductWebViewHostObject`，固定只暴露 `submitLoginPasswordBytes`、
+  `submitInitializationPasswordBytes`、`unmount`、`hasActiveSession` 和 `getSessionState` 五个方法。
+  五态只编码为 0～4 的中性整数；旧 P1 `submitPasswordBytes` 及硬件 ID、密码角色、模式、档位、
+  容器形态、卷类型和根秘密均不存在于可查询成员表。
+- 把 P1 SAFEARRAY 入口拆为可复用的 `consume_webview_password_array`：仅接受一维 `VT_UI1` 或
+  WebView Runtime 的 `VT_VARIANT`／字节范围 `VT_I4` 数组，在锁页所有者中复制输入后交给产品
+  控制器统一执行 NFC；P1 入口继续调用原控制器，不增加第二套规范化。
+- 初始化方法按 COM 逆序参数读取两个数组，并在检查任一输入之前同时建立擦除守卫。支持的来源
+  数组在成功、长度／类型错误、确认或强度拒绝和下游异常路径均作 best-effort 清零；类型错误的
+  `argument_error` 精确指向 COM 参数索引。错误参数数量也会清理已提供的最多两个支持数组。
+- 依据用户 2026-08-31 决策再次清理需求中的旧表述：口令遗忘确认继续暂缓，不是卡初始化或明文
+  导出确认屏的不可跳过提交条件；本桥不新增该布尔位或任何持久确认状态。
+- 本切片不修改 WebView 页面、HID、ViKey helper／IPC、实体卡或主 App composition root。下一
+  小切片应实现五态初始化／登录页面并用受控假后端完成 UI 全流程；再下一切片才组合正式 ViKey、
+  HID 生命周期、P2 会话和真实容器挂载。
+
+#### 测试、安全复核与提交状态
+
+- 新增 `card_product_webview_host_object_tests`，覆盖五态整数投影、禁止成员表、单输入 NFC／擦除／
+  重试与成功、双输入 COM 顺序／独立数组／NFC 相等、确认失败、两个参数各自的类型错误及索引、
+  错误参数数量清理、统一卸载、活动会话查询和 property 调用拒绝；P1 数组与 host object 回归测试
+  继续通过。
+- 定向构建首次发现 `SafeArrayGetDim` 的 Windows 头文件签名不接受 `const SAFEARRAY*`，将内部
+  计数辅助函数改为非 const 引用后通过。这是编译期限定符问题，没有生成或运行失配二进制，也未
+  复现 P2.15a 陈旧对象布局导致的系统错误弹窗。
+- Debug、MSVC `/analyze`、ASan 三套完整构建与 CTest 均为 **49/49**：47 项实际通过、2 项因 Codex
+  父令牌受限按既有规则跳过；`/analyze` 无项目诊断，ASan 未报告内存错误。新增桥接测试三套均
+  实际通过，P1 回归通过；不涉及 helper／伪 DLL 或实体卡，无需用户手动补跑 PowerShell。
+- 安全复核确认桥接不会向页面返回秘密或可区分形态；双输入在首个错误发生前已同时受擦除守卫，
+  锁页副本由 RAII 清除，产品控制器仍是唯一 NFC 与策略入口。无法主动擦除的剩余面仍是 WebView2、
+  JavaScript 引擎和 COM 内部可能产生的短期副本；不支持的字符串等非数组参数只拒绝而不解释或
+  修改。页面尚未调用本桥，正式 App 也仍是 P1，因此当前还不能进行真实 P2 UI 全流程验收。本切片
+  已完成实现、测试和安全复核，用户已批准提交；本地提交随本记录创建。

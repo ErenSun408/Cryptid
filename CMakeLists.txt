@@ -152,6 +152,7 @@ add_library(usb_vault_core STATIC
   src/security/offline_card_password_policy.cpp
   src/security/password_normalization.cpp
   src/security/secure_buffer.cpp
+  src/ui/card_product_webview_host_object.cpp
   src/ui/card_product_ui_session_controller.cpp
   src/ui/password_ingress.cpp
   src/ui/ui_close_guard.cpp

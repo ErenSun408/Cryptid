@@ -5,7 +5,9 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -37,6 +39,18 @@ class SafeArrayAccess final {
  private:
   SAFEARRAY& array_;
   void* data_{nullptr};
+};
+
+class PasswordVariantWiper final {
+ public:
+  explicit PasswordVariantWiper(VARIANT& value) noexcept : value_(value) {}
+  ~PasswordVariantWiper() noexcept { wipe_webview_password_array(value_); }
+
+  PasswordVariantWiper(const PasswordVariantWiper&) = delete;
+  PasswordVariantWiper& operator=(const PasswordVariantWiper&) = delete;
+
+ private:
+  VARIANT& value_;
 };
 
 class VariantPasswordAccess final {
@@ -113,8 +127,8 @@ struct ArrayInfo final {
           element_type};
 }
 
-void submit_byte_array(SAFEARRAY& array, const std::size_t size,
-                       UiSessionController& controller) {
+[[nodiscard]] security::SecureBuffer consume_byte_array(
+    SAFEARRAY& array, const std::size_t size) {
   if (array.cbElements != sizeof(std::byte)) {
     throw std::invalid_argument(
         "WebView2 byte array has an invalid element width");
@@ -124,11 +138,14 @@ void submit_byte_array(SAFEARRAY& array, const std::size_t size,
   if (size != 0 && bytes == nullptr) {
     throw std::invalid_argument("WebView2 password array has no data");
   }
-  controller.submit_password(std::span<std::byte>(bytes, size));
+  security::SecureBuffer result(size);
+  std::ranges::copy(std::span<const std::byte>(bytes, size),
+                    result.bytes().begin());
+  return result;
 }
 
-void submit_variant_byte_array(SAFEARRAY& array, const std::size_t size,
-                               UiSessionController& controller) {
+[[nodiscard]] security::SecureBuffer consume_variant_byte_array(
+    SAFEARRAY& array, const std::size_t size) {
   if (array.cbElements != sizeof(VARIANT)) {
     throw std::invalid_argument(
         "WebView2 variant array has an invalid element width");
@@ -145,19 +162,67 @@ void submit_variant_byte_array(SAFEARRAY& array, const std::size_t size,
           "WebView2 variant password array must contain byte-range integers");
     }
   }
-  security::SecureBuffer normalized(size);
+  security::SecureBuffer result(size);
   for (std::size_t index = 0; index < size; ++index) {
-    normalized.bytes()[index] =
+    result.bytes()[index] =
         static_cast<std::byte>(static_cast<unsigned char>(access[index].lVal));
   }
   access.wipe();
-  controller.submit_password(normalized.bytes());
+  return result;
+}
+
+[[nodiscard]] std::size_t array_element_count(SAFEARRAY& array) noexcept {
+  const UINT dimensions = ::SafeArrayGetDim(&array);
+  if (dimensions == 0) return 0;
+
+  std::size_t result = 1;
+  for (UINT index = 0; index < dimensions; ++index) {
+    const std::size_t count = array.rgsabound[index].cElements;
+    if (count != 0 &&
+        result > std::numeric_limits<std::size_t>::max() / count) {
+      return 0;
+    }
+    result *= count;
+  }
+  return result;
 }
 
 }  // namespace
 
-void submit_webview_password_array(VARIANT& password_bytes,
-                                   UiSessionController& controller) {
+void wipe_webview_password_array(VARIANT& password_bytes) noexcept {
+  if (password_bytes.parray == nullptr ||
+      (password_bytes.vt != (VT_ARRAY | VT_UI1) &&
+       password_bytes.vt != (VT_ARRAY | VT_VARIANT))) {
+    return;
+  }
+
+  SAFEARRAY& array = *password_bytes.parray;
+  const std::size_t count = array_element_count(array);
+  if (count == 0) return;
+
+  void* raw_data = nullptr;
+  if (FAILED(::SafeArrayAccessData(&array, &raw_data)) || raw_data == nullptr) {
+    return;
+  }
+  if (password_bytes.vt == (VT_ARRAY | VT_UI1) &&
+      array.cbElements == sizeof(std::byte)) {
+    static_cast<void>(::SecureZeroMemory(raw_data, count));
+  } else if (password_bytes.vt == (VT_ARRAY | VT_VARIANT) &&
+             array.cbElements == sizeof(VARIANT)) {
+    auto* const elements = static_cast<VARIANT*>(raw_data);
+    for (std::size_t index = 0; index < count; ++index) {
+      if (elements[index].vt == VT_I4) {
+        static_cast<void>(
+            ::SecureZeroMemory(&elements[index].lVal, sizeof(LONG)));
+      }
+    }
+  }
+  static_cast<void>(::SafeArrayUnaccessData(&array));
+}
+
+security::SecureBuffer consume_webview_password_array(
+    VARIANT& password_bytes) {
+  PasswordVariantWiper source_wiper(password_bytes);
   if (password_bytes.parray == nullptr ||
       (password_bytes.vt != (VT_ARRAY | VT_UI1) &&
        password_bytes.vt != (VT_ARRAY | VT_VARIANT))) {
@@ -175,12 +240,21 @@ void submit_webview_password_array(VARIANT& password_bytes,
     throw std::invalid_argument(
         "WebView2 password SAFEARRAY type does not match its VARIANT");
   }
+  if (info.size > security::kMaximumPasswordUtf8InputBytes) {
+    throw std::length_error("WebView2 password array is too long");
+  }
 
   if (expected_element_type == static_cast<VARTYPE>(VT_UI1)) {
-    submit_byte_array(array, info.size, controller);
-    return;
+    return consume_byte_array(array, info.size);
   }
-  submit_variant_byte_array(array, info.size, controller);
+  return consume_variant_byte_array(array, info.size);
+}
+
+void submit_webview_password_array(VARIANT& password_bytes,
+                                   UiSessionController& controller) {
+  security::SecureBuffer password =
+      consume_webview_password_array(password_bytes);
+  controller.submit_password(password.bytes());
 }
 
 }  // namespace usb_vault::ui
