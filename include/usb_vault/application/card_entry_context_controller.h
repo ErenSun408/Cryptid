@@ -50,11 +50,36 @@ class ICardEntryInspectionSource {
   ICardEntryInspectionSource() noexcept = default;
 };
 
+// Secret-consuming product actions exposed to a native UI controller. This
+// deliberately omits arrival/removal, insertion context, vendor identity, and
+// raw record access. Implementations own all retry and invalidation semantics.
+class ICardEntryActions {
+ public:
+  virtual ~ICardEntryActions() noexcept = default;
+
+  ICardEntryActions(const ICardEntryActions&) = delete;
+  ICardEntryActions& operator=(const ICardEntryActions&) = delete;
+  ICardEntryActions(ICardEntryActions&&) = delete;
+  ICardEntryActions& operator=(ICardEntryActions&&) = delete;
+
+  virtual void initialize_and_authenticate(
+      CardAuthenticationSession& authentication,
+      security::ConfirmedPassword confirmed_daily_password) = 0;
+  virtual void authenticate_login(
+      ICardLoginSuccessConsumer& success_consumer,
+      security::SecureBuffer login_password_utf8) = 0;
+  [[nodiscard]] virtual std::optional<CardEntryRoute>
+  current_route() const noexcept = 0;
+
+ protected:
+  ICardEntryActions() noexcept = default;
+};
+
 // Owns the strictly volatile context and fixed route for at most one physical
 // insertion. Every arrival first destroys the previous binding; removal
 // destroys the current binding before publishing the no-card state. Source
 // failures and null contexts fail closed without an automatic retry.
-class CardEntryContextController final {
+class CardEntryContextController final : public ICardEntryActions {
  public:
   explicit CardEntryContextController(
       ICardEntryInspectionSource& source) noexcept;
@@ -69,7 +94,7 @@ class CardEntryContextController final {
   // fresh arrival establish a new read-only context.
   void initialize_and_authenticate(
       CardAuthenticationSession& authentication,
-      security::ConfirmedPassword confirmed_daily_password);
+      security::ConfirmedPassword confirmed_daily_password) override;
 
   // Attempts one login against the exact initialized insertion. A credential
   // rejection preserves the route and context for another user attempt. Any
@@ -78,10 +103,11 @@ class CardEntryContextController final {
   // login input into the synchronous non-UI consumer.
   void authenticate_login(
       ICardLoginSuccessConsumer& success_consumer,
-      security::SecureBuffer login_password_utf8);
+      security::SecureBuffer login_password_utf8) override;
 
   // No value means no accepted physical insertion is currently present.
-  [[nodiscard]] std::optional<CardEntryRoute> current_route() const noexcept;
+  [[nodiscard]] std::optional<CardEntryRoute>
+  current_route() const noexcept override;
   [[nodiscard]] bool has_context() const noexcept;
 
  private:
