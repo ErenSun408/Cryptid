@@ -63,10 +63,20 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-15c-five-state\"></script>") !=
+              "<script src=\"card_session.js?v=p2-15f-init-feedback\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
+  require(count_occurrences(page, "class=\"password-visibility\"") == 2 &&
+              page.find("aria-controls=\"card-password\"") !=
+                  std::string::npos &&
+              page.find("aria-controls=\"card-password-confirmation\"") !=
+                  std::string::npos &&
+              page.find("input::-ms-reveal") != std::string::npos,
+          "product page does not replace transient browser reveal controls");
+  require(count_occurrences(page,
+                            "class=\"password-strength-segment\"") == 3,
+          "product page strength meter must contain exactly three segments");
 }
 
 void test_five_states_are_complete_and_vendor_neutral() {
@@ -160,16 +170,83 @@ void test_strength_feedback_matches_the_native_length_baseline() {
   require(script.find("count < 12") != std::string::npos &&
               script.find("count <= 17") != std::string::npos &&
               script.find("count <= 128") != std::string::npos &&
-              script.find("强度：可接受") != std::string::npos &&
-              script.find("强度：较强") != std::string::npos,
+              script.find("strengthOutput.dataset.score = \"1\"") !=
+                  std::string::npos &&
+              script.find("strengthOutput.dataset.score = \"2\"") !=
+                  std::string::npos &&
+              script.find("strengthOutput.dataset.score = \"3\"") !=
+                  std::string::npos &&
+              script.find("passwordInput.value.length === 0") !=
+                  std::string::npos &&
+              script.find("strengthOutput.hidden = true") !=
+                  std::string::npos &&
+              script.find("还需") == std::string::npos,
           "strength feedback diverges from the 12/18/128 policy boundary");
+  require(script.find("initializationInputReady") != std::string::npos &&
+              script.find("count >= 12 && count <= 128") !=
+                  std::string::npos &&
+              script.find("至少12字符") != std::string::npos,
+          "initialization button does not enforce the visible minimum length");
+}
+
+void test_initialization_feedback_is_stable_and_recoverable() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script =
+      read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("class=\"strength-slot\"") != std::string::npos &&
+              page.find(".strength-slot { min-height:") != std::string::npos,
+          "strength meter does not reserve its height before it appears");
+  const std::size_t status_line = page.find("id=\"card-session-status\"");
+  const std::size_t error_line = page.find("id=\"card-session-error\"");
+  require(status_line != std::string::npos &&
+              error_line != std::string::npos && status_line < error_line &&
+              page.find("#card-session-error { margin-top: .5rem; color:") !=
+                  std::string::npos,
+          "failures do not appear as a red line under the standing guidance");
+  require(script.find("statusOutput.textContent = message;") !=
+              std::string::npos &&
+              script.find("errorOutput.textContent = error;") !=
+                  std::string::npos &&
+              script.find("render(messageForCurrentState(), retryable") !=
+                  std::string::npos,
+          "an initialization failure hides the standing guidance line");
+  require(script.find("初始化失败，两次密码不一致。") != std::string::npos &&
+              script.find("无法初始化安全卡") == std::string::npos &&
+              script.find("initializationInputsMatch") != std::string::npos &&
+              script.find("password.normalize(\"NFC\") === "
+                          "confirmation.normalize(\"NFC\")") !=
+                  std::string::npos,
+          "a mismatch is not named on the same terms the native route uses");
+  require(script.find("passwordInput.value = retainedPassword;") !=
+              std::string::npos &&
+              script.find("confirmationInput.value = retainedConfirmation;") !=
+                  std::string::npos &&
+              script.find("!externalRefreshPending;") != std::string::npos,
+          "a retryable initialization failure discards the typed inputs");
+  require(count_occurrences(script, "retainedPassword = \"\";") >= 3 &&
+              count_occurrences(script, "retainedConfirmation = \"\";") >= 3,
+          "retained retry copies lack a success and fallback release");
+}
+
+void test_visibility_controls_persist_until_sensitive_inputs_are_cleared() {
+  const std::string script =
+      read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(script.find("const setPasswordVisibility") != std::string::npos &&
+              script.find("input.type = visible ? \"text\" : \"password\"") !=
+                  std::string::npos &&
+              count_occurrences(script,
+                                "getAttribute(\"aria-pressed\")") == 2,
+          "custom password visibility controls are not stateful");
+  require(script.find("const resetPasswordVisibility") != std::string::npos &&
+              count_occurrences(script, "resetPasswordVisibility();") >= 3,
+          "password visibility survives a submission or card-state clear");
 }
 
 void test_actions_are_serialized_and_external_changes_coalesce() {
   const std::string script =
       read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   require(script.find("if (busy)") != std::string::npos &&
-              script.find("actionButton.disabled = busy") !=
+              script.find("actionButton.disabled = busy ||") !=
                   std::string::npos,
           "product page does not serialize asynchronous actions");
   require(script.find(
@@ -195,6 +272,8 @@ int main() {
   test_bridge_calls_are_narrow_and_route_specific();
   test_all_password_copies_have_fallback_wipes();
   test_strength_feedback_matches_the_native_length_baseline();
+  test_initialization_feedback_is_stable_and_recoverable();
+  test_visibility_controls_persist_until_sensitive_inputs_are_cleared();
   test_actions_are_serialized_and_external_changes_coalesce();
   std::cout << "card_product_ui_page_contract_tests: PASS\n";
   return 0;

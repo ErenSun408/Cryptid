@@ -197,6 +197,33 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.unmount_calls == 1 && !g_volume.mounted();
 }
 
+[[nodiscard]] int failure_exit_code(const wchar_t* const message) noexcept {
+  constexpr const wchar_t* failures[]{
+      L"fail-no-card",
+      L"fail-initialization-route",
+      L"fail-short-password-state",
+      L"fail-password-visibility-persistence",
+      L"fail-confirmation-visibility-persistence",
+      L"fail-strength",
+      L"fail-initialization-mismatch",
+      L"fail-initialization-error-clear",
+      L"fail-initialization-submit",
+      L"fail-login-route",
+      L"fail-external-input-clear",
+      L"fail-login-retry",
+      L"fail-login-success",
+      L"fail-unavailable",
+      L"fail-unmount",
+      L"fail-final-no-card",
+  };
+  int code = 10;
+  for (const wchar_t* const failure : failures) {
+    if (std::wcscmp(message, failure) == 0) return code;
+    ++code;
+  }
+  return 2;
+}
+
 HRESULT handle_message(const HWND window,
                        ICoreWebView2WebMessageReceivedEventArgs& args) {
   LPWSTR raw_message = nullptr;
@@ -241,7 +268,7 @@ HRESULT handle_message(const HWND window,
   if (std::wcscmp(raw_message, L"pass") == 0 && product_flow_matched()) {
     g_exit_code = 0;
   } else {
-    g_exit_code = 2;
+    g_exit_code = failure_exit_code(raw_message);
   }
   ::CoTaskMemFree(raw_message);
   static_cast<void>(::DestroyWindow(window));

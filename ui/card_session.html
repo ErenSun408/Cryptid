@@ -17,14 +17,46 @@
     .field + .field { margin-top: 1rem; }
     label { display: block; margin-bottom: .5rem; font-size: .9rem; font-weight: 600; }
     input, button { width: 100%; min-height: 2.75rem; border-radius: .5rem; font: inherit; }
-    input { border: 1px solid #4b5563; padding: 0 .75rem; background: #111827; color: #f9fafb; }
+    input { border: 1px solid #4b5563; padding: 0 3.25rem 0 .75rem; background: #111827; color: #f9fafb; }
+    input::-ms-reveal, input::-ms-clear { display: none; }
     input:focus { outline: 2px solid #60a5fa; outline-offset: 2px; }
     button { margin-top: 1rem; border: 0; background: #2563eb; color: white; font-weight: 600; }
-    input:disabled, button:disabled { cursor: wait; opacity: .55; }
+    input:disabled, button:disabled { opacity: .55; }
+    #card-session-action:disabled { cursor: not-allowed; background: #4b5563; color: #d1d5db; }
+    main[data-busy="true"] input:disabled,
+    main[data-busy="true"] button:disabled { cursor: wait; }
     output { display: block; min-height: 1.5rem; margin-top: 1rem; color: #9ca3af; font-size: .9rem; text-align: center; }
-    #password-strength[data-level="acceptable"] { color: #93c5fd; }
-    #password-strength[data-level="strong"] { color: #86efac; }
-    #password-strength[data-level="invalid"] { color: #fca5a5; }
+    .password-control { position: relative; }
+    .password-visibility {
+      position: absolute; top: 50%; right: .35rem; width: 2.25rem;
+      min-height: 2.25rem; margin: 0; padding: .45rem; transform: translateY(-50%);
+      border-radius: .4rem; background: transparent; color: #9ca3af;
+    }
+    .password-visibility:hover:not(:disabled),
+    .password-visibility:focus-visible { background: #374151; color: #f9fafb; }
+    .password-visibility:focus-visible { outline: 2px solid #60a5fa; outline-offset: 1px; }
+    .password-visibility svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+    .password-visibility .visibility-slash { display: none; }
+    .password-visibility[aria-pressed="true"] .visibility-slash { display: block; }
+    .strength-slot { min-height: 1.25rem; margin-top: .75rem; }
+    main:not([data-session-state="initialization-required"]) .strength-slot {
+      display: none;
+    }
+    #password-strength {
+      display: flex; align-items: center; gap: .75rem; min-height: 1.25rem;
+      margin-top: 0; color: #9ca3af; font-size: .82rem;
+    }
+    .password-strength-segments { display: grid; flex: 1; grid-template-columns: repeat(3, 1fr); gap: .35rem; }
+    .password-strength-segment { height: .35rem; border-radius: 999px; background: #4b5563; transition: background-color 120ms ease; }
+    #password-strength[data-level="invalid"] .password-strength-segment:first-child { background: #f87171; }
+    #password-strength[data-level="invalid"][data-score="3"] .password-strength-segment { background: #f87171; }
+    #password-strength[data-level="acceptable"] .password-strength-segment:nth-child(-n+2) { background: #fbbf24; }
+    #password-strength[data-level="strong"] .password-strength-segment { background: #4ade80; }
+    #card-session-error { margin-top: .5rem; color: #f87171; }
+    .visually-hidden {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
   </style>
 </head>
 <body>
@@ -35,16 +67,52 @@
     <section id="password-fields" hidden>
       <div class="field">
         <label id="card-password-label" for="card-password">密码</label>
-        <input id="card-password" type="password" autocomplete="off"
-               autocapitalize="off" spellcheck="false" disabled>
+        <div class="password-control">
+          <input id="card-password" type="password" autocomplete="off"
+                 autocapitalize="off" spellcheck="false" disabled>
+          <button id="card-password-visibility" class="password-visibility"
+                  type="button" aria-label="显示密码"
+                  aria-controls="card-password" aria-pressed="false" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path>
+              <circle cx="12" cy="12" r="2.5"></circle>
+              <path class="visibility-slash" d="M4 4l16 16"></path>
+            </svg>
+          </button>
+        </div>
       </div>
       <div id="confirmation-field" class="field" hidden>
         <label for="card-password-confirmation">确认密码</label>
-        <input id="card-password-confirmation" type="password"
-               autocomplete="off" autocapitalize="off" spellcheck="false"
-               disabled>
+        <div class="password-control">
+          <input id="card-password-confirmation" type="password"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 disabled>
+          <button id="card-password-confirmation-visibility"
+                  class="password-visibility" type="button"
+                  aria-label="显示确认密码"
+                  aria-controls="card-password-confirmation"
+                  aria-pressed="false" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path>
+              <circle cx="12" cy="12" r="2.5"></circle>
+              <path class="visibility-slash" d="M4 4l16 16"></path>
+            </svg>
+          </button>
+        </div>
       </div>
-      <output id="password-strength" aria-live="polite" hidden></output>
+      <div class="strength-slot">
+        <output id="password-strength" aria-live="polite" data-level=""
+                data-score="0" hidden>
+          <span>密码强度</span>
+          <span class="password-strength-segments" aria-hidden="true">
+            <span class="password-strength-segment"></span>
+            <span class="password-strength-segment"></span>
+            <span class="password-strength-segment"></span>
+          </span>
+          <span id="password-strength-description"
+                class="visually-hidden"></span>
+        </output>
+      </div>
     </section>
     <button id="card-session-action" type="button" disabled hidden>
       正在初始化
@@ -52,7 +120,8 @@
     <output id="card-session-status" aria-live="polite">
       正在连接安全组件
     </output>
+    <output id="card-session-error" aria-live="polite" hidden></output>
   </main>
-  <script src="card_session.js?v=p2-15c-five-state"></script>
+  <script src="card_session.js?v=p2-15f-init-feedback"></script>
 </body>
 </html>

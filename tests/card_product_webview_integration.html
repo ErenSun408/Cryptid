@@ -13,18 +13,34 @@
     <section id="password-fields" hidden>
       <label id="card-password-label" for="card-password">密码</label>
       <input id="card-password" type="password" disabled>
+      <button id="card-password-visibility" type="button"
+              aria-label="显示密码" aria-controls="card-password"
+              aria-pressed="false" disabled>显示</button>
       <div id="confirmation-field" hidden>
         <label for="card-password-confirmation">确认密码</label>
         <input id="card-password-confirmation" type="password" disabled>
+        <button id="card-password-confirmation-visibility" type="button"
+                aria-label="显示确认密码"
+                aria-controls="card-password-confirmation"
+                aria-pressed="false" disabled>显示</button>
       </div>
-      <output id="password-strength" hidden></output>
+      <div class="strength-slot">
+        <output id="password-strength" data-level="" data-score="0" hidden>
+          <span>密码强度</span>
+          <span class="password-strength-segment"></span>
+          <span class="password-strength-segment"></span>
+          <span class="password-strength-segment"></span>
+          <span id="password-strength-description"></span>
+        </output>
+      </div>
     </section>
     <button id="card-session-action" type="button" disabled hidden>
       正在初始化
     </button>
     <output id="card-session-status">正在连接安全组件</output>
+    <output id="card-session-error" hidden></output>
   </main>
-  <script src="card_session.js?v=p2-15c-five-state"></script>
-  <script src="card_product_webview_integration.js?v=p2-15c-five-state"></script>
+  <script src="card_session.js?v=p2-15f-init-feedback"></script>
+  <script src="card_product_webview_integration.js?v=p2-15f-init-feedback"></script>
 </body>
 </html>

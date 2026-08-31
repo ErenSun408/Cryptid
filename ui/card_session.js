@@ -21,12 +21,19 @@
   const passwordFields = document.getElementById("password-fields");
   const passwordLabel = document.getElementById("card-password-label");
   const passwordInput = document.getElementById("card-password");
+  const passwordVisibilityButton =
+    document.getElementById("card-password-visibility");
   const confirmationField = document.getElementById("confirmation-field");
   const confirmationInput =
     document.getElementById("card-password-confirmation");
+  const confirmationVisibilityButton =
+    document.getElementById("card-password-confirmation-visibility");
   const strengthOutput = document.getElementById("password-strength");
+  const strengthDescription =
+    document.getElementById("password-strength-description");
   const actionButton = document.getElementById("card-session-action");
   const statusOutput = document.getElementById("card-session-status");
+  const errorOutput = document.getElementById("card-session-error");
 
   let bridge = null;
   let currentState = null;
@@ -42,13 +49,57 @@
   const acceptsInitialization = () =>
     currentState === nativeState.initializationRequired;
 
+  const normalizedPasswordLength = () => {
+    try {
+      return Array.from(passwordInput.value.normalize("NFC")).length;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  // The native route compares both inputs only after NFC normalization, so a
+  // failure is reported as a mismatch on exactly the same terms.
+  const initializationInputsMatch = (password, confirmation) => {
+    try {
+      return password.normalize("NFC") === confirmation.normalize("NFC");
+    } catch (_) {
+      return password === confirmation;
+    }
+  };
+
+  const initializationInputReady = () => {
+    const count = normalizedPasswordLength();
+    return count !== null && count >= 12 && count <= 128 &&
+      confirmationInput.value.length !== 0;
+  };
+
+  const updateActionAvailability = () => {
+    actionButton.disabled = busy ||
+      (acceptsInitialization() && !initializationInputReady());
+  };
+
+  const setPasswordVisibility = (input, button, visible) => {
+    input.type = visible ? "text" : "password";
+    button.setAttribute("aria-pressed", visible ? "true" : "false");
+    const confirmation = input === confirmationInput;
+    button.setAttribute(
+      "aria-label",
+      `${visible ? "隐藏" : "显示"}${confirmation ? "确认密码" : "密码"}`);
+  };
+
+  const resetPasswordVisibility = () => {
+    setPasswordVisibility(passwordInput, passwordVisibilityButton, false);
+    setPasswordVisibility(
+      confirmationInput, confirmationVisibilityButton, false);
+  };
+
   const focusCurrentInput = () => {
     if (!busy && (acceptsLogin() || acceptsInitialization())) {
       passwordInput.focus();
     }
   };
 
-  const render = (message) => {
+  const render = (message, error = "") => {
     surface.dataset.sessionState = currentState === null
       ? "initializing"
       : stateName[currentState];
@@ -61,11 +112,12 @@
        currentState === nativeState.unavailable);
     setVisible(passwordFields, showPassword);
     setVisible(confirmationField, showConfirmation);
-    setVisible(strengthOutput, showConfirmation);
     setVisible(actionButton, showPassword || showUnmount);
     passwordInput.disabled = busy || !showPassword;
     confirmationInput.disabled = busy || !showConfirmation;
-    actionButton.disabled = busy;
+    passwordVisibilityButton.disabled = busy || !showPassword;
+    confirmationVisibilityButton.disabled = busy || !showConfirmation;
+    updateActionAvailability();
 
     switch (currentState) {
       case nativeState.noCard:
@@ -96,39 +148,49 @@
         break;
     }
     statusOutput.textContent = message;
+    errorOutput.textContent = error;
+    errorOutput.hidden = error.length === 0;
+  };
+
+  const clearError = () => {
+    errorOutput.textContent = "";
+    errorOutput.hidden = true;
   };
 
   const updateStrength = () => {
-    if (!acceptsInitialization()) {
-      strengthOutput.textContent = "";
+    if (!acceptsInitialization() || passwordInput.value.length === 0) {
+      strengthOutput.hidden = true;
       strengthOutput.dataset.level = "";
+      strengthOutput.dataset.score = "0";
+      strengthDescription.textContent = "";
       return;
     }
 
-    let count = 0;
-    try {
-      count = Array.from(passwordInput.value.normalize("NFC")).length;
-    } catch (_) {
-      strengthOutput.textContent = "无法评估密码长度";
+    strengthOutput.hidden = false;
+    const count = normalizedPasswordLength();
+    if (count === null) {
       strengthOutput.dataset.level = "invalid";
+      strengthOutput.dataset.score = "1";
+      strengthDescription.textContent = "密码强度：无法评估";
       return;
     }
 
-    if (count === 0) {
-      strengthOutput.textContent = "请输入 12 至 128 个字符";
+    if (count < 12) {
       strengthOutput.dataset.level = "invalid";
-    } else if (count < 12) {
-      strengthOutput.textContent = `还需 ${12 - count} 个字符`;
-      strengthOutput.dataset.level = "invalid";
+      strengthOutput.dataset.score = "1";
+      strengthDescription.textContent = "密码强度：未达到最低要求";
     } else if (count <= 17) {
-      strengthOutput.textContent = "强度：可接受";
       strengthOutput.dataset.level = "acceptable";
+      strengthOutput.dataset.score = "2";
+      strengthDescription.textContent = "密码强度：可接受";
     } else if (count <= 128) {
-      strengthOutput.textContent = "强度：较强";
       strengthOutput.dataset.level = "strong";
+      strengthOutput.dataset.score = "3";
+      strengthDescription.textContent = "密码强度：较强";
     } else {
-      strengthOutput.textContent = "密码不能超过 128 个字符";
       strengthOutput.dataset.level = "invalid";
+      strengthOutput.dataset.score = "3";
+      strengthDescription.textContent = "密码长度超过 128 个字符";
     }
   };
 
@@ -141,7 +203,9 @@
   const clearDomInputs = () => {
     passwordInput.value = "";
     confirmationInput.value = "";
+    resetPasswordVisibility();
     updateStrength();
+    updateActionAvailability();
   };
 
   const refreshNativeState = async () => {
@@ -165,7 +229,7 @@
       case nativeState.noCard:
         return "等待安全卡。";
       case nativeState.initializationRequired:
-        return "请设置并确认日常密码。";
+        return "请输入并确认日常密码，至少12字符。";
       case nativeState.loginRequired:
         return "请输入密码。";
       case nativeState.authenticated:
@@ -221,6 +285,7 @@
         passwordBytes = Array.from(encodedPasswordBytes);
       } finally {
         passwordInput.value = "";
+        resetPasswordVisibility();
         wipe(encodedPasswordBytes);
         encodedPasswordBytes = null;
       }
@@ -258,18 +323,23 @@
     let passwordBytes = null;
     let encodedConfirmationBytes = null;
     let confirmationBytes = null;
+    // Retained only so a failed attempt can be edited instead of retyped; both
+    // copies are dropped as soon as the route stops accepting a retry.
+    let retainedPassword = passwordInput.value;
+    let retainedConfirmation = confirmationInput.value;
     busy = true;
     render("正在初始化安全卡");
     try {
       try {
-        encodedPasswordBytes = new TextEncoder().encode(passwordInput.value);
+        encodedPasswordBytes = new TextEncoder().encode(retainedPassword);
         passwordBytes = Array.from(encodedPasswordBytes);
         encodedConfirmationBytes =
-          new TextEncoder().encode(confirmationInput.value);
+          new TextEncoder().encode(retainedConfirmation);
         confirmationBytes = Array.from(encodedConfirmationBytes);
       } finally {
         passwordInput.value = "";
         confirmationInput.value = "";
+        resetPasswordVisibility();
         wipe(encodedPasswordBytes);
         wipe(encodedConfirmationBytes);
         encodedPasswordBytes = null;
@@ -282,6 +352,8 @@
         wipe(passwordBytes);
         wipe(confirmationBytes);
       }
+      retainedPassword = "";
+      retainedConfirmation = "";
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
@@ -293,12 +365,25 @@
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
+      const retryable =
+        currentState === nativeState.initializationRequired &&
+        !externalRefreshPending;
+      const mismatched =
+        !initializationInputsMatch(retainedPassword, retainedConfirmation);
+      if (retryable) {
+        passwordInput.value = retainedPassword;
+        confirmationInput.value = retainedConfirmation;
+      }
+      retainedPassword = "";
+      retainedConfirmation = "";
       busy = false;
-      render(currentState === nativeState.initializationRequired
-        ? "无法初始化安全卡，请检查两个密码输入后重试。"
-        : messageForCurrentState());
+      render(messageForCurrentState(), retryable
+        ? (mismatched ? "初始化失败，两次密码不一致。" : "初始化失败，请重试。")
+        : "");
       updateStrength();
     } finally {
+      retainedPassword = "";
+      retainedConfirmation = "";
       wipe(encodedPasswordBytes);
       wipe(encodedConfirmationBytes);
       wipe(passwordBytes);
@@ -357,9 +442,9 @@
       return;
     }
     if (acceptsInitialization()) {
-      if (passwordInput.value.length === 0 ||
-          confirmationInput.value.length === 0) {
-        render("请输入并确认日常密码。");
+      if (!initializationInputReady()) {
+        render("请输入并确认日常密码，至少12字符。");
+        updateStrength();
         passwordInput.focus();
         return;
       }
@@ -367,7 +452,25 @@
     }
   });
 
-  passwordInput.addEventListener("input", updateStrength);
+  passwordInput.addEventListener("input", () => {
+    clearError();
+    updateStrength();
+    updateActionAvailability();
+  });
+  confirmationInput.addEventListener("input", () => {
+    clearError();
+    updateActionAvailability();
+  });
+  passwordVisibilityButton.addEventListener("click", () => {
+    setPasswordVisibility(
+      passwordInput, passwordVisibilityButton,
+      passwordVisibilityButton.getAttribute("aria-pressed") !== "true");
+  });
+  confirmationVisibilityButton.addEventListener("click", () => {
+    setPasswordVisibility(
+      confirmationInput, confirmationVisibilityButton,
+      confirmationVisibilityButton.getAttribute("aria-pressed") !== "true");
+  });
   passwordInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && acceptsLogin() && !passwordInput.disabled) {
       event.preventDefault();
