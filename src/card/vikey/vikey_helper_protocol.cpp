@@ -75,7 +75,8 @@ bool valid_request(const Request& request) noexcept {
       request.operation == Operation::card_record_write ||
       request.operation == Operation::card_identity_probe ||
       request.operation == Operation::card_media_probe ||
-      request.operation == Operation::card_media_bootstrap;
+      request.operation == Operation::card_media_bootstrap ||
+      request.operation == Operation::development_media_reset;
   std::uint32_t required_payload = 0;
   if (request.operation == Operation::development_session_probe ||
       request.operation == Operation::development_blob_read ||
@@ -92,6 +93,8 @@ bool valid_request(const Request& request) noexcept {
     required_payload = kCardRecordWritePayloadBytes;
   } else if (request.operation == Operation::card_media_bootstrap) {
     required_payload = kCardMediaBootstrapPayloadBytes;
+  } else if (request.operation == Operation::development_media_reset) {
+    required_payload = kDevelopmentMediaResetPayloadBytes;
   }
   return request.magic == kMagic && request.version == kVersion &&
          request.header_bytes == sizeof(Request) &&
@@ -338,6 +341,52 @@ CardMediaBootstrapRequest read_card_media_bootstrap_request(
   if (result.expected_hardware_id == 0 ||
       !valid_bootstrap_media_state(result.expected_media_state)) {
     throw_protocol("reject invalid ViKey card media bootstrap binding");
+  }
+  return result;
+}
+
+void write_development_media_reset_request(
+    const HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest,
+    const std::uint32_t expected_hardware_id,
+    const CardMediaState expected_media_state,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin) {
+  if (!valid_request(request) ||
+      request.operation != Operation::development_media_reset ||
+      expected_hardware_id == 0 ||
+      !valid_development_reset_media_state(expected_media_state) ||
+      user_sn.size() != kVikeyUserSnBytes ||
+      api_key.size() != kVikeyApiKeyBytes ||
+      user_pin.size() != kVikeyUserPinBytes) {
+    throw_protocol("refuse invalid ViKey development media reset request");
+  }
+  write_exact(pipe, message_bytes(request));
+  write_exact(pipe, vendor_digest);
+  write_exact(pipe, message_bytes(expected_hardware_id));
+  write_exact(pipe, message_bytes(expected_media_state));
+  write_exact(pipe, user_sn.bytes());
+  write_exact(pipe, api_key.bytes());
+  write_exact(pipe, user_pin.bytes());
+}
+
+CardMediaBootstrapRequest read_development_media_reset_request(
+    const HANDLE pipe, const Request& request) {
+  if (!valid_request(request) ||
+      request.operation != Operation::development_media_reset) {
+    throw_protocol("reject invalid ViKey development media reset request");
+  }
+  CardMediaBootstrapRequest result;
+  read_exact(pipe, result.vendor_digest);
+  read_exact(pipe, mutable_message_bytes(result.expected_hardware_id));
+  read_exact(pipe, mutable_message_bytes(result.expected_media_state));
+  read_exact(pipe, result.user_sn.bytes());
+  read_exact(pipe, result.api_key.bytes());
+  read_exact(pipe, result.user_pin.bytes());
+  if (result.expected_hardware_id == 0 ||
+      !valid_development_reset_media_state(result.expected_media_state)) {
+    throw_protocol("reject invalid ViKey development media reset binding");
   }
   return result;
 }

@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 10;
+constexpr std::uint16_t kVersion = 11;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -41,6 +41,8 @@ constexpr std::uint32_t kCardMediaProbePayloadBytes =
 constexpr std::uint32_t kCardMediaBootstrapPayloadBytes =
     kDevelopmentSessionPayloadBytes + kHardwareIdentityBytes +
     kCardMediaStateBytes;
+constexpr std::uint32_t kDevelopmentMediaResetPayloadBytes =
+    kCardMediaBootstrapPayloadBytes;
 
 enum class Operation : std::uint32_t {
   probe = 1,
@@ -55,6 +57,7 @@ enum class Operation : std::uint32_t {
   card_identity_probe = 10,
   card_media_probe = 11,
   card_media_bootstrap = 12,
+  development_media_reset = 13,
 };
 
 enum class CardMediaState : std::uint32_t {
@@ -95,6 +98,11 @@ enum class CardLogicalState : std::uint32_t {
     const CardMediaState state) noexcept {
   return state == CardMediaState::blank ||
          state == CardMediaState::provisioning_interrupted;
+}
+
+[[nodiscard]] constexpr bool valid_development_reset_media_state(
+    const CardMediaState state) noexcept {
+  return state == CardMediaState::legacy_p1_or_foreign_prefix;
 }
 
 enum class SecurityProperty : std::uint32_t {
@@ -363,6 +371,17 @@ void write_card_media_bootstrap_request(
     const security::SecureBuffer& user_pin);
 [[nodiscard]] CardMediaBootstrapRequest read_card_media_bootstrap_request(
     HANDLE pipe, const Request& request);
+void write_development_media_reset_request(
+    HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest,
+    std::uint32_t expected_hardware_id,
+    CardMediaState expected_media_state,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin);
+[[nodiscard]] CardMediaBootstrapRequest
+read_development_media_reset_request(HANDLE pipe,
+                                     const Request& request);
 void write_development_blob_round_trip_request(
     HANDLE pipe, const Request& request, const Sha256Digest& vendor_digest,
     const security::SecureBuffer& user_sn,

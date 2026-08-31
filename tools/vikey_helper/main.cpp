@@ -449,6 +449,57 @@ bootstrap_media_state(const CardMediaState state) {
   }
 }
 
+[[nodiscard]] OperationResult development_media_reset(
+    const CardMediaBootstrapRequest& request) {
+  try {
+    if (request.expected_media_state !=
+        CardMediaState::legacy_p1_or_foreign_prefix) {
+      return {.status = static_cast<std::int32_t>(
+                  CardError::invalid_configuration)};
+    }
+    const std::filesystem::path staged = staged_vendor_dll();
+    auto verified = usb_vault::card::vikey::verify_vikey_dll(
+        staged.parent_path(), request.vendor_digest);
+    auto module =
+        usb_vault::card::vikey::VikeyModule::load_from(std::move(verified));
+    auto session = usb_vault::card::vikey::VikeySession::open(
+        module.functions(), request.user_sn, request.api_key,
+        request.user_pin);
+    require_expected_hardware_identity(session,
+                                       request.expected_hardware_id);
+
+    OperationResult result{};
+    try {
+      usb_vault::card::vikey::reset_vikey_development_legacy_media(
+          session,
+          usb_vault::card::vikey::
+              VikeyCardMediaState::legacy_p1_or_foreign_prefix);
+    } catch (const std::system_error& error) {
+      result.status = error.code().category() == card_error_category()
+                          ? error.code().value()
+                          : static_cast<std::int32_t>(
+                                CardError::backend_unavailable);
+    } catch (...) {
+      result.status =
+          static_cast<std::int32_t>(CardError::backend_unavailable);
+    }
+
+    const std::error_code close_error = session.close();
+    if (result.status != 0) return result;
+    if (close_error) return {.status = close_error.value()};
+    return {};
+  } catch (const std::system_error& error) {
+    if (error.code().category() == card_error_category()) {
+      return {.status = error.code().value()};
+    }
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  } catch (...) {
+    return {.status =
+                static_cast<std::int32_t>(CardError::backend_unavailable)};
+  }
+}
+
 [[nodiscard]] OperationResult development_blob_round_trip(
     const DevelopmentBlobRoundTripRequest& request) {
   try {
@@ -723,6 +774,7 @@ bootstrap_media_state(const CardMediaState state) {
     case Operation::card_record_read:
     case Operation::card_record_write:
     case Operation::card_media_bootstrap:
+    case Operation::development_media_reset:
       return {.status =
                   static_cast<std::int32_t>(CardError::invalid_operation)};
   }
@@ -763,7 +815,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
             request.operation == Operation::card_record_write ||
             request.operation == Operation::card_identity_probe ||
             request.operation == Operation::card_media_probe ||
-            request.operation == Operation::card_media_bootstrap) {
+            request.operation == Operation::card_media_bootstrap ||
+            request.operation == Operation::development_media_reset) {
           if (environment !=
               EnvironmentBoundary::network_enabled_development) {
             result.status =
@@ -791,6 +844,12 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                   read_card_media_bootstrap_request(request_handle,
                                                     request);
               result = card_media_bootstrap(bootstrap_request);
+            } else if (request.operation ==
+                       Operation::development_media_reset) {
+              CardMediaBootstrapRequest reset_request =
+                  read_development_media_reset_request(request_handle,
+                                                       request);
+              result = development_media_reset(reset_request);
             } else {
               if (request.operation ==
                   Operation::development_blob_round_trip_probe) {

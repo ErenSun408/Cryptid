@@ -149,6 +149,22 @@ void bootstrap_vikey_development_card_media_with_network_access(
     const security::SecureBuffer& user_pin,
     std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
+// Development-only one-shot reset for the exact P1-shaped media state. The
+// helper binds the expected hardware identity, revalidates the complete card
+// media shape, verifies a full-area clear, and returns only after the card is
+// classified blank. It never accepts foreign or existing product media.
+void reset_vikey_development_legacy_media_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    std::uint32_t expected_hardware_id,
+    VikeyCardMediaState expected_media_state,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
 // Development-only destructive probe. The helper backs up the fixed blob,
 // writes and verifies test_blob, restores the original, verifies restoration,
 // closes the session, and exits. Failure to prove restoration is reported as

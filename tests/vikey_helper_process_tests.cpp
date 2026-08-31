@@ -44,6 +44,8 @@ using usb_vault::card::vikey::
     probe_vikey_development_session_with_network_access;
 using usb_vault::card::vikey::
     probe_vikey_development_vendor_runtime_with_network_access;
+using usb_vault::card::vikey::
+    reset_vikey_development_legacy_media_with_network_access;
 using usb_vault::card::vikey::probe_vikey_helper;
 using usb_vault::card::vikey::probe_vikey_vendor_runtime;
 using usb_vault::card::vikey::IVikeyCredentialProvider;
@@ -723,6 +725,62 @@ void test_development_card_media_bootstrap_staging(
          "failed card media bootstrap left staging residue");
 }
 
+void test_development_legacy_media_reset_staging(
+    const std::filesystem::path& helper,
+    const std::filesystem::path& vendor) {
+  const std::size_t directories_before =
+      development_helper_directory_count();
+  const auto user_sn = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(
+      usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
+  const auto legacy_user_pin = fixed_secret(
+      usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'S'});
+  const auto helper_digest = file_digest(helper);
+  const auto vendor_digest = file_digest(vendor);
+
+  const auto media = probe_vikey_development_card_media_with_network_access(
+      helper, helper_digest, vendor.parent_path(), vendor_digest,
+      user_sn, api_key, legacy_user_pin, 5s);
+  expect(media.hardware_id == 1 &&
+             media.media_state == usb_vault::card::vikey::
+                                      VikeyCardMediaState::
+                                          legacy_p1_or_foreign_prefix,
+         "development reset fixture did not expose P1-shaped media");
+
+  reset_vikey_development_legacy_media_with_network_access(
+      helper, helper_digest, vendor.parent_path(), vendor_digest,
+      media.hardware_id, media.media_state, user_sn, api_key,
+      legacy_user_pin, 5s);
+  expect(development_helper_directory_count() == directories_before,
+         "development media reset left staging residue");
+
+  try {
+    reset_vikey_development_legacy_media_with_network_access(
+        helper, helper_digest, vendor.parent_path(), vendor_digest, 2,
+        media.media_state, user_sn, api_key, legacy_user_pin, 5s);
+    fail("mismatched development reset identity was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::device_failure),
+           "mismatched development reset identity returned the wrong error");
+  }
+
+  try {
+    reset_vikey_development_legacy_media_with_network_access(
+        helper, helper_digest, vendor.parent_path(), vendor_digest, 1,
+        usb_vault::card::vikey::VikeyCardMediaState::foreign_data,
+        user_sn, api_key, legacy_user_pin, 5s);
+    fail("foreign development reset state was accepted");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(
+                               CardError::invalid_configuration),
+           "foreign development reset state returned the wrong error");
+  }
+  expect(development_helper_directory_count() == directories_before,
+         "failed development media reset left staging residue");
+}
+
 void test_formal_card_enrollment_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -1140,6 +1198,9 @@ int wmain(const int argc, wchar_t** const argv) {
     });
     run_test("development card media bootstrap", [&] {
       test_development_card_media_bootstrap_staging(helper, vendor);
+    });
+    run_test("development legacy media reset", [&] {
+      test_development_legacy_media_reset_staging(helper, vendor);
     });
     run_test("formal card enrollment", [&] {
       test_formal_card_enrollment_staging(helper, vendor);

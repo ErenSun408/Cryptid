@@ -457,6 +457,23 @@ target_link_libraries(usb_vault_vikey_formal_blob_read_probe PRIVATE
 )
 usb_vault_configure_target(usb_vault_vikey_formal_blob_read_probe)
 
+# One-purpose development utility for the current disposable P1 card. It
+# refuses every media shape except the ambiguous 32-byte P1 prefix (or an
+# already blank idempotent result), binds the probed hardware identity, and is
+# never included in the product or default build.
+add_executable(usb_vault_vikey_p1_card_reset EXCLUDE_FROM_ALL
+  tools/vikey_p1_card_reset/main.cpp
+)
+target_include_directories(usb_vault_vikey_p1_card_reset PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(usb_vault_vikey_p1_card_reset PRIVATE
+  usb_vault_vikey_development_credentials
+  usb_vault_vikey_helper_client
+)
+usb_vault_configure_target(usb_vault_vikey_p1_card_reset)
+
 # Explicit P1.7 acceptance support. The executable reads the development card
 # once, derives fixed non-production fixture passwords in locked memory, and
 # creates disposable local containers beside the development app. It is never

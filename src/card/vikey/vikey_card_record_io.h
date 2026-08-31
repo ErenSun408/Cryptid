@@ -35,6 +35,16 @@ inspect_vikey_card_record_state_read_only(VikeySession& session);
 void bootstrap_vikey_card_media(VikeySession& session,
                                 VikeyCardMediaState expected_state);
 
+// Development-only destructive reset for the one ambiguous media shape left
+// by P1: a nonzero 32-byte prefix and an otherwise blank user-data area. The
+// caller must have explicitly selected that exact state. The implementation
+// revalidates it in the same hardware-bound session, verifies zero writes over
+// the complete user-data area, and clears the prefix last so an interrupted
+// attempt remains either retryable legacy-shaped media or fully blank media.
+// No product path may call this operation automatically.
+void reset_vikey_development_legacy_media(
+    VikeySession& session, VikeyCardMediaState expected_state);
+
 [[nodiscard]] security::SecureBuffer read_vikey_card_record(
     VikeySession& session);
 

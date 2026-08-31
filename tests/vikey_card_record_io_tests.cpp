@@ -11,11 +11,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -33,6 +35,7 @@ using usb_vault::card::vikey::bootstrap_vikey_card_media;
 using usb_vault::card::vikey::inspect_vikey_card_media;
 using usb_vault::card::vikey::inspect_vikey_card_record_state_read_only;
 using usb_vault::card::vikey::read_vikey_card_record;
+using usb_vault::card::vikey::reset_vikey_development_legacy_media;
 using usb_vault::card::vikey::VikeyCardMediaState;
 using usb_vault::card::vikey::VikeySession;
 using usb_vault::card::vikey::write_vikey_card_record;
@@ -48,6 +51,10 @@ struct FakeSdk final {
   std::size_t writes{};
   bool ranges_valid{true};
   bool mutate_write_arguments{true};
+  std::size_t fail_write_call{std::numeric_limits<std::size_t>::max()};
+  std::size_t bytes_before_failure{};
+  std::vector<sdk::Address> write_addresses;
+  std::vector<sdk::Length> write_lengths;
 };
 
 FakeSdk* active_fake = nullptr;
@@ -127,15 +134,22 @@ sdk::Status __stdcall write_data(const sdk::Index index,
                                  const sdk::Length length,
                                  sdk::Byte* const source) {
   FakeSdk& state = fake();
-  ++state.writes;
+  const std::size_t call = state.writes++;
+  state.write_addresses.push_back(address);
+  state.write_lengths.push_back(length);
   const bool valid = index == 0 && source != nullptr &&
                      address <= state.data.size() &&
                      length <= state.data.size() - address;
   state.ranges_valid = state.ranges_valid && valid;
   if (!valid) return sdk::kInvalidAddressOrSize;
-  for (std::size_t offset = 0; offset < length; ++offset) {
+  const std::size_t copied =
+      call == state.fail_write_call
+          ? std::min<std::size_t>(length, state.bytes_before_failure)
+          : length;
+  for (std::size_t offset = 0; offset < copied; ++offset) {
     state.data[address + offset] = static_cast<std::byte>(source[offset]);
   }
+  if (call == state.fail_write_call) return sdk::kCommunication;
   if (state.mutate_write_arguments && length != 0) source[0] ^= 0xffU;
   return sdk::kSuccess;
 }
@@ -417,6 +431,110 @@ void test_media_bootstrap_revalidates_before_writing() {
   active_fake = nullptr;
 }
 
+void test_development_legacy_reset_is_explicit_and_recoverable() {
+  FakeSdk state;
+  active_fake = &state;
+
+  SecureBuffer user_sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer api_key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer user_pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(user_sn.bytes(), std::byte{'A'});
+  std::ranges::fill(api_key.bytes(), std::byte{'B'});
+  std::ranges::fill(user_pin.bytes(), std::byte{'P'});
+  VikeySession session =
+      VikeySession::open(functions(), user_sn, api_key, user_pin);
+
+  state.data.fill(std::byte{});
+  std::ranges::fill_n(state.data.begin(),
+                      usb_vault::card::vikey::kVikeyBlobBytes,
+                      std::byte{0xa5});
+  reset_vikey_development_legacy_media(
+      session, VikeyCardMediaState::legacy_p1_or_foreign_prefix);
+  require(inspect_vikey_card_media(session) == VikeyCardMediaState::blank,
+          "development reset did not produce blank ViKey media");
+  require(!state.write_addresses.empty() &&
+              state.write_addresses.back() == 0 &&
+              state.write_lengths.back() ==
+                  usb_vault::card::vikey::kVikeyBlobBytes,
+          "development reset did not clear the legacy prefix last");
+  require(std::ranges::all_of(state.data, [](const std::byte value) {
+            return value == std::byte{};
+          }),
+          "development reset did not verify the complete user-data area");
+
+  const std::array<VikeyCardMediaState, 5> forbidden_expected_states{
+      VikeyCardMediaState::blank,
+      VikeyCardMediaState::foreign_data,
+      VikeyCardMediaState::provisioning_interrupted,
+      VikeyCardMediaState::conflicting_evidence,
+      VikeyCardMediaState::product_evidence,
+  };
+  for (const VikeyCardMediaState forbidden : forbidden_expected_states) {
+    const std::size_t reads_before = state.reads;
+    const std::size_t writes_before = state.writes;
+    require_card_error(
+        [&] { reset_vikey_development_legacy_media(session, forbidden); },
+        CardError::invalid_configuration,
+        "development reset accepted an ineligible expected state");
+    require(state.reads == reads_before && state.writes == writes_before,
+            "ineligible development reset touched ViKey media");
+  }
+
+  state.data.fill(std::byte{});
+  state.data.back() = std::byte{0x7e};
+  const std::size_t writes_before_changed_state = state.writes;
+  require_card_error(
+      [&] {
+        reset_vikey_development_legacy_media(
+            session,
+            VikeyCardMediaState::legacy_p1_or_foreign_prefix);
+      },
+      CardError::device_failure,
+      "changed foreign media was accepted by development reset");
+  require(state.writes == writes_before_changed_state,
+          "changed foreign media was written by development reset");
+
+  state.data.fill(std::byte{});
+  std::ranges::fill_n(state.data.begin(),
+                      usb_vault::card::vikey::kVikeyBlobBytes,
+                      std::byte{0xa5});
+  state.fail_write_call = state.writes + 2;
+  state.bytes_before_failure =
+      usb_vault::card::vikey::kVikeyBlobBytes / 2;
+  require_card_error(
+      [&] {
+        reset_vikey_development_legacy_media(
+            session,
+            VikeyCardMediaState::legacy_p1_or_foreign_prefix);
+      },
+      CardError::device_failure,
+      "partial final reset write was reported as successful");
+  require(inspect_vikey_card_media(session) ==
+              VikeyCardMediaState::legacy_p1_or_foreign_prefix,
+          "partial final reset write did not remain explicitly retryable");
+
+  state.fail_write_call = std::numeric_limits<std::size_t>::max();
+  state.bytes_before_failure = 0;
+  reset_vikey_development_legacy_media(
+      session, VikeyCardMediaState::legacy_p1_or_foreign_prefix);
+  require(inspect_vikey_card_media(session) == VikeyCardMediaState::blank,
+          "retry did not finish the interrupted development reset");
+
+  state.data.fill(std::byte{});
+  std::ranges::fill_n(state.data.begin(),
+                      usb_vault::card::vikey::kVikeyBlobBytes,
+                      std::byte{0xa5});
+  state.fail_write_call = state.writes + 2;
+  state.bytes_before_failure = usb_vault::card::vikey::kVikeyBlobBytes;
+  reset_vikey_development_legacy_media(
+      session, VikeyCardMediaState::legacy_p1_or_foreign_prefix);
+  require(inspect_vikey_card_media(session) == VikeyCardMediaState::blank,
+          "verified full reset write failure was not accepted");
+
+  require(!session.close(), "ViKey development reset session did not close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
@@ -424,6 +542,7 @@ int main() {
     test_random_access_card_record_path();
     test_read_only_media_classification();
     test_media_bootstrap_revalidates_before_writing();
+    test_development_legacy_reset_is_explicit_and_recoverable();
     std::cout << "vikey card record IO tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

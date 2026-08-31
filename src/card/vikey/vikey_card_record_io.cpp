@@ -62,6 +62,24 @@ namespace {
   return true;
 }
 
+void write_verified_zeros(ICardRecordJournalStorage& storage,
+                          const std::size_t offset,
+                          const std::size_t length) {
+  security::SecureBuffer zeros(length);
+  try {
+    storage.write(offset, zeros.bytes());
+  } catch (...) {
+    // A vendor-reported failure is indeterminate until readback. Accept it
+    // only when every intended zero is nevertheless present.
+  }
+
+  if (!range_is_blank(storage, offset, offset + length)) {
+    throw std::system_error(
+        make_error_code(CardError::device_failure),
+        "ViKey development reset write did not verify");
+  }
+}
+
 [[nodiscard]] VikeyCardMediaState inspect_vikey_card_media(
     VikeyCardRecordStorage& storage) {
   const std::size_t capacity = storage.capacity();
@@ -135,6 +153,42 @@ void bootstrap_vikey_card_media(
     throw std::system_error(
         make_error_code(CardError::device_failure),
         "ViKey card media changed during bootstrap");
+  }
+}
+
+void reset_vikey_development_legacy_media(
+    VikeySession& session,
+    const VikeyCardMediaState expected_state) {
+  if (expected_state !=
+      VikeyCardMediaState::legacy_p1_or_foreign_prefix) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey development reset requires the legacy-shaped expected state");
+  }
+
+  VikeyCardRecordStorage storage(session);
+  if (inspect_vikey_card_media(storage) != expected_state) {
+    throw std::system_error(
+        make_error_code(CardError::device_failure),
+        "ViKey card media changed before development reset");
+  }
+
+  const std::size_t capacity = storage.capacity();
+  for (std::size_t offset = kVikeyBlobBytes; offset < capacity;) {
+    const std::size_t length =
+        std::min(kMediaScanChunkSize, capacity - offset);
+    write_verified_zeros(storage, offset, length);
+    offset += length;
+  }
+
+  // Preserve the only legacy-shaped evidence until every other user-data
+  // byte has been verified blank. A torn final write is therefore either
+  // still eligible for an explicit retry or already a complete blank card.
+  write_verified_zeros(storage, 0, kVikeyBlobBytes);
+  if (inspect_vikey_card_media(storage) != VikeyCardMediaState::blank) {
+    throw std::system_error(
+        make_error_code(CardError::device_failure),
+        "ViKey development reset did not produce blank media");
   }
 }
 

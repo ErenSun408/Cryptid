@@ -125,6 +125,12 @@ void test_request_validation() {
   request.payload_bytes = 0;
   expect(!valid_request(request),
          "card media bootstrap without bindings was accepted");
+  request.operation = Operation::development_media_reset;
+  request.payload_bytes = kDevelopmentMediaResetPayloadBytes;
+  expect(valid_request(request), "development media reset was rejected");
+  request.payload_bytes = 0;
+  expect(!valid_request(request),
+         "development media reset without bindings was accepted");
   request.operation = Operation::card_record_read;
   request.payload_bytes = kDevelopmentSessionPayloadBytes;
   expect(!valid_request(request),
@@ -300,6 +306,53 @@ void test_card_media_bootstrap_request_round_trip() {
             CardMediaState::foreign_data, user_sn, api_key, user_pin);
       },
       "ineligible card bootstrap state was accepted");
+}
+
+void test_development_media_reset_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  Request sent{};
+  sent.operation = Operation::development_media_reset;
+  sent.payload_bytes = kDevelopmentMediaResetPayloadBytes;
+  Sha256Digest digest{};
+  digest[6] = std::byte{0x74};
+  constexpr std::uint32_t kExpectedHardwareId = 0x87654321U;
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'S'});
+
+  write_development_media_reset_request(
+      pipe.write.get(), sent, digest, kExpectedHardwareId,
+      CardMediaState::legacy_p1_or_foreign_prefix, user_sn, api_key,
+      user_pin);
+  const Request received = read_request(pipe.read.get());
+  CardMediaBootstrapRequest body =
+      read_development_media_reset_request(pipe.read.get(), received);
+  expect(body.vendor_digest == digest,
+         "development reset digest did not round-trip");
+  expect(body.expected_hardware_id == kExpectedHardwareId,
+         "development reset identity did not round-trip");
+  expect(body.expected_media_state ==
+             CardMediaState::legacy_p1_or_foreign_prefix,
+         "development reset media state did not round-trip");
+  expect_fixed_secret(body.user_pin, std::byte{'S'},
+                      "development reset PIN did not round-trip");
+
+  const Pipe invalid_pipe = make_pipe();
+  expect_protocol_error(
+      [&] {
+        write_development_media_reset_request(
+            invalid_pipe.write.get(), sent, digest, 0,
+            CardMediaState::legacy_p1_or_foreign_prefix, user_sn,
+            api_key, user_pin);
+      },
+      "zero development reset identity was accepted");
+  expect_protocol_error(
+      [&] {
+        write_development_media_reset_request(
+            invalid_pipe.write.get(), sent, digest, kExpectedHardwareId,
+            CardMediaState::foreign_data, user_sn, api_key, user_pin);
+      },
+      "ineligible development reset state was accepted");
 }
 
 void test_development_session_request_rejects_wrong_sizes() {
@@ -624,6 +677,8 @@ void test_response_validation() {
   response.detail = 0;
   expect(valid_response(response, Operation::card_media_bootstrap),
          "valid card media bootstrap response was rejected");
+  expect(valid_response(response, Operation::development_media_reset),
+         "valid development media reset response was rejected");
   expect(!valid_response(response, Operation::development_blob_read),
          "blob read response without a payload was accepted");
   response.payload_bytes = static_cast<std::uint32_t>(kVikeyBlobBytes);
@@ -723,6 +778,7 @@ int main() {
     test_card_identity_request_round_trip();
     test_card_media_request_round_trip();
     test_card_media_bootstrap_request_round_trip();
+    test_development_media_reset_request_round_trip();
     test_development_session_request_rejects_wrong_sizes();
     test_development_blob_request_round_trip();
     test_development_blob_request_rejects_wrong_sizes();

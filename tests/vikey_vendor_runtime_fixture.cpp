@@ -54,6 +54,7 @@ std::array<BYTE, kUserDataSize> journal_data{};
 bool journal_initialized = false;
 bool blank_media_session = false;
 bool initialized_media_session = false;
+bool legacy_media_session = false;
 
 void store_u32(const std::size_t offset,
                const std::uint32_t value,
@@ -202,12 +203,15 @@ VikeyUserLogin(const WORD index, char* const user_pin) {
   const bool product_session = fixed_argument_matches(user_pin, 'P', 8);
   const bool bootstrap_session = fixed_argument_matches(user_pin, 'Q', 8);
   const bool initialized_session = fixed_argument_matches(user_pin, 'R', 8);
+  const bool legacy_session = fixed_argument_matches(user_pin, 'S', 8);
   if (session_state != SessionState::attempts_read || index != 0 ||
-      (!product_session && !bootstrap_session && !initialized_session)) {
+      (!product_session && !bootstrap_session && !initialized_session &&
+       !legacy_session)) {
     return kInvalidValue;
   }
   blank_media_session = bootstrap_session;
   initialized_media_session = initialized_session;
+  legacy_media_session = legacy_session;
   session_state = SessionState::logged_in;
   return ERROR_SUCCESS;
 }
@@ -287,7 +291,13 @@ VikeyReadData(const WORD index, const DWORD address, const DWORD length,
   }
   if (session_state == SessionState::initial_data_size_read && address == 0 &&
       length == kDescriptorSize) {
-    if (!blank_media_session && !initialize_journal()) return kInvalidValue;
+    if (legacy_media_session && !journal_initialized) {
+      journal_data.fill(0);
+      std::fill_n(journal_data.begin(), 32, static_cast<BYTE>(0x3c));
+      journal_initialized = true;
+    } else if (!blank_media_session && !initialize_journal()) {
+      return kInvalidValue;
+    }
     session_state = SessionState::journal_active;
   }
   if (session_state == SessionState::journal_active) {
