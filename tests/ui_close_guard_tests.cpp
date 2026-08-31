@@ -65,6 +65,10 @@ class FakeProductEntry final : public ICardEntryActions {
 
 class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
  public:
+  void create_container_a(std::uint64_t) override {
+    throw std::logic_error("not used by close guard");
+  }
+
   void consume_authenticated_login(SecureBuffer, SecureBuffer) override {
     throw std::logic_error("not used by close guard");
   }

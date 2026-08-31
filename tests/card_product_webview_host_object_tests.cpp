@@ -67,6 +67,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
       : authentication_(authentication) {}
 
+  void create_container_a(std::uint64_t) override {
+    throw std::logic_error("not used by WebView host-object tests");
+  }
+
   void consume_authenticated_login(
       SecureBuffer root, SecureBuffer login_password_utf8) override {
     ++consume_calls;

@@ -4411,4 +4411,54 @@
   A/B 形态、密码、根秘密、硬件身份或账号数据；原型的模拟内容没有进入产品资源。开发中导航在
   所有认证情形下保持一致，不形成档二／档三差异。剩余风险是弹层尚未实现焦点圈闭，且真实 A/B
   建卷、容量状态和实体卡视觉验收均未进入本切片。
-- 提交：待定（建议提交题目：`[P2.16]add authenticated dashboard shell`）。
+- 提交：`dc0fb3a [P2.16]add authenticated dashboard shell`。
+
+### 小切片 16b：认证会话内的加密盘 A 建卷事务
+
+#### 需求、计划与既有实现审计
+
+- 审计 N-05、N-08、8.6、现有 `CardLoginMountSession`、挂载编排、P1.4 建卷 helper 和 P1.7
+  一次性测试夹具后确认：A 与 B 必须独立创建；A 的卷密码固定为 `KDF(S,"diskA")`；普通 A 建卷
+  也必须经过带 `requireAdministrator` manifest 的同一个独立 helper，不能因形态不同省略 UAC；
+  代码和本地产物不得新增档位、模式或容器组合状态。P1.7 夹具属于 disposable evidence，本切片只
+  重新实现已验证的暂存、发布和清理语义，没有把夹具链接进产品。
+- 本切片边界限定为真实 A 建卷后端，不修改页面或 COM 方法：认证会话以受控作用域使用已持有的
+  根秘密 S，创建标准容器、发布并立即挂载。容量输入的 UI、进度呈现和错误文案留给下一切片，
+  B 普通／隐藏卷及其卡记录事务继续保持独立。
+
+#### 实现
+
+- `IAuthenticatedCardVolumeSession` 新增仅接收字节容量的 `create_container_a()`；UI 不提供根秘密、
+  登录密码或派生结果。`CardLoginMountSessionCore` 是 `CardAuthenticationSession` 唯一既有友元，
+  只有已认证且 A 尚未挂载时才可借用锁页根秘密，以固定五字节 `diskA` 和 A 的既有固定盐执行
+  KDF。固定输入与 64 字节卷密码均保留在 `SecureBuffer`，在派生、创建、挂载的成功和异常路径
+  显式清除。
+- 正式会话从主程序接收同目录的 `usb_vault_volume_creator.exe`，构造时复用既有 helper 文件校验；
+  `create_standard()` 因 helper manifest 无条件触发 UAC。最终路径 `container_a.hc` 和固定暂存路径
+  `container_a.hc.preparing` 都先执行绝对路径、非目录、非 reparse 检查，存在任一目标即拒绝，
+  helper 继续通过 `CREATE_NEW` 防止竞态覆盖。
+- helper 成功返回后才把暂存文件视为本事务所有；随后用不带 replace 标志且要求
+  `MOVEFILE_WRITE_THROUGH` 的重命名发布。创建调用自身失败时沿用 helper 内部的调用者身份清理，
+  不删除可能由检查竞态产生的外来文件；发布失败时删除已确认归本事务所有的暂存文件，清理失败
+  以 `ContainerCreationCleanupError` 同时保留原始操作与清理异常，且诊断文本不含路径或秘密。
+- 发布后用 SHA-512、PIM 0、可写、延迟 Shell 通知的固定选项立即挂载 A。挂载失败保留已经完成的
+  最终容器，下一次登录可按既有 A-only 路径挂载，不因演示失败删除有效数据；Shell 通知失败发生
+  在精确挂载状态记账之后，后续普通／拔卡强制卸载仍能清理真实盘符。认证状态在这些普通建卷或
+  挂载失败后均保留，继续由物理拔卡生命周期统一撤销。
+
+#### 测试、安全复核与提交状态
+
+- 扩展 `card_login_mount_session_tests`，覆盖未认证、非法容量、最终／暂存目标已存在、固定
+  `diskA` 与盐、创建失败、发布失败及清理、清理二次失败、发布后挂载失败保留最终容器、通知失败
+  保留真实挂载状态，以及成功后的重复创建拒绝。其他四个会话假实现只补齐尚未由 UI 调用的新接口，
+  既有 UI／WebView／关闭守卫语义不变。
+- Debug、MSVC `/analyze`、ASan 三套默认构建和完整 CTest 均为 **50/50**：48 项实际通过、2 项因
+  Codex 父令牌受限按既有规则跳过；`/analyze` 无项目诊断，ASan 未报告内存错误。Debug P2 ViKey
+  开发应用和 UAC 建卷 helper 已成功链接，`git diff --check` 通过。本切片未从页面发起真实 UAC，
+  也未在实体卡上执行建卷或挂载，因此不宣称真机建卷闭环已验收。
+- 安全复核确认没有新增根秘密 getter、用户口令输入、档位字段、日志、注册表或配置写入；所有路径
+  采用固定 A 名称，派生与挂载显式锁定既有算法参数。剩余风险是进程在 helper 成功与发布之间被
+  强制终止时可能留下固定 `.preparing` 文件，后续尝试会失败关闭而不会自动删除；发布后挂载失败会
+  留下有效 `container_a.hc`，下一次登录负责恢复挂载。页面仍只有禁用的预览按钮，下一切片才接入
+  容量输入、原生调用和忙碌／成功／失败反馈。
+- 提交：待定（建议提交题目：`[P2.16]add authenticated container A creation transaction`）。

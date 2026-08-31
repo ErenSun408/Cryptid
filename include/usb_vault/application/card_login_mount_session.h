@@ -4,11 +4,28 @@
 #include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/application/mount_orchestrator.h"
 
+#include <cstdint>
+#include <exception>
+#include <filesystem>
 #include <memory>
+#include <stdexcept>
 
 namespace usb_vault::application {
 
 class CardAuthenticationSession;
+
+class ContainerCreationCleanupError final : public std::runtime_error {
+ public:
+  ContainerCreationCleanupError(std::exception_ptr operation_failure,
+                                std::exception_ptr cleanup_failure);
+
+  [[nodiscard]] const std::exception_ptr& operation_failure() const noexcept;
+  [[nodiscard]] const std::exception_ptr& cleanup_failure() const noexcept;
+
+ private:
+  std::exception_ptr operation_failure_;
+  std::exception_ptr cleanup_failure_;
+};
 
 // Combined product boundary required by the native UI: a successful login
 // handoff and the lifecycle of any resulting active volumes must be the same
@@ -27,6 +44,11 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   IAuthenticatedCardVolumeSession& operator=(
       IAuthenticatedCardVolumeSession&&) = delete;
 
+  // Creates the independent standard A container for the authenticated card,
+  // publishes it without replacement, and mounts it before returning. Root
+  // bytes and derived passwords never cross this boundary.
+  virtual void create_container_a(std::uint64_t size_bytes) = 0;
+
  protected:
   IAuthenticatedCardVolumeSession() noexcept = default;
 };
@@ -39,7 +61,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
  public:
   CardLoginMountSession(CardAuthenticationSession& authentication,
                         const volume::VolumeProvider& provider,
-                        ContainerLayout layout);
+                        ContainerLayout layout,
+                        std::filesystem::path volume_creator_helper_path);
   ~CardLoginMountSession() noexcept override;
 
   CardLoginMountSession(const CardLoginMountSession&) = delete;
@@ -50,6 +73,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void consume_authenticated_login(
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8) override;
+  void create_container_a(std::uint64_t size_bytes) override;
 
   void unmount_active() override;
   [[nodiscard]] bool force_unmount_active() override;
