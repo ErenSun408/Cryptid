@@ -4,6 +4,10 @@
 
 namespace usb_vault::application {
 
+namespace detail {
+class CardLoginMountSessionCore;
+}
+
 // Minimal lifecycle boundary used by physical-card event coordination. It
 // reveals no root bytes, password role, mounted shape, mode, or vendor data.
 class IVolatileCardAuthenticationSession {
@@ -47,6 +51,8 @@ class CardAuthenticationSession final
   [[nodiscard]] bool authenticated() const noexcept override;
 
  private:
+  friend class detail::CardLoginMountSessionCore;
+
   security::SecureBuffer root_secret_;
 };
 

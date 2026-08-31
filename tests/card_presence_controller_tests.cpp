@@ -7,20 +7,14 @@ namespace {
 
 using usb_vault::application::CardPresenceController;
 using usb_vault::application::CardPresenceTransition;
-using usb_vault::application::IApplicationSessionActions;
-using usb_vault::security::SecureBuffer;
+using usb_vault::application::IActiveVolumeSession;
 
 void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);
 }
 
-class FakeSession final : public IApplicationSessionActions {
+class FakeSession final : public IActiveVolumeSession {
  public:
-  void authenticate_and_mount(SecureBuffer) override {
-    ++authenticate_calls;
-    is_mounted = true;
-  }
-
   void unmount_active() override {
     ++unmount_calls;
     if (throw_on_unmount) throw std::runtime_error("busy");
@@ -40,7 +34,6 @@ class FakeSession final : public IApplicationSessionActions {
   bool throw_on_unmount{false};
   bool keep_mounted_after_unmount{false};
   bool force_required{false};
-  int authenticate_calls{0};
   int unmount_calls{0};
   int force_unmount_calls{0};
 };
@@ -53,8 +46,7 @@ void test_arrival_only_changes_volatile_presence() {
               CardPresenceTransition::card_available,
           "first arrival returned the wrong transition");
   require(controller.card_present(), "arrival did not mark the card present");
-  require(session.authenticate_calls == 0 && session.unmount_calls == 0 &&
-              session.force_unmount_calls == 0,
+  require(session.unmount_calls == 0 && session.force_unmount_calls == 0,
           "arrival performed a session action");
   require(controller.handle_arrival() == CardPresenceTransition::no_change,
           "duplicate arrival was not ignored");

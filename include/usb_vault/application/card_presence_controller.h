@@ -1,6 +1,6 @@
 #pragma once
 
-#include "usb_vault/application/application_session.h"
+#include "usb_vault/application/active_volume_session.h"
 
 namespace usb_vault::application {
 
@@ -26,7 +26,7 @@ enum class CardPresenceTransition {
 class CardPresenceController final {
  public:
   explicit CardPresenceController(
-      IApplicationSessionActions& session,
+      IActiveVolumeSession& session,
       bool initially_present = false) noexcept;
 
   [[nodiscard]] CardPresenceTransition handle_arrival() noexcept;
@@ -34,7 +34,7 @@ class CardPresenceController final {
   [[nodiscard]] bool card_present() const noexcept;
 
  private:
-  IApplicationSessionActions& session_;
+  IActiveVolumeSession& session_;
   bool card_present_{};
 };
 

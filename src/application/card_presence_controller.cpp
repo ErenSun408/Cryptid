@@ -3,7 +3,7 @@
 namespace usb_vault::application {
 
 CardPresenceController::CardPresenceController(
-    IApplicationSessionActions& session, const bool initially_present) noexcept
+    IActiveVolumeSession& session, const bool initially_present) noexcept
     : session_(session), card_present_(initially_present) {}
 
 CardPresenceTransition CardPresenceController::handle_arrival() noexcept {

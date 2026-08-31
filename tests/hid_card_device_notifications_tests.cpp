@@ -18,7 +18,7 @@ using usb_vault::application::CardDeviceLifecycleController;
 using usb_vault::application::CardEntryContextController;
 using usb_vault::application::CardEntryMediaEvidence;
 using usb_vault::application::CardEntryRoute;
-using usb_vault::application::IApplicationSessionActions;
+using usb_vault::application::IActiveVolumeSession;
 using usb_vault::application::ICardEntryInspectionSource;
 using usb_vault::application::IVolatileCardAuthenticationSession;
 using usb_vault::application::IReadOnlyCardEntryInspection;
@@ -26,7 +26,6 @@ using usb_vault::card::CardRecordState;
 using usb_vault::platform::windows::HidDeviceIdentity;
 using usb_vault::platform::windows::handle_hid_device_change;
 using usb_vault::platform::windows::matches_hid_device_path;
-using usb_vault::security::SecureBuffer;
 
 constexpr HidDeviceIdentity kTarget{.vendor_id = 0x1987,
                                     .product_id = 0x0331};
@@ -35,9 +34,8 @@ void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);
 }
 
-class FakeSession final : public IApplicationSessionActions {
+class FakeSession final : public IActiveVolumeSession {
  public:
-  void authenticate_and_mount(SecureBuffer) override { ++authenticate_calls; }
   void unmount_active() override {
     ++unmount_calls;
     mounted_state = false;
@@ -52,7 +50,6 @@ class FakeSession final : public IApplicationSessionActions {
   }
 
   bool mounted_state{};
-  int authenticate_calls{};
   int unmount_calls{};
   int force_unmount_calls{};
 };
@@ -153,8 +150,8 @@ void test_target_arrival_and_removal_are_routed() {
                                    payload.parameter(), kTarget) ==
               CardPresenceTransition::card_available,
           "target arrival was not routed");
-  require(session.authenticate_calls == 0,
-          "target arrival attempted authentication");
+  require(session.unmount_calls == 0 && session.force_unmount_calls == 0,
+          "target arrival attempted a volume action");
   session.mounted_state = true;
   require(handle_hid_device_change(controller, DBT_DEVICEREMOVECOMPLETE,
                                    payload.parameter(), kTarget) ==

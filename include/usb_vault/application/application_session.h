@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/application/active_volume_session.h"
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/card/card_store.h"
 #include "usb_vault/security/secure_buffer.h"
@@ -9,19 +10,15 @@
 
 namespace usb_vault::application {
 
-class IApplicationSessionActions {
+class IApplicationSessionActions : public IActiveVolumeSession {
  public:
   virtual ~IApplicationSessionActions() noexcept = default;
 
   virtual void authenticate_and_mount(
       security::SecureBuffer password_utf8) = 0;
-  virtual void unmount_active() = 0;
-  // Unmounts the active session even when a drive is busy, for the single
-  // case where the key material behind it can no longer be trusted. Returns
-  // true when a forced unmount was required, which can discard data the
-  // filesystem has not written yet.
-  [[nodiscard]] virtual bool force_unmount_active() = 0;
-  [[nodiscard]] virtual bool mounted() const noexcept = 0;
+
+ protected:
+  IApplicationSessionActions() noexcept = default;
 };
 
 // Owns only the volatile state needed to actively unmount drives created by the

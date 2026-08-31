@@ -33,4 +33,11 @@ class MountRuntime {
     const security::SecureBuffer& password_utf8,
     const security::SecureBuffer& card_secret);
 
+[[nodiscard]] MountSessionResult
+mount_authenticated_card_session_with_runtime(
+    MountRuntime& runtime,
+    const ContainerLayout& layout,
+    const security::SecureBuffer& login_password_utf8,
+    const security::SecureBuffer& root_secret);
+
 }  // namespace usb_vault::application::detail

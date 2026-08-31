@@ -212,6 +212,23 @@ usb_vault_configure_target(card_authentication_session_tests)
 add_test(NAME card_authentication_session_tests
   COMMAND card_authentication_session_tests)
 
+add_executable(card_login_mount_session_tests
+  card_login_mount_session_tests.cpp
+)
+
+target_include_directories(card_login_mount_session_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(card_login_mount_session_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(card_login_mount_session_tests)
+
+add_test(NAME card_login_mount_session_tests
+  COMMAND card_login_mount_session_tests)
+
 add_executable(card_device_lifecycle_controller_tests
   card_device_lifecycle_controller_tests.cpp
 )

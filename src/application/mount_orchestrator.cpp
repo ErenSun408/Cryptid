@@ -198,13 +198,30 @@ MountSessionResult mount_session(
                                             card_secret);
 }
 
-namespace detail {
+MountSessionResult mount_authenticated_card_session(
+    const volume::VolumeProvider& provider,
+    const ContainerLayout& layout,
+    const security::SecureBuffer& login_password_utf8,
+    const security::SecureBuffer& root_secret) {
+  ProductionMountRuntime runtime(provider);
+  return detail::mount_authenticated_card_session_with_runtime(
+      runtime, layout, login_password_utf8, root_secret);
+}
 
-MountSessionResult mount_session_with_runtime(
+namespace detail {
+namespace {
+
+enum class MissingContainerPolicy {
+  p1_compatibility,
+  authenticated_card_v1,
+};
+
+MountSessionResult mount_session_with_policy(
     MountRuntime& runtime,
     const ContainerLayout& layout,
     const security::SecureBuffer& password_utf8,
-    const security::SecureBuffer& card_secret) {
+    const security::SecureBuffer& card_secret,
+    const MissingContainerPolicy policy) {
   validate_layout(layout);
   const auto started = std::chrono::steady_clock::now();
   MountSessionResult result;
@@ -230,10 +247,17 @@ MountSessionResult mount_session_with_runtime(
     }
     runtime.notify_mounted(layout.container_b.drive_letter);
   } else if (runtime.container_exists(layout.container_a.path)) {
-    result.container_a = derive_and_mount(
-        runtime, layout.container_a, password_utf8, card_secret);
+    if (policy == MissingContainerPolicy::authenticated_card_v1) {
+      security::SecureBuffer fixed_input = container_a_password_input();
+      result.container_a = derive_and_mount(
+          runtime, layout.container_a, fixed_input, card_secret);
+      fixed_input.clear();
+    } else {
+      result.container_a = derive_and_mount(
+          runtime, layout.container_a, password_utf8, card_secret);
+    }
     runtime.notify_mounted(layout.container_a.drive_letter);
-  } else {
+  } else if (policy == MissingContainerPolicy::p1_compatibility) {
     throw std::system_error(
         std::make_error_code(std::errc::no_such_file_or_directory),
         "no container files are available");
@@ -242,6 +266,28 @@ MountSessionResult mount_session_with_runtime(
   result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started);
   return result;
+}
+
+}  // namespace
+
+MountSessionResult mount_session_with_runtime(
+    MountRuntime& runtime,
+    const ContainerLayout& layout,
+    const security::SecureBuffer& password_utf8,
+    const security::SecureBuffer& card_secret) {
+  return mount_session_with_policy(runtime, layout, password_utf8,
+                                   card_secret,
+                                   MissingContainerPolicy::p1_compatibility);
+}
+
+MountSessionResult mount_authenticated_card_session_with_runtime(
+    MountRuntime& runtime,
+    const ContainerLayout& layout,
+    const security::SecureBuffer& login_password_utf8,
+    const security::SecureBuffer& root_secret) {
+  return mount_session_with_policy(
+      runtime, layout, login_password_utf8, root_secret,
+      MissingContainerPolicy::authenticated_card_v1);
 }
 
 }  // namespace detail

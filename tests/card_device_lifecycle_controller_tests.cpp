@@ -15,24 +15,20 @@ using usb_vault::application::CardEntryMediaEvidence;
 using usb_vault::application::CardEntryRoute;
 using usb_vault::application::CardPresenceController;
 using usb_vault::application::CardPresenceTransition;
-using usb_vault::application::IApplicationSessionActions;
+using usb_vault::application::IActiveVolumeSession;
 using usb_vault::application::ICardEntryInspectionSource;
 using usb_vault::application::IVolatileCardAuthenticationSession;
 using usb_vault::application::IReadOnlyCardEntryInspection;
 using usb_vault::card::CardRecordState;
-using usb_vault::security::SecureBuffer;
 
 void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);
 }
 
-class FakeSession final : public IApplicationSessionActions {
+class FakeSession final : public IActiveVolumeSession {
  public:
   explicit FakeSession(std::vector<std::string>& calls) : calls_(calls) {}
 
-  void authenticate_and_mount(SecureBuffer) override {
-    calls_.push_back("authenticate");
-  }
   void unmount_active() override { calls_.push_back("unmount"); }
   [[nodiscard]] bool force_unmount_active() override {
     calls_.push_back("force-unmount");
