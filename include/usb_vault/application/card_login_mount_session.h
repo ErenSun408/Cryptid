@@ -103,6 +103,13 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // path. The session refuses a path it has already adopted.
   virtual std::uint32_t mount_container(std::wstring_view path) = 0;
 
+  // Mounts a container this session already adopted, without asking the user
+  // for anything. Standard containers derive from the card alone; the
+  // hidden-volume container uses the volume password derived once from the
+  // login input, so which of its two volumes appears still follows the
+  // password the session was opened with.
+  virtual void mount_adopted_container(std::uint32_t id) = 0;
+
   // Unmounts one adopted container. The container stays adopted and unmounted
   // so it can be mounted again without reselecting its file.
   virtual void unmount_container(std::uint32_t id) = 0;
@@ -149,6 +156,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       const security::SecureBuffer& login_password_utf8,
       const security::SecureBuffer& decoy_password_utf8) override;
   std::uint32_t mount_container(std::wstring_view path) override;
+  void mount_adopted_container(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;

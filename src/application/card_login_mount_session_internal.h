@@ -2,6 +2,7 @@
 
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/mount_orchestrator.h"
+#include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/volume/unmount_retry.h"
 
 #include <cstdint>
@@ -78,6 +79,12 @@ struct SessionContainer final {
 struct CardLoginMountSessionState final {
   std::vector<SessionContainer> containers;
   std::uint32_t next_container_id{1};
+  // Volume password for the hidden-volume container, derived once from the
+  // login input while it still existed. Keeping this instead of the login
+  // password lets the user mount that container later without retyping, while
+  // the retained value opens nothing else: not the card record, not a
+  // standard container, and it cannot be typed at the password prompt.
+  security::SecureBuffer container_b_password;
 
   [[nodiscard]] bool mounted() const noexcept {
     for (const SessionContainer& container : containers) {
@@ -103,6 +110,7 @@ class CardLoginMountSessionCore final {
   void create_container_a(std::uint64_t size_bytes);
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes);
+  void mount_adopted_container(std::uint32_t id);
   std::uint32_t create_container_b(
       std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& login_password_utf8,

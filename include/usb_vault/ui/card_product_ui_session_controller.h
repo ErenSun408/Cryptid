@@ -8,7 +8,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <span>
 #include <string>
 #include <vector>
@@ -79,10 +78,9 @@ class CardProductUiSessionController final {
   // chooser. Returns false when the user cancels.
   bool mount_container();
 
-  // Mounts a container this session already adopted, without asking for the
-  // file again. Falls back to the chooser when this controller never saw the
-  // path, which happens only for a container adopted during login.
-  bool mount_container(std::uint32_t id);
+  // Mounts a container this session already adopted. Nothing is asked of the
+  // user: the session still holds everything each container needs to open.
+  void mount_container(std::uint32_t id);
 
   void unmount_container(std::uint32_t id);
   void unmount();
@@ -99,11 +97,6 @@ class CardProductUiSessionController final {
   application::IAuthenticatedCardVolumeSession& volume_session_;
   const security::IPasswordStrengthPolicy& password_policy_;
   IContainerFileChooser& file_chooser_;
-  // Paths this controller obtained from the chooser, kept only so an adopted
-  // container can be mounted again without reselecting its file. It mirrors
-  // what the session already holds, lives only in this process, and is never
-  // written anywhere.
-  std::map<std::uint32_t, std::wstring> chosen_paths_;
 };
 
 }  // namespace usb_vault::ui

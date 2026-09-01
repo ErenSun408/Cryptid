@@ -240,6 +240,10 @@ std::uint32_t CardLoginMountSession::mount_container(
   return impl_->core.mount_container(path);
 }
 
+void CardLoginMountSession::mount_adopted_container(const std::uint32_t id) {
+  impl_->core.mount_adopted_container(id);
+}
+
 void CardLoginMountSession::unmount_container(const std::uint32_t id) {
   impl_->core.unmount_container(id);
 }
@@ -301,6 +305,14 @@ namespace {
                                         std::current_exception());
   }
   std::rethrow_exception(operation_failure);
+}
+
+[[nodiscard]] SessionContainer* find_by_id(
+    CardLoginMountSessionState& state, const std::uint32_t id) noexcept {
+  for (SessionContainer& container : state.containers) {
+    if (container.id == id) return &container;
+  }
+  return nullptr;
 }
 
 [[nodiscard]] SessionContainer* find_by_path(
@@ -375,6 +387,19 @@ void CardLoginMountSessionCore::consume_authenticated_login(
 
   try {
     authentication_.establish(std::move(root_secret));
+    state_.container_b_password = security::SecureBuffer();
+    if (runtime_.container_exists(layout_.container_b.path)) {
+      // Derived here because this is the only moment the login input exists.
+      state_.container_b_password = runtime_.derive_container_password(
+          login_password_utf8, authentication_.root_secret_,
+          layout_.container_b.salt);
+      static_cast<void>(adopt(state_, layout_.container_b.path, wchar_t{},
+                              false, true));
+    }
+    if (runtime_.container_exists(layout_.container_a.path)) {
+      static_cast<void>(adopt(state_, layout_.container_a.path, wchar_t{},
+                              false));
+    }
     if (login_mount_policy_ == LoginMountPolicy::manual) {
       // The login input only ever existed for the synchronous mount call, so
       // the manual policy releases it as soon as authentication is volatile.
@@ -564,6 +589,53 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
   }
 }
 
+void CardLoginMountSessionCore::mount_adopted_container(
+    const std::uint32_t id) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "mounting a container requires an authenticated card session");
+  }
+  SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  if (entry->mounted) return;
+  if (!runtime_.container_exists(entry->path)) {
+    throw std::system_error(
+        std::make_error_code(std::errc::no_such_file_or_directory),
+        "adopted container file is no longer present");
+  }
+
+  const bool hidden_volume = entry->release_first;
+  if (hidden_volume && state_.container_b_password.empty()) {
+    throw std::logic_error(
+        "this container can only be opened by the login that captured it");
+  }
+  security::SecureBuffer standard_password;
+  if (!hidden_volume) standard_password = derive_standard_password();
+  const security::SecureBuffer& volume_password =
+      hidden_volume ? state_.container_b_password : standard_password;
+
+  const wchar_t drive_letter = reserve_drive_letter();
+  try {
+    static_cast<void>(runtime_.mount_created(
+        entry->path, volume_password,
+        {.drive_letter = drive_letter,
+         .prf = volume::Pkcs5Prf::sha512,
+         .pim = 0,
+         .read_only = false,
+         .notify_shell = false}));
+  } catch (...) {
+    standard_password.clear();
+    throw;
+  }
+  standard_password.clear();
+  entry->drive_letter = drive_letter;
+  entry->mounted = true;
+  runtime_.notify_mounted(drive_letter);
+}
+
 std::uint32_t CardLoginMountSessionCore::mount_container(
     const std::wstring_view path) {
   if (path == layout_.container_b.path) {
@@ -682,6 +754,10 @@ void CardLoginMountSessionCore::unmount_active() {
 }
 
 bool CardLoginMountSessionCore::force_unmount_active() {
+  // Forced release is the card-removal path, so the retained volume password
+  // goes with it. A deliberate unmount keeps it, which is what lets the user
+  // mount the container again in the same session.
+  state_.container_b_password = security::SecureBuffer();
   bool forced = false;
   for (const bool release_first : {true, false}) {
     for (SessionContainer& container : state_.containers) {

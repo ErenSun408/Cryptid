@@ -39,6 +39,16 @@ void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);
 }
 
+[[nodiscard]] std::vector<std::byte> bytes_vector(
+    const std::string_view value) {
+  std::vector<std::byte> result;
+  result.reserve(value.size());
+  for (const char character : value) {
+    result.push_back(static_cast<std::byte>(character));
+  }
+  return result;
+}
+
 [[nodiscard]] SecureBuffer bytes(const std::string_view value) {
   SecureBuffer result(value.size());
   for (std::size_t index = 0; index < value.size(); ++index) {
@@ -94,6 +104,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::uint64_t hidden_size{};
   std::vector<std::byte> hidden_outer_password;
   std::vector<std::byte> hidden_inner_password;
+  std::vector<std::byte> last_mount_password;
   std::vector<std::wstring> other_existing;
   std::vector<std::wstring> other_staging;
   std::vector<std::string> events;
@@ -309,6 +320,8 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
                 options.pim == 0 && !options.read_only &&
                 !options.notify_shell,
             "created mount received the wrong fixed options");
+    last_mount_password.assign(volume_password.bytes().begin(),
+                               volume_password.bytes().end());
     if (fail_created_mount) throw std::runtime_error("mount created failed");
     return {};
   }
@@ -384,7 +397,7 @@ void test_all_container_shapes_establish_authentication() {
             "successful card login did not establish authentication");
     require(session.mounted() == (mount_a || mount_b),
             "container shape produced the wrong unified mount state");
-    require_events(runtime, {"mount"});
+    require_events(runtime, {"exists:final-other", "exists:final", "mount"});
   }
 }
 
@@ -404,7 +417,7 @@ void test_mount_failures_do_not_revoke_card_authentication() {
   require(authentication.authenticated() && !session.mounted(),
           "post-authentication mount failure revoked authentication or "
           "invented mount state");
-  require_events(runtime, {"mount"});
+  require_events(runtime, {"exists:final-other", "exists:final", "mount"});
 }
 
 void test_failed_rollback_retains_only_residual_mount() {
@@ -426,7 +439,7 @@ void test_failed_rollback_retains_only_residual_mount() {
   runtime.leave_b_after_failure = false;
   session.unmount_active();
   require(!session.mounted(), "residual mount could not be retried");
-  require_events(runtime, {"mount", "unmount:B"});
+  require_events(runtime, {"exists:final-other", "exists:final", "mount", "unmount:B"});
 }
 
 void test_invalid_or_duplicate_handoff_fails_before_mount() {
@@ -643,6 +656,108 @@ void test_container_a_notify_failure_retains_mount_state() {
   require_events(runtime, {"unmount:A"});
 }
 
+[[nodiscard]] FakeRuntime runtime_with_both_containers() {
+  FakeRuntime runtime;
+  runtime.container_a_exists = true;
+  runtime.container_a_size_bytes = 64ULL * 1024ULL * 1024ULL;
+  runtime.other_existing.emplace_back(L"C:\\vault\\b.hc");
+  runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  return runtime;
+}
+
+void test_manual_login_captures_the_hidden_volume_password_only() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime = runtime_with_both_containers();
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+
+  // One derivation, for the container whose password cannot be recovered
+  // later; the standard container needs no login input at all.
+  require_events(runtime, {"exists:final-other", "derive:B", "exists:final"});
+  require(!session.mounted(), "manual login mounted a container");
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2 && statuses[0].name == L"b.hc" &&
+              statuses[1].name == L"a.hc" && !statuses[0].mounted &&
+              !statuses[1].mounted,
+          "manual login did not adopt both containers unmounted");
+}
+
+void test_adopted_containers_mount_without_further_input() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime = runtime_with_both_containers();
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+  const std::vector<ContainerStatus> adopted = session.container_statuses();
+  const std::uint32_t hidden_id = adopted[0].id;
+  const std::uint32_t standard_id = adopted[1].id;
+
+  runtime.events.clear();
+  session.mount_adopted_container(hidden_id);
+  require(runtime.last_mount_password ==
+              bytes_vector("derived-b-login-password...."),
+          "the hidden container was not opened with the captured password");
+  require_events(runtime, {"exists:final-other", "allocate",
+                           "mount-created:other", "notify:A"});
+
+  runtime.events.clear();
+  session.mount_adopted_container(standard_id);
+  require(runtime.last_mount_password ==
+              bytes_vector("derived-container-a-password"),
+          "the standard container was not opened with the card derivation");
+  require_events(runtime, {"exists:final", "derive:A", "allocate",
+                           "mount-created:A", "notify:A"});
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2 && statuses[0].mounted && statuses[1].mounted &&
+              statuses[0].drive_letter != statuses[1].drive_letter,
+          "the adopted containers did not both mount on distinct drives");
+
+  // Mounting an already mounted container is a no-op, and an unknown
+  // identifier is refused.
+  runtime.events.clear();
+  session.mount_adopted_container(hidden_id);
+  require(runtime.events.empty(), "a mounted container was mounted again");
+  require_throws<std::invalid_argument>(
+      [&] { session.mount_adopted_container(hidden_id + 100); },
+      "an unknown identifier was accepted");
+}
+
+void test_forced_release_drops_the_captured_volume_password() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime = runtime_with_both_containers();
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+  const std::uint32_t hidden_id = session.container_statuses()[0].id;
+  session.mount_adopted_container(hidden_id);
+
+  // Card removal releases the volumes and the captured password with them.
+  static_cast<void>(session.force_unmount_active());
+  require_throws<std::logic_error>(
+      [&] { session.mount_adopted_container(hidden_id); },
+      "the hidden container was mounted after its password was dropped");
+
+  // A deliberate unmount keeps it so the same session can mount again.
+  CardAuthenticationSession second_authentication;
+  FakeRuntime second_runtime = runtime_with_both_containers();
+  CardLoginMountSessionCore second(second_authentication, second_runtime,
+                                   layout(), LoginMountPolicy::manual);
+  second.consume_authenticated_login(root_secret(),
+                                     bytes("login-password"));
+  const std::uint32_t second_hidden = second.container_statuses()[0].id;
+  second.mount_adopted_container(second_hidden);
+  second.unmount_active();
+  second.mount_adopted_container(second_hidden);
+  require(second.container_statuses()[0].mounted,
+          "a deliberate unmount blocked a later mount in the same session");
+}
+
 void test_login_adopts_every_mounted_container() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -662,12 +777,13 @@ void test_login_adopts_every_mounted_container() {
   std::vector<ContainerStatus> statuses = session.container_statuses();
   require(statuses.size() == 2,
           "login did not adopt both containers into one collection");
-  require(statuses[0].name == L"a.hc" && statuses[0].mounted &&
-              statuses[0].drive_letter == L'X',
-          "the standard container is missing from the collection");
-  require(statuses[1].name == L"b.hc" && statuses[1].mounted &&
-              statuses[1].drive_letter == L'Y',
+  // Adoption order follows the fixed probe order: the hidden container first.
+  require(statuses[0].name == L"b.hc" && statuses[0].mounted &&
+              statuses[0].drive_letter == L'Y',
           "the hidden container is missing from the collection");
+  require(statuses[1].name == L"a.hc" && statuses[1].mounted &&
+              statuses[1].drive_letter == L'X',
+          "the standard container is missing from the collection");
 
   // The hidden container is still released before the standard ones.
   runtime.events.clear();
@@ -839,10 +955,16 @@ void test_manual_policy_authenticates_without_mounting() {
 
   require(authentication.authenticated(),
           "the manual policy did not establish card authentication");
-  require(runtime.events.empty(),
-          "the manual policy reached the mount runtime during login");
+  // Login only looks for the fixed containers so the user can mount them
+  // later; it must not mount anything by itself.
+  require_events(runtime, {"exists:final-other", "exists:final"});
   require(!session.mounted(),
           "the manual policy reported an active volume after login");
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].name == L"a.hc" &&
+              !statuses[0].mounted && statuses[0].drive_letter == wchar_t{},
+          "manual login did not adopt the existing container unmounted");
 
   const auto status = session.container_a_status();
   require(status.exists && !status.mounted && status.drive_letter == wchar_t{},
@@ -1003,6 +1125,9 @@ int main() {
     test_container_a_creation_reports_cleanup_failure();
     test_container_a_mount_failure_keeps_published_container();
     test_container_a_notify_failure_retains_mount_state();
+    test_manual_login_captures_the_hidden_volume_password_only();
+    test_adopted_containers_mount_without_further_input();
+    test_forced_release_drops_the_captured_volume_password();
     test_login_adopts_every_mounted_container();
     test_standard_mount_refuses_the_hidden_container_path();
     test_container_b_creation_derives_both_volume_passwords();

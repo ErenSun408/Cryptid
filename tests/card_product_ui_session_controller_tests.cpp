@@ -129,6 +129,17 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, kFakeContainerBytes);
   }
 
+  void mount_adopted_container(const std::uint32_t id) override {
+    ++mount_adopted_calls;
+    for (Adopted& entry : containers) {
+      if (entry.id != id) continue;
+      entry.mounted = true;
+      mounted_state = true;
+      return;
+    }
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
   void unmount_container(const std::uint32_t id) override {
     ++unmount_container_calls;
     for (Adopted& entry : containers) {
@@ -254,6 +265,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int create_calls{};
   int mount_calls{};
   int unmount_container_calls{};
+  int mount_adopted_calls{};
   int container_statuses_calls{};
   bool fail_after_authentication{};
   bool mount_on_success{};
@@ -652,18 +664,15 @@ void test_adopted_container_remounts_without_reselecting_its_file() {
   const std::uint32_t id = fixture.controller.container_statuses()[0].id;
 
   fixture.controller.unmount_container(id);
-  require(fixture.controller.mount_container(id) &&
-              fixture.chooser.existing_calls == 0 &&
-              fixture.volume.mounted_path == L"D:\\Vault\\work.hc",
+  fixture.controller.mount_container(id);
+  require(fixture.chooser.existing_calls == 0 &&
+              fixture.volume.mount_adopted_calls == 1 &&
+              fixture.volume.mount_calls == 0,
           "remounting an adopted container asked for the file again");
   require(fixture.controller.container_statuses()[0].mounted,
           "the remounted container is not reported as mounted");
-
-  require(fixture.controller.mount_container(id) &&
-              fixture.volume.mount_calls == 1,
-          "remounting a mounted container repeated the session call");
   require_throws<std::invalid_argument>(
-      [&] { static_cast<void>(fixture.controller.mount_container(id + 7)); },
+      [&] { fixture.controller.mount_container(id + 7); },
       "UI mounted an identifier the session never adopted");
 
   fixture.chooser.existing_path = L"E:\\Media\\photos.hc";

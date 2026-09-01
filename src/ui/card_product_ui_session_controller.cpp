@@ -161,9 +161,8 @@ bool CardProductUiSessionController::create_container(
 
   const std::wstring path = file_chooser_.choose_new_container();
   if (path.empty()) return false;
-  const std::uint32_t id = volume_session_.create_container(
-      path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
-  chosen_paths_.insert_or_assign(id, path);
+  static_cast<void>(volume_session_.create_container(
+      path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib));
   return true;
 }
 
@@ -223,35 +222,17 @@ bool CardProductUiSessionController::mount_container() {
 
   const std::wstring path = file_chooser_.choose_existing_container();
   if (path.empty()) return false;
-  const std::uint32_t id = volume_session_.mount_container(path);
-  chosen_paths_.insert_or_assign(id, path);
+  static_cast<void>(volume_session_.mount_container(path));
   return true;
 }
 
-bool CardProductUiSessionController::mount_container(
+void CardProductUiSessionController::mount_container(
     const std::uint32_t id) {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route(
         "mounting a container is not available in the current UI state");
   }
-
-  bool adopted = false;
-  for (const application::ContainerStatus& status :
-       volume_session_.container_statuses()) {
-    if (status.id != id) continue;
-    if (status.mounted) return true;
-    adopted = true;
-    break;
-  }
-  if (!adopted) {
-    throw std::invalid_argument(
-        "no container is adopted under that identifier");
-  }
-
-  const auto known = chosen_paths_.find(id);
-  if (known == chosen_paths_.end()) return mount_container();
-  static_cast<void>(volume_session_.mount_container(known->second));
-  return true;
+  volume_session_.mount_adopted_container(id);
 }
 
 void CardProductUiSessionController::unmount_container(

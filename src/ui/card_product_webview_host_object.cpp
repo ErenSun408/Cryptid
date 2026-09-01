@@ -421,8 +421,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       return DISP_E_TYPEMISMATCH;
     }
     try {
-      return complete_selection(controller_.mount_container(identifier),
-                                result);
+      controller_.mount_container(identifier);
+      return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;

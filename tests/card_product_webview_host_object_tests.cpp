@@ -113,6 +113,19 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, 64ULL * 1024ULL * 1024ULL);
   }
 
+  void mount_adopted_container(const std::uint32_t id) override {
+    ++mount_adopted_calls;
+    for (Adopted& entry : containers) {
+      if (entry.id != id) continue;
+      entry.mounted = true;
+      mounted_state = true;
+      return;
+    }
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+
+  int mount_adopted_calls{};
   void unmount_container(const std::uint32_t id) override {
     ++unmount_container_calls;
     for (Adopted& entry : containers) {

@@ -126,6 +126,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, 64ULL * 1024ULL * 1024ULL);
   }
 
+  void mount_adopted_container(std::uint32_t) override {
+    throw std::logic_error("adopted mounts are not part of this fake");
+  }
   void unmount_container(const std::uint32_t id) override {
     ++unmount_container_calls;
     for (Adopted& entry : containers) {

@@ -64,6 +64,9 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   std::uint32_t mount_container(std::wstring_view) override {
     throw std::logic_error("not used by close guard");
   }
+  void mount_adopted_container(std::uint32_t) override {
+    throw std::logic_error("adopted mounts are not part of this fake");
+  }
   void unmount_container(std::uint32_t) override {
     throw std::logic_error("not used by close guard");
   }
