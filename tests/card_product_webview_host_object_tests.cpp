@@ -466,60 +466,6 @@ class InitializationArguments final {
   return mounted;
 }
 
-[[nodiscard]] HRESULT invoke_create_a(
-    IDispatch& host, VARIANTARG& size,
-    UINT* const argument_error = nullptr) {
-  DISPPARAMS parameters{&size, nullptr, 1, 0};
-  return host.Invoke(member_id(host, L"createContainerAMib"), IID_NULL,
-                     LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
-                     nullptr, argument_error);
-}
-
-[[nodiscard]] LONG invoke_container_a_state(IDispatch& host) {
-  DISPPARAMS parameters{};
-  VARIANT result{};
-  ::VariantInit(&result);
-  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerAState"),
-                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
-                                &parameters, &result, nullptr, nullptr)),
-          "container A state query failed");
-  require(result.vt == VT_I4,
-          "container A state query returned the wrong type");
-  const LONG state = result.lVal;
-  static_cast<void>(::VariantClear(&result));
-  return state;
-}
-
-[[nodiscard]] ULONG invoke_container_a_size(IDispatch& host) {
-  DISPPARAMS parameters{};
-  VARIANT result{};
-  ::VariantInit(&result);
-  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerASizeMib"),
-                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
-                                &parameters, &result, nullptr, nullptr)),
-          "container A capacity query failed");
-  require(result.vt == VT_UI4,
-          "container A capacity query returned the wrong type");
-  const ULONG size = result.ulVal;
-  static_cast<void>(::VariantClear(&result));
-  return size;
-}
-
-[[nodiscard]] std::wstring invoke_container_a_drive(IDispatch& host) {
-  DISPPARAMS parameters{};
-  VARIANT result{};
-  ::VariantInit(&result);
-  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerADriveLetter"),
-                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
-                                &parameters, &result, nullptr, nullptr)),
-          "container A drive query failed");
-  require(result.vt == VT_BSTR && result.bstrVal != nullptr,
-          "container A drive query returned the wrong type");
-  const std::wstring drive(result.bstrVal, ::SysStringLen(result.bstrVal));
-  static_cast<void>(::VariantClear(&result));
-  return drive;
-}
-
 [[nodiscard]] VARIANTARG number_argument(const std::uint32_t value) noexcept {
   VARIANTARG argument{};
   ::VariantInit(&argument);
@@ -801,97 +747,6 @@ void test_unmount_and_property_rejection() {
           "product state was exposed as a property");
 }
 
-void test_container_a_creation_accepts_only_exact_bounded_numbers() {
-  Fixture fixture;
-  fixture.authentication.establish(root_secret());
-  ComPtr<IDispatch> host = make_host(fixture.controller);
-
-  VARIANTARG size{};
-  ::VariantInit(&size);
-  size.vt = VT_R8;
-  size.dblVal = 64.0;
-  require(invoke_create_a(*host.Get(), size) == S_OK &&
-              fixture.volume.create_a_calls == 1 &&
-              fixture.volume.created_a_size_bytes ==
-                  64ULL * 1024ULL * 1024ULL &&
-              invoke_mounted(*host.Get()),
-          "host did not forward exact container A capacity");
-
-  for (const double invalid : {19.0, 1048577.0, 64.5}) {
-    size.dblVal = invalid;
-    UINT argument_error = 99;
-    require(invoke_create_a(*host.Get(), size, &argument_error) ==
-                    DISP_E_TYPEMISMATCH &&
-                argument_error == 0,
-            "host accepted an invalid container A capacity");
-  }
-  require(fixture.volume.create_a_calls == 1,
-          "invalid capacity reached the volume session");
-
-  size.vt = VT_BSTR;
-  size.bstrVal = ::SysAllocString(L"64");
-  require(size.bstrVal != nullptr, "BSTR allocation failed");
-  UINT argument_error = 99;
-  require(invoke_create_a(*host.Get(), size, &argument_error) ==
-                  DISP_E_TYPEMISMATCH &&
-              argument_error == 0,
-          "host coerced a string capacity");
-  static_cast<void>(::VariantClear(&size));
-}
-
-void test_container_a_creation_preserves_route_and_failure_semantics() {
-  Fixture fixture;
-  fixture.entry.route = CardEntryRoute::login_required;
-  ComPtr<IDispatch> host = make_host(fixture.controller);
-  VARIANTARG size{};
-  ::VariantInit(&size);
-  size.vt = VT_UI4;
-  size.ulVal = 64;
-
-  require(invoke_create_a(*host.Get(), size) == E_FAIL &&
-              fixture.volume.create_a_calls == 0,
-          "host allowed creation outside authentication");
-
-  fixture.authentication.establish(root_secret());
-  fixture.volume.reject_create_a = true;
-  require(invoke_create_a(*host.Get(), size) == E_FAIL &&
-              fixture.volume.create_a_calls == 1 &&
-              invoke_state(*host.Get()) == 3L &&
-              !invoke_mounted(*host.Get()),
-          "host hid creation failure or changed authentication state");
-
-  DISPPARAMS no_arguments{};
-  require(host->Invoke(member_id(*host.Get(), L"createContainerAMib"),
-                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
-                       &no_arguments, nullptr, nullptr, nullptr) ==
-              DISP_E_BADPARAMCOUNT,
-          "host accepted missing creation capacity");
-}
-
-void test_container_a_display_facts_are_narrow_and_route_gated() {
-  Fixture fixture;
-  fixture.entry.route = CardEntryRoute::login_required;
-  ComPtr<IDispatch> host = make_host(fixture.controller);
-  require(invoke_container_a_state(*host.Get()) == 0L &&
-              invoke_container_a_size(*host.Get()) == 0UL &&
-              invoke_container_a_drive(*host.Get()).empty(),
-          "unauthenticated host exposed container A facts");
-
-  fixture.authentication.establish(root_secret());
-  fixture.volume.container_a_exists = true;
-  fixture.volume.container_a_size_bytes = 96ULL * 1024ULL * 1024ULL;
-  require(invoke_container_a_state(*host.Get()) == 1L &&
-              invoke_container_a_size(*host.Get()) == 96UL &&
-              invoke_container_a_drive(*host.Get()).empty(),
-          "host lost present, unmounted container A facts");
-
-  fixture.volume.container_a_mounted = true;
-  require(invoke_container_a_state(*host.Get()) == 2L &&
-              invoke_container_a_size(*host.Get()) == 96UL &&
-              invoke_container_a_drive(*host.Get()) == L"X:",
-          "host did not expose mounted A capacity and fixed drive");
-}
-
 void test_container_collection_is_exposed_by_position_and_route_gated() {
   Fixture fixture;
   fixture.entry.route = CardEntryRoute::login_required;
@@ -955,6 +810,16 @@ void test_container_calls_reject_wrong_shapes_and_report_cancellation() {
   require(invoke_with_number(*host.Get(), L"createContainerMib", 19, nullptr,
                              &argument_error) == DISP_E_TYPEMISMATCH,
           "host accepted a capacity below the shared minimum");
+  VARIANTARG fractional{};
+  ::VariantInit(&fractional);
+  fractional.vt = VT_R8;
+  fractional.dblVal = 64.5;
+  DISPPARAMS fractional_parameters{&fractional, nullptr, 1, 0};
+  require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &fractional_parameters, nullptr, nullptr,
+                       &argument_error) == DISP_E_TYPEMISMATCH,
+          "host accepted a capacity that is not a whole number");
   require(fixture.chooser.new_calls == 0 && fixture.volume.create_calls == 0,
           "a rejected creation still opened the chooser or the session");
 
@@ -1029,9 +894,6 @@ int main() {
     test_initialization_failure_wipes_every_supported_argument();
     test_bad_arity_still_wipes_supplied_password_array();
     test_unmount_and_property_rejection();
-    test_container_a_creation_accepts_only_exact_bounded_numbers();
-    test_container_a_creation_preserves_route_and_failure_semantics();
-    test_container_a_display_facts_are_narrow_and_route_gated();
     test_container_collection_is_exposed_by_position_and_route_gated();
     test_container_calls_reject_wrong_shapes_and_report_cancellation();
     test_adopted_container_mount_and_unmount_route_through_identifiers();

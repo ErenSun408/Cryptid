@@ -15,31 +15,19 @@
 
 namespace usb_vault::ui {
 
-inline constexpr std::uint32_t kContainerACreationMinimumMib = 20;
-inline constexpr std::uint32_t kContainerACreationMaximumMib = 1024U * 1024U;
+inline constexpr std::uint32_t kContainerCreationMinimumMib = 20;
+inline constexpr std::uint32_t kContainerCreationMaximumMib = 1024U * 1024U;
 
 // Complete, vendor-neutral page state. It reveals neither hardware identity,
 // password role, mode, tier, B-container shape, nor volume type. Unified
-// mounted state remains separate for safe cleanup; authenticated A display
-// facts use the narrow status below.
+// mounted state remains separate for safe cleanup; per-container display facts
+// use the narrow status below.
 enum class CardProductUiState : std::uint8_t {
   no_card = 0,
   initialization_required = 1,
   login_required = 2,
   authenticated = 3,
   unavailable = 4,
-};
-
-enum class ContainerAUiState : std::uint8_t {
-  absent = 0,
-  present = 1,
-  mounted = 2,
-};
-
-struct ContainerAUiStatus final {
-  ContainerAUiState state{ContainerAUiState::absent};
-  std::uint32_t size_mib{};
-  wchar_t drive_letter{};
 };
 
 // One standard container adopted by the current session, projected for the
@@ -70,8 +58,6 @@ class CardProductUiSessionController final {
   void submit_initialization(
       std::span<std::byte> mutable_password_utf8,
       std::span<std::byte> mutable_confirmation_utf8);
-  void create_container_a(std::uint32_t size_mib);
-
   // Creates one standard container of the requested size at a location the
   // user picks in the native chooser. Returns false when the user cancels;
   // an out-of-range size or a wrong route throws.
@@ -91,8 +77,6 @@ class CardProductUiSessionController final {
 
   [[nodiscard]] CardProductUiState state() const noexcept;
   [[nodiscard]] bool mounted() const noexcept;
-  [[nodiscard]] ContainerAUiStatus container_a_status();
-
   // Live facts for every adopted container, in adoption order. Returns an
   // empty list on every route other than `authenticated`.
   [[nodiscard]] std::vector<ContainerUiStatus> container_statuses();

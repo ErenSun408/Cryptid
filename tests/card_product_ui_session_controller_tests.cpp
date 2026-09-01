@@ -30,10 +30,9 @@ using usb_vault::security::OfflineCardPasswordPolicy;
 using usb_vault::security::SecureBuffer;
 using usb_vault::ui::CardProductUiSessionController;
 using usb_vault::ui::CardProductUiState;
-using usb_vault::ui::ContainerAUiState;
 using usb_vault::ui::ContainerUiStatus;
-using usb_vault::ui::kContainerACreationMaximumMib;
-using usb_vault::ui::kContainerACreationMinimumMib;
+using usb_vault::ui::kContainerCreationMaximumMib;
+using usb_vault::ui::kContainerCreationMinimumMib;
 
 static_assert(std::derived_from<CardEntryContextController,
                                 ICardEntryActions>);
@@ -538,80 +537,6 @@ void test_unmount_forwards_only_unified_active_state() {
           "controller did not forward unmount once");
 }
 
-void test_container_a_creation_requires_authenticated_bounded_capacity() {
-  Fixture fixture;
-  fixture.entry.route = CardEntryRoute::login_required;
-  require_throws<std::system_error>(
-      [&] { fixture.controller.create_container_a(64); },
-      "unauthenticated UI accepted container A creation");
-  require(fixture.volume.create_a_calls == 0,
-          "wrong-route UI creation reached the volume session");
-
-  fixture.authentication.establish(root_secret());
-  for (const std::uint32_t invalid : {
-           kContainerACreationMinimumMib - 1,
-           kContainerACreationMaximumMib + 1}) {
-    require_throws<std::invalid_argument>(
-        [&] { fixture.controller.create_container_a(invalid); },
-        "out-of-range UI capacity was accepted");
-  }
-  require(fixture.volume.create_a_calls == 0,
-          "invalid UI capacity reached the volume session");
-
-  fixture.controller.create_container_a(64);
-  require(fixture.volume.create_a_calls == 1 &&
-              fixture.volume.created_a_size_bytes ==
-                  64ULL * 1024ULL * 1024ULL &&
-              fixture.controller.mounted(),
-          "UI capacity was not converted to the exact byte count");
-}
-
-void test_container_a_creation_failure_preserves_authentication() {
-  Fixture fixture;
-  fixture.authentication.establish(root_secret());
-  fixture.volume.reject_create_a = true;
-
-  require_throws<std::runtime_error>(
-      [&] { fixture.controller.create_container_a(64); },
-      "container A creation failure was hidden");
-  require(fixture.controller.state() == CardProductUiState::authenticated &&
-              !fixture.controller.mounted(),
-          "container A creation failure changed UI authentication or mount");
-}
-
-void test_container_a_status_is_authenticated_and_normalized_for_ui() {
-  Fixture fixture;
-  fixture.entry.route = CardEntryRoute::login_required;
-  require(fixture.controller.container_a_status().state ==
-                  ContainerAUiState::absent &&
-              fixture.volume.container_a_status_calls == 0,
-          "unauthenticated UI queried or exposed container A");
-
-  fixture.authentication.establish(root_secret());
-  fixture.volume.container_a_exists = true;
-  fixture.volume.container_a_size_bytes = 96ULL * 1024ULL * 1024ULL;
-  auto status = fixture.controller.container_a_status();
-  require(status.state == ContainerAUiState::present &&
-              status.size_mib == 96 && status.drive_letter == wchar_t{},
-          "UI lost unmounted A capacity or invented a drive");
-
-  fixture.volume.container_a_mounted = true;
-  status = fixture.controller.container_a_status();
-  require(status.state == ContainerAUiState::mounted &&
-              status.size_mib == 96 && status.drive_letter == L'X',
-          "UI did not project mounted A metadata");
-
-  fixture.volume.container_a_size_bytes += 1;
-  status = fixture.controller.container_a_status();
-  require(status.size_mib == 0,
-          "UI rounded a non-MiB container size into misleading capacity");
-
-  fixture.volume.container_a_exists = false;
-  require_throws<std::runtime_error>(
-      [&] { static_cast<void>(fixture.controller.container_a_status()); },
-      "UI accepted a mounted A that did not exist");
-}
-
 void test_container_collection_is_projected_only_when_authenticated() {
   Fixture fixture;
   fixture.entry.route = CardEntryRoute::login_required;
@@ -650,8 +575,8 @@ void test_container_creation_is_bounded_and_cancellable() {
       "unauthenticated route created a container");
 
   fixture.authentication.establish(root_secret());
-  for (const std::uint32_t invalid : {kContainerACreationMinimumMib - 1,
-                                      kContainerACreationMaximumMib + 1}) {
+  for (const std::uint32_t invalid : {kContainerCreationMinimumMib - 1,
+                                      kContainerCreationMaximumMib + 1}) {
     require_throws<std::invalid_argument>(
         [&] {
           static_cast<void>(fixture.controller.create_container(invalid));
@@ -661,10 +586,19 @@ void test_container_creation_is_bounded_and_cancellable() {
   require(fixture.chooser.new_calls == 0 && fixture.volume.create_calls == 0,
           "an out-of-range size still opened the chooser or the session");
 
+  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  fixture.volume.reject_create = true;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.create_container(64)); },
+      "a failed creation was not reported");
+  require(fixture.controller.state() == CardProductUiState::authenticated,
+          "a failed creation dropped the authenticated route");
+  fixture.volume.reject_create = false;
+
   fixture.chooser.new_path.clear();
   require(!fixture.controller.create_container(64) &&
-              fixture.chooser.new_calls == 1 &&
-              fixture.volume.create_calls == 0,
+              fixture.chooser.new_calls == 2 &&
+              fixture.volume.create_calls == 1,
           "a cancelled chooser still created a container");
   require(fixture.controller.container_statuses().empty(),
           "a cancelled creation left an adopted container behind");
@@ -730,9 +664,6 @@ int main() {
     test_overlapping_initialization_inputs_are_rejected_and_wiped();
     test_residual_mount_blocks_new_card_actions_until_cleanup();
     test_unmount_forwards_only_unified_active_state();
-    test_container_a_creation_requires_authenticated_bounded_capacity();
-    test_container_a_creation_failure_preserves_authentication();
-    test_container_a_status_is_authenticated_and_normalized_for_ui();
     test_container_collection_is_projected_only_when_authenticated();
     test_container_creation_is_bounded_and_cancellable();
     test_adopted_container_remounts_without_reselecting_its_file();

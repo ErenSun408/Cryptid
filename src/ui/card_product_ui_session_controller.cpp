@@ -49,7 +49,7 @@ constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
     const std::uint64_t size_bytes) noexcept {
   if (size_bytes % kBytesPerMib != 0) return 0;
   const std::uint64_t quotient = size_bytes / kBytesPerMib;
-  return quotient <= kContainerACreationMaximumMib
+  return quotient <= kContainerCreationMaximumMib
              ? static_cast<std::uint32_t>(quotient)
              : 0;
 }
@@ -121,28 +121,14 @@ void CardProductUiSessionController::submit_initialization(
   entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
 }
 
-void CardProductUiSessionController::create_container_a(
-    const std::uint32_t size_mib) {
-  if (state() != CardProductUiState::authenticated) {
-    throw_wrong_route(
-        "container A creation is not available in the current UI state");
-  }
-  if (size_mib < kContainerACreationMinimumMib ||
-      size_mib > kContainerACreationMaximumMib) {
-    throw std::invalid_argument("container A size is outside the UI range");
-  }
-  volume_session_.create_container_a(
-      static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
-}
-
 bool CardProductUiSessionController::create_container(
     const std::uint32_t size_mib) {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route(
         "container creation is not available in the current UI state");
   }
-  if (size_mib < kContainerACreationMinimumMib ||
-      size_mib > kContainerACreationMaximumMib) {
+  if (size_mib < kContainerCreationMinimumMib ||
+      size_mib > kContainerCreationMaximumMib) {
     throw std::invalid_argument("container size is outside the UI range");
   }
 
@@ -230,30 +216,6 @@ CardProductUiState CardProductUiSessionController::state() const noexcept {
 
 bool CardProductUiSessionController::mounted() const noexcept {
   return volume_session_.mounted();
-}
-
-ContainerAUiStatus CardProductUiSessionController::container_a_status() {
-  if (state() != CardProductUiState::authenticated) return {};
-
-  const application::ContainerAStatus status =
-      volume_session_.container_a_status();
-  if ((!status.exists &&
-       (status.mounted || status.size_bytes != 0 ||
-        status.drive_letter != wchar_t{})) ||
-      (status.exists && status.mounted &&
-       (status.drive_letter < L'A' || status.drive_letter > L'Z')) ||
-      (status.exists && !status.mounted &&
-       status.drive_letter != wchar_t{})) {
-    throw std::runtime_error("container A status is inconsistent");
-  }
-  const std::uint32_t size_mib =
-      status.exists ? displayable_size_mib(status.size_bytes) : 0;
-  return {.state = status.mounted
-                       ? ContainerAUiState::mounted
-                       : status.exists ? ContainerAUiState::present
-                                       : ContainerAUiState::absent,
-          .size_mib = size_mib,
-          .drive_letter = status.mounted ? status.drive_letter : wchar_t{}};
 }
 
 std::vector<ContainerUiStatus>

@@ -254,14 +254,14 @@ void test_container_collection_replaces_the_single_container_display() {
 void test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
-  require(page.find("id=\"create-container-a-capacity\"") !=
+  require(page.find("id=\"create-container-capacity\"") !=
               std::string::npos &&
               page.find("min=\"20\" max=\"1048576\" step=\"1\" value=\"64\"") !=
                   std::string::npos &&
               page.find("id=\"create-volume-status\"") !=
                   std::string::npos,
           "container A dialog lacks its fixed capacity and status controls");
-  require(script.find("const containerACapacityMib") != std::string::npos &&
+  require(script.find("const containerCapacityMib") != std::string::npos &&
               script.find("value >= 20 && value <= 1048576") !=
                   std::string::npos &&
               script.find("creationKind !== \"encrypted\"") !=

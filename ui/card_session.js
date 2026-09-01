@@ -58,9 +58,9 @@
   const creationCancelButton = document.getElementById("create-volume-cancel");
   const creationContinueButton =
     document.getElementById("create-volume-continue");
-  const containerAForm = document.getElementById("create-container-a-form");
-  const containerACapacity =
-    document.getElementById("create-container-a-capacity");
+  const containerForm = document.getElementById("create-container-form");
+  const containerCapacity =
+    document.getElementById("create-container-capacity");
   const creationStatus = document.getElementById("create-volume-status");
 
   let bridge = null;
@@ -132,8 +132,8 @@
     }
   };
 
-  const containerACapacityMib = () => {
-    const raw = containerACapacity.value.trim();
+  const containerCapacityMib = () => {
+    const raw = containerCapacity.value.trim();
     if (!/^[0-9]+$/.test(raw)) return null;
     const value = Number(raw);
     return Number.isSafeInteger(value) && value >= 20 && value <= 1048576
@@ -144,13 +144,13 @@
   const updateCreationAvailability = () => {
     const encrypted = creationKind === "encrypted";
     const authenticated = currentState === nativeState.authenticated;
-    containerAForm.hidden = !encrypted;
-    containerACapacity.disabled = busy || !authenticated || !encrypted ||
+    containerForm.hidden = !encrypted;
+    containerCapacity.disabled = busy || !authenticated || !encrypted ||
       creationCompleted;
     creationCloseButton.disabled = busy;
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated || !encrypted ||
-      creationCompleted || containerACapacityMib() === null;
+      creationCompleted || containerCapacityMib() === null;
     creationContinueButton.title = encrypted ? "" : "正在开发中";
     creationContinueButton.textContent = encrypted ? "创建加密盘" : "继续";
     creationCancelButton.textContent = creationCompleted ? "完成" : "返回";
@@ -191,7 +191,7 @@
     creationCompleted = false;
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
-    containerACapacity.value = "64";
+    containerCapacity.value = "64";
     creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
     creationDescription.textContent = hiddenVolume
       ? "隐藏盘参数与卡记录事务将在后续切片接入。"
@@ -201,8 +201,8 @@
     if (hiddenVolume) {
       creationCloseButton.focus();
     } else {
-      containerACapacity.focus();
-      containerACapacity.select();
+      containerCapacity.focus();
+      containerCapacity.select();
     }
   };
 
@@ -726,7 +726,7 @@
     "无法卸载该加密盘，请关闭占用文件后重试。");
 
   const createContainer = async () => {
-    const sizeMib = containerACapacityMib();
+    const sizeMib = containerCapacityMib();
     if (sizeMib === null || creationKind !== "encrypted" ||
         currentState !== nativeState.authenticated) {
       creationStatus.textContent = "请输入有效的加密盘容量。";
@@ -822,7 +822,7 @@
       }
     });
   }
-  containerACapacity.addEventListener("input", () => {
+  containerCapacity.addEventListener("input", () => {
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
     updateCreationAvailability();

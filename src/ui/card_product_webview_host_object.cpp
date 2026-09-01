@@ -21,10 +21,6 @@ constexpr DISPID kSubmitInitializationPasswordBytesId = 2;
 constexpr DISPID kUnmountId = 3;
 constexpr DISPID kHasActiveSessionId = 4;
 constexpr DISPID kGetSessionStateId = 5;
-constexpr DISPID kCreateContainerAMibId = 6;
-constexpr DISPID kGetContainerAStateId = 7;
-constexpr DISPID kGetContainerASizeMibId = 8;
-constexpr DISPID kGetContainerADriveLetterId = 9;
 constexpr DISPID kCreateContainerMibId = 10;
 constexpr DISPID kMountContainerId = 11;
 constexpr DISPID kMountAdoptedContainerId = 12;
@@ -42,11 +38,6 @@ constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
 constexpr wchar_t kUnmountName[] = L"unmount";
 constexpr wchar_t kHasActiveSessionName[] = L"hasActiveSession";
 constexpr wchar_t kGetSessionStateName[] = L"getSessionState";
-constexpr wchar_t kCreateContainerAMibName[] = L"createContainerAMib";
-constexpr wchar_t kGetContainerAStateName[] = L"getContainerAState";
-constexpr wchar_t kGetContainerASizeMibName[] = L"getContainerASizeMib";
-constexpr wchar_t kGetContainerADriveLetterName[] =
-    L"getContainerADriveLetter";
 constexpr wchar_t kCreateContainerMibName[] = L"createContainerMib";
 constexpr wchar_t kMountContainerName[] = L"mountContainer";
 constexpr wchar_t kMountAdoptedContainerName[] = L"mountAdoptedContainer";
@@ -159,22 +150,6 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kGetSessionStateId;
       return S_OK;
     }
-    if (matches(names[0], kCreateContainerAMibName)) {
-      ids[0] = kCreateContainerAMibId;
-      return S_OK;
-    }
-    if (matches(names[0], kGetContainerAStateName)) {
-      ids[0] = kGetContainerAStateId;
-      return S_OK;
-    }
-    if (matches(names[0], kGetContainerASizeMibName)) {
-      ids[0] = kGetContainerASizeMibId;
-      return S_OK;
-    }
-    if (matches(names[0], kGetContainerADriveLetterName)) {
-      ids[0] = kGetContainerADriveLetterId;
-      return S_OK;
-    }
     if (matches(names[0], kCreateContainerMibName)) {
       ids[0] = kCreateContainerMibId;
       return S_OK;
@@ -237,14 +212,6 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_login(parameters, argument_error);
       case kSubmitInitializationPasswordBytesId:
         return invoke_initialization(parameters, argument_error);
-      case kCreateContainerAMibId:
-        return invoke_create_container_a(parameters, argument_error);
-      case kGetContainerAStateId:
-        return invoke_container_a_state(parameters, result);
-      case kGetContainerASizeMibId:
-        return invoke_container_a_size(parameters, result);
-      case kGetContainerADriveLetterId:
-        return invoke_container_a_drive(parameters, result);
       case kCreateContainerMibId:
         return invoke_create_container(parameters, result, argument_error);
       case kMountContainerId:
@@ -313,55 +280,6 @@ class CardProductWebViewHostObject final : public IDispatch {
     return S_OK;
   }
 
-  HRESULT invoke_container_a_state(DISPPARAMS* const parameters,
-                                   VARIANT* const result) noexcept {
-    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
-    if (result == nullptr) return S_OK;
-    try {
-      const ContainerAUiStatus status = controller_.container_a_status();
-      ::VariantInit(result);
-      result->vt = VT_I4;
-      result->lVal = static_cast<LONG>(status.state);
-      return S_OK;
-    } catch (...) {
-      return E_FAIL;
-    }
-  }
-
-  HRESULT invoke_container_a_size(DISPPARAMS* const parameters,
-                                  VARIANT* const result) noexcept {
-    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
-    if (result == nullptr) return S_OK;
-    try {
-      const ContainerAUiStatus status = controller_.container_a_status();
-      ::VariantInit(result);
-      result->vt = VT_UI4;
-      result->ulVal = status.size_mib;
-      return S_OK;
-    } catch (...) {
-      return E_FAIL;
-    }
-  }
-
-  HRESULT invoke_container_a_drive(DISPPARAMS* const parameters,
-                                   VARIANT* const result) noexcept {
-    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
-    if (result == nullptr) return S_OK;
-    try {
-      const ContainerAUiStatus status = controller_.container_a_status();
-      wchar_t drive[] = {status.drive_letter, L':'};
-      const UINT length = status.drive_letter == wchar_t{} ? 0U : 2U;
-      BSTR value = ::SysAllocStringLen(drive, length);
-      if (value == nullptr) return E_OUTOFMEMORY;
-      ::VariantInit(result);
-      result->vt = VT_BSTR;
-      result->bstrVal = value;
-      return S_OK;
-    } catch (...) {
-      return E_FAIL;
-    }
-  }
-
   HRESULT invoke_unmount(DISPPARAMS* const parameters) noexcept {
     if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
     try {
@@ -392,29 +310,6 @@ class CardProductWebViewHostObject final : public IDispatch {
       return true;
     }
     return false;
-  }
-
-  HRESULT invoke_create_container_a(
-      DISPPARAMS* const parameters,
-      UINT* const argument_error) noexcept {
-    if (parameters == nullptr || parameters->cArgs != 1 ||
-        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
-      return DISP_E_BADPARAMCOUNT;
-    }
-    std::uint32_t size_mib = 0;
-    if (!exact_uint32(parameters->rgvarg[0], size_mib)) {
-      if (argument_error != nullptr) *argument_error = 0;
-      return DISP_E_TYPEMISMATCH;
-    }
-    try {
-      controller_.create_container_a(size_mib);
-      return S_OK;
-    } catch (const std::invalid_argument&) {
-      if (argument_error != nullptr) *argument_error = 0;
-      return DISP_E_TYPEMISMATCH;
-    } catch (...) {
-      return E_FAIL;
-    }
   }
 
   HRESULT invoke_create_container(DISPPARAMS* const parameters,

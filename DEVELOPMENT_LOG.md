@@ -4775,4 +4775,35 @@
   4. 四个 A 专用 COM 方法与控制器的 `create_container_a` / `container_a_status` 现已无页面调用，
      属可清理的死面，留待单独一刀切除。
   5. 建卷与挂载仍同步占用 UI 线程（16c 已记录）；同名不同目录的容器在列表中显示相同名称。
-- 提交：待定（`[ui]add the multi-container page and bridge`）。
+- 提交：`5ce593e [ui]add the multi-container page and bridge`。
+
+### 小切片 16i：切除单容器 A 专用界面面
+
+#### 需求审计与实现
+
+- 16h 之后，页面已全部改走容器集合，四个 A 专用 COM 方法与控制器的
+  `create_container_a` / `container_a_status` 再无调用方，属自动化边界上的死面。用户明确要求
+  一刀切除，本切片只做删除与更名，不改任何行为。
+- COM 面删除 `createContainerAMib`、`getContainerAState`、`getContainerASizeMib`、
+  `getContainerADriveLetter` 四个方法及其 DISPID、名称与四个 `invoke_*` 实现。
+- 控制器删除 `create_container_a`、`container_a_status` 与 `ContainerAUiState` /
+  `ContainerAUiStatus`；容量常量更名为 `kContainerCreationMinimumMib` /
+  `kContainerCreationMaximumMib`（不再有"A"这一层含义）。
+- 页面与夹具的建卷控件同步更名：`create-container-a-form` → `create-container-form`、
+  `create-container-a-capacity` → `create-container-capacity`，脚本内的 `containerACapacity*`
+  一并改名。
+- **未动会话层**：`IAuthenticatedCardVolumeSession::create_container_a` 与 `container_a_status`
+  仍在（`create_container_a` 只是固定路径版的 `create_container`），目前只剩测试调用。
+  它们与登录挂载策略共用固定 `container_a` 布局，是否一并折叠留待单独评审。
+
+#### 测试、安全复核与提交状态
+
+- 删除三个控制器测试与三个 COM 宿主测试（连同四个 A 专用 invoke 辅助），但把其中仍然成立的
+  两处覆盖迁到新入口上：创建失败后仍保持已认证路由、以及非整数容量（`VT_R8` 64.5）必须被
+  `exact_uint32` 拒绝。
+- 完整 CTest **49/50**（唯一失败仍是实体卡不在位的 `vikey_helper_process_tests`）；
+  真实 WebView2 假后端夹具重跑退出 0；两个 `node --check` 通过。
+- 安全复核：本切片只减不增，自动化边界的方法数从 19 降到 15，没有新增入参、出参或状态。
+- ⚠️ P2 开发应用 exe 本次**未能重新链接**（`LNK1168`，用户正在运行该程序）。源码与页面已是最新，
+  下次构建即可覆盖。
+- 提交：待定（`[ui]drop the single-container bridge`）。

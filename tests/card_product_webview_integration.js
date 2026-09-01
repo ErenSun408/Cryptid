@@ -39,7 +39,7 @@ chrome.webview.postMessage("driver-loaded");
   const creationCancel = document.getElementById("create-volume-cancel");
   const creationContinue = document.getElementById("create-volume-continue");
   const creationCapacity =
-    document.getElementById("create-container-a-capacity");
+    document.getElementById("create-container-capacity");
   const creationStatus = document.getElementById("create-volume-status");
   const instruction = "请输入并确认日常密码，至少12字符。";
 
