@@ -316,17 +316,20 @@ namespace {
 // explicit mount all converge on one entry per container path.
 SessionContainer& adopt(CardLoginMountSessionState& state,
                         const std::wstring_view path,
-                        const wchar_t drive_letter, const bool mounted) {
+                        const wchar_t drive_letter, const bool mounted,
+                        const bool release_first = false) {
   if (SessionContainer* const existing = find_by_path(state, path)) {
     existing->drive_letter = drive_letter;
     existing->mounted = mounted;
+    existing->release_first = existing->release_first || release_first;
     return *existing;
   }
   state.containers.push_back({.id = state.next_container_id,
                               .path = std::wstring(path),
                               .name = file_name_of(path),
                               .drive_letter = drive_letter,
-                              .mounted = mounted});
+                              .mounted = mounted,
+                              .release_first = release_first});
   ++state.next_container_id;
   return state.containers.back();
 }
@@ -338,13 +341,13 @@ void record_residual_mount(const ContainerLayout& layout,
     if (drive_letter == layout.container_a.drive_letter) {
       static_cast<void>(adopt(state, layout.container_a.path, drive_letter,
                               true));
+    } else if (drive_letter == layout.container_b.drive_letter) {
+      static_cast<void>(adopt(state, layout.container_b.path, drive_letter,
+                              true, true));
     }
   } catch (...) {
-    // A residual mount must still be reported through container_b below even
-    // if the A entry cannot be recorded; the drive letter is never lost.
-  }
-  if (drive_letter == layout.container_b.drive_letter) {
-    state.container_b_mounted = true;
+    // A residual drive letter that cannot be recorded is still held by this
+    // session; the unified cleanup path releases it by drive letter.
   }
 }
 
@@ -384,7 +387,10 @@ void CardLoginMountSessionCore::consume_authenticated_login(
       static_cast<void>(adopt(state_, layout_.container_a.path,
                               layout_.container_a.drive_letter, true));
     }
-    state_.container_b_mounted = result.container_b.has_value();
+    if (result.container_b.has_value()) {
+      static_cast<void>(adopt(state_, layout_.container_b.path,
+                              layout_.container_b.drive_letter, true, true));
+    }
     login_password_utf8.clear();
   } catch (const MountRollbackError& error) {
     record_residual_mount(layout_, state_, error.residual_drive_letter());
@@ -426,11 +432,6 @@ wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
       throw std::runtime_error(
           "allocated drive letter is already held by this session");
     }
-  }
-  if (state_.container_b_mounted &&
-      layout_.container_b.drive_letter == letter) {
-    throw std::runtime_error(
-        "allocated drive letter is already held by this session");
   }
   return letter;
 }
@@ -546,7 +547,8 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
          .pim = 0,
          .read_only = false,
          .notify_shell = false}));
-    const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
+    const std::uint32_t id =
+        adopt(state_, path, drive_letter, true, true).id;
     outer_password.clear();
     hidden_password.clear();
     runtime_.notify_mounted(drive_letter);
@@ -564,6 +566,12 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
 
 std::uint32_t CardLoginMountSessionCore::mount_container(
     const std::wstring_view path) {
+  if (path == layout_.container_b.path) {
+    // Its volumes derive from a password this session no longer holds, so the
+    // fixed standard derivation must never be tried against it.
+    throw std::invalid_argument(
+        "this container cannot be opened with the standard derivation");
+  }
   if (!authentication_.authenticated()) {
     throw std::logic_error(
         "mounting a container requires an authenticated card session");
@@ -659,32 +667,32 @@ ContainerAStatus CardLoginMountSessionCore::container_a_status() {
 }
 
 void CardLoginMountSessionCore::unmount_active() {
-  // The B-before-A order required after authentication still holds: container
-  // B is released first, then every adopted standard container.
-  if (state_.container_b_mounted) {
-    static_cast<void>(runtime_.unmount(layout_.container_b.drive_letter));
-    state_.container_b_mounted = false;
-  }
-  for (SessionContainer& container : state_.containers) {
-    if (!container.mounted) continue;
-    static_cast<void>(runtime_.unmount(container.drive_letter));
-    container.mounted = false;
-    container.drive_letter = wchar_t{};
+  // The B-before-A order required after authentication still holds: the
+  // container with a hidden volume is released first, then every other one.
+  for (const bool release_first : {true, false}) {
+    for (SessionContainer& container : state_.containers) {
+      if (!container.mounted || container.release_first != release_first) {
+        continue;
+      }
+      static_cast<void>(runtime_.unmount(container.drive_letter));
+      container.mounted = false;
+      container.drive_letter = wchar_t{};
+    }
   }
 }
 
 bool CardLoginMountSessionCore::force_unmount_active() {
   bool forced = false;
-  if (state_.container_b_mounted) {
-    forced = runtime_.unmount_forced(
-        layout_.container_b.drive_letter).forced;
-    state_.container_b_mounted = false;
-  }
-  for (SessionContainer& container : state_.containers) {
-    if (!container.mounted) continue;
-    forced = runtime_.unmount_forced(container.drive_letter).forced || forced;
-    container.mounted = false;
-    container.drive_letter = wchar_t{};
+  for (const bool release_first : {true, false}) {
+    for (SessionContainer& container : state_.containers) {
+      if (!container.mounted || container.release_first != release_first) {
+        continue;
+      }
+      forced = runtime_.unmount_forced(container.drive_letter).forced ||
+               forced;
+      container.mounted = false;
+      container.drive_letter = wchar_t{};
+    }
   }
   return forced;
 }

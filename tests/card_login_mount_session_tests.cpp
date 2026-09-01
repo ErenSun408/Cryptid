@@ -643,6 +643,61 @@ void test_container_a_notify_failure_retains_mount_state() {
   require_events(runtime, {"unmount:A"});
 }
 
+void test_login_adopts_every_mounted_container() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.mount_a = true;
+  runtime.mount_b = true;
+  // A real login only mounts containers whose files are present, so the
+  // fixture reports both backing files.
+  runtime.container_a_exists = true;
+  runtime.container_a_size_bytes = 64ULL * 1024ULL * 1024ULL;
+  runtime.other_existing.emplace_back(L"C:\\vault\\b.hc");
+  runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+
+  std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2,
+          "login did not adopt both containers into one collection");
+  require(statuses[0].name == L"a.hc" && statuses[0].mounted &&
+              statuses[0].drive_letter == L'X',
+          "the standard container is missing from the collection");
+  require(statuses[1].name == L"b.hc" && statuses[1].mounted &&
+              statuses[1].drive_letter == L'Y',
+          "the hidden container is missing from the collection");
+
+  // The hidden container is still released before the standard ones.
+  runtime.events.clear();
+  session.unmount_active();
+  require_events(runtime, {"unmount:B", "unmount:A"});
+  statuses = session.container_statuses();
+  require(statuses.size() == 2 && !statuses[0].mounted &&
+              !statuses[1].mounted &&
+              statuses[0].drive_letter == wchar_t{} &&
+              statuses[1].drive_letter == wchar_t{},
+          "unmounting dropped the adopted containers or kept a drive");
+  require(!session.mounted(), "unmount left an active volume behind");
+}
+
+void test_standard_mount_refuses_the_hidden_container_path() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  authentication.establish(root_secret());
+
+  require_throws<std::invalid_argument>(
+      [&] {
+        static_cast<void>(session.mount_container(L"C:\\vault\\b.hc"));
+      },
+      "the standard derivation was tried against the hidden container");
+  require(runtime.events.empty(),
+          "a refused mount still reached the runtime");
+}
+
 void test_container_b_creation_derives_both_volume_passwords() {
   FakeRuntime runtime;
   CardAuthenticationSession authentication;
@@ -948,6 +1003,8 @@ int main() {
     test_container_a_creation_reports_cleanup_failure();
     test_container_a_mount_failure_keeps_published_container();
     test_container_a_notify_failure_retains_mount_state();
+    test_login_adopts_every_mounted_container();
+    test_standard_mount_refuses_the_hidden_container_path();
     test_container_b_creation_derives_both_volume_passwords();
     test_container_b_creation_rejects_unusable_input();
     test_container_b_creation_cleans_a_failed_format();

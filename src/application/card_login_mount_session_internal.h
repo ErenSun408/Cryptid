@@ -69,15 +69,17 @@ struct SessionContainer final {
   std::wstring name;
   wchar_t drive_letter{};
   bool mounted{};
+  // The container with a hidden volume is released before the standard ones,
+  // which is the only reason the session distinguishes it. Nothing about this
+  // flag crosses the application boundary.
+  bool release_first{};
 };
 
 struct CardLoginMountSessionState final {
   std::vector<SessionContainer> containers;
   std::uint32_t next_container_id{1};
-  bool container_b_mounted{};
 
   [[nodiscard]] bool mounted() const noexcept {
-    if (container_b_mounted) return true;
     for (const SessionContainer& container : containers) {
       if (container.mounted) return true;
     }
