@@ -48,8 +48,9 @@ void require(const bool condition, const char* const message) {
 
 void test_page_has_route_specific_password_surfaces() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
-  require(count_occurrences(page, "type=\"password\"") == 2,
-          "product page must have exactly password and confirmation inputs");
+  // Two session inputs plus the three the hidden-volume creation form needs.
+  require(count_occurrences(page, "type=\"password\"") == 5,
+          "product page must have exactly the session and creation inputs");
   require(page.find("id=\"card-password\"") != std::string::npos &&
               page.find("id=\"card-password-confirmation\"") !=
                   std::string::npos,
@@ -57,13 +58,13 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("id=\"confirmation-field\" class=\"field\" hidden") !=
               std::string::npos,
           "confirmation must start hidden outside initialization");
-  require(count_occurrences(page, "autocomplete=\"off\"") == 2 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 2,
-          "both product password controls must disable browser assistance");
+  require(count_occurrences(page, "autocomplete=\"off\"") == 5 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 5,
+          "every product password control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-16h-container-collection\"></script>") !=
+              "<script src=\"card_session.js?v=p2-16m-container-b\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -251,7 +252,45 @@ void test_container_collection_replaces_the_single_container_display() {
           "the container display leaked B shape or volume type into the UI");
 }
 
-void test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred() {
+void test_hidden_container_form_is_symmetric_and_never_validated() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("id=\"create-container-b-form\"") != std::string::npos &&
+              page.find("id=\"create-container-b-capacity\"") !=
+                  std::string::npos &&
+              page.find("id=\"create-container-b-hidden-capacity\"") !=
+                  std::string::npos &&
+              page.find("id=\"create-container-b-password\"") !=
+                  std::string::npos &&
+              page.find("id=\"create-container-b-second\"") !=
+                  std::string::npos &&
+              page.find("id=\"create-container-b-second-confirmation\"") !=
+                  std::string::npos,
+          "the hidden container form is incomplete");
+  // 8.7.2: the wording is fixed and never adapts to who is logged in.
+  require(page.find("为该容器设置诱饵密码") != std::string::npos &&
+              page.find("再次输入诱饵密码") != std::string::npos &&
+              page.find("请务必输入正确 —— 软件不会、也无法替你校验它") !=
+                  std::string::npos,
+          "the second password prompt is not the fixed symmetric wording");
+  require(script.find("await bridge.createContainerBMib(sizes.outer, "
+                      "sizes.hidden,") != std::string::npos,
+          "the page does not create the hidden container through the bridge");
+  // 8.7.3: entering it twice is the only permitted check. The page must not
+  // claim the second password is right or wrong.
+  require(script.find("containerBSecond.value === "
+                      "containerBSecondConfirmation.value") !=
+                  std::string::npos &&
+              script.find("诱饵密码错误") == std::string::npos &&
+              script.find("密码不正确") == std::string::npos,
+          "the page judges the second password instead of only confirming it");
+  require(script.find("creationContinueButton.title") == std::string::npos &&
+              script.find("隐藏盘参数与卡记录事务将在后续切片接入") ==
+                  std::string::npos,
+          "the deferred hidden-volume placeholder is still present");
+}
+
+void test_container_creation_form_is_bounded() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   require(page.find("id=\"create-container-capacity\"") !=
@@ -262,13 +301,12 @@ void test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred() 
                   std::string::npos,
           "container A dialog lacks its fixed capacity and status controls");
   require(script.find("const containerCapacityMib") != std::string::npos &&
-              script.find("value >= 20 && value <= 1048576") !=
-                  std::string::npos &&
+              script.find("value >= minimum &&") != std::string::npos &&
               script.find("creationKind !== \"encrypted\"") !=
                   std::string::npos &&
-              script.find("creationContinueButton.title = encrypted ? \"\" : \"正在开发中\"") !=
+              script.find("creationKind !== \"hidden\"") !=
                   std::string::npos,
-          "creation routing does not bind A capacity or defer hidden volumes");
+          "creation routing does not bind each capacity to its own flow");
   require(script.find("请选择保存位置，随后确认管理员权限") !=
               std::string::npos &&
               script.find("创建成功，可以开始使用加密盘") !=
@@ -417,7 +455,8 @@ int main() {
     test_authenticated_dashboard_is_real_state_only();
     test_five_states_are_complete_and_vendor_neutral();
     test_bridge_calls_are_narrow_and_route_specific();
-    test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred();
+    test_container_creation_form_is_bounded();
+    test_hidden_container_form_is_symmetric_and_never_validated();
     test_container_collection_replaces_the_single_container_display();
     test_all_password_copies_have_fallback_wipes();
     test_strength_feedback_matches_the_native_length_baseline();

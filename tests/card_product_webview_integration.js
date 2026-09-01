@@ -40,6 +40,16 @@ chrome.webview.postMessage("driver-loaded");
   const creationContinue = document.getElementById("create-volume-continue");
   const creationCapacity =
     document.getElementById("create-container-capacity");
+  const hiddenCreate = document.querySelector('[data-create-kind="hidden"]');
+  const hiddenCapacity =
+    document.getElementById("create-container-b-capacity");
+  const hiddenInnerCapacity =
+    document.getElementById("create-container-b-hidden-capacity");
+  const hiddenPassword =
+    document.getElementById("create-container-b-password");
+  const hiddenSecond = document.getElementById("create-container-b-second");
+  const hiddenSecondConfirmation =
+    document.getElementById("create-container-b-second-confirmation");
   const creationStatus = document.getElementById("create-volume-status");
   const instruction = "请输入并确认日常密码，至少12字符。";
 
@@ -229,6 +239,37 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
 
+  // The hidden container commits the card record and the volume through one
+  // five-argument bridge call; the fakes verify every position.
+  const typeInto = (input, value) => {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  hiddenCreate.click();
+  typeInto(hiddenCapacity, "128");
+  typeInto(hiddenInnerCapacity, "96");
+  typeInto(hiddenPassword, "p\u0000ä");
+  typeInto(hiddenSecond, "second-password-value");
+  typeInto(hiddenSecondConfirmation, "second-password-value");
+  if (creationDialog.hidden || creationContinue.disabled) {
+    request("fail-hidden-creation");
+    return;
+  }
+  creationContinue.click();
+  if (!await waitFor(() => surface.dataset.busy === "false" &&
+      dashboardContainerCount.textContent === "2" &&
+      containerRows().length === 2 && hiddenPassword.value === "" &&
+      hiddenSecond.value === "" &&
+      creationStatus.dataset.tone === "success")) {
+    request("fail-hidden-creation");
+    return;
+  }
+  creationCancel.click();
+  if (!creationDialog.hidden) {
+    request("fail-creation-close");
+    return;
+  }
+
   request("request-login");
   if (!await waitForState("login-required") ||
       !confirmationField.hidden || password.disabled || surface.hidden ||
@@ -257,7 +298,7 @@ chrome.webview.postMessage("driver-loaded");
       !action.hidden || !surface.hidden || dashboard.hidden ||
       dashboardUnmount.hidden ||
       dashboardVolumeState.textContent !== "已挂载" ||
-      dashboardContainerCount.textContent !== "1" ||
+      dashboardContainerCount.textContent !== "2" ||
       containerFacts(containerRows()[0]).join("/") !== "64 MiB/D:") {
     request("fail-login-success");
     return;

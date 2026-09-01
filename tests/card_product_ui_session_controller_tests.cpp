@@ -99,10 +99,20 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, size_bytes);
   }
 
-  std::uint32_t create_container_b(std::uint64_t, std::uint64_t,
-                                   const SecureBuffer&,
-                                   const SecureBuffer&) override {
-    throw std::logic_error("container B is not part of this slice");
+  std::uint32_t create_container_b(
+      const std::uint64_t outer_size_bytes,
+      const std::uint64_t hidden_size_bytes,
+      const SecureBuffer& login_password_utf8,
+      const SecureBuffer& decoy_password_utf8) override {
+    ++create_b_calls;
+    created_outer_bytes = outer_size_bytes;
+    created_hidden_bytes = hidden_size_bytes;
+    b_login_password.assign(login_password_utf8.bytes().begin(),
+                            login_password_utf8.bytes().end());
+    b_decoy_password.assign(decoy_password_utf8.bytes().begin(),
+                            decoy_password_utf8.bytes().end());
+    if (reject_create_b) throw std::runtime_error("container B failed");
+    return adopt(L"C:/vault/b.hc", outer_size_bytes);
   }
 
   std::uint32_t mount_container(const std::wstring_view path) override {
@@ -234,7 +244,13 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   // reports a drive letter, which must fail closed instead of being shown.
   wchar_t inconsistent_unmounted_drive{};
   bool reject_create{};
+  bool reject_create_b{};
   bool reject_mount{};
+  std::uint64_t created_outer_bytes{};
+  std::uint64_t created_hidden_bytes{};
+  std::vector<std::byte> b_login_password;
+  std::vector<std::byte> b_decoy_password;
+  int create_b_calls{};
   int create_calls{};
   int mount_calls{};
   int unmount_container_calls{};
@@ -286,8 +302,18 @@ class FakeEntry final : public ICardEntryActions {
         root_secret(), std::move(login_password_utf8));
   }
 
-  void set_second_card_password(SecureBuffer, SecureBuffer) override {
-    throw std::logic_error("card record updates are not part of this slice");
+  void set_second_card_password(SecureBuffer existing_password_utf8,
+                                SecureBuffer second_password_utf8) override {
+    ++second_password_calls;
+    existing_password_bytes.assign(existing_password_utf8.bytes().begin(),
+                                   existing_password_utf8.bytes().end());
+    second_password_bytes.assign(second_password_utf8.bytes().begin(),
+                                 second_password_utf8.bytes().end());
+    existing_password_utf8.clear();
+    second_password_utf8.clear();
+    if (reject_second_password) {
+      throw std::runtime_error("card record update failed");
+    }
   }
 
   [[nodiscard]] std::optional<CardEntryRoute>
@@ -298,6 +324,10 @@ class FakeEntry final : public ICardEntryActions {
   std::optional<CardEntryRoute> route;
   std::vector<std::byte> initialization_bytes;
   bool reject_credential{};
+  bool reject_second_password{};
+  std::vector<std::byte> existing_password_bytes;
+  std::vector<std::byte> second_password_bytes;
+  int second_password_calls{};
   bool fail_system{};
   int initialization_calls{};
   int login_calls{};
@@ -647,6 +677,108 @@ void test_adopted_container_remounts_without_reselecting_its_file() {
           "a cancelled chooser still adopted a container");
 }
 
+void test_container_b_commits_the_card_before_the_volume() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  auto login = bytes("login-password");
+  auto second = bytes("second-password-value");
+  auto confirmation = bytes("second-password-value");
+
+  fixture.controller.create_container_b(64, 16, login, second, confirmation);
+
+  require(fixture.entry.second_password_calls == 1 &&
+              fixture.volume.create_b_calls == 1,
+          "container B did not run both halves exactly once");
+  require(fixture.entry.existing_password_bytes == bytes("login-password") &&
+              fixture.entry.second_password_bytes ==
+                  bytes("second-password-value"),
+          "the card record received the wrong passwords");
+  require(fixture.volume.b_login_password == bytes("login-password") &&
+              fixture.volume.b_decoy_password ==
+                  bytes("second-password-value"),
+          "the volume transaction received the wrong passwords");
+  require(fixture.volume.created_outer_bytes == 64ULL * 1024ULL * 1024ULL &&
+              fixture.volume.created_hidden_bytes ==
+                  16ULL * 1024ULL * 1024ULL,
+          "container B was created with the wrong sizes");
+  for (const std::vector<std::byte>& input : {login, second, confirmation}) {
+    for (const std::byte value : input) {
+      require(value == std::byte{}, "a container B input survived the call");
+    }
+  }
+
+  // A failed card record must stop before the volume exists, because a
+  // container nobody can open with the second password blocks every retry.
+  Fixture blocked;
+  blocked.authentication.establish(root_secret());
+  blocked.entry.reject_second_password = true;
+  auto blocked_login = bytes("login-password");
+  auto blocked_second = bytes("second-password-value");
+  auto blocked_confirmation = bytes("second-password-value");
+  require_throws<std::runtime_error>(
+      [&] {
+        blocked.controller.create_container_b(64, 16, blocked_login,
+                                              blocked_second,
+                                              blocked_confirmation);
+      },
+      "a failed card record update was not reported");
+  require(blocked.volume.create_b_calls == 0,
+          "the volume was created after the card record failed");
+}
+
+void test_container_b_rejects_unusable_requests() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  auto login = bytes("login-password");
+  auto second = bytes("second-password-value");
+  auto confirmation = bytes("second-password-value");
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.create_container_b(64, 16, login, second,
+                                              confirmation);
+      },
+      "an unauthenticated route created container B");
+
+  fixture.authentication.establish(root_secret());
+  for (const auto [outer, hidden] : {
+           std::pair<std::uint32_t, std::uint32_t>{19, 8},
+           std::pair<std::uint32_t, std::uint32_t>{
+               kContainerCreationMaximumMib + 1, 8},
+           std::pair<std::uint32_t, std::uint32_t>{64, 0},
+           std::pair<std::uint32_t, std::uint32_t>{64, 64}}) {
+    auto sized_login = bytes("login-password");
+    auto sized_second = bytes("second-password-value");
+    auto sized_confirmation = bytes("second-password-value");
+    require_throws<std::invalid_argument>(
+        [&] {
+          fixture.controller.create_container_b(outer, hidden, sized_login,
+                                                sized_second,
+                                                sized_confirmation);
+        },
+        "container B accepted an unusable size pair");
+  }
+
+  auto mismatched = bytes("second-password-value");
+  auto other = bytes("different-password-val");
+  auto reused = bytes("login-password");
+  require_throws<usb_vault::security::PasswordConfirmationRejected>(
+      [&] {
+        fixture.controller.create_container_b(64, 16, reused, mismatched,
+                                              other);
+      },
+      "container B accepted two different second passwords");
+  require(fixture.entry.second_password_calls == 0 &&
+              fixture.volume.create_b_calls == 0,
+          "a rejected container B request still reached the card or volume");
+
+  auto shared = bytes("login-password");
+  require_throws<std::invalid_argument>(
+      [&] {
+        fixture.controller.create_container_b(64, 16, shared, shared, shared);
+      },
+      "container B accepted overlapping input buffers");
+}
+
 void test_inconsistent_container_status_fails_closed() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -677,6 +809,8 @@ int main() {
     test_container_collection_is_projected_only_when_authenticated();
     test_container_creation_is_bounded_and_cancellable();
     test_adopted_container_remounts_without_reselecting_its_file();
+    test_container_b_commits_the_card_before_the_volume();
+    test_container_b_rejects_unusable_requests();
     test_inconsistent_container_status_fails_closed();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;

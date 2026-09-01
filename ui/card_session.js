@@ -62,6 +62,22 @@
   const containerCapacity =
     document.getElementById("create-container-capacity");
   const creationStatus = document.getElementById("create-volume-status");
+  const creationWorkflow = document.getElementById("create-volume-workflow");
+  const containerBForm = document.getElementById("create-container-b-form");
+  const containerBCapacity =
+    document.getElementById("create-container-b-capacity");
+  const containerBHiddenCapacity =
+    document.getElementById("create-container-b-hidden-capacity");
+  const containerBPassword =
+    document.getElementById("create-container-b-password");
+  const containerBSecond =
+    document.getElementById("create-container-b-second");
+  const containerBSecondConfirmation =
+    document.getElementById("create-container-b-second-confirmation");
+  const containerBInputs = [
+    containerBCapacity, containerBHiddenCapacity, containerBPassword,
+    containerBSecond, containerBSecondConfirmation,
+  ];
 
   let bridge = null;
   let currentState = null;
@@ -132,27 +148,67 @@
     }
   };
 
-  const containerCapacityMib = () => {
-    const raw = containerCapacity.value.trim();
-    if (!/^[0-9]+$/.test(raw)) return null;
-    const value = Number(raw);
-    return Number.isSafeInteger(value) && value >= 20 && value <= 1048576
+  const positiveInteger = (raw, minimum, maximum) => {
+    const text = raw.trim();
+    if (!/^[0-9]+$/.test(text)) return null;
+    const value = Number(text);
+    return Number.isSafeInteger(value) && value >= minimum &&
+      value <= maximum
       ? value
       : null;
   };
 
+  const containerCapacityMib = () =>
+    positiveInteger(containerCapacity.value, 20, 1048576);
+
+  const containerBSizes = () => {
+    const outer = positiveInteger(containerBCapacity.value, 20, 1048576);
+    const hidden = positiveInteger(containerBHiddenCapacity.value, 1, 1048575);
+    if (outer === null || hidden === null || hidden >= outer) return null;
+    return { outer, hidden };
+  };
+
+  const normalizedLength = (value) => {
+    try {
+      return Array.from(value.normalize("NFC")).length;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const containerBInputReady = () => {
+    const second = normalizedLength(containerBSecond.value);
+    return containerBSizes() !== null &&
+      containerBPassword.value.length !== 0 && second !== null &&
+      second >= 12 && second <= 128 &&
+      containerBSecond.value === containerBSecondConfirmation.value;
+  };
+
   const updateCreationAvailability = () => {
     const encrypted = creationKind === "encrypted";
+    const hiddenVolume = creationKind === "hidden";
     const authenticated = currentState === nativeState.authenticated;
+    const ready = encrypted
+      ? containerCapacityMib() !== null
+      : hiddenVolume && containerBInputReady();
     containerForm.hidden = !encrypted;
+    containerBForm.hidden = !hiddenVolume;
+    // The step preview describes the standard flow, which picks a location.
+    // The hidden container uses a fixed path, so it is not shown there.
+    creationWorkflow.hidden = hiddenVolume;
     containerCapacity.disabled = busy || !authenticated || !encrypted ||
       creationCompleted;
+    for (const input of containerBInputs) {
+      input.disabled = busy || !authenticated || !hiddenVolume ||
+        creationCompleted;
+    }
     creationCloseButton.disabled = busy;
     creationCancelButton.disabled = busy;
-    creationContinueButton.disabled = busy || !authenticated || !encrypted ||
-      creationCompleted || containerCapacityMib() === null;
-    creationContinueButton.title = encrypted ? "" : "正在开发中";
-    creationContinueButton.textContent = encrypted ? "创建加密盘" : "继续";
+    creationContinueButton.disabled = busy || !authenticated ||
+      creationCompleted || !ready;
+    creationContinueButton.textContent = hiddenVolume
+      ? "创建隐藏盘"
+      : "创建加密盘";
     creationCancelButton.textContent = creationCompleted ? "完成" : "返回";
   };
 
@@ -192,14 +248,20 @@
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
     containerCapacity.value = "64";
+    containerBCapacity.value = "128";
+    containerBHiddenCapacity.value = "96";
+    containerBPassword.value = "";
+    containerBSecond.value = "";
+    containerBSecondConfirmation.value = "";
     creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
     creationDescription.textContent = hiddenVolume
-      ? "隐藏盘参数与卡记录事务将在后续切片接入。"
+      ? "隐藏盘在同一个文件里有内外两层，各用一个密码打开。创建过程将请求管理员权限。"
       : "请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。";
     creationDialog.hidden = false;
     updateCreationAvailability();
     if (hiddenVolume) {
-      creationCloseButton.focus();
+      containerBCapacity.focus();
+      containerBCapacity.select();
     } else {
       containerCapacity.focus();
       containerCapacity.select();
@@ -725,6 +787,91 @@
     () => bridge.unmountContainer(id),
     "无法卸载该加密盘，请关闭占用文件后重试。");
 
+  const createContainerB = async () => {
+    const sizes = containerBSizes();
+    if (sizes === null || !containerBInputReady() ||
+        creationKind !== "hidden" ||
+        currentState !== nativeState.authenticated) {
+      creationStatus.textContent = "请检查容量与两次输入的诱饵密码。";
+      creationStatus.dataset.tone = "error";
+      updateCreationAvailability();
+      return;
+    }
+
+    let encodedLogin = null;
+    let encodedSecond = null;
+    let encodedConfirmation = null;
+    let loginBytes = null;
+    let secondBytes = null;
+    let confirmationBytes = null;
+    busy = true;
+    creationStatus.textContent = "正在写入安全卡并创建隐藏盘。";
+    creationStatus.dataset.tone = "";
+    render(messageForCurrentState());
+    try {
+      try {
+        const encoder = new TextEncoder();
+        encodedLogin = encoder.encode(containerBPassword.value);
+        encodedSecond = encoder.encode(containerBSecond.value);
+        encodedConfirmation =
+          encoder.encode(containerBSecondConfirmation.value);
+        loginBytes = Array.from(encodedLogin);
+        secondBytes = Array.from(encodedSecond);
+        confirmationBytes = Array.from(encodedConfirmation);
+      } finally {
+        containerBPassword.value = "";
+        containerBSecond.value = "";
+        containerBSecondConfirmation.value = "";
+        wipe(encodedLogin);
+        wipe(encodedSecond);
+        wipe(encodedConfirmation);
+        encodedLogin = null;
+        encodedSecond = null;
+        encodedConfirmation = null;
+      }
+      try {
+        await bridge.createContainerBMib(sizes.outer, sizes.hidden,
+                                         loginBytes, secondBytes,
+                                         confirmationBytes);
+      } finally {
+        wipe(loginBytes);
+        wipe(secondBytes);
+        wipe(confirmationBytes);
+      }
+      await refreshNativeState();
+      busy = false;
+      creationCompleted = true;
+      render(messageForCurrentState());
+      creationDescription.textContent = "隐藏盘已经创建并挂载。";
+      creationStatus.textContent = "创建成功，可以开始使用隐藏盘。";
+      creationStatus.dataset.tone = "success";
+      updateCreationAvailability();
+    } catch (_) {
+      try {
+        await refreshNativeState();
+      } catch (_) {
+        currentState = nativeState.unavailable;
+        activeVolumes = true;
+      }
+      busy = false;
+      render(messageForCurrentState());
+      if (!creationDialog.hidden &&
+          currentState === nativeState.authenticated) {
+        creationStatus.textContent =
+          "创建失败。请确认当前密码无误后重试。";
+        creationStatus.dataset.tone = "error";
+        updateCreationAvailability();
+      }
+    } finally {
+      wipe(loginBytes);
+      wipe(secondBytes);
+      wipe(confirmationBytes);
+      if (externalRefreshPending) {
+        void refreshAfterExternalChange();
+      }
+    }
+  };
+
   const createContainer = async () => {
     const sizeMib = containerCapacityMib();
     if (sizeMib === null || creationKind !== "encrypted" ||
@@ -793,8 +940,11 @@
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => closeCreationFlow());
   creationContinueButton.addEventListener("click", async () => {
-    if (!busy && creationKind === "encrypted") {
+    if (busy) return;
+    if (creationKind === "encrypted") {
       await createContainer();
+    } else if (creationKind === "hidden") {
+      await createContainerB();
     }
   });
   for (const button of mountExistingButtons) {
@@ -822,11 +972,13 @@
       }
     });
   }
-  containerCapacity.addEventListener("input", () => {
-    creationStatus.textContent = "";
-    creationStatus.dataset.tone = "";
-    updateCreationAvailability();
-  });
+  for (const input of [containerCapacity, ...containerBInputs]) {
+    input.addEventListener("input", () => {
+      creationStatus.textContent = "";
+      creationStatus.dataset.tone = "";
+      updateCreationAvailability();
+    });
+  }
   creationDialog.addEventListener("click", (event) => {
     if (event.target === creationDialog) {
       closeCreationFlow();

@@ -56,6 +56,18 @@ constexpr UINT kTimeoutMilliseconds = 20000;
   return result;
 }
 
+// The driver types these into the hidden-container form, so the fakes can
+// prove that all five COM arguments arrived in the right positions.
+constexpr std::byte kLoginPassword[]{
+    std::byte{'p'}, std::byte{0x00}, std::byte{0xC3}, std::byte{0xA4}};
+constexpr std::byte kSecondPassword[]{
+    std::byte{'s'}, std::byte{'e'}, std::byte{'c'}, std::byte{'o'},
+    std::byte{'n'}, std::byte{'d'}, std::byte{'-'}, std::byte{'p'},
+    std::byte{'a'}, std::byte{'s'}, std::byte{'s'}, std::byte{'w'},
+    std::byte{'o'}, std::byte{'r'}, std::byte{'d'}, std::byte{'-'},
+    std::byte{'v'}, std::byte{'a'}, std::byte{'l'}, std::byte{'u'},
+    std::byte{'e'}};
+
 class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
  public:
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
@@ -84,11 +96,24 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, size_bytes);
   }
 
-  std::uint32_t create_container_b(std::uint64_t, std::uint64_t,
-                                   const SecureBuffer&,
-                                   const SecureBuffer&) override {
-    throw std::logic_error("container B is not part of this slice");
+  std::uint32_t create_container_b(
+      const std::uint64_t outer_size_bytes,
+      const std::uint64_t hidden_size_bytes,
+      const SecureBuffer& login_password_utf8,
+      const SecureBuffer& decoy_password_utf8) override {
+    ++create_b_calls;
+    created_b_outer_bytes = outer_size_bytes;
+    created_b_hidden_bytes = hidden_size_bytes;
+    b_login_matched = equals(login_password_utf8.bytes(), kLoginPassword);
+    b_decoy_matched = equals(decoy_password_utf8.bytes(), kSecondPassword);
+    return adopt(L"C:/vault/hidden.hc", outer_size_bytes);
   }
+
+  std::uint64_t created_b_outer_bytes{};
+  std::uint64_t created_b_hidden_bytes{};
+  bool b_login_matched{};
+  bool b_decoy_matched{};
+  int create_b_calls{};
 
   std::uint32_t mount_container(const std::wstring_view path) override {
     ++mount_calls;
@@ -247,9 +272,20 @@ class FakeEntry final : public ICardEntryActions {
         root_secret(), std::move(login_password_utf8));
   }
 
-  void set_second_card_password(SecureBuffer, SecureBuffer) override {
-    throw std::logic_error("card record updates are not part of this slice");
+  void set_second_card_password(SecureBuffer existing_password_utf8,
+                                SecureBuffer second_password_utf8) override {
+    ++second_password_calls;
+    second_password_existing_matched =
+        equals(existing_password_utf8.bytes(), kLoginPassword);
+    second_password_new_matched =
+        equals(second_password_utf8.bytes(), kSecondPassword);
+    existing_password_utf8.clear();
+    second_password_utf8.clear();
   }
+
+  bool second_password_existing_matched{};
+  bool second_password_new_matched{};
+  int second_password_calls{};
 
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override {
@@ -338,8 +374,15 @@ void fail_and_close(const HWND window) noexcept {
   return g_entry.initialization_calls == 1 &&
          g_entry.initialization_payload_matched &&
          g_entry.login_calls == 2 && g_entry.credential_rejections == 1 &&
+         g_entry.second_password_calls == 1 &&
+         g_entry.second_password_existing_matched &&
+         g_entry.second_password_new_matched &&
+         g_volume.create_b_calls == 1 && g_volume.b_login_matched &&
+         g_volume.b_decoy_matched &&
+         g_volume.created_b_outer_bytes == 128ULL * 1024ULL * 1024ULL &&
+         g_volume.created_b_hidden_bytes == 96ULL * 1024ULL * 1024ULL &&
          g_volume.create_calls == 2 && g_file_chooser.new_calls == 3 &&
-         g_volume.containers.size() == 1 &&
+         g_volume.containers.size() == 2 &&
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
          g_volume.unmount_calls == 1 && !g_volume.mounted();
@@ -361,6 +404,7 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-creation-validation",
       L"fail-creation-failure-feedback",
       L"fail-creation-cancelled",
+      L"fail-hidden-creation",
       L"fail-creation-submit",
       L"fail-creation-close",
       L"fail-login-route",

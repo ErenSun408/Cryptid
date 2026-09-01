@@ -31,6 +31,7 @@ constexpr DISPID kGetContainerNameId = 16;
 constexpr DISPID kGetContainerMountedId = 17;
 constexpr DISPID kGetContainerSizeMibId = 18;
 constexpr DISPID kGetContainerDriveLetterId = 19;
+constexpr DISPID kCreateContainerBMibId = 20;
 constexpr wchar_t kSubmitLoginPasswordBytesName[] =
     L"submitLoginPasswordBytes";
 constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
@@ -49,6 +50,7 @@ constexpr wchar_t kGetContainerMountedName[] = L"getContainerMounted";
 constexpr wchar_t kGetContainerSizeMibName[] = L"getContainerSizeMib";
 constexpr wchar_t kGetContainerDriveLetterName[] =
     L"getContainerDriveLetter";
+constexpr wchar_t kCreateContainerBMibName[] = L"createContainerBMib";
 
 class PasswordArgumentsWiper final {
  public:
@@ -190,6 +192,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kGetContainerDriveLetterId;
       return S_OK;
     }
+    if (matches(names[0], kCreateContainerBMibName)) {
+      ids[0] = kCreateContainerBMibId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -214,6 +220,8 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_initialization(parameters, argument_error);
       case kCreateContainerMibId:
         return invoke_create_container(parameters, result, argument_error);
+      case kCreateContainerBMibId:
+        return invoke_create_container_b(parameters, argument_error);
       case kMountContainerId:
         return invoke_mount_container(parameters, result);
       case kMountAdoptedContainerId:
@@ -327,6 +335,61 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       return complete_selection(controller_.create_container(size_mib),
                                 result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // Five arguments: outer capacity, hidden capacity, the password the caller
+  // is logged in under, and the new second password twice. COM delivers them
+  // in reverse order, and every supplied array is wiped on every path.
+  HRESULT invoke_create_container_b(
+      DISPPARAMS* const parameters, UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 5 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      wipe_available_arguments(parameters, 5);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t outer_size_mib = 0;
+    std::uint32_t hidden_size_mib = 0;
+    if (!exact_uint32(parameters->rgvarg[4], outer_size_mib) ||
+        !exact_uint32(parameters->rgvarg[3], hidden_size_mib)) {
+      wipe_available_arguments(parameters, 5);
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+
+    VARIANT& login_argument = parameters->rgvarg[2];
+    VARIANT& second_argument = parameters->rgvarg[1];
+    VARIANT& confirmation_argument = parameters->rgvarg[0];
+    security::SecureBuffer login;
+    security::SecureBuffer second;
+    security::SecureBuffer confirmation;
+    try {
+      login = consume_webview_password_array(login_argument);
+      second = consume_webview_password_array(second_argument);
+      confirmation = consume_webview_password_array(confirmation_argument);
+    } catch (const std::invalid_argument&) {
+      wipe_available_arguments(parameters, 5);
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (const std::length_error&) {
+      wipe_available_arguments(parameters, 5);
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      wipe_available_arguments(parameters, 5);
+      return E_FAIL;
+    }
+
+    try {
+      controller_.create_container_b(outer_size_mib, hidden_size_mib,
+                                     login.bytes(), second.bytes(),
+                                     confirmation.bytes());
+      return S_OK;
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;

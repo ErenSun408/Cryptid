@@ -1,6 +1,7 @@
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/password_ingress.h"
 
 #include <Windows.h>
@@ -53,6 +54,32 @@ constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
              ? static_cast<std::uint32_t>(quotient)
              : 0;
 }
+
+// Both secrets are needed twice: once for the card record, which consumes
+// them, and once for the volume creation, which only reads them. SecureBuffer
+// is deliberately not copyable, so the duplicate is explicit and is cleared on
+// every path together with the original.
+[[nodiscard]] security::SecureBuffer duplicate(
+    const security::SecureBuffer& source) {
+  security::SecureBuffer result(source.size());
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    result.bytes()[index] = source.bytes()[index];
+  }
+  return result;
+}
+
+class SecureBufferGuard final {
+ public:
+  explicit SecureBufferGuard(security::SecureBuffer& buffer) noexcept
+      : buffer_(buffer) {}
+  ~SecureBufferGuard() noexcept { buffer_.clear(); }
+
+  SecureBufferGuard(const SecureBufferGuard&) = delete;
+  SecureBufferGuard& operator=(const SecureBufferGuard&) = delete;
+
+ private:
+  security::SecureBuffer& buffer_;
+};
 
 [[noreturn]] void throw_wrong_route(const char* const operation) {
   throw std::system_error(
@@ -138,6 +165,54 @@ bool CardProductUiSessionController::create_container(
       path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
   chosen_paths_.insert_or_assign(id, path);
   return true;
+}
+
+void CardProductUiSessionController::create_container_b(
+    const std::uint32_t outer_size_mib, const std::uint32_t hidden_size_mib,
+    const std::span<std::byte> mutable_login_password_utf8,
+    const std::span<std::byte> mutable_second_password_utf8,
+    const std::span<std::byte> mutable_second_confirmation_utf8) {
+  MutableInputWiper login_wiper(mutable_login_password_utf8);
+  MutableInputWiper second_wiper(mutable_second_password_utf8,
+                                 mutable_second_confirmation_utf8);
+  if (inputs_overlap(mutable_login_password_utf8,
+                     mutable_second_password_utf8) ||
+      inputs_overlap(mutable_login_password_utf8,
+                     mutable_second_confirmation_utf8) ||
+      inputs_overlap(mutable_second_password_utf8,
+                     mutable_second_confirmation_utf8)) {
+    throw std::invalid_argument(
+        "container B inputs must be independent buffers");
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "container creation is not available in the current UI state");
+  }
+  if (outer_size_mib < kContainerCreationMinimumMib ||
+      outer_size_mib > kContainerCreationMaximumMib ||
+      hidden_size_mib == 0 || hidden_size_mib >= outer_size_mib) {
+    throw std::invalid_argument("container B sizes are outside the UI range");
+  }
+
+  security::SecureBuffer login =
+      consume_password_utf8(mutable_login_password_utf8);
+  SecureBufferGuard login_guard(login);
+  security::SecureBuffer second =
+      std::move(security::confirm_password(
+                    password_policy_,
+                    consume_password_utf8(mutable_second_password_utf8),
+                    consume_password_utf8(mutable_second_confirmation_utf8)))
+          .take();
+  SecureBufferGuard second_guard(second);
+
+  // The card record is committed first. A volume that exists but cannot be
+  // opened with the second password would block every retry, while a second
+  // password that opens nothing yet is harmless and can be set again.
+  entry_.set_second_card_password(duplicate(login), duplicate(second));
+  static_cast<void>(volume_session_.create_container_b(
+      static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib,
+      static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, login,
+      second));
 }
 
 bool CardProductUiSessionController::mount_container() {

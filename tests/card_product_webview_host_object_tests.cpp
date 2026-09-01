@@ -88,11 +88,19 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, size_bytes);
   }
 
-  std::uint32_t create_container_b(std::uint64_t, std::uint64_t,
-                                   const SecureBuffer&,
-                                   const SecureBuffer&) override {
-    throw std::logic_error("container B is not part of this slice");
+  std::uint32_t create_container_b(
+      const std::uint64_t outer_size_bytes,
+      const std::uint64_t hidden_size_bytes,
+      const SecureBuffer&, const SecureBuffer&) override {
+    ++create_b_calls;
+    created_outer_bytes = outer_size_bytes;
+    created_hidden_bytes = hidden_size_bytes;
+    return adopt(L"C:/vault/b.hc", outer_size_bytes);
   }
+
+  std::uint64_t created_outer_bytes{};
+  std::uint64_t created_hidden_bytes{};
+  int create_b_calls{};
 
   std::uint32_t mount_container(const std::wstring_view path) override {
     ++mount_calls;
@@ -244,9 +252,20 @@ class FakeEntry final : public ICardEntryActions {
         root_secret(), std::move(login_password_utf8));
   }
 
-  void set_second_card_password(SecureBuffer, SecureBuffer) override {
-    throw std::logic_error("card record updates are not part of this slice");
+  void set_second_card_password(SecureBuffer existing_password_utf8,
+                                SecureBuffer second_password_utf8) override {
+    ++second_password_calls;
+    existing_password_bytes.assign(existing_password_utf8.bytes().begin(),
+                                   existing_password_utf8.bytes().end());
+    second_password_bytes.assign(second_password_utf8.bytes().begin(),
+                                 second_password_utf8.bytes().end());
+    existing_password_utf8.clear();
+    second_password_utf8.clear();
   }
+
+  std::vector<std::byte> existing_password_bytes;
+  std::vector<std::byte> second_password_bytes;
+  int second_password_calls{};
 
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override {
@@ -875,6 +894,60 @@ void test_adopted_container_mount_and_unmount_route_through_identifiers() {
           "host unmounted an identifier the session never adopted");
 }
 
+void test_container_b_creation_consumes_five_reversed_arguments() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  const auto login = bytes("login-password");
+  const auto second = bytes("second-password-value");
+
+  std::array<VARIANTARG, 5> values{};
+  // COM delivers positional arguments in reverse order.
+  initialize_byte_array(values[0], second);
+  initialize_byte_array(values[1], second);
+  initialize_byte_array(values[2], login);
+  values[3] = number_argument(16);
+  values[4] = number_argument(64);
+  DISPPARAMS parameters{values.data(), nullptr, 5, 0};
+
+  const HRESULT result =
+      host->Invoke(member_id(*host.Get(), L"createContainerBMib"), IID_NULL,
+                   LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
+                   nullptr, nullptr);
+  require(result == S_OK, "container B creation was refused");
+  require(fixture.entry.second_password_calls == 1 &&
+              fixture.entry.existing_password_bytes == login &&
+              fixture.entry.second_password_bytes == second,
+          "the card record did not receive both passwords");
+  require(fixture.volume.create_b_calls == 1 &&
+              fixture.volume.created_outer_bytes == 64ULL * 1024ULL * 1024ULL &&
+              fixture.volume.created_hidden_bytes ==
+                  16ULL * 1024ULL * 1024ULL,
+          "the volume transaction received the wrong sizes");
+  for (std::size_t index = 0; index < 3; ++index) {
+    require_array_wiped(values[index],
+                        index == 2 ? login.size() : second.size(),
+                        "a container B password array survived the call");
+  }
+  for (VARIANTARG& value : values) {
+    static_cast<void>(::VariantClear(&value));
+  }
+
+  Fixture short_call;
+  short_call.authentication.establish(root_secret());
+  ComPtr<IDispatch> short_host = make_host(short_call.controller);
+  DISPPARAMS empty{};
+  require(short_host->Invoke(member_id(*short_host.Get(),
+                                       L"createContainerBMib"),
+                             IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                             &empty, nullptr, nullptr, nullptr) ==
+              DISP_E_BADPARAMCOUNT,
+          "container B accepted the wrong argument count");
+  require(short_call.entry.second_password_calls == 0 &&
+              short_call.volume.create_b_calls == 0,
+          "a malformed container B call still reached the product");
+}
+
 void test_container_query_failure_does_not_invent_facts() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -907,6 +980,7 @@ int main() {
     test_container_collection_is_exposed_by_position_and_route_gated();
     test_container_calls_reject_wrong_shapes_and_report_cancellation();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
+    test_container_b_creation_consumes_five_reversed_arguments();
     test_container_query_failure_does_not_invent_facts();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
