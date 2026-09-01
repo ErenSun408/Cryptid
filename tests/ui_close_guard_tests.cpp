@@ -144,13 +144,23 @@ void test_failed_unmount_blocks_close_and_remains_retryable() {
           "retry did not clear mounted state");
 }
 
+// Closing never selects a container file, so the chooser only has to exist.
+class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
+ public:
+  [[nodiscard]] std::wstring choose_new_container() override { return {}; }
+  [[nodiscard]] std::wstring choose_existing_container() override {
+    return {};
+  }
+};
+
 void test_product_controller_uses_the_same_close_contract() {
   FakeProductEntry entry;
   usb_vault::application::CardAuthenticationSession authentication;
   FakeProductVolume volume;
   usb_vault::security::OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
   CardProductUiSessionController controller(
-      entry, authentication, volume, policy);
+      entry, authentication, volume, policy, chooser);
 
   require(prepare_ui_session_for_close(controller),
           "inactive product session blocked close");

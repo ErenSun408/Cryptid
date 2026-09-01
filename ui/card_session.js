@@ -15,12 +15,6 @@
     "authenticated",
     "unavailable",
   ]);
-  const containerAState = Object.freeze({
-    absent: 0,
-    present: 1,
-    mounted: 2,
-  });
-
   const surface = document.getElementById("card-session-surface");
   const stateTitle = document.getElementById("card-state-title");
   const passwordFields = document.getElementById("password-fields");
@@ -43,18 +37,13 @@
   const dashboardUnmountButton = document.getElementById("dashboard-unmount");
   const dashboardVolumeState =
     document.getElementById("dashboard-volume-state");
-  const dashboardContainerAState =
-    document.getElementById("dashboard-container-a-state");
-  const containerATitles =
-    Array.from(document.querySelectorAll("[data-container-a-title]"));
-  const containerASummaries =
-    Array.from(document.querySelectorAll("[data-container-a-summary]"));
-  const containerAFacts =
-    Array.from(document.querySelectorAll("[data-container-a-facts]"));
-  const containerASizes =
-    Array.from(document.querySelectorAll("[data-container-a-size]"));
-  const containerADrives =
-    Array.from(document.querySelectorAll("[data-container-a-drive]"));
+  const dashboardContainerCount =
+    document.getElementById("dashboard-container-count");
+  const dashboardStatus = document.getElementById("dashboard-status");
+  const containerLists =
+    Array.from(document.querySelectorAll("[data-container-list]"));
+  const mountExistingButtons =
+    Array.from(document.querySelectorAll("[data-mount-existing]"));
   const dashboardNavigation =
     Array.from(document.querySelectorAll(".dashboard-nav"));
   const dashboardSections =
@@ -77,9 +66,9 @@
   let bridge = null;
   let currentState = null;
   let activeVolumes = false;
-  let currentContainerAState = containerAState.absent;
-  let currentContainerASizeMib = 0;
-  let currentContainerADrive = "";
+  // Live projection of the containers this session has adopted. Nothing here
+  // is stored: it is rebuilt from the native side on every refresh.
+  let containers = [];
   let busy = true;
   let externalRefreshPending = false;
   let creationKind = null;
@@ -198,9 +187,6 @@
       return;
     }
     const hiddenVolume = kind === "hidden";
-    if (!hiddenVolume && currentContainerAState !== containerAState.absent) {
-      return;
-    }
     creationKind = hiddenVolume ? "hidden" : "encrypted";
     creationCompleted = false;
     creationStatus.textContent = "";
@@ -209,7 +195,7 @@
     creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
     creationDescription.textContent = hiddenVolume
       ? "隐藏盘参数与卡记录事务将在后续切片接入。"
-      : "请选择加密盘容量。创建过程将请求管理员权限。";
+      : "请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。";
     creationDialog.hidden = false;
     updateCreationAvailability();
     if (hiddenVolume) {
@@ -220,46 +206,124 @@
     }
   };
 
+  const kSvgNamespace = "http://www.w3.org/2000/svg";
+  const kLockPaths = Object.freeze([
+    "M7 10.5h10a1.5 1.5 0 011.5 1.5v6a1.5 1.5 0 01-1.5 1.5H7A1.5 1.5 0 015.5" +
+      " 18v-6A1.5 1.5 0 017 10.5z",
+    "M8.2 10.5V7.6a3.8 3.8 0 017.6 0v2.9",
+  ]);
+
+  const setDashboardStatus = (message, tone = "") => {
+    dashboardStatus.textContent = message;
+    dashboardStatus.dataset.tone = tone;
+  };
+
+  const lockIcon = () => {
+    const svg = document.createElementNS(kSvgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    for (const definition of kLockPaths) {
+      const path = document.createElementNS(kSvgNamespace, "path");
+      path.setAttribute("d", definition);
+      svg.appendChild(path);
+    }
+    return svg;
+  };
+
+  const containerFact = (label, value) => {
+    const fact = document.createElement("div");
+    fact.className = "container-fact";
+    const caption = document.createElement("div");
+    caption.className = "container-fact-label";
+    caption.textContent = label;
+    const content = document.createElement("div");
+    content.className = "container-fact-value";
+    content.textContent = value;
+    fact.append(caption, content);
+    return fact;
+  };
+
+  // The name comes from a file the user picked, so it is only ever written as
+  // text. Nothing on this row is built from markup.
+  const containerRow = (container) => {
+    const row = document.createElement("div");
+    row.className = container.mounted
+      ? "container-row mounted"
+      : "container-row";
+
+    const mark = document.createElement("span");
+    mark.className = "container-mark";
+    mark.appendChild(lockIcon());
+
+    const identity = document.createElement("div");
+    identity.className = "container-identity";
+    const name = document.createElement("div");
+    name.className = "container-name";
+    name.textContent = container.name;
+    name.title = container.name;
+    const state = document.createElement("div");
+    state.className = "container-state";
+    state.textContent = container.mounted ? "已挂载" : "未挂载";
+    identity.append(name, state);
+
+    const facts = document.createElement("div");
+    facts.className = "container-facts";
+    facts.append(
+      containerFact(
+        "容量",
+        container.sizeMib > 0
+          ? `${container.sizeMib.toLocaleString("zh-CN")} MiB`
+          : "不可用"),
+      containerFact("盘符", container.mounted ? container.drive : "—"));
+
+    const actions = document.createElement("div");
+    actions.className = "container-actions";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "shell-button";
+    toggle.textContent = container.mounted ? "卸载" : "挂载";
+    toggle.disabled = busy;
+    toggle.dataset.containerId = String(container.id);
+    toggle.dataset.containerAction = container.mounted ? "unmount" : "mount";
+    actions.appendChild(toggle);
+
+    row.append(mark, identity, facts, actions);
+    return row;
+  };
+
+  const renderContainers = () => {
+    for (const list of containerLists) {
+      while (list.firstChild !== null) list.removeChild(list.firstChild);
+      if (containers.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "container-empty";
+        empty.textContent = "还没有加密盘。新建一个，或打开已有的加密盘文件。";
+        list.appendChild(empty);
+        continue;
+      }
+      for (const container of containers) {
+        list.appendChild(containerRow(container));
+      }
+    }
+  };
+
   const updateProductSurface = () => {
     const showDashboard = currentState === nativeState.authenticated;
     surface.hidden = showDashboard;
     dashboard.hidden = !showDashboard;
     document.body.dataset.view = showDashboard ? "dashboard" : "session";
     dashboardVolumeState.textContent = activeVolumes ? "已挂载" : "未挂载";
-    const containerAExists =
-      currentContainerAState !== containerAState.absent;
-    const containerAMounted =
-      currentContainerAState === containerAState.mounted;
-    dashboardContainerAState.textContent = containerAMounted
-      ? "已挂载"
-      : containerAExists ? "未挂载" : "未创建";
-    for (const title of containerATitles) {
-      title.textContent = containerAMounted
-        ? "加密盘已挂载"
-        : containerAExists ? "加密盘已创建" : "尚未创建加密盘";
-    }
-    for (const summary of containerASummaries) {
-      summary.textContent = containerAMounted
-        ? "加密盘已安全挂载，可以从对应盘符访问。"
-        : containerAExists
-          ? "加密盘当前未挂载，请重新插卡并登录后打开。"
-          : "点击“新建”创建并挂载加密盘。";
-    }
-    for (const facts of containerAFacts) facts.hidden = !containerAExists;
-    const capacity = currentContainerASizeMib > 0
-      ? `${currentContainerASizeMib.toLocaleString("zh-CN")} MiB`
-      : "不可用";
-    for (const size of containerASizes) size.textContent = capacity;
-    for (const drive of containerADrives) {
-      drive.textContent = containerAMounted ? currentContainerADrive : "未挂载";
-    }
+    dashboardContainerCount.textContent = String(containers.length);
+    renderContainers();
     dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
     dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
+    // Every creation entry stays visible on every route the page can reach.
+    // Hiding one would tell an observer which containers this machine holds.
     for (const button of creationButtons) {
-      const existingContainerA = button.dataset.createKind === "encrypted" &&
-        containerAExists;
-      button.hidden = existingContainerA;
-      button.disabled = busy || !showDashboard || existingContainerA;
+      button.disabled = busy || !showDashboard;
+    }
+    for (const button of mountExistingButtons) {
+      button.disabled = busy || !showDashboard;
     }
     if (!showDashboard) {
       closeCreationFlow(true);
@@ -385,29 +449,31 @@
         (nextActiveVolumes !== true && nextActiveVolumes !== false)) {
       throw new Error("invalid native session state");
     }
-    let nextContainerAState = containerAState.absent;
-    let nextContainerASizeMib = 0;
-    let nextContainerADrive = "";
+    const nextContainers = [];
     if (nextState === nativeState.authenticated) {
-      nextContainerAState = await bridge.getContainerAState();
-      nextContainerASizeMib = await bridge.getContainerASizeMib();
-      nextContainerADrive = await bridge.getContainerADriveLetter();
-      const validState = Number.isInteger(nextContainerAState) &&
-        nextContainerAState >= containerAState.absent &&
-        nextContainerAState <= containerAState.mounted;
-      const validSize = Number.isInteger(nextContainerASizeMib) &&
-        ((nextContainerAState === containerAState.absent &&
-          nextContainerASizeMib === 0) ||
-         (nextContainerAState !== containerAState.absent &&
-          nextContainerASizeMib >= 20 &&
-          nextContainerASizeMib <= 1048576));
-      const validDrive = typeof nextContainerADrive === "string" &&
-        ((nextContainerAState === containerAState.mounted &&
-          /^[A-Z]:$/.test(nextContainerADrive) && nextActiveVolumes) ||
-         (nextContainerAState !== containerAState.mounted &&
-          nextContainerADrive === ""));
-      if (!validState || !validSize || !validDrive) {
-        throw new Error("invalid container A status");
+      const count = await bridge.getContainerCount();
+      if (!Number.isInteger(count) || count < 0 || count > 4096) {
+        throw new Error("invalid container count");
+      }
+      for (let index = 0; index < count; index += 1) {
+        const id = await bridge.getContainerId(index);
+        const name = await bridge.getContainerName(index);
+        const mounted = await bridge.getContainerMounted(index);
+        const sizeMib = await bridge.getContainerSizeMib(index);
+        const drive = await bridge.getContainerDriveLetter(index);
+        const validId = Number.isInteger(id) && id > 0;
+        const validName = typeof name === "string" && name.length !== 0;
+        const validMounted = mounted === true || mounted === false;
+        const validSize = Number.isInteger(sizeMib) && sizeMib >= 0 &&
+          sizeMib <= 1048576;
+        const validDrive = typeof drive === "string" &&
+          ((mounted === true && /^[A-Z]:$/.test(drive) && nextActiveVolumes) ||
+           (mounted !== true && drive === ""));
+        if (!validId || !validName || !validMounted || !validSize ||
+            !validDrive) {
+          throw new Error("invalid container status");
+        }
+        nextContainers.push({ id, name, mounted, sizeMib, drive });
       }
     }
     currentState = nextActiveVolumes &&
@@ -416,9 +482,7 @@
       ? nativeState.unavailable
       : nextState;
     activeVolumes = nextActiveVolumes;
-    currentContainerAState = nextContainerAState;
-    currentContainerASizeMib = nextContainerASizeMib;
-    currentContainerADrive = nextContainerADrive;
+    containers = nextContainers;
   };
 
   const messageForCurrentState = () => {
@@ -619,7 +683,49 @@
     }
   };
 
-  const createContainerA = async () => {
+  // One shared shape for the dashboard-side container actions: serialize on
+  // the busy flag, refresh from the native side, and report failure on the
+  // dashboard instead of the hidden session surface.
+  const runContainerAction = async (action, failure) => {
+    busy = true;
+    setDashboardStatus("");
+    render(messageForCurrentState());
+    try {
+      const outcome = await action();
+      await refreshNativeState();
+      busy = false;
+      render(messageForCurrentState());
+      if (outcome === false) setDashboardStatus("已取消。");
+    } catch (_) {
+      try {
+        await refreshNativeState();
+      } catch (_) {
+        currentState = nativeState.unavailable;
+        activeVolumes = true;
+      }
+      busy = false;
+      render(messageForCurrentState());
+      setDashboardStatus(failure, "error");
+    } finally {
+      if (externalRefreshPending) {
+        void refreshAfterExternalChange();
+      }
+    }
+  };
+
+  const mountExistingContainer = () => runContainerAction(
+    () => bridge.mountContainer(),
+    "无法打开该加密盘，请确认文件与当前安全卡匹配。");
+
+  const mountAdoptedContainer = (id) => runContainerAction(
+    () => bridge.mountAdoptedContainer(id),
+    "无法挂载该加密盘，请稍后重试。");
+
+  const unmountAdoptedContainer = (id) => runContainerAction(
+    () => bridge.unmountContainer(id),
+    "无法卸载该加密盘，请关闭占用文件后重试。");
+
+  const createContainer = async () => {
     const sizeMib = containerACapacityMib();
     if (sizeMib === null || creationKind !== "encrypted" ||
         currentState !== nativeState.authenticated) {
@@ -630,15 +736,21 @@
     }
 
     busy = true;
-    creationStatus.textContent = "正在请求管理员权限并创建加密盘。";
+    creationStatus.textContent = "请选择保存位置，随后确认管理员权限。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     try {
-      await bridge.createContainerAMib(sizeMib);
+      const created = await bridge.createContainerMib(sizeMib);
       await refreshNativeState();
       busy = false;
-      creationCompleted = true;
       render(messageForCurrentState());
+      if (created === false) {
+        creationStatus.textContent = "已取消创建。";
+        creationStatus.dataset.tone = "";
+        updateCreationAvailability();
+        return;
+      }
+      creationCompleted = true;
       creationDescription.textContent = "加密盘已经创建并挂载。";
       creationStatus.textContent = "创建成功，可以开始使用加密盘。";
       creationStatus.dataset.tone = "success";
@@ -682,9 +794,34 @@
   creationCancelButton.addEventListener("click", () => closeCreationFlow());
   creationContinueButton.addEventListener("click", async () => {
     if (!busy && creationKind === "encrypted") {
-      await createContainerA();
+      await createContainer();
     }
   });
+  for (const button of mountExistingButtons) {
+    button.addEventListener("click", async () => {
+      if (!busy && currentState === nativeState.authenticated) {
+        await mountExistingContainer();
+      }
+    });
+  }
+  for (const list of containerLists) {
+    list.addEventListener("click", async (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("[data-container-action]")
+        : null;
+      if (target === null || busy ||
+          currentState !== nativeState.authenticated) {
+        return;
+      }
+      const id = Number(target.dataset.containerId);
+      if (!Number.isInteger(id) || id <= 0) return;
+      if (target.dataset.containerAction === "unmount") {
+        await unmountAdoptedContainer(id);
+      } else {
+        await mountAdoptedContainer(id);
+      }
+    });
+  }
   containerACapacity.addEventListener("input", () => {
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";

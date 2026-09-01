@@ -19,22 +19,21 @@ chrome.webview.postMessage("driver-loaded");
   const dashboardUnmount = document.getElementById("dashboard-unmount");
   const dashboardVolumeState =
     document.getElementById("dashboard-volume-state");
-  const dashboardContainerAState =
-    document.getElementById("dashboard-container-a-state");
+  const dashboardContainerCount =
+    document.getElementById("dashboard-container-count");
   const encryptedNavigation =
     document.querySelector('[data-section="encrypted"]');
   const encryptedSection =
     document.getElementById("dashboard-section-encrypted");
   const encryptedCreate = encryptedSection.querySelector(
     '[data-create-kind="encrypted"]');
-  const encryptedContainerATitle = encryptedSection.querySelector(
-    "[data-container-a-title]");
-  const encryptedContainerAFacts = encryptedSection.querySelector(
-    "[data-container-a-facts]");
-  const encryptedContainerASize = encryptedSection.querySelector(
-    "[data-container-a-size]");
-  const encryptedContainerADrive = encryptedSection.querySelector(
-    "[data-container-a-drive]");
+  const encryptedList = encryptedSection.querySelector(
+    "[data-container-list]");
+  const containerRows = () =>
+    Array.from(encryptedList.querySelectorAll(".container-row"));
+  const containerFacts = (row) =>
+    Array.from(row.querySelectorAll(".container-fact-value"))
+      .map((fact) => fact.textContent);
   const creationDialog = document.getElementById("create-volume-dialog");
   const creationTitle = document.getElementById("create-volume-title");
   const creationCancel = document.getElementById("create-volume-cancel");
@@ -157,8 +156,8 @@ chrome.webview.postMessage("driver-loaded");
       confirmationVisibility.getAttribute("aria-pressed") !== "false" ||
       !action.hidden || !surface.hidden || dashboard.hidden ||
       !dashboardUnmount.hidden || dashboardVolumeState.textContent !== "未挂载" ||
-      dashboardContainerAState.textContent !== "未创建" ||
-      encryptedCreate.hidden || !encryptedContainerAFacts.hidden) {
+      dashboardContainerCount.textContent !== "0" ||
+      encryptedCreate.hidden || containerRows().length !== 0) {
     request("fail-initialization-submit");
     return;
   }
@@ -191,18 +190,36 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-creation-failure-feedback");
     return;
   }
+  // The second selection is cancelled by the native chooser: the page must
+  // report it as an ordinary cancellation and stay ready for another try.
   creationContinue.click();
   if (!await waitFor(() => surface.dataset.busy === "false" &&
-      dashboardVolumeState.textContent === "已挂载" &&
-      !dashboardUnmount.hidden && creationCapacity.disabled &&
-      creationContinue.disabled && creationCancel.textContent === "完成" &&
-      creationStatus.dataset.tone === "success" &&
-      dashboardContainerAState.textContent === "已挂载" &&
-      encryptedContainerATitle.textContent === "加密盘已挂载" &&
-      !encryptedContainerAFacts.hidden &&
-      encryptedContainerASize.textContent === "64 MiB" &&
-      encryptedContainerADrive.textContent === "X:" &&
-      encryptedCreate.hidden)) {
+      creationStatus.textContent === "已取消创建。" &&
+      creationStatus.dataset.tone === "" && !creationContinue.disabled &&
+      containerRows().length === 0)) {
+    request("fail-creation-cancelled");
+    return;
+  }
+  creationContinue.click();
+  if (!await waitFor(() => {
+    if (surface.dataset.busy !== "false" ||
+        dashboardVolumeState.textContent !== "已挂载" ||
+        dashboardUnmount.hidden || !creationCapacity.disabled ||
+        !creationContinue.disabled || creationCancel.textContent !== "完成" ||
+        creationStatus.dataset.tone !== "success" ||
+        dashboardContainerCount.textContent !== "1" ||
+        containerRows().length !== 1) {
+      return false;
+    }
+    const row = containerRows()[0];
+    const facts = containerFacts(row);
+    // 8.7.2: the creation entry stays visible once a container exists.
+    return row.querySelector(".container-name").textContent ===
+        "integration.hc" &&
+      row.querySelector(".container-state").textContent === "已挂载" &&
+      facts.length === 2 && facts[0] === "64 MiB" && facts[1] === "D:" &&
+      !encryptedCreate.hidden;
+  })) {
     request("fail-creation-submit");
     return;
   }
@@ -240,9 +257,8 @@ chrome.webview.postMessage("driver-loaded");
       !action.hidden || !surface.hidden || dashboard.hidden ||
       dashboardUnmount.hidden ||
       dashboardVolumeState.textContent !== "已挂载" ||
-      dashboardContainerAState.textContent !== "已挂载" ||
-      encryptedContainerASize.textContent !== "64 MiB" ||
-      encryptedContainerADrive.textContent !== "X:") {
+      dashboardContainerCount.textContent !== "1" ||
+      containerFacts(containerRows()[0]).join("/") !== "64 MiB/D:") {
     request("fail-login-success");
     return;
   }

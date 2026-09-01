@@ -73,6 +73,90 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     mounted_state = true;
   }
 
+  std::uint32_t create_container(const std::wstring_view path,
+                                 const std::uint64_t size_bytes) override {
+    ++create_calls;
+    created_size_bytes = size_bytes;
+    if (fail_next_create) {
+      fail_next_create = false;
+      throw std::runtime_error("injected container creation failure");
+    }
+    return adopt(path, size_bytes);
+  }
+
+  std::uint32_t mount_container(const std::wstring_view path) override {
+    ++mount_calls;
+    for (Adopted& entry : containers) {
+      if (entry.path != path) continue;
+      entry.mounted = true;
+      mounted_state = true;
+      return entry.id;
+    }
+    return adopt(path, 64ULL * 1024ULL * 1024ULL);
+  }
+
+  void unmount_container(const std::uint32_t id) override {
+    ++unmount_container_calls;
+    for (Adopted& entry : containers) {
+      if (entry.id != id) continue;
+      entry.mounted = false;
+      return;
+    }
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+
+  [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
+  container_statuses() override {
+    std::vector<usb_vault::application::ContainerStatus> result;
+    result.reserve(containers.size());
+    for (const Adopted& entry : containers) {
+      result.push_back({.id = entry.id,
+                        .name = entry.name,
+                        .mounted = entry.mounted,
+                        .size_bytes = entry.size_bytes,
+                        .drive_letter =
+                            entry.mounted ? entry.drive_letter : wchar_t{}});
+    }
+    return result;
+  }
+
+  struct Adopted final {
+    std::uint32_t id{};
+    std::wstring path;
+    std::wstring name;
+    std::uint64_t size_bytes{};
+    wchar_t drive_letter{};
+    bool mounted{};
+  };
+
+  std::uint32_t adopt(const std::wstring_view path,
+                      const std::uint64_t size_bytes) {
+    const std::size_t separator = path.find_last_of(L"/");
+    const std::wstring_view name = separator == std::wstring_view::npos
+                                       ? path
+                                       : path.substr(separator + 1);
+    const std::uint32_t id = next_id++;
+    containers.push_back(
+        {.id = id,
+         .path = std::wstring(path),
+         .name = std::wstring(name),
+         .size_bytes = size_bytes,
+         .drive_letter = static_cast<wchar_t>(
+             L'D' + static_cast<wchar_t>(containers.size())),
+         .mounted = true});
+    mounted_state = true;
+    return id;
+  }
+
+  std::vector<Adopted> containers;
+  std::uint64_t created_size_bytes{};
+  std::uint32_t next_id{1};
+  bool fail_next_create{true};
+  int create_calls{};
+  int mount_calls{};
+  int unmount_container_calls{};
+
   [[nodiscard]] ContainerAStatus container_a_status() override {
     return {.exists = container_a_exists,
             .mounted = container_a_mounted,
@@ -169,6 +253,29 @@ class FakeEntry final : public ICardEntryActions {
   int credential_rejections{};
 };
 
+// The fixture drives the page, never a real dialog: the chooser hands back
+// whatever path the current scenario expects, or an empty string to stand for
+// a user who cancelled.
+class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
+ public:
+  // The second selection is cancelled so the page has to prove it treats a
+  // cancelled dialog as an ordinary outcome rather than a failure.
+  [[nodiscard]] std::wstring choose_new_container() override {
+    ++new_calls;
+    return new_calls == 2 ? std::wstring{} : new_path;
+  }
+
+  [[nodiscard]] std::wstring choose_existing_container() override {
+    ++existing_calls;
+    return existing_path;
+  }
+
+  std::wstring new_path{L"D:/Vault/integration.hc"};
+  std::wstring existing_path;
+  int new_calls{};
+  int existing_calls{};
+};
+
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
@@ -176,8 +283,9 @@ FakeEntry g_entry;
 CardAuthenticationSession g_authentication;
 FakeVolumeSession g_volume(g_authentication);
 OfflineCardPasswordPolicy g_policy;
+FakeFileChooser g_file_chooser;
 CardProductUiSessionController g_ui_session(
-    g_entry, g_authentication, g_volume, g_policy);
+    g_entry, g_authentication, g_volume, g_policy, g_file_chooser);
 std::wstring g_page_uri;
 int g_exit_code = 1;
 
@@ -220,8 +328,9 @@ void fail_and_close(const HWND window) noexcept {
   return g_entry.initialization_calls == 1 &&
          g_entry.initialization_payload_matched &&
          g_entry.login_calls == 2 && g_entry.credential_rejections == 1 &&
-         g_volume.create_a_calls == 2 &&
-         g_volume.created_a_size_bytes == 64ULL * 1024ULL * 1024ULL &&
+         g_volume.create_calls == 2 && g_file_chooser.new_calls == 3 &&
+         g_volume.containers.size() == 1 &&
+         g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
          g_volume.unmount_calls == 1 && !g_volume.mounted();
 }
@@ -241,6 +350,7 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-creation-entry",
       L"fail-creation-validation",
       L"fail-creation-failure-feedback",
+      L"fail-creation-cancelled",
       L"fail-creation-submit",
       L"fail-creation-close",
       L"fail-login-route",

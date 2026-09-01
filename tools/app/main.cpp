@@ -12,6 +12,7 @@
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
+#include "platform/windows/shell_container_file_chooser.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_device_lifecycle_controller.h"
 #include "usb_vault/application/card_entry_context_controller.h"
@@ -84,6 +85,9 @@ std::unique_ptr<usb_vault::application::CardLoginMountSession>
     g_card_volume_session;
 std::unique_ptr<usb_vault::security::OfflineCardPasswordPolicy>
     g_password_policy;
+std::unique_ptr<
+    usb_vault::platform::windows::ShellContainerFileChooser>
+    g_container_file_chooser;
 std::unique_ptr<usb_vault::ui::CardProductUiSessionController> g_ui_session;
 #else
 std::unique_ptr<usb_vault::application::IApplicationSessionActions>
@@ -281,9 +285,12 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
           usb_vault::application::LoginMountPolicy::manual);
   auto password_policy = std::make_unique<
       usb_vault::security::OfflineCardPasswordPolicy>();
+  auto file_chooser = std::make_unique<
+      usb_vault::platform::windows::ShellContainerFileChooser>(window);
   auto ui_session = std::make_unique<
       usb_vault::ui::CardProductUiSessionController>(
-          *entry, *authentication, *volume_session, *password_policy);
+          *entry, *authentication, *volume_session, *password_policy,
+          *file_chooser);
   auto presence =
       std::make_unique<usb_vault::application::CardPresenceController>(
           *volume_session);
@@ -302,6 +309,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   g_authentication = std::move(authentication);
   g_card_volume_session = std::move(volume_session);
   g_password_policy = std::move(password_policy);
+  g_container_file_chooser = std::move(file_chooser);
   g_ui_session = std::move(ui_session);
   g_card_presence_controller = std::move(presence);
   g_card_lifecycle_controller = std::move(lifecycle);
@@ -334,6 +342,7 @@ void clear_application_session() noexcept {
   g_card_lifecycle_controller.reset();
   g_card_presence_controller.reset();
   g_ui_session.reset();
+  g_container_file_chooser.reset();
   g_password_policy.reset();
   g_card_volume_session.reset();
   g_authentication.reset();

@@ -7,8 +7,10 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace usb_vault::ui {
 namespace {
@@ -38,6 +40,20 @@ class MutableInputWiper final {
   std::span<std::byte> second_;
 };
 
+constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
+
+// Converts a backing-file size the page can display. Anything that is not an
+// exact MiB multiple inside the creation range is reported as unavailable
+// instead of rounded, so the page never shows an invented capacity.
+[[nodiscard]] std::uint32_t displayable_size_mib(
+    const std::uint64_t size_bytes) noexcept {
+  if (size_bytes % kBytesPerMib != 0) return 0;
+  const std::uint64_t quotient = size_bytes / kBytesPerMib;
+  return quotient <= kContainerACreationMaximumMib
+             ? static_cast<std::uint32_t>(quotient)
+             : 0;
+}
+
 [[noreturn]] void throw_wrong_route(const char* const operation) {
   throw std::system_error(
       card::make_error_code(card::CardError::invalid_operation), operation);
@@ -63,11 +79,13 @@ CardProductUiSessionController::CardProductUiSessionController(
     application::ICardEntryActions& entry,
     application::CardAuthenticationSession& authentication,
     application::IAuthenticatedCardVolumeSession& volume_session,
-    const security::IPasswordStrengthPolicy& password_policy) noexcept
+    const security::IPasswordStrengthPolicy& password_policy,
+    IContainerFileChooser& file_chooser) noexcept
     : entry_(entry),
       authentication_(authentication),
       volume_session_(volume_session),
-      password_policy_(password_policy) {}
+      password_policy_(password_policy),
+      file_chooser_(file_chooser) {}
 
 void CardProductUiSessionController::submit_login(
     const std::span<std::byte> mutable_utf8) {
@@ -113,9 +131,75 @@ void CardProductUiSessionController::create_container_a(
       size_mib > kContainerACreationMaximumMib) {
     throw std::invalid_argument("container A size is outside the UI range");
   }
-  constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
   volume_session_.create_container_a(
       static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
+}
+
+bool CardProductUiSessionController::create_container(
+    const std::uint32_t size_mib) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "container creation is not available in the current UI state");
+  }
+  if (size_mib < kContainerACreationMinimumMib ||
+      size_mib > kContainerACreationMaximumMib) {
+    throw std::invalid_argument("container size is outside the UI range");
+  }
+
+  const std::wstring path = file_chooser_.choose_new_container();
+  if (path.empty()) return false;
+  const std::uint32_t id = volume_session_.create_container(
+      path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
+  chosen_paths_.insert_or_assign(id, path);
+  return true;
+}
+
+bool CardProductUiSessionController::mount_container() {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "mounting a container is not available in the current UI state");
+  }
+
+  const std::wstring path = file_chooser_.choose_existing_container();
+  if (path.empty()) return false;
+  const std::uint32_t id = volume_session_.mount_container(path);
+  chosen_paths_.insert_or_assign(id, path);
+  return true;
+}
+
+bool CardProductUiSessionController::mount_container(
+    const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "mounting a container is not available in the current UI state");
+  }
+
+  bool adopted = false;
+  for (const application::ContainerStatus& status :
+       volume_session_.container_statuses()) {
+    if (status.id != id) continue;
+    if (status.mounted) return true;
+    adopted = true;
+    break;
+  }
+  if (!adopted) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+
+  const auto known = chosen_paths_.find(id);
+  if (known == chosen_paths_.end()) return mount_container();
+  static_cast<void>(volume_session_.mount_container(known->second));
+  return true;
+}
+
+void CardProductUiSessionController::unmount_container(
+    const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "unmounting a container is not available in the current UI state");
+  }
+  volume_session_.unmount_container(id);
 }
 
 void CardProductUiSessionController::unmount() {
@@ -162,20 +246,38 @@ ContainerAUiStatus CardProductUiSessionController::container_a_status() {
        status.drive_letter != wchar_t{})) {
     throw std::runtime_error("container A status is inconsistent");
   }
-  constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
-  std::uint32_t size_mib = 0;
-  if (status.exists && status.size_bytes % kBytesPerMib == 0) {
-    const std::uint64_t quotient = status.size_bytes / kBytesPerMib;
-    if (quotient <= kContainerACreationMaximumMib) {
-      size_mib = static_cast<std::uint32_t>(quotient);
-    }
-  }
+  const std::uint32_t size_mib =
+      status.exists ? displayable_size_mib(status.size_bytes) : 0;
   return {.state = status.mounted
                        ? ContainerAUiState::mounted
                        : status.exists ? ContainerAUiState::present
                                        : ContainerAUiState::absent,
           .size_mib = size_mib,
           .drive_letter = status.mounted ? status.drive_letter : wchar_t{}};
+}
+
+std::vector<ContainerUiStatus>
+CardProductUiSessionController::container_statuses() {
+  if (state() != CardProductUiState::authenticated) return {};
+
+  const std::vector<application::ContainerStatus> statuses =
+      volume_session_.container_statuses();
+  std::vector<ContainerUiStatus> result;
+  result.reserve(statuses.size());
+  for (const application::ContainerStatus& status : statuses) {
+    if (status.id == 0 || status.name.empty() ||
+        (status.mounted &&
+         (status.drive_letter < L'A' || status.drive_letter > L'Z')) ||
+        (!status.mounted && status.drive_letter != wchar_t{})) {
+      throw std::runtime_error("container status is inconsistent");
+    }
+    result.push_back({.id = status.id,
+                      .name = status.name,
+                      .mounted = status.mounted,
+                      .size_mib = displayable_size_mib(status.size_bytes),
+                      .drive_letter = status.drive_letter});
+  }
+  return result;
 }
 
 }  // namespace usb_vault::ui

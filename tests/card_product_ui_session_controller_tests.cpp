@@ -31,6 +31,7 @@ using usb_vault::security::SecureBuffer;
 using usb_vault::ui::CardProductUiSessionController;
 using usb_vault::ui::CardProductUiState;
 using usb_vault::ui::ContainerAUiState;
+using usb_vault::ui::ContainerUiStatus;
 using usb_vault::ui::kContainerACreationMaximumMib;
 using usb_vault::ui::kContainerACreationMinimumMib;
 
@@ -90,18 +91,56 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     mounted_state = true;
   }
 
-  std::uint32_t create_container(std::wstring_view, std::uint64_t) override {
-    throw std::logic_error("the container collection is not part of this slice");
+  std::uint32_t create_container(const std::wstring_view path,
+                                 const std::uint64_t size_bytes) override {
+    ++create_calls;
+    created_path.assign(path);
+    created_size_bytes = size_bytes;
+    if (reject_create) throw std::runtime_error("creation failed");
+    return adopt(path, size_bytes);
   }
-  std::uint32_t mount_container(std::wstring_view) override {
-    throw std::logic_error("the container collection is not part of this slice");
+
+  std::uint32_t mount_container(const std::wstring_view path) override {
+    ++mount_calls;
+    mounted_path.assign(path);
+    if (reject_mount) throw std::runtime_error("mount failed");
+    for (Adopted& entry : containers) {
+      if (entry.path != path) continue;
+      if (entry.mounted) throw std::logic_error("container already mounted");
+      entry.mounted = true;
+      mounted_state = true;
+      return entry.id;
+    }
+    return adopt(path, kFakeContainerBytes);
   }
-  void unmount_container(std::uint32_t) override {
-    throw std::logic_error("the container collection is not part of this slice");
+
+  void unmount_container(const std::uint32_t id) override {
+    ++unmount_container_calls;
+    for (Adopted& entry : containers) {
+      if (entry.id != id) continue;
+      entry.mounted = false;
+      mounted_state = any_mounted();
+      return;
+    }
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
   }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
-    throw std::logic_error("the container collection is not part of this slice");
+    ++container_statuses_calls;
+    std::vector<usb_vault::application::ContainerStatus> result;
+    result.reserve(containers.size());
+    for (const Adopted& entry : containers) {
+      result.push_back(
+          {.id = entry.id,
+           .name = entry.name,
+           .mounted = entry.mounted,
+           .size_bytes = entry.size_bytes,
+           .drive_letter = entry.mounted ? entry.drive_letter
+                                         : inconsistent_unmounted_drive});
+    }
+    return result;
   }
 
   [[nodiscard]] ContainerAStatus container_a_status() override {
@@ -141,8 +180,60 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return mounted_state;
   }
 
+  struct Adopted final {
+    std::uint32_t id{};
+    std::wstring path;
+    std::wstring name;
+    std::uint64_t size_bytes{};
+    wchar_t drive_letter{};
+    bool mounted{};
+  };
+
+  static constexpr std::uint64_t kFakeContainerBytes =
+      64ULL * 1024ULL * 1024ULL;
+
+  std::uint32_t adopt(const std::wstring_view path,
+                      const std::uint64_t size_bytes) {
+    const std::size_t separator = path.find_last_of(L"\\/");
+    const std::wstring_view name = separator == std::wstring_view::npos
+                                       ? path
+                                       : path.substr(separator + 1);
+    const std::uint32_t id = next_id++;
+    containers.push_back(
+        {.id = id,
+         .path = std::wstring(path),
+         .name = std::wstring(name),
+         .size_bytes = size_bytes,
+         .drive_letter = static_cast<wchar_t>(
+             L'D' + static_cast<wchar_t>(containers.size())),
+         .mounted = true});
+    mounted_state = true;
+    return id;
+  }
+
+  [[nodiscard]] bool any_mounted() const noexcept {
+    for (const Adopted& entry : containers) {
+      if (entry.mounted) return true;
+    }
+    return false;
+  }
+
   CardAuthenticationSession& authentication_;
   std::vector<std::byte> login_bytes;
+  std::vector<Adopted> containers;
+  std::wstring created_path;
+  std::wstring mounted_path;
+  std::uint64_t created_size_bytes{};
+  std::uint32_t next_id{1};
+  // Lets one test hand the controller an unmounted container that still
+  // reports a drive letter, which must fail closed instead of being shown.
+  wchar_t inconsistent_unmounted_drive{};
+  bool reject_create{};
+  bool reject_mount{};
+  int create_calls{};
+  int mount_calls{};
+  int unmount_container_calls{};
+  int container_statuses_calls{};
   bool fail_after_authentication{};
   bool mount_on_success{};
   bool mounted_state{};
@@ -203,15 +294,36 @@ class FakeEntry final : public ICardEntryActions {
   int login_calls{};
 };
 
+// The page never supplies a path, so every selection in these tests comes
+// from the chooser and the counters prove when it was consulted.
+class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
+ public:
+  [[nodiscard]] std::wstring choose_new_container() override {
+    ++new_calls;
+    return new_path;
+  }
+
+  [[nodiscard]] std::wstring choose_existing_container() override {
+    ++existing_calls;
+    return existing_path;
+  }
+
+  std::wstring new_path;
+  std::wstring existing_path;
+  int new_calls{};
+  int existing_calls{};
+};
+
 struct Fixture final {
   Fixture()
       : volume(authentication),
-        controller(entry, authentication, volume, policy) {}
+        controller(entry, authentication, volume, policy, chooser) {}
 
   FakeEntry entry;
   CardAuthenticationSession authentication;
   FakeVolumeSession volume;
   OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
   CardProductUiSessionController controller;
 };
 
@@ -500,6 +612,111 @@ void test_container_a_status_is_authenticated_and_normalized_for_ui() {
       "UI accepted a mounted A that did not exist");
 }
 
+void test_container_collection_is_projected_only_when_authenticated() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  require(fixture.controller.container_statuses().empty() &&
+              fixture.volume.container_statuses_calls == 0,
+          "unauthenticated UI queried or exposed the container collection");
+
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  require(fixture.controller.create_container(64),
+          "creation reported a cancellation the chooser did not make");
+
+  std::vector<ContainerUiStatus> statuses =
+      fixture.controller.container_statuses();
+  require(statuses.size() == 1 && statuses[0].id != 0 &&
+              statuses[0].name == L"work.hc" && statuses[0].mounted &&
+              statuses[0].size_mib == 64 && statuses[0].drive_letter == L'D',
+          "container projection lost identity, name, capacity, or drive");
+  require(fixture.volume.created_path == L"D:\\Vault\\work.hc" &&
+              fixture.volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "the chosen path or capacity did not reach the session");
+
+  fixture.controller.unmount_container(statuses[0].id);
+  statuses = fixture.controller.container_statuses();
+  require(statuses.size() == 1 && !statuses[0].mounted &&
+              statuses[0].drive_letter == wchar_t{} &&
+              statuses[0].size_mib == 64,
+          "an unmounted container was dropped or kept a drive letter");
+}
+
+void test_container_creation_is_bounded_and_cancellable() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.create_container(64)); },
+      "unauthenticated route created a container");
+
+  fixture.authentication.establish(root_secret());
+  for (const std::uint32_t invalid : {kContainerACreationMinimumMib - 1,
+                                      kContainerACreationMaximumMib + 1}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          static_cast<void>(fixture.controller.create_container(invalid));
+        },
+        "UI accepted a container size outside the shared range");
+  }
+  require(fixture.chooser.new_calls == 0 && fixture.volume.create_calls == 0,
+          "an out-of-range size still opened the chooser or the session");
+
+  fixture.chooser.new_path.clear();
+  require(!fixture.controller.create_container(64) &&
+              fixture.chooser.new_calls == 1 &&
+              fixture.volume.create_calls == 0,
+          "a cancelled chooser still created a container");
+  require(fixture.controller.container_statuses().empty(),
+          "a cancelled creation left an adopted container behind");
+}
+
+void test_adopted_container_remounts_without_reselecting_its_file() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  require(fixture.controller.create_container(64), "creation was refused");
+  const std::uint32_t id = fixture.controller.container_statuses()[0].id;
+
+  fixture.controller.unmount_container(id);
+  require(fixture.controller.mount_container(id) &&
+              fixture.chooser.existing_calls == 0 &&
+              fixture.volume.mounted_path == L"D:\\Vault\\work.hc",
+          "remounting an adopted container asked for the file again");
+  require(fixture.controller.container_statuses()[0].mounted,
+          "the remounted container is not reported as mounted");
+
+  require(fixture.controller.mount_container(id) &&
+              fixture.volume.mount_calls == 1,
+          "remounting a mounted container repeated the session call");
+  require_throws<std::invalid_argument>(
+      [&] { static_cast<void>(fixture.controller.mount_container(id + 7)); },
+      "UI mounted an identifier the session never adopted");
+
+  fixture.chooser.existing_path = L"E:\\Media\\photos.hc";
+  require(fixture.controller.mount_container() &&
+              fixture.chooser.existing_calls == 1 &&
+              fixture.controller.container_statuses().size() == 2,
+          "adopting a second container through the chooser failed");
+  fixture.chooser.existing_path.clear();
+  require(!fixture.controller.mount_container() &&
+              fixture.controller.container_statuses().size() == 2,
+          "a cancelled chooser still adopted a container");
+}
+
+void test_inconsistent_container_status_fails_closed() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  require(fixture.controller.create_container(64), "creation was refused");
+  const std::uint32_t id = fixture.controller.container_statuses()[0].id;
+  fixture.controller.unmount_container(id);
+
+  fixture.volume.inconsistent_unmounted_drive = L'D';
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.container_statuses()); },
+      "UI displayed a drive letter for an unmounted container");
+}
+
 }  // namespace
 
 int main() {
@@ -516,6 +733,10 @@ int main() {
     test_container_a_creation_requires_authenticated_bounded_capacity();
     test_container_a_creation_failure_preserves_authentication();
     test_container_a_status_is_authenticated_and_normalized_for_ui();
+    test_container_collection_is_projected_only_when_authenticated();
+    test_container_creation_is_bounded_and_cancellable();
+    test_adopted_container_remounts_without_reselecting_its_file();
+    test_inconsistent_container_status_fails_closed();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

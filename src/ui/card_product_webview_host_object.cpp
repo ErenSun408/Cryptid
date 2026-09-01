@@ -11,6 +11,7 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <vector>
 
 namespace usb_vault::ui {
 namespace {
@@ -24,6 +25,16 @@ constexpr DISPID kCreateContainerAMibId = 6;
 constexpr DISPID kGetContainerAStateId = 7;
 constexpr DISPID kGetContainerASizeMibId = 8;
 constexpr DISPID kGetContainerADriveLetterId = 9;
+constexpr DISPID kCreateContainerMibId = 10;
+constexpr DISPID kMountContainerId = 11;
+constexpr DISPID kMountAdoptedContainerId = 12;
+constexpr DISPID kUnmountContainerId = 13;
+constexpr DISPID kGetContainerCountId = 14;
+constexpr DISPID kGetContainerIdId = 15;
+constexpr DISPID kGetContainerNameId = 16;
+constexpr DISPID kGetContainerMountedId = 17;
+constexpr DISPID kGetContainerSizeMibId = 18;
+constexpr DISPID kGetContainerDriveLetterId = 19;
 constexpr wchar_t kSubmitLoginPasswordBytesName[] =
     L"submitLoginPasswordBytes";
 constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
@@ -36,6 +47,17 @@ constexpr wchar_t kGetContainerAStateName[] = L"getContainerAState";
 constexpr wchar_t kGetContainerASizeMibName[] = L"getContainerASizeMib";
 constexpr wchar_t kGetContainerADriveLetterName[] =
     L"getContainerADriveLetter";
+constexpr wchar_t kCreateContainerMibName[] = L"createContainerMib";
+constexpr wchar_t kMountContainerName[] = L"mountContainer";
+constexpr wchar_t kMountAdoptedContainerName[] = L"mountAdoptedContainer";
+constexpr wchar_t kUnmountContainerName[] = L"unmountContainer";
+constexpr wchar_t kGetContainerCountName[] = L"getContainerCount";
+constexpr wchar_t kGetContainerIdName[] = L"getContainerId";
+constexpr wchar_t kGetContainerNameName[] = L"getContainerName";
+constexpr wchar_t kGetContainerMountedName[] = L"getContainerMounted";
+constexpr wchar_t kGetContainerSizeMibName[] = L"getContainerSizeMib";
+constexpr wchar_t kGetContainerDriveLetterName[] =
+    L"getContainerDriveLetter";
 
 class PasswordArgumentsWiper final {
  public:
@@ -153,6 +175,46 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kGetContainerADriveLetterId;
       return S_OK;
     }
+    if (matches(names[0], kCreateContainerMibName)) {
+      ids[0] = kCreateContainerMibId;
+      return S_OK;
+    }
+    if (matches(names[0], kMountContainerName)) {
+      ids[0] = kMountContainerId;
+      return S_OK;
+    }
+    if (matches(names[0], kMountAdoptedContainerName)) {
+      ids[0] = kMountAdoptedContainerId;
+      return S_OK;
+    }
+    if (matches(names[0], kUnmountContainerName)) {
+      ids[0] = kUnmountContainerId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerCountName)) {
+      ids[0] = kGetContainerCountId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerIdName)) {
+      ids[0] = kGetContainerIdId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerNameName)) {
+      ids[0] = kGetContainerNameId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerMountedName)) {
+      ids[0] = kGetContainerMountedId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerSizeMibName)) {
+      ids[0] = kGetContainerSizeMibId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetContainerDriveLetterName)) {
+      ids[0] = kGetContainerDriveLetterId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -183,6 +245,24 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_container_a_size(parameters, result);
       case kGetContainerADriveLetterId:
         return invoke_container_a_drive(parameters, result);
+      case kCreateContainerMibId:
+        return invoke_create_container(parameters, result, argument_error);
+      case kMountContainerId:
+        return invoke_mount_container(parameters, result);
+      case kMountAdoptedContainerId:
+        return invoke_mount_adopted_container(parameters, result,
+                                              argument_error);
+      case kUnmountContainerId:
+        return invoke_unmount_container(parameters, argument_error);
+      case kGetContainerCountId:
+        return invoke_container_count(parameters, result);
+      case kGetContainerIdId:
+      case kGetContainerNameId:
+      case kGetContainerMountedId:
+      case kGetContainerSizeMibId:
+      case kGetContainerDriveLetterId:
+        return invoke_container_fact(member, parameters, result,
+                                     argument_error);
       default:
         return DISP_E_MEMBERNOTFOUND;
     }
@@ -292,7 +372,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
-  [[nodiscard]] static bool exact_size_mib(
+  [[nodiscard]] static bool exact_uint32(
       const VARIANTARG& argument,
       std::uint32_t& result) noexcept {
     if (argument.vt == VT_I4 && argument.lVal >= 0) {
@@ -322,7 +402,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       return DISP_E_BADPARAMCOUNT;
     }
     std::uint32_t size_mib = 0;
-    if (!exact_size_mib(parameters->rgvarg[0], size_mib)) {
+    if (!exact_uint32(parameters->rgvarg[0], size_mib)) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
@@ -335,6 +415,172 @@ class CardProductWebViewHostObject final : public IDispatch {
     } catch (...) {
       return E_FAIL;
     }
+  }
+
+  HRESULT invoke_create_container(DISPPARAMS* const parameters,
+                                  VARIANT* const result,
+                                  UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t size_mib = 0;
+    if (!exact_uint32(parameters->rgvarg[0], size_mib)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      return complete_selection(controller_.create_container(size_mib),
+                                result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_mount_container(DISPPARAMS* const parameters,
+                                 VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    try {
+      return complete_selection(controller_.mount_container(), result);
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_mount_adopted_container(
+      DISPPARAMS* const parameters, VARIANT* const result,
+      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t identifier = 0;
+    if (!exact_uint32(parameters->rgvarg[0], identifier)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      return complete_selection(controller_.mount_container(identifier),
+                                result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_unmount_container(DISPPARAMS* const parameters,
+                                   UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t identifier = 0;
+    if (!exact_uint32(parameters->rgvarg[0], identifier)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.unmount_container(identifier);
+      return S_OK;
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_container_count(DISPPARAMS* const parameters,
+                                 VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (result == nullptr) return S_OK;
+    try {
+      const std::vector<ContainerUiStatus> statuses =
+          controller_.container_statuses();
+      ::VariantInit(result);
+      result->vt = VT_UI4;
+      result->ulVal = static_cast<ULONG>(statuses.size());
+      return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // One live fact of one adopted container. The page reads the count first and
+  // then each fact by position, so an index that no longer exists is a raced
+  // read and fails instead of returning a substitute value.
+  HRESULT invoke_container_fact(const DISPID member,
+                                DISPPARAMS* const parameters,
+                                VARIANT* const result,
+                                UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t index = 0;
+    if (!exact_uint32(parameters->rgvarg[0], index)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    if (result == nullptr) return S_OK;
+    try {
+      const std::vector<ContainerUiStatus> statuses =
+          controller_.container_statuses();
+      if (index >= statuses.size()) return E_INVALIDARG;
+      const ContainerUiStatus& status = statuses[index];
+      ::VariantInit(result);
+      switch (member) {
+        case kGetContainerIdId:
+          result->vt = VT_UI4;
+          result->ulVal = status.id;
+          return S_OK;
+        case kGetContainerMountedId:
+          result->vt = VT_BOOL;
+          result->boolVal = status.mounted ? VARIANT_TRUE : VARIANT_FALSE;
+          return S_OK;
+        case kGetContainerSizeMibId:
+          result->vt = VT_UI4;
+          result->ulVal = status.size_mib;
+          return S_OK;
+        case kGetContainerNameId:
+          return complete_string(status.name.c_str(),
+                                 static_cast<UINT>(status.name.size()),
+                                 result);
+        case kGetContainerDriveLetterId:
+        default: {
+          const wchar_t drive[] = {status.drive_letter, L':'};
+          return complete_string(
+              drive, status.drive_letter == wchar_t{} ? 0U : 2U, result);
+        }
+      }
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  [[nodiscard]] static HRESULT complete_selection(
+      const bool selected, VARIANT* const result) noexcept {
+    if (result != nullptr) {
+      ::VariantInit(result);
+      result->vt = VT_BOOL;
+      result->boolVal = selected ? VARIANT_TRUE : VARIANT_FALSE;
+    }
+    return S_OK;
+  }
+
+  [[nodiscard]] static HRESULT complete_string(
+      const wchar_t* const value, const UINT length,
+      VARIANT* const result) noexcept {
+    BSTR allocated = ::SysAllocStringLen(value, length);
+    if (allocated == nullptr) return E_OUTOFMEMORY;
+    result->vt = VT_BSTR;
+    result->bstrVal = allocated;
+    return S_OK;
   }
 
   HRESULT invoke_login(DISPPARAMS* const parameters,

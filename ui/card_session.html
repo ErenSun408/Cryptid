@@ -156,6 +156,8 @@
     }
     .status-dot { width: .35rem; height: .35rem; border-radius: 50%; background: var(--ok); }
     .topbar-actions { gap: .5rem; }
+    .dashboard-status { font-size: .74rem; color: var(--text-3); }
+    .dashboard-status[data-tone="error"] { color: var(--danger); }
     .shell-button, .create-button, .modal-button {
       display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
       min-height: 2rem; padding: .35rem .75rem; border-radius: .5rem;
@@ -226,6 +228,7 @@
     .overview-group + .overview-group { margin-top: 1.5rem; }
     .overview-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .7rem; }
     .overview-heading h3 { margin: 0; font-size: .85rem; font-weight: 600; }
+    .overview-actions { display: flex; gap: .4rem; flex: 0 0 auto; }
     .overview-card {
       display: flex; align-items: flex-start; gap: .9rem; padding: 1.1rem 1.15rem;
       border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850);
@@ -245,6 +248,36 @@
       display: block; margin-top: .2rem; font-family: var(--mono); font-size: .78rem;
       font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text);
     }
+
+    .container-list { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
+    .container-row { display: flex; align-items: center; gap: .9rem; padding: .8rem 1rem; border-top: 1px solid var(--line); }
+    .container-row:first-child { border-top: 0; }
+    .container-mark {
+      display: grid; place-items: center; flex: 0 0 auto; width: 2rem; height: 2rem;
+      border-radius: .55rem; color: var(--text-2); background: rgba(255, 255, 255, .05);
+    }
+    .container-row.mounted .container-mark {
+      color: var(--gold); background: rgba(200, 169, 106, .12);
+    }
+    .container-mark svg { width: .95rem; height: .95rem; }
+    .container-identity { min-width: 0; flex: 1; }
+    .container-name {
+      font-size: .85rem; font-weight: 600; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .container-state { margin-top: .15rem; font-size: .72rem; color: var(--text-3); }
+    .container-facts { display: flex; gap: 1.25rem; flex: 0 0 auto; }
+    .container-fact { min-width: 3.5rem; }
+    .container-fact-label { font-size: .6rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); }
+    .container-fact-value { margin-top: .15rem; font-family: var(--mono); font-size: .78rem; }
+    .container-actions { display: flex; gap: .4rem; flex: 0 0 auto; }
+    .container-empty { padding: 1.6rem 1.15rem; color: var(--text-3); font-size: .8rem; line-height: 1.7; text-align: center; }
+    .section-note {
+      display: flex; gap: .6rem; margin-top: .9rem; padding: .7rem .85rem;
+      border: 1px solid var(--line); border-radius: .6rem;
+      color: var(--text-3); font-size: .74rem; line-height: 1.7;
+    }
+    .section-note svg { flex: 0 0 auto; width: .9rem; height: .9rem; margin-top: .15rem; }
 
     /* ================= 建卷对话框 ================= */
     .modal-overlay {
@@ -394,6 +427,7 @@
         <div class="card-badge"><span class="status-dot"></span><span>安全卡已认证</span></div>
       </div>
       <div class="topbar-actions">
+        <output id="dashboard-status" class="dashboard-status" aria-live="polite" data-tone=""></output>
         <button id="dashboard-unmount" class="shell-button" type="button" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14.5h14"></path><path d="M12 4.5l6 7H6l6-7z"></path><path d="M6 18.5h12"></path></svg>
           安全卸载
@@ -453,22 +487,18 @@
             </article>
             <article class="stat-card">
               <div class="stat-icon neutral"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5"></path></svg></div>
-              <div><div class="stat-label">加密盘状态</div><div id="dashboard-container-a-state" class="stat-value">未创建</div></div>
+              <div><div class="stat-label">加密盘数量</div><div id="dashboard-container-count" class="stat-value">0</div></div>
             </article>
           </div>
           <div class="overview-group">
-            <div class="overview-heading"><h3>加密盘概览</h3><button class="create-button" type="button" data-create-kind="encrypted">新建</button></div>
-            <article class="overview-card">
-              <div class="overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.2"></rect><path d="M8.2 10.5V7.6a3.8 3.8 0 017.6 0v2.9"></path></svg></div>
-              <div class="overview-copy">
-                <h4 data-container-a-title>尚未创建加密盘</h4>
-                <p data-container-a-summary>点击“新建”创建并挂载加密盘。</p>
-                <div class="volume-facts" data-container-a-facts hidden>
-                  <span class="volume-fact">容量<strong data-container-a-size>—</strong></span>
-                  <span class="volume-fact">盘符<strong data-container-a-drive>—</strong></span>
-                </div>
+            <div class="overview-heading">
+              <h3>加密盘</h3>
+              <div class="overview-actions">
+                <button class="shell-button" type="button" data-mount-existing>打开已有</button>
+                <button class="create-button" type="button" data-create-kind="encrypted">新建</button>
               </div>
-            </article>
+            </div>
+            <div class="container-list" data-container-list></div>
           </div>
           <div class="overview-group">
             <div class="overview-heading"><h3>隐藏盘概览</h3><button class="create-button" type="button" data-create-kind="hidden">新建</button></div>
@@ -480,18 +510,18 @@
         </section>
 
         <section id="dashboard-section-encrypted" class="dashboard-section" aria-labelledby="encrypted-title">
-          <div class="section-header"><div><h2 id="encrypted-title">加密盘管理</h2><p>创建、挂载和管理加密盘</p></div><button class="create-button" type="button" data-create-kind="encrypted">新建加密盘</button></div>
-          <article class="overview-card">
-            <div class="overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.2"></rect><path d="M8.2 10.5V7.6a3.8 3.8 0 017.6 0v2.9"></path></svg></div>
-            <div class="overview-copy">
-              <h4 data-container-a-title>尚未创建加密盘</h4>
-              <p data-container-a-summary>创建后将在这里显示实时挂载信息。</p>
-              <div class="volume-facts" data-container-a-facts hidden>
-                <span class="volume-fact">容量<strong data-container-a-size>—</strong></span>
-                <span class="volume-fact">盘符<strong data-container-a-drive>—</strong></span>
-              </div>
+          <div class="section-header">
+            <div><h2 id="encrypted-title">加密盘管理</h2><p>创建、打开和卸载加密盘，数量不限</p></div>
+            <div class="overview-actions">
+              <button class="shell-button" type="button" data-mount-existing>打开已有加密盘</button>
+              <button class="create-button" type="button" data-create-kind="encrypted">新建加密盘</button>
             </div>
-          </article>
+          </div>
+          <div class="container-list" data-container-list></div>
+          <p class="section-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 11v5.5"></path><path d="M12 8h.01"></path></svg>
+            <span>所有加密盘共用同一个密码，分开存放不等于分开保护。软件不会记录加密盘的位置，退出后需要重新打开对应文件。</span>
+          </p>
         </section>
 
         <section id="dashboard-section-hidden" class="dashboard-section" aria-labelledby="hidden-title">
@@ -514,11 +544,11 @@
         </button>
       </div>
       <div class="modal-body">
-        <p id="create-volume-description">请选择加密盘容量。创建过程将请求管理员权限。</p>
+        <p id="create-volume-description">请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。</p>
         <div class="workflow-preview" aria-label="建卷流程预览">
-          <div class="workflow-step"><span class="step-number">1</span><span>确认卷类型与容量</span></div>
+          <div class="workflow-step"><span class="step-number">1</span><span>确认容量并选择保存位置</span></div>
           <div class="workflow-step"><span class="step-number">2</span><span>完成管理员权限确认</span></div>
-          <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载加密卷</span></div>
+          <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载加密盘</span></div>
         </div>
         <div id="create-container-a-form" class="creation-form" hidden>
           <label for="create-container-a-capacity">加密盘容量</label>
@@ -537,6 +567,6 @@
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-16d-container-a-status"></script>
+  <script src="card_session.js?v=p2-16h-container-collection"></script>
 </body>
 </html>

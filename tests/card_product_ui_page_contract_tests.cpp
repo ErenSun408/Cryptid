@@ -63,7 +63,7 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-16d-container-a-status\"></script>") !=
+              "<script src=\"card_session.js?v=p2-16h-container-collection\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -179,45 +179,76 @@ void test_bridge_calls_are_narrow_and_route_specific() {
           "initialization page does not use the independent P2 inputs");
   require(script.find("await bridge.unmount();") != std::string::npos,
           "product page lacks unified cleanup");
-  require(script.find("await bridge.createContainerAMib(sizeMib);") !=
+  require(script.find("await bridge.createContainerMib(sizeMib);") !=
               std::string::npos,
-          "authenticated A creation does not use the capacity-only bridge");
-  require(script.find("await bridge.getContainerAState();") !=
+          "authenticated creation does not use the capacity-only bridge");
+  require(script.find("await bridge.getContainerCount();") !=
                   std::string::npos &&
-              script.find("await bridge.getContainerASizeMib();") !=
+              script.find("await bridge.getContainerId(index);") !=
                   std::string::npos &&
-              script.find("await bridge.getContainerADriveLetter();") !=
+              script.find("await bridge.getContainerName(index);") !=
+                  std::string::npos &&
+              script.find("await bridge.getContainerMounted(index);") !=
+                  std::string::npos &&
+              script.find("await bridge.getContainerSizeMib(index);") !=
+                  std::string::npos &&
+              script.find("await bridge.getContainerDriveLetter(index);") !=
                   std::string::npos,
-          "authenticated dashboard does not query live container A facts");
+          "authenticated dashboard does not query the live container list");
+  require(script.find("bridge.mountContainer()") != std::string::npos &&
+              script.find("bridge.mountAdoptedContainer(id)") !=
+                  std::string::npos &&
+              script.find("bridge.unmountContainer(id)") != std::string::npos,
+          "the page cannot adopt, remount, or release one container");
+  // The page asks; the native side chooses. A path must never be built,
+  // stored, or sent by the page.
+  require(script.find("getContainerAState") == std::string::npos &&
+              script.find("getContainerASizeMib") == std::string::npos &&
+              script.find("getContainerADriveLetter") == std::string::npos &&
+              script.find("createContainerAMib") == std::string::npos,
+          "the page still reads the retired single-container bridge");
   require(script.find("bridge.submitPasswordBytes") == std::string::npos,
           "product page reused the incompatible P1 submission method");
 }
 
-void test_container_a_information_replaces_the_dashboard_placeholders() {
+void test_container_collection_replaces_the_single_container_display() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
-  require(page.find("id=\"dashboard-container-a-state\"") !=
+  require(page.find("id=\"dashboard-container-count\"") !=
                   std::string::npos &&
-              count_occurrences(page, "data-container-a-title") == 2 &&
-              count_occurrences(page, "data-container-a-size") == 2 &&
-              count_occurrences(page, "data-container-a-drive") == 2,
-          "dashboard and A management page lack shared live A fields");
-  require(page.find("建卷能力接入后，这里会显示加密盘") ==
-                  std::string::npos &&
-              page.find("本页已经接入认证会话；下一切片将连接真实建卷") ==
+              count_occurrences(page, "data-container-list") == 2 &&
+              count_occurrences(page, "data-mount-existing") == 2 &&
+              page.find("id=\"dashboard-status\"") != std::string::npos,
+          "dashboard and management views lack the shared container list");
+  require(count_occurrences(page, "data-container-a-title") == 0 &&
+              count_occurrences(page, "data-container-a-size") == 0 &&
+              count_occurrences(page, "data-container-a-drive") == 0,
+          "the retired single-container placeholders are still rendered");
+  require(script.find("currentContainerAState") == std::string::npos &&
+              script.find("加密盘已创建") == std::string::npos,
+          "the page still tracks one fixed container");
+  require(script.find("let containers = []") != std::string::npos &&
+              script.find("nextContainers.push({ id, name, mounted, sizeMib,"
+                          " drive })") != std::string::npos &&
+              script.find("throw new Error(\"invalid container status\")") !=
                   std::string::npos,
-          "obsolete container A placeholders remain visible");
-  require(script.find("currentContainerAState") != std::string::npos &&
-              script.find("加密盘已挂载") != std::string::npos &&
-              script.find("加密盘已创建") != std::string::npos &&
-              script.find("未挂载，请重新插卡并登录后打开") !=
+          "the container list is not validated before it is displayed");
+  // A container name comes from a file the user picked. It is displayed as
+  // text so a crafted file name cannot become markup.
+  require(script.find("name.textContent = container.name;") !=
                   std::string::npos &&
-              script.find("button.hidden = existingContainerA") !=
+              script.find("innerHTML") == std::string::npos,
+          "container names are not rendered as inert text");
+  // 8.7.2: an entry that disappears tells an observer what this machine holds.
+  require(script.find("button.hidden = existingContainerA") ==
+                  std::string::npos &&
+              script.find("button.disabled = busy || !showDashboard;") !=
                   std::string::npos,
-          "live A state does not drive its text, facts, and creation entry");
+          "a creation entry is still hidden by what already exists");
   require(script.find("getContainerB") == std::string::npos &&
-              script.find("containerBType") == std::string::npos,
-          "A display slice leaked B shape or volume type into the UI");
+              script.find("containerBType") == std::string::npos &&
+              script.find("volumeType") == std::string::npos,
+          "the container display leaked B shape or volume type into the UI");
 }
 
 void test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred() {
@@ -238,13 +269,14 @@ void test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred() 
               script.find("creationContinueButton.title = encrypted ? \"\" : \"正在开发中\"") !=
                   std::string::npos,
           "creation routing does not bind A capacity or defer hidden volumes");
-  require(script.find("正在请求管理员权限并创建加密盘") !=
+  require(script.find("请选择保存位置，随后确认管理员权限") !=
               std::string::npos &&
               script.find("创建成功，可以开始使用加密盘") !=
                   std::string::npos &&
+              script.find("已取消创建。") != std::string::npos &&
               script.find("若容器已完成但未挂载，请重新插卡后重试") !=
                   std::string::npos,
-          "container A flow lacks busy, success, or recovery feedback");
+          "creation lacks busy, success, cancellation, or recovery feedback");
 }
 
 void test_all_password_copies_have_fallback_wipes() {
@@ -386,7 +418,7 @@ int main() {
     test_five_states_are_complete_and_vendor_neutral();
     test_bridge_calls_are_narrow_and_route_specific();
     test_container_a_creation_form_is_bounded_and_hidden_flow_stays_deferred();
-    test_container_a_information_replaces_the_dashboard_placeholders();
+    test_container_collection_replaces_the_single_container_display();
     test_all_password_copies_have_fallback_wipes();
     test_strength_feedback_matches_the_native_length_baseline();
     test_initialization_feedback_is_stable_and_recoverable();

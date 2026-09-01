@@ -43,7 +43,8 @@
   <section id="authenticated-dashboard" hidden>
     <button id="dashboard-unmount" type="button" hidden>安全卸载</button>
     <span id="dashboard-volume-state">未挂载</span>
-    <span id="dashboard-container-a-state">未创建</span>
+    <span id="dashboard-container-count">0</span>
+    <output id="dashboard-status" data-tone=""></output>
     <nav>
       <button class="dashboard-nav active" type="button"
               data-section="dashboard" aria-current="page">仪表盘</button>
@@ -63,21 +64,13 @@
     <section id="dashboard-section-dashboard" class="dashboard-section active">
       <button type="button" data-create-kind="encrypted">新建</button>
       <button type="button" data-create-kind="hidden">新建</button>
-      <h4 data-container-a-title>尚未创建加密盘</h4>
-      <p data-container-a-summary></p>
-      <div data-container-a-facts hidden>
-        <span data-container-a-size>—</span>
-        <span data-container-a-drive>—</span>
-      </div>
+      <button type="button" data-mount-existing>打开已有</button>
+      <div class="container-list" data-container-list></div>
     </section>
     <section id="dashboard-section-encrypted" class="dashboard-section">
       <button type="button" data-create-kind="encrypted">新建加密盘</button>
-      <h4 data-container-a-title>尚未创建加密盘</h4>
-      <p data-container-a-summary></p>
-      <div data-container-a-facts hidden>
-        <span data-container-a-size>—</span>
-        <span data-container-a-drive>—</span>
-      </div>
+      <button type="button" data-mount-existing>打开已有加密盘</button>
+      <div class="container-list" data-container-list></div>
     </section>
     <section id="dashboard-section-hidden" class="dashboard-section">
       <button type="button" data-create-kind="hidden">新建隐藏盘</button>
@@ -96,7 +89,7 @@
     <button id="create-volume-cancel" type="button">返回</button>
     <button id="create-volume-continue" type="button">创建加密盘</button>
   </div>
-  <script src="card_session.js?v=p2-16d-container-a-status"></script>
-  <script src="card_product_webview_integration.js?v=p2-16d-container-a-status"></script>
+  <script src="card_session.js?v=p2-16h-container-collection"></script>
+  <script src="card_product_webview_integration.js?v=p2-16h-container-collection"></script>
 </body>
 </html>

@@ -80,19 +80,90 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     mounted_state = true;
   }
 
-  std::uint32_t create_container(std::wstring_view, std::uint64_t) override {
-    throw std::logic_error("the container collection is not part of this slice");
+  std::uint32_t create_container(const std::wstring_view path,
+                                 const std::uint64_t size_bytes) override {
+    ++create_calls;
+    created_size_bytes = size_bytes;
+    if (reject_create) throw std::runtime_error("creation failed");
+    return adopt(path, size_bytes);
   }
-  std::uint32_t mount_container(std::wstring_view) override {
-    throw std::logic_error("the container collection is not part of this slice");
+
+  std::uint32_t mount_container(const std::wstring_view path) override {
+    ++mount_calls;
+    for (Adopted& entry : containers) {
+      if (entry.path != path) continue;
+      entry.mounted = true;
+      mounted_state = true;
+      return entry.id;
+    }
+    return adopt(path, 64ULL * 1024ULL * 1024ULL);
   }
-  void unmount_container(std::uint32_t) override {
-    throw std::logic_error("the container collection is not part of this slice");
+
+  void unmount_container(const std::uint32_t id) override {
+    ++unmount_container_calls;
+    for (Adopted& entry : containers) {
+      if (entry.id != id) continue;
+      entry.mounted = false;
+      return;
+    }
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
   }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
-    throw std::logic_error("the container collection is not part of this slice");
+    if (fail_container_statuses) {
+      throw std::runtime_error("container status query failed");
+    }
+    std::vector<usb_vault::application::ContainerStatus> result;
+    result.reserve(containers.size());
+    for (const Adopted& entry : containers) {
+      result.push_back({.id = entry.id,
+                        .name = entry.name,
+                        .mounted = entry.mounted,
+                        .size_bytes = entry.size_bytes,
+                        .drive_letter =
+                            entry.mounted ? entry.drive_letter : wchar_t{}});
+    }
+    return result;
   }
+
+  struct Adopted final {
+    std::uint32_t id{};
+    std::wstring path;
+    std::wstring name;
+    std::uint64_t size_bytes{};
+    wchar_t drive_letter{};
+    bool mounted{};
+  };
+
+  std::uint32_t adopt(const std::wstring_view path,
+                      const std::uint64_t size_bytes) {
+    const std::size_t separator = path.find_last_of(L"\\/");
+    const std::wstring_view name = separator == std::wstring_view::npos
+                                       ? path
+                                       : path.substr(separator + 1);
+    const std::uint32_t id = next_id++;
+    containers.push_back(
+        {.id = id,
+         .path = std::wstring(path),
+         .name = std::wstring(name),
+         .size_bytes = size_bytes,
+         .drive_letter = static_cast<wchar_t>(
+             L'D' + static_cast<wchar_t>(containers.size())),
+         .mounted = true});
+    mounted_state = true;
+    return id;
+  }
+
+  std::vector<Adopted> containers;
+  std::uint64_t created_size_bytes{};
+  std::uint32_t next_id{1};
+  bool reject_create{};
+  bool fail_container_statuses{};
+  int create_calls{};
+  int mount_calls{};
+  int unmount_container_calls{};
 
   [[nodiscard]] ContainerAStatus container_a_status() override {
     return {.exists = container_a_exists,
@@ -179,15 +250,36 @@ class FakeEntry final : public ICardEntryActions {
   int login_calls{};
 };
 
+// Selection stays native: the page can only ask, so the fixture decides which
+// path comes back and an empty string stands for a cancelled dialog.
+class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
+ public:
+  [[nodiscard]] std::wstring choose_new_container() override {
+    ++new_calls;
+    return new_path;
+  }
+
+  [[nodiscard]] std::wstring choose_existing_container() override {
+    ++existing_calls;
+    return existing_path;
+  }
+
+  std::wstring new_path;
+  std::wstring existing_path;
+  int new_calls{};
+  int existing_calls{};
+};
+
 struct Fixture final {
   Fixture()
       : volume(authentication),
-        controller(entry, authentication, volume, policy) {}
+        controller(entry, authentication, volume, policy, chooser) {}
 
   FakeEntry entry;
   CardAuthenticationSession authentication;
   FakeVolumeSession volume;
   OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
   CardProductUiSessionController controller;
 };
 
@@ -426,6 +518,107 @@ class InitializationArguments final {
   const std::wstring drive(result.bstrVal, ::SysStringLen(result.bstrVal));
   static_cast<void>(::VariantClear(&result));
   return drive;
+}
+
+[[nodiscard]] VARIANTARG number_argument(const std::uint32_t value) noexcept {
+  VARIANTARG argument{};
+  ::VariantInit(&argument);
+  argument.vt = VT_UI4;
+  argument.ulVal = value;
+  return argument;
+}
+
+[[nodiscard]] HRESULT invoke_with_number(IDispatch& host,
+                                         const wchar_t* const name,
+                                         const std::uint32_t value,
+                                         VARIANT* const result,
+                                         UINT* const argument_error) {
+  VARIANTARG argument = number_argument(value);
+  DISPPARAMS parameters{&argument, nullptr, 1, 0};
+  return host.Invoke(member_id(host, name), IID_NULL, LOCALE_INVARIANT,
+                     DISPATCH_METHOD, &parameters, result, nullptr,
+                     argument_error);
+}
+
+[[nodiscard]] ULONG invoke_container_count(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"getContainerCount"),
+                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                                &parameters, &result, nullptr, nullptr)),
+          "container count query failed");
+  require(result.vt == VT_UI4, "container count returned the wrong type");
+  const ULONG count = result.ulVal;
+  static_cast<void>(::VariantClear(&result));
+  return count;
+}
+
+[[nodiscard]] ULONG invoke_container_number(IDispatch& host,
+                                            const wchar_t* const name,
+                                            const std::uint32_t index) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(host, name, index, &result, nullptr)),
+          "container fact query failed");
+  require(result.vt == VT_UI4, "container fact returned the wrong type");
+  const ULONG value = result.ulVal;
+  static_cast<void>(::VariantClear(&result));
+  return value;
+}
+
+[[nodiscard]] bool invoke_container_mounted(IDispatch& host,
+                                            const std::uint32_t index) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(host, L"getContainerMounted", index,
+                                       &result, nullptr)),
+          "container mounted query failed");
+  require(result.vt == VT_BOOL, "container mounted returned the wrong type");
+  const bool mounted = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return mounted;
+}
+
+[[nodiscard]] std::wstring invoke_container_text(IDispatch& host,
+                                                 const wchar_t* const name,
+                                                 const std::uint32_t index) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(host, name, index, &result, nullptr)),
+          "container text query failed");
+  require(result.vt == VT_BSTR && result.bstrVal != nullptr,
+          "container text returned the wrong type");
+  const std::wstring value(result.bstrVal, ::SysStringLen(result.bstrVal));
+  static_cast<void>(::VariantClear(&result));
+  return value;
+}
+
+[[nodiscard]] bool invoke_selection(IDispatch& host,
+                                    const wchar_t* const name,
+                                    const std::uint32_t value) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(host, name, value, &result, nullptr)),
+          "container selection call failed");
+  require(result.vt == VT_BOOL, "container selection returned the wrong type");
+  const bool selected = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return selected;
+}
+
+[[nodiscard]] bool invoke_mount_container(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"mountContainer"), IID_NULL,
+                                LOCALE_INVARIANT, DISPATCH_METHOD, &parameters,
+                                &result, nullptr, nullptr)),
+          "container adoption call failed");
+  require(result.vt == VT_BOOL, "container adoption returned the wrong type");
+  const bool adopted = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return adopted;
 }
 
 void test_surface_and_state_projection_are_fixed() {
@@ -699,6 +892,133 @@ void test_container_a_display_facts_are_narrow_and_route_gated() {
           "host did not expose mounted A capacity and fixed drive");
 }
 
+void test_container_collection_is_exposed_by_position_and_route_gated() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  require(invoke_container_count(*host.Get()) == 0UL,
+          "unauthenticated host exposed adopted containers");
+
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:/Vault/work.hc";
+  require(invoke_selection(*host.Get(), L"createContainerMib", 64) &&
+              fixture.chooser.new_calls == 1 &&
+              fixture.volume.create_calls == 1 &&
+              fixture.volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "creation did not run the native chooser and the session once");
+
+  require(invoke_container_count(*host.Get()) == 1UL &&
+              invoke_container_number(*host.Get(), L"getContainerId", 0) ==
+                  1UL &&
+              invoke_container_text(*host.Get(), L"getContainerName", 0) ==
+                  L"work.hc" &&
+              invoke_container_mounted(*host.Get(), 0) &&
+              invoke_container_number(*host.Get(), L"getContainerSizeMib",
+                                      0) == 64UL &&
+              invoke_container_text(*host.Get(), L"getContainerDriveLetter",
+                                    0) == L"D:",
+          "host lost an adopted container fact");
+
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(invoke_with_number(*host.Get(), L"getContainerName", 1, &result,
+                             nullptr) == E_INVALIDARG,
+          "host answered a position no container occupies");
+  static_cast<void>(::VariantClear(&result));
+}
+
+void test_container_calls_reject_wrong_shapes_and_report_cancellation() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  UINT argument_error = 99;
+  VARIANTARG text{};
+  ::VariantInit(&text);
+  text.vt = VT_BSTR;
+  text.bstrVal = ::SysAllocString(L"D:/Vault/injected.hc");
+  require(text.bstrVal != nullptr, "test BSTR allocation failed");
+  DISPPARAMS text_parameters{&text, nullptr, 1, 0};
+  require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &text_parameters, nullptr, nullptr, &argument_error) ==
+                  DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "host accepted a string where only a capacity is allowed");
+  static_cast<void>(::VariantClear(&text));
+
+  DISPPARAMS empty{};
+  require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &empty,
+                       nullptr, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "host accepted a creation call without a capacity");
+  require(invoke_with_number(*host.Get(), L"createContainerMib", 19, nullptr,
+                             &argument_error) == DISP_E_TYPEMISMATCH,
+          "host accepted a capacity below the shared minimum");
+  require(fixture.chooser.new_calls == 0 && fixture.volume.create_calls == 0,
+          "a rejected creation still opened the chooser or the session");
+
+  require(!invoke_selection(*host.Get(), L"createContainerMib", 64) &&
+              fixture.chooser.new_calls == 1 &&
+              fixture.volume.create_calls == 0,
+          "a cancelled chooser was not reported as a cancellation");
+  require(!invoke_mount_container(*host.Get()) &&
+              fixture.chooser.existing_calls == 1,
+          "a cancelled adoption was not reported as a cancellation");
+}
+
+void test_adopted_container_mount_and_unmount_route_through_identifiers() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  fixture.chooser.new_path = L"D:/Vault/work.hc";
+  require(invoke_selection(*host.Get(), L"createContainerMib", 64),
+          "creation was refused");
+  const ULONG id = invoke_container_number(*host.Get(), L"getContainerId", 0);
+
+  require(invoke_with_number(*host.Get(), L"unmountContainer", id, nullptr,
+                             nullptr) == S_OK &&
+              fixture.volume.unmount_container_calls == 1 &&
+              !invoke_container_mounted(*host.Get(), 0) &&
+              invoke_container_text(*host.Get(), L"getContainerDriveLetter",
+                                    0).empty(),
+          "unmounting by identifier did not clear the drive");
+
+  require(invoke_selection(*host.Get(), L"mountAdoptedContainer", id) &&
+              fixture.chooser.existing_calls == 0 &&
+              invoke_container_mounted(*host.Get(), 0),
+          "remounting by identifier asked for the file again");
+
+  UINT argument_error = 99;
+  require(invoke_with_number(*host.Get(), L"mountAdoptedContainer", id + 7,
+                             nullptr, &argument_error) ==
+                  DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "host mounted an identifier the session never adopted");
+  require(invoke_with_number(*host.Get(), L"unmountContainer", id + 7, nullptr,
+                             &argument_error) == DISP_E_TYPEMISMATCH,
+          "host unmounted an identifier the session never adopted");
+}
+
+void test_container_query_failure_does_not_invent_facts() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  fixture.volume.fail_container_statuses = true;
+
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(host->Invoke(member_id(*host.Get(), L"getContainerCount"), IID_NULL,
+                       LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, &result,
+                       nullptr, nullptr) == E_FAIL,
+          "a failed container query reported a count anyway");
+  require(invoke_with_number(*host.Get(), L"getContainerName", 0, &result,
+                             nullptr) == E_FAIL,
+          "a failed container query reported a name anyway");
+  static_cast<void>(::VariantClear(&result));
+}
+
 }  // namespace
 
 int main() {
@@ -712,6 +1032,10 @@ int main() {
     test_container_a_creation_accepts_only_exact_bounded_numbers();
     test_container_a_creation_preserves_route_and_failure_semantics();
     test_container_a_display_facts_are_narrow_and_route_gated();
+    test_container_collection_is_exposed_by_position_and_route_gated();
+    test_container_calls_reject_wrong_shapes_and_report_cancellation();
+    test_adopted_container_mount_and_unmount_route_through_identifiers();
+    test_container_query_failure_does_not_invent_facts();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
