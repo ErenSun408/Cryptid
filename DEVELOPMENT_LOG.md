@@ -4888,4 +4888,47 @@
 - 完整 CTest **44/45**（唯一失败仍是实体卡不在位的 `vikey_helper_process_tests`）。
 - 安全复核：口令明文只在本次调用内存在，派生完即清零；跨边界仍只有 id／文件名／容量／盘符，
   没有引入档位、卷类型或"这是 B"的持久化标记。本切片没有触碰卡记录，也没有真实建卷。
-- 提交：待定（`[P2.16]create the hidden volume container`）。
+- 提交：`4e27b72 [P2.16]create the hidden volume container`。
+
+### 小切片 16l：卡记录的第二口令
+
+#### 需求审计与实现
+
+- 16k 已提交为 `4e27b72`。本切片补齐 B 流程的第二块：让卡记录能同时被"当前登录口令"与
+  "新设的第二口令"打开，否则用第二口令根本登录不进来，B 的外层卷也就永远挂不出来。
+- 底座 `rewrap_card_record_v1`（P2.1）已存在，但**上层没有任何通路**：`CardRecordService`
+  只有初始化与认证，`ICardLoginTarget` 明确注释「intentionally exposes no ICardStore write
+  capability」，而 `ICardInitializationTarget` 绑定的是 provisioning 上下文。所以本切片比
+  原计划厚一层，补了从已认证状态写卡的完整通路。
+- `CardRecordService::set_second_password(existing, second)`：只接受 initialized v1 记录，
+  空口令直接拒绝，随后 `rewrap_card_record_v1` 把根重新封进两个信封，写入后**读回比对**，
+  写报错但记录确实落盘的情况按成功处理（沿用初始化那套可恢复提交语义）。
+  记录原语需要调用方口令两次（一次开旧记录、一次当作替换信封），`SecureBuffer` 故意不可拷贝，
+  因此复制是显式的、锁页的，并与原件一起被消费。
+- 新增 `card::ICardUpdateTarget`（只有 `card_store()`），**与只读的登录目标分开**：登录永远
+  不能写卡，改写信封必须能写。`ICardEntryInspectionSource::make_update_target` 默认返回空，
+  不支持的适配器 fail-closed。
+- `ICardEntryActions::set_second_card_password(existing, second)` 由 `CardEntryContextController`
+  实现：空口令在触碰适配器之前拒绝且**不作废插入**（输入手误不该逼用户重新插卡）；路由不是
+  login_required 时拒绝；适配器创建或写卡失败时把插入退役（卡此刻可能是新旧任一记录，
+  状态不再可知），由用户重新插卡。
+- ViKey 侧新增 `VikeyHelperCardUpdateTarget` 与 `make_update_target`，复用既有
+  `VikeyHelperCardRecordBackend::write_record`（只校验硬件 ID 与凭据，不带介质状态门），
+  因此不需要改 helper 协议。
+- 命名刻意保持中性：代码里叫 `second_password`，不叫 decoy／诱饵 —— 卡层不记录哪个口令是哪个，
+  与 8.6「档位不是运行时实体」和记录原语自身的注释一致。
+
+#### 测试、安全复核与提交状态
+
+- `card_record_service_tests` 新增三例：改写后两个口令解出同一个根且记录不与改写前逐字节相同、
+  非 initialized 状态与空口令一律拒绝且不写卡、`write_then_throw` 按读回结果接受而
+  `throw_without_write` 如实报错且记录不变。
+- `card_entry_context_controller_tests` 新增四例并补了一个假更新目标：路由不对时不碰适配器、
+  空输入不退役插入、适配器不支持时 fail-closed 并退役插入、成功路径只写一次卡且改写后两个
+  口令都能解开同一个根。
+- 完整 CTest **44/45**（唯一失败仍是实体卡不在位的 `vikey_helper_process_tests`）；
+  真实 WebView2 假后端夹具重跑退出 0。
+- 安全复核：口令只在调用内存在，显式副本与原件同时被消费；卡层不落任何"哪个是诱饵"的标记；
+  写卡仍绑定原始硬件 ID，且每次操作重新加载凭据。⚠️ 未做实体卡验证 —— 本切片全部为假存储测试。
+- 🟡 已知代价：改写失败时插入被退役，用户需重新插卡重试；这是"卡状态不可知就不继续"的取舍。
+- 提交：待定（`[P2.16]commit a second card record password`）。

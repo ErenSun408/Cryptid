@@ -35,6 +35,15 @@ class CardRecordService final {
   [[nodiscard]] security::SecureBuffer initialize_and_authenticate(
       security::SecureBuffer daily_password_utf8);
 
+  // Replaces both envelopes of an initialized record so it opens with the
+  // caller's existing password and with a second, newly chosen one. Like the
+  // record primitive underneath, this operation is generic: it stores no slot
+  // label, no activation bit, and nothing recording which password is which.
+  // Both inputs are consumed and wiped. The write is verified by reading the
+  // record back, so a reported failure that actually landed is accepted.
+  void set_second_password(security::SecureBuffer existing_password_utf8,
+                           security::SecureBuffer second_password_utf8);
+
   // Consumes the password. Only an initialized v1 record reaches the KDF;
   // provisioning, legacy, unsupported, and malformed states are reported via
   // UnexpectedCardRecordState and never converted into initialization.

@@ -247,6 +247,10 @@ class FakeEntry final : public ICardEntryActions {
         root_secret(), std::move(login_password_utf8));
   }
 
+  void set_second_card_password(SecureBuffer, SecureBuffer) override {
+    throw std::logic_error("card record updates are not part of this slice");
+  }
+
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override {
     return route;

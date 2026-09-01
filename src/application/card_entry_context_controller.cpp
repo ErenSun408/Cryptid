@@ -86,6 +86,47 @@ void CardEntryContextController::initialize_and_authenticate(
           *target, std::move(confirmed_daily_password)));
 }
 
+void CardEntryContextController::set_second_card_password(
+    security::SecureBuffer existing_password_utf8,
+    security::SecureBuffer second_password_utf8) {
+  if (existing_password_utf8.empty() || second_password_utf8.empty()) {
+    existing_password_utf8.clear();
+    second_password_utf8.clear();
+    throw std::invalid_argument(
+        "both card record passwords are required");
+  }
+  if (route_ != CardEntryRoute::login_required || !context_) {
+    existing_password_utf8.clear();
+    second_password_utf8.clear();
+    throw std::system_error(
+        card::make_error_code(card::CardError::invalid_operation),
+        "card record update requires a fresh initialized insertion");
+  }
+
+  std::unique_ptr<card::ICardUpdateTarget> target;
+  try {
+    target = source_.make_update_target(*context_);
+    if (!target) {
+      throw std::system_error(
+          card::make_error_code(card::CardError::backend_unavailable),
+          "card adapter cannot update this insertion");
+    }
+    card::CardRecordService service(target->card_store());
+    service.set_second_password(std::move(existing_password_utf8),
+                                std::move(second_password_utf8));
+  } catch (...) {
+    existing_password_utf8.clear();
+    second_password_utf8.clear();
+    target.reset();
+    // The card may hold either record after a failed write, so the insertion
+    // is retired and the user reinserts instead of continuing on a context
+    // whose state is no longer known.
+    route_ = CardEntryRoute::unavailable;
+    context_.reset();
+    throw;
+  }
+}
+
 void CardEntryContextController::authenticate_login(
     ICardLoginSuccessConsumer& success_consumer,
     security::SecureBuffer login_password_utf8) {

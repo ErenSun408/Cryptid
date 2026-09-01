@@ -36,6 +36,9 @@ class FakeProductEntry final : public ICardEntryActions {
       SecureBuffer) override {
     throw std::logic_error("not used by close guard");
   }
+  void set_second_card_password(SecureBuffer, SecureBuffer) override {
+    throw std::logic_error("not used by close guard");
+  }
   [[nodiscard]] std::optional<usb_vault::application::CardEntryRoute>
   current_route() const noexcept override {
     return std::nullopt;

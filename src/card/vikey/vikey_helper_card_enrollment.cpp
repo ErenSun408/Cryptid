@@ -118,6 +118,20 @@ VikeyHelperCardEnrollment::make_login_target(
       config_, credential_provider_, insertion->probe());
 }
 
+std::unique_ptr<ICardUpdateTarget>
+VikeyHelperCardEnrollment::make_update_target(
+    const application::IReadOnlyCardEntryInspection& context) {
+  const auto* const insertion =
+      dynamic_cast<const VikeyCardInsertionContext*>(&context);
+  if (insertion == nullptr) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_configuration),
+        "ViKey record update requires its original insertion context");
+  }
+  return std::make_unique<VikeyHelperCardUpdateTarget>(
+      config_, credential_provider_, insertion->probe());
+}
+
 void VikeyHelperCardEnrollment::bootstrap(
     const VikeyCardMediaProbe& context) {
   if (context.hardware_id == 0 ||
@@ -181,6 +195,19 @@ VikeyHelperCardLoginTarget::VikeyHelperCardLoginTarget(
 
 security::SecureBuffer VikeyHelperCardLoginTarget::read_record() {
   return store_.get_blob();
+}
+
+VikeyHelperCardUpdateTarget::VikeyHelperCardUpdateTarget(
+    VikeyHelperBackendConfig config,
+    IVikeyCredentialProvider& credential_provider,
+    const VikeyCardMediaProbe context)
+    : context_(validate_login_context(context)),
+      backend_(std::move(config), credential_provider,
+               context_.hardware_id),
+      store_(backend_) {}
+
+ICardStore& VikeyHelperCardUpdateTarget::card_store() noexcept {
+  return store_;
 }
 
 }  // namespace usb_vault::card::vikey

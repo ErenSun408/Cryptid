@@ -190,6 +190,97 @@ void test_initialization_enters_authenticated_state() {
           "initialization and login returned different roots");
 }
 
+void test_second_password_opens_the_same_record() {
+  SecureBuffer provisioning = marker();
+  FakeCardStore store(provisioning.bytes());
+  CardRecordService service(store);
+
+  SecureBuffer root = service.initialize_and_authenticate(
+      secure_text("service-daily-password-v1"));
+  const std::vector<std::byte> initialized = copy_bytes(store.blob);
+
+  service.set_second_password(secure_text("service-daily-password-v1"),
+                              secure_text("service-second-password-v1"));
+  require(store.blob.size() == kCardRecordV1Size,
+          "the rewritten record changed size");
+  require(store.blob != initialized,
+          "the rewritten record is byte-identical to the previous one");
+  require(service.inspect() == CardRecordState::initialized_v1,
+          "the rewritten record left the initialized state");
+
+  SecureBuffer existing_root =
+      service.authenticate(secure_text("service-daily-password-v1"));
+  SecureBuffer second_root =
+      service.authenticate(secure_text("service-second-password-v1"));
+  require(std::ranges::equal(root.bytes(), existing_root.bytes()) &&
+              std::ranges::equal(root.bytes(), second_root.bytes()),
+          "the two passwords no longer open the same root");
+}
+
+void test_second_password_requires_an_initialized_record() {
+  SecureBuffer provisioning = marker();
+  FakeCardStore store(provisioning.bytes());
+  CardRecordService service(store);
+  const std::vector<std::byte> untouched = copy_bytes(store.blob);
+
+  require_state_error(
+      [&] {
+        service.set_second_password(secure_text("service-daily-password-v1"),
+                                    secure_text("service-second-password-v1"));
+      },
+      CardRecordState::provisioned_uninitialized,
+      "a provisioning record accepted a second password");
+  require(store.blob == untouched && store.put_calls == 0,
+          "a rejected second password still wrote the card");
+
+  SecureBuffer root = service.initialize_and_authenticate(
+      secure_text("service-daily-password-v1"));
+  const std::vector<std::byte> initialized = copy_bytes(store.blob);
+  for (auto [existing, second] : {
+           std::pair<std::string_view, std::string_view>{
+               "", "service-second-password-v1"},
+           std::pair<std::string_view, std::string_view>{
+               "service-daily-password-v1", ""}}) {
+    bool rejected = false;
+    try {
+      service.set_second_password(secure_text(existing), secure_text(second));
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    require(rejected, "an empty card record password was accepted");
+  }
+  require(store.blob == initialized,
+          "a rejected second password still changed the record");
+}
+
+void test_second_password_write_failure_is_verified_against_the_card() {
+  SecureBuffer provisioning = marker();
+  FakeCardStore store(provisioning.bytes());
+  CardRecordService service(store);
+  SecureBuffer root = service.initialize_and_authenticate(
+      secure_text("service-daily-password-v1"));
+
+  store.behavior = WriteBehavior::write_then_throw;
+  service.set_second_password(secure_text("service-daily-password-v1"),
+                              secure_text("service-second-password-v1"));
+  SecureBuffer second_root =
+      service.authenticate(secure_text("service-second-password-v1"));
+  require(std::ranges::equal(root.bytes(), second_root.bytes()),
+          "a verified complete write was not accepted");
+
+  store.behavior = WriteBehavior::throw_without_write;
+  const std::vector<std::byte> before = copy_bytes(store.blob);
+  bool reported = false;
+  try {
+    service.set_second_password(secure_text("service-second-password-v1"),
+                                secure_text("service-third-password-v1"));
+  } catch (const std::exception&) {
+    reported = true;
+  }
+  require(reported && store.blob == before,
+          "a failed write was hidden or changed the record");
+}
+
 void test_non_provisioning_states_never_initialize() {
   SecureBuffer provisioning = marker();
   FakeCardStore store(provisioning.bytes());
@@ -314,7 +405,10 @@ int main() {
   try {
     test_public_states_are_reported_without_password_work();
     test_initialization_enters_authenticated_state();
-    test_non_provisioning_states_never_initialize();
+    test_second_password_opens_the_same_record();
+  test_second_password_requires_an_initialized_record();
+  test_second_password_write_failure_is_verified_against_the_card();
+  test_non_provisioning_states_never_initialize();
     test_verified_complete_write_error_is_accepted();
     test_state_change_during_kdf_is_not_overwritten();
     test_failed_write_preserves_original_error_when_old_record_survives();

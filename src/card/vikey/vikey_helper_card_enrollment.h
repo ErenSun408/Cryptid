@@ -30,6 +30,8 @@ class VikeyHelperCardEnrollment final
       const application::IReadOnlyCardEntryInspection& context) override;
   [[nodiscard]] std::unique_ptr<ICardLoginTarget> make_login_target(
       const application::IReadOnlyCardEntryInspection& context) override;
+  [[nodiscard]] std::unique_ptr<ICardUpdateTarget> make_update_target(
+      const application::IReadOnlyCardEntryInspection& context) override;
   void bootstrap(const VikeyCardMediaProbe& context);
 
  private:
@@ -69,6 +71,24 @@ class VikeyHelperCardInitializationTarget final
   VikeyHelperCardRecordBackend backend_;
   VikeyCardRecordStore store_;
   ProvisioningState provisioning_state_{ProvisioningState::pending};
+};
+
+// Binds an adapter-approved initialized insertion to a formal Card Record
+// store for one record update. It is separate from the login target because
+// logging in must not be able to write the card.
+class VikeyHelperCardUpdateTarget final : public ICardUpdateTarget {
+ public:
+  VikeyHelperCardUpdateTarget(
+      VikeyHelperBackendConfig config,
+      IVikeyCredentialProvider& credential_provider,
+      VikeyCardMediaProbe context);
+
+  [[nodiscard]] ICardStore& card_store() noexcept override;
+
+ private:
+  VikeyCardMediaProbe context_;
+  VikeyHelperCardRecordBackend backend_;
+  VikeyCardRecordStore store_;
 };
 
 // Binds an adapter-approved initialized insertion to a formal Card Record

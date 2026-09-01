@@ -5,6 +5,7 @@
 #include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/card/card_initialization_service.h"
 #include "usb_vault/card/card_login_target.h"
+#include "usb_vault/card/card_update_target.h"
 
 #include <memory>
 #include <optional>
@@ -46,6 +47,16 @@ class ICardEntryInspectionSource {
     return nullptr;
   }
 
+  // Creates a read/write update target bound to the exact initialized context
+  // previously returned by this source. It exists only for replacing both
+  // record envelopes; the login target stays read-only. Construction must not
+  // load credentials or perform card I/O, and unsupported sources fail closed
+  // by returning null.
+  [[nodiscard]] virtual std::unique_ptr<card::ICardUpdateTarget>
+  make_update_target(const IReadOnlyCardEntryInspection&) {
+    return nullptr;
+  }
+
  protected:
   ICardEntryInspectionSource() noexcept = default;
 };
@@ -68,6 +79,13 @@ class ICardEntryActions {
   virtual void authenticate_login(
       ICardLoginSuccessConsumer& success_consumer,
       security::SecureBuffer login_password_utf8) = 0;
+  // Replaces both envelopes of the current insertion's record so it opens
+  // with the caller's existing password and with a second, newly chosen one.
+  // Both inputs are consumed. The card layer records nothing about which
+  // password is which.
+  virtual void set_second_card_password(
+      security::SecureBuffer existing_password_utf8,
+      security::SecureBuffer second_password_utf8) = 0;
   [[nodiscard]] virtual std::optional<CardEntryRoute>
   current_route() const noexcept = 0;
 
@@ -104,6 +122,9 @@ class CardEntryContextController final : public ICardEntryActions {
   void authenticate_login(
       ICardLoginSuccessConsumer& success_consumer,
       security::SecureBuffer login_password_utf8) override;
+  void set_second_card_password(
+      security::SecureBuffer existing_password_utf8,
+      security::SecureBuffer second_password_utf8) override;
 
   // No value means no accepted physical insertion is currently present.
   [[nodiscard]] std::optional<CardEntryRoute>
