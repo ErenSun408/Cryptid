@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>USB Vault · 全流程 UI 设计预览</title>
+<style>
+/* ============================================================
+   USB Vault — 全流程 UI 设计预览
+   设计语言：石墨底 + 香槟金点缀 + 发丝线分隔
+   本文件是设计稿，不是实现代码；脚本仅用于切换屏幕。
+   ============================================================ */
+:root{
+  --ink-900:#08090B;
+  --ink-850:#0B0D10;
+  --ink-800:#101216;
+  --ink-750:#14171C;
+  --ink-700:#191D23;
+  --line:rgba(255,255,255,.07);
+  --line-2:rgba(255,255,255,.12);
+  --line-3:rgba(255,255,255,.18);
+  --text:#E8EAED;
+  --text-2:#98A1AC;
+  --text-3:#6A727C;
+  --gold:#C8A96A;
+  --gold-2:#E0C48C;
+  --ok:#68BE95;
+  --warn:#D8A544;
+  --danger:#D96B62;
+  --info:#7FA6C8;
+  --r-sm:6px; --r:10px; --r-lg:14px;
+  --mono:"SFMono-Regular",Consolas,"Cascadia Mono",monospace;
+  --sans:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:#121316; color:var(--text); font-family:var(--sans);
+  font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.2)}
+::-webkit-scrollbar-track{background:transparent}
+svg{display:block;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+/* ===================== 预览外壳 ===================== */
+.shell{display:grid;grid-template-columns:296px 1fr;height:100vh}
+.index{border-right:1px solid var(--line);background:var(--ink-850);overflow-y:auto;padding:22px 0 40px}
+.index-head{padding:6px 22px 18px}
+.index-head .mark{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.index-head .glyph{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:#12140f;background:linear-gradient(145deg,var(--gold-2),var(--gold))}
+.index-head .glyph svg{width:15px;height:15px;stroke-width:1.8}
+.index-head h1{font-size:12.5px;font-weight:600;letter-spacing:.24em;text-transform:uppercase}
+.index-head p{font-size:12px;color:var(--text-3);line-height:1.7}
+.index-head .rule{height:1px;background:var(--line);margin:16px 0 14px}
+.legend{display:flex;flex-wrap:wrap;gap:6px}
+.grp-label{padding:18px 22px 8px;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+.nav-s{display:flex;align-items:center;gap:10px;width:100%;padding:8px 22px;background:none;border:0;color:var(--text-2);font:inherit;font-size:13px;text-align:left;cursor:pointer;position:relative}
+.nav-s:hover{color:var(--text);background:rgba(255,255,255,.03)}
+.nav-s.on{color:var(--text);background:rgba(200,169,106,.07)}
+.nav-s.on::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;background:var(--gold)}
+.nav-s .num{font-family:var(--mono);font-size:11px;color:var(--text-3);min-width:22px}
+.nav-s.on .num{color:var(--gold)}
+.nav-s .label{flex:1}
+.nav-s .dot{width:5px;height:5px;border-radius:50%;flex:0 0 auto}
+.dot-done{background:var(--ok)} .dot-part{background:var(--warn)} .dot-todo{background:var(--text-3)} .dot-spec{background:var(--info)}
+
+.stage{display:flex;flex-direction:column;overflow:hidden;background:radial-gradient(120% 80% at 50% -10%,#1B1E24 0%,#121316 55%)}
+.stage-bar{display:flex;align-items:center;gap:16px;padding:14px 28px;border-bottom:1px solid var(--line);background:rgba(10,11,13,.5)}
+.stage-bar h2{font-size:14.5px;font-weight:600}
+.stage-bar .path{font-size:11.5px;color:var(--text-3);font-family:var(--mono)}
+.stage-bar .sp{flex:1}
+.pager{display:flex;gap:6px}
+.pager button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;display:grid;place-items:center}
+.pager button:hover{color:var(--text);border-color:var(--line-3);background:rgba(255,255,255,.04)}
+.pager button svg{width:15px;height:15px}
+.stage-body{flex:1;overflow-y:auto;padding:34px 28px 60px}
+.frame-wrap{display:flex;justify-content:center}
+.frame-scale{transform-origin:top center}
+
+/* 状态标记 */
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+.chip i{width:5px;height:5px;border-radius:50%;background:currentColor;display:block}
+.chip.done{color:var(--ok);background:rgba(104,190,149,.1);border-color:rgba(104,190,149,.22)}
+.chip.part{color:var(--warn);background:rgba(216,165,68,.1);border-color:rgba(216,165,68,.22)}
+.chip.todo{color:var(--text-2);background:rgba(255,255,255,.05);border-color:var(--line-2)}
+.chip.change{color:var(--info);background:rgba(127,166,200,.1);border-color:rgba(127,166,200,.24)}
+
+/* 说明面板 */
+.notes{margin:26px auto 0;max-width:1180px;display:grid;grid-template-columns:1.6fr 1fr;gap:16px;align-items:start}
+.note-card{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);padding:20px 22px}
+.note-card h3{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin-bottom:12px}
+.note-card ul{list-style:none;display:grid;gap:9px}
+.note-card li{position:relative;padding-left:15px;font-size:13px;color:var(--text-2);line-height:1.65}
+.note-card li::before{content:"";position:absolute;left:0;top:9px;width:4px;height:4px;border-radius:50%;background:var(--gold);opacity:.7}
+.note-card li b{color:var(--text);font-weight:600}
+.note-card li.warn::before{background:var(--danger);opacity:.9}
+.refs{display:flex;flex-wrap:wrap;gap:6px}
+.ref{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:6px;color:var(--text-2);background:rgba(255,255,255,.04);border:1px solid var(--line)}
+
+/* ===================== 应用窗口 ===================== */
+.win{border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:var(--ink-900);box-shadow:0 40px 90px -30px rgba(0,0,0,.9);display:flex;flex-direction:column;position:relative}
+.titlebar{height:40px;flex:0 0 40px;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 16px;border-bottom:1px solid var(--line);background:var(--ink-850)}
+.tb-brand{display:flex;align-items:center;gap:9px}
+.tb-brand .glyph{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;color:#12140f;background:linear-gradient(145deg,var(--gold-2),var(--gold))}
+.tb-brand .glyph svg{width:11px;height:11px;stroke-width:2}
+.tb-brand span{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--text-2);font-weight:600}
+.tb-ctl{display:flex}
+.tb-ctl i{width:38px;height:32px;display:grid;place-items:center;border-radius:6px;color:var(--text-3)}
+.tb-ctl i svg{width:11px;height:11px;stroke-width:1.4}
+.win-body{flex:1;min-height:0;display:flex}
+
+/* 会话入口（小窗） */
+.gate{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 46px;text-align:center;position:relative;background:radial-gradient(90% 60% at 50% 22%,rgba(200,169,106,.07) 0%,transparent 60%),var(--ink-900)}
+.gate-mark{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;margin-bottom:20px;color:var(--gold);border:1px solid rgba(200,169,106,.3);background:rgba(200,169,106,.07)}
+.gate-mark.muted{color:var(--text-3);border-color:var(--line-2);background:rgba(255,255,255,.03)}
+.gate-mark.danger{color:var(--danger);border-color:rgba(217,107,98,.35);background:rgba(217,107,98,.08)}
+.gate-mark svg{width:24px;height:24px;stroke-width:1.4}
+.gate-word{font-size:12px;letter-spacing:.34em;text-transform:uppercase;color:var(--text-2);font-weight:600}
+.gate-rule{width:26px;height:1px;background:var(--gold);opacity:.55;margin:14px 0 22px}
+.gate h2{font-size:19px;font-weight:600;margin-bottom:7px}
+.gate .sub{font-size:12.5px;color:var(--text-3);line-height:1.7;max-width:310px}
+.gate-form{width:100%;margin-top:26px;text-align:left}
+.gate-foot{position:absolute;left:0;right:0;bottom:22px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:11.5px;color:var(--text-3)}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(104,190,149,.15)}
+.pulse.warn{background:var(--warn);box-shadow:0 0 0 3px rgba(216,165,68,.15)}
+.pulse.off{background:var(--text-3);box-shadow:none}
+.pulse.danger{background:var(--danger);box-shadow:0 0 0 3px rgba(217,107,98,.15)}
+
+/* 表单件 */
+.field{margin-bottom:14px}
+.field > label{display:block;font-size:12px;color:var(--text-2);margin-bottom:7px;font-weight:500}
+.inp{display:flex;align-items:center;gap:8px;height:42px;padding:0 12px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--ink-850);color:var(--text);font-size:13.5px}
+.inp.focus{border-color:rgba(200,169,106,.55);box-shadow:0 0 0 3px rgba(200,169,106,.1)}
+.inp.err{border-color:rgba(217,107,98,.6);box-shadow:0 0 0 3px rgba(217,107,98,.1)}
+.inp .val{flex:1;letter-spacing:.06em}
+.inp .val.ph{color:var(--text-3);letter-spacing:0}
+.inp .eye{color:var(--text-3)}
+.inp .eye svg{width:16px;height:16px}
+.inp .unit{color:var(--text-3);font-size:12px}
+.inp.mono .val{font-family:var(--mono);font-size:12.5px;letter-spacing:0}
+.inp.sm{height:36px;font-size:12.5px}
+.caret{display:inline-block;width:1px;height:15px;background:var(--gold);vertical-align:-3px;margin-left:1px}
+.hint{font-size:11.5px;color:var(--text-3);margin-top:7px;line-height:1.6}
+.hint.err{color:var(--danger)}
+.meter{display:flex;align-items:center;gap:10px;margin-top:11px}
+.meter .segs{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;flex:1}
+.meter .segs i{height:3px;border-radius:99px;background:rgba(255,255,255,.1);display:block}
+.meter .txt{font-size:11.5px;color:var(--text-3);min-width:56px;text-align:right}
+.meter.lv1 .segs i:nth-child(1){background:var(--danger)}
+.meter.lv2 .segs i:nth-child(-n+2){background:var(--warn)}
+.meter.lv3 .segs i{background:var(--ok)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border-radius:var(--r);border:1px solid var(--line-2);background:rgba(255,255,255,.03);color:var(--text);font-size:13px;font-weight:600;cursor:default;white-space:nowrap}
+.btn svg{width:15px;height:15px}
+.btn.pri{border-color:transparent;color:#14160F;background:linear-gradient(145deg,var(--gold-2),var(--gold));box-shadow:0 6px 18px -8px rgba(200,169,106,.6)}
+.btn.danger{border-color:rgba(217,107,98,.35);color:#F0A79F;background:rgba(217,107,98,.1)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.btn.block{width:100%}
+.btn.sm{height:32px;padding:0 12px;font-size:12px;border-radius:8px}
+.btn.dis{opacity:.38}
+.spin{width:14px;height:14px;border-radius:50%;border:1.6px solid rgba(20,22,15,.3);border-top-color:#14160F;display:block;animation:sp .8s linear infinite}
+.spin.dark{border:1.6px solid rgba(255,255,255,.16);border-top-color:var(--gold)}
+@keyframes sp{to{transform:rotate(360deg)}}
+.tog{width:34px;height:19px;border-radius:99px;background:rgba(255,255,255,.12);position:relative;flex:0 0 auto}
+.tog i{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--text-2);display:block}
+.tog.on{background:rgba(200,169,106,.35)}
+.tog.on i{left:17px;background:var(--gold-2)}
+.tog.lock{opacity:.55}
+.cbx{width:16px;height:16px;border-radius:5px;border:1px solid var(--line-3);flex:0 0 auto;display:grid;place-items:center;color:transparent}
+.cbx.on{background:var(--gold);border-color:var(--gold);color:#14160F}
+.cbx svg{width:10px;height:10px;stroke-width:2.6}
+
+/* ===================== 应用主界面 ===================== */
+.side{width:216px;flex:0 0 216px;border-right:1px solid var(--line);background:var(--ink-850);padding:16px 12px;display:flex;flex-direction:column}
+.side-lab{padding:14px 12px 6px;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+.side-lab:first-child{padding-top:4px}
+.side-i{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;color:var(--text-2);font-size:13px;position:relative}
+.side-i svg{width:16px;height:16px;flex:0 0 auto}
+.side-i.on{color:var(--text);background:rgba(255,255,255,.05)}
+.side-i.on::before{content:"";position:absolute;left:-12px;top:8px;bottom:8px;width:2px;border-radius:0 2px 2px 0;background:var(--gold)}
+.side-i .tail{margin-left:auto;font-size:11px;color:var(--text-3);font-family:var(--mono)}
+.side-foot{margin-top:auto;padding:12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:9px}
+.side-foot .dotc{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:0 0 auto}
+.side-foot .t{font-size:11.5px;color:var(--text-2);line-height:1.4}
+.side-foot .t small{display:block;color:var(--text-3);font-size:10.5px;font-family:var(--mono)}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--ink-900)}
+.main-head{padding:26px 32px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.main-head h2{font-size:20px;font-weight:600;letter-spacing:-.01em}
+.main-head p{font-size:12.5px;color:var(--text-3);margin-top:4px}
+.main-head .acts{display:flex;gap:8px;align-items:center}
+.main-body{flex:1;min-height:0;overflow:hidden;padding:22px 32px 28px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:22px}
+.tile{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);padding:16px 18px}
+.tile .k{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+.tile .v{font-size:19px;font-weight:600;margin-top:8px;display:flex;align-items:center;gap:9px}
+.tile .v small{font-size:12px;font-weight:500;color:var(--text-3)}
+.tile .s{font-size:11.5px;color:var(--text-3);margin-top:3px}
+.tile .v .ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;color:var(--gold);background:rgba(200,169,106,.12)}
+.tile .v .ic svg{width:13px;height:13px}
+.sec-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px}
+.sec-title h3{font-size:13px;font-weight:600}
+.sec-title .m{font-size:11.5px;color:var(--text-3)}
+
+.list{border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;background:var(--ink-850)}
+.row{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:0 0 auto;color:var(--text-2);background:rgba(255,255,255,.04);border:1px solid var(--line)}
+.row .ic svg{width:16px;height:16px}
+.row .ic.on{color:var(--gold);background:rgba(200,169,106,.1);border-color:rgba(200,169,106,.22)}
+.row .ic.bad{color:var(--danger);background:rgba(217,107,98,.08);border-color:rgba(217,107,98,.24)}
+.row .nm{min-width:0;flex:1}
+.row .nm .t{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.row .nm .p{font-size:11.5px;color:var(--text-3);font-family:var(--mono);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .facts{display:flex;gap:22px;flex:0 0 auto;margin-right:6px}
+.fact{min-width:64px}
+.fact .fk{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+.fact .fv{font-size:12.5px;margin-top:2px;font-family:var(--mono)}
+.row .ops{display:flex;gap:6px;flex:0 0 auto}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:5px;border:1px solid var(--line-2);color:var(--text-2);background:rgba(255,255,255,.04)}
+.tag.gold{color:var(--gold);border-color:rgba(200,169,106,.28);background:rgba(200,169,106,.1)}
+.tag.ok{color:var(--ok);border-color:rgba(104,190,149,.26);background:rgba(104,190,149,.09)}
+.tag.bad{color:var(--danger);border-color:rgba(217,107,98,.3);background:rgba(217,107,98,.09)}
+
+.note{display:flex;gap:11px;padding:13px 16px;border-radius:var(--r);border:1px solid var(--line);background:rgba(255,255,255,.02);font-size:12.5px;color:var(--text-2);line-height:1.65}
+.note .ni{flex:0 0 auto;color:var(--text-3);margin-top:1px}
+.note .ni svg{width:15px;height:15px}
+.note.warn{border-color:rgba(216,165,68,.28);background:rgba(216,165,68,.06)}
+.note.warn .ni{color:var(--warn)}
+.note.danger{border-color:rgba(217,107,98,.3);background:rgba(217,107,98,.07)}
+.note.danger .ni{color:var(--danger)}
+.note.gold{border-color:rgba(200,169,106,.26);background:rgba(200,169,106,.06)}
+.note.gold .ni{color:var(--gold)}
+.note b{color:var(--text);font-weight:600}
+
+.empty{border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:46px 40px;text-align:center;background:rgba(255,255,255,.015)}
+.empty .ic{width:46px;height:46px;border-radius:14px;margin:0 auto 16px;display:grid;place-items:center;color:var(--gold);border:1px solid rgba(200,169,106,.26);background:rgba(200,169,106,.07)}
+.empty .ic svg{width:21px;height:21px;stroke-width:1.4}
+.empty h4{font-size:15px;font-weight:600;margin-bottom:6px}
+.empty p{font-size:12.5px;color:var(--text-3);max-width:420px;margin:0 auto 20px;line-height:1.75}
+
+/* 模态 */
+.scrim{position:absolute;inset:0;background:rgba(4,5,7,.66);display:grid;place-items:center;padding:28px}
+.dlg{width:520px;max-width:100%;border:1px solid var(--line-2);border-radius:var(--r-lg);background:var(--ink-800);box-shadow:0 30px 70px -20px rgba(0,0,0,.85);overflow:hidden}
+.dlg.wide{width:640px}
+.dlg-h{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line)}
+.dlg-h h3{font-size:14.5px;font-weight:600}
+.dlg-h .x{color:var(--text-3)}
+.dlg-h .x svg{width:15px;height:15px}
+.dlg-b{padding:22px}
+.dlg-b > p.lead{font-size:12.5px;color:var(--text-2);line-height:1.7;margin-bottom:18px}
+.dlg-f{display:flex;justify-content:flex-end;gap:9px;padding:16px 22px;border-top:1px solid var(--line);background:rgba(255,255,255,.015)}
+.picks{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pick{border:1px solid var(--line-2);border-radius:var(--r);padding:16px;background:rgba(255,255,255,.02)}
+.pick.on{border-color:rgba(200,169,106,.5);background:rgba(200,169,106,.07)}
+.pick .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--text-2);background:rgba(255,255,255,.05);margin-bottom:11px}
+.pick.on .ic{color:var(--gold);background:rgba(200,169,106,.14)}
+.pick .ic svg{width:15px;height:15px}
+.pick h4{font-size:13px;font-weight:600;margin-bottom:5px}
+.pick p{font-size:11.5px;color:var(--text-3);line-height:1.6}
+.steps{display:grid;gap:2px}
+.step{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:9px;font-size:12.5px;color:var(--text-3)}
+.step .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-family:var(--mono);border:1px solid var(--line-2);flex:0 0 auto}
+.step.done{color:var(--text-2)}
+.step.done .n{color:var(--ok);border-color:rgba(104,190,149,.4);background:rgba(104,190,149,.1)}
+.step.done .n svg{width:11px;height:11px;stroke-width:2.4}
+.step.now{color:var(--text);background:rgba(200,169,106,.07)}
+.step.now .n{color:var(--gold);border-color:rgba(200,169,106,.45)}
+.step .tail{margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--text-3)}
+.bar{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--gold),var(--gold-2))}
+.bar.ok i{background:var(--ok)} .bar.warn i{background:var(--warn)} .bar.danger i{background:var(--danger)}
+
+table.log{width:100%;border-collapse:collapse;font-size:12.5px}
+table.log th{text-align:left;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600;padding:0 14px 10px}
+table.log td{padding:11px 14px;border-top:1px solid var(--line);color:var(--text-2)}
+table.log td.t{font-family:var(--mono);font-size:11.5px;color:var(--text-3);white-space:nowrap}
+table.log td.o{font-family:var(--mono);font-size:11.5px}
+table.log tr:hover td{background:rgba(255,255,255,.015)}
+
+.set-grp{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);overflow:hidden;margin-bottom:14px}
+.set-grp > h4{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600;padding:14px 18px 10px}
+.set-r{display:flex;align-items:center;gap:16px;padding:14px 18px;border-top:1px solid var(--line)}
+.set-r .st{flex:1;min-width:0}
+.set-r .st b{display:block;font-size:13px;font-weight:600;margin-bottom:3px}
+.set-r .st span{font-size:11.5px;color:var(--text-3);line-height:1.6}
+.kv{display:flex;justify-content:space-between;gap:20px;padding:11px 18px;border-top:1px solid var(--line);font-size:12.5px}
+.kv .k{color:var(--text-3)}
+.kv .v{font-family:var(--mono);font-size:12px}
+
+/* 设计语言页 */
+.dl{padding:34px 38px;overflow:hidden}
+.dl h3{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin:0 0 14px}
+.dl .grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.sw{display:flex;gap:10px;flex-wrap:wrap}
+.sw div{width:76px}
+.sw i{display:block;height:44px;border-radius:9px;border:1px solid var(--line);margin-bottom:6px}
+.sw span{font-size:10.5px;color:var(--text-3);font-family:var(--mono)}
+.tscale > div{border-bottom:1px solid var(--line);padding:9px 0;display:flex;align-items:baseline;gap:14px}
+.tscale small{font-family:var(--mono);font-size:10.5px;color:var(--text-3);min-width:88px}
+.flowmap{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:6px}
+.fm{border:1px solid var(--line);border-radius:var(--r);background:var(--ink-850);padding:14px}
+.fm h5{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);font-weight:600;margin-bottom:10px}
+.fm ol{list-style:none;display:grid;gap:7px}
+.fm li{font-size:11.5px;color:var(--text-2);display:flex;gap:8px}
+.fm li em{font-style:normal;font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="index">
+    <div class="index-head">
+      <div class="mark">
+        <span class="glyph"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg></span>
+        <h1>USB Vault</h1>
+      </div>
+      <p>全流程 UI 设计预览 · v3 稿<br>石墨 + 香槟金 · 面向 WebView2</p>
+      <div class="rule"></div>
+      <div class="legend">
+        <span class="chip done"><i></i>已实现</span>
+        <span class="chip part"><i></i>部分实现</span>
+        <span class="chip todo"><i></i>未实现</span>
+      </div>
+    </div>
+    <nav id="index-nav"></nav>
+  </aside>
+  <section class="stage">
+    <header class="stage-bar">
+      <h2 id="sTitle">—</h2>
+      <span class="path" id="sPath"></span>
+      <span class="sp"></span>
+      <span id="sChip"></span>
+      <div class="pager">
+        <button id="prev" title="上一屏 (↑)"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button id="next" title="下一屏 (↓)"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      </div>
+    </header>
+    <div class="stage-body" id="stageBody">
+      <div class="frame-wrap"><div class="frame-scale" id="frameScale"></div></div>
+      <div class="notes" id="notes"></div>
+    </div>
+  </section>
+</div>
+<script>
+/* ---------- 图标 ---------- */
+const P = {
+  shield:'<path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
+  dash:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  box:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M4 7.5l8 4.5 8-4.5"/><path d="M12 12v9"/>',
+  send:'<path d="M4 12h12"/><path d="M13 7l5 5-5 5"/><path d="M20 4v16"/>',
+  clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.6 7.6 0 000-2l2-1.5-2-3.4-2.4 1a8 8 0 00-1.7-1L14.9 3H9.1l-.4 3.1a8 8 0 00-1.7 1l-2.4-1-2 3.4L4.6 11a7.6 7.6 0 000 2l-2 1.5 2 3.4 2.4-1a8 8 0 001.7 1l.4 3.1h5.8l.4-3.1a8 8 0 001.7-1l2.4 1 2-3.4-2-1.5z"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  eye:'<path d="M2.8 12S6.2 6.5 12 6.5 21.2 12 21.2 12 17.8 17.5 12 17.5 2.8 12 2.8 12z"/><circle cx="12" cy="12" r="2.6"/>',
+  eyeOff:'<path d="M2.8 12S6.2 6.5 12 6.5 21.2 12 21.2 12 17.8 17.5 12 17.5 2.8 12 2.8 12z"/><circle cx="12" cy="12" r="2.6"/><path d="M4 4l16 16"/>',
+  lock:'<rect x="5" y="10.5" width="14" height="9.5" rx="2.2"/><path d="M8.2 10.5V7.6a3.8 3.8 0 017.6 0v2.9"/>',
+  unlock:'<rect x="5" y="10.5" width="14" height="9.5" rx="2.2"/><path d="M8.2 10.5V7.6a3.8 3.8 0 017.1-1.8"/>',
+  alert:'<path d="M12 4.5l8.5 15h-17l8.5-15z"/><path d="M12 10v4"/><path d="M12 17h.01"/>',
+  info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><path d="M12 8h.01"/>',
+  check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  card:'<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M2.5 10h19"/><path d="M6.5 14.5h3"/>',
+  min:'<path d="M5 12h14"/>', max:'<rect x="6" y="6" width="12" height="12" rx="1.5"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
+  folder:'<path d="M3 7.5A1.5 1.5 0 014.5 6h4l2 2.4h9A1.5 1.5 0 0121 10v7.5A1.5 1.5 0 0119.5 19h-15A1.5 1.5 0 013 17.5v-10z"/>',
+  refresh:'<path d="M20 12a8 8 0 10-2.6 5.9"/><path d="M20 6.5V12h-5.5"/>',
+  disk:'<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.6"/>',
+  key:'<circle cx="8" cy="12" r="3.6"/><path d="M11.6 12H21"/><path d="M17.5 12v3.2"/><path d="M20.2 12v2.2"/>',
+  eject:'<path d="M5 14.5h14"/><path d="M12 4.5l6 7H6l6-7z"/><path d="M6 18.5h12"/>',
+  trash:'<path d="M4.5 7h15"/><path d="M9.5 7V5.2h5V7"/><path d="M6.5 7l.9 12.2h9.2L17.5 7"/>',
+  chevron:'<path d="M9 6l6 6-6 6"/>',
+  down:'<path d="M6 9l6 6 6-6"/>',
+  file:'<path d="M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0 001.5-1.5V8.5l-5-5z"/><path d="M13.5 3.5v5h5"/>',
+  layers:'<path d="M12 3.5l8.5 4.6L12 12.7 3.5 8.1 12 3.5z"/><path d="M3.5 15.9L12 20.5l8.5-4.6"/><path d="M3.5 12L12 16.6 20.5 12"/>'
+};
+const ic = (n, cls) => '<svg viewBox="0 0 24 24"' + (cls ? ' class="' + cls + '"' : '') + '>' + P[n] + '</svg>';
+
+/* ---------- 结构件 ---------- */
+const gate = o => `
+  <div class="gate">
+    <div class="gate-mark ${o.markCls || ''}">${ic(o.mark || 'shield')}</div>
+    <div class="gate-word">USB Vault</div>
+    <div class="gate-rule"></div>
+    <h2>${o.title}</h2>
+    <p class="sub">${o.sub}</p>
+    ${o.form ? `<div class="gate-form">${o.form}</div>` : ''}
+    <div class="gate-foot"><span class="pulse ${o.footTone || ''}"></span><span>${o.foot}</span></div>
+  </div>`;
+
+const NAVS = [
+  ['dash', 'dash', '仪表盘'], ['box', 'box', '容器'],
+  ['send', 'send', '导出与迁移'], ['clock', 'clock', '操作日志'], ['gear', 'gear', '设置']
+];
+const app = o => `
+  <nav class="side">
+    <div class="side-lab">工作区</div>
+    ${NAVS.slice(0, 2).map(n => `<div class="side-i ${o.nav === n[0] ? 'on' : ''}">${ic(n[1])}<span>${n[2]}</span>${n[0] === 'box' && o.count ? `<span class="tail">${o.count}</span>` : ''}</div>`).join('')}
+    <div class="side-lab">数据</div>
+    ${NAVS.slice(2, 4).map(n => `<div class="side-i ${o.nav === n[0] ? 'on' : ''}">${ic(n[1])}<span>${n[2]}</span></div>`).join('')}
+    <div class="side-lab">系统</div>
+    <div class="side-i ${o.nav === 'gear' ? 'on' : ''}">${ic('gear')}<span>设置</span></div>
+    <div class="side-foot"><span class="dotc"></span><span class="t">安全卡已认证<small>${o.cardId || 'VK·7C2A'}</small></span></div>
+  </nav>
+  <main class="main">
+    <div class="main-head">
+      <div><h2>${o.title}</h2><p>${o.sub}</p></div>
+      <div class="acts">${o.acts || ''}</div>
+    </div>
+    <div class="main-body">${o.body}</div>
+  </main>`;
+
+/* ---------- 屏幕 ---------- */
+const S = [];
+const add = s => S.push(s);
+/* ===== 00 设计语言 ===== */
+add({
+  g: '设计基线', t: '设计语言', path: 'design-tokens', st: 'spec', w: 1180, h: 720,
+  body: `<div class="dl" style="flex:1">
+    <div class="grid2">
+      <div>
+        <h3>色板 · 石墨底与香槟金</h3>
+        <div class="sw">
+          <div><i style="background:#08090B"></i><span>#08090B 底</span></div>
+          <div><i style="background:#0B0D10"></i><span>#0B0D10 面</span></div>
+          <div><i style="background:#101216"></i><span>#101216 浮层</span></div>
+          <div><i style="background:#C8A96A"></i><span>#C8A96A 金</span></div>
+          <div><i style="background:#68BE95"></i><span>#68BE95 正常</span></div>
+          <div><i style="background:#D8A544"></i><span>#D8A544 注意</span></div>
+          <div><i style="background:#D96B62"></i><span>#D96B62 危险</span></div>
+        </div>
+        <h3 style="margin-top:26px">字阶</h3>
+        <div class="tscale">
+          <div><small>20 / 600</small><span style="font-size:20px;font-weight:600">页面标题 仪表盘</span></div>
+          <div><small>13.5 / 600</small><span style="font-size:13.5px;font-weight:600">条目标题 工作资料</span></div>
+          <div><small>12.5 / 400</small><span style="font-size:12.5px;color:var(--text-2)">正文与说明文字</span></div>
+          <div><small>10.5 / 600 · 0.14em</small><span style="font-size:10.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3)">分组标签 CONTAINERS</span></div>
+          <div><small>12 / mono</small><span style="font-family:var(--mono);font-size:12px;color:var(--text-2)">D:\\Vault\\work.vc · 64 GiB · X:</span></div>
+        </div>
+      </div>
+      <div>
+        <h3>控件</h3>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:18px">
+          <span class="btn pri">${ic('lock')}主操作</span>
+          <span class="btn">次操作</span>
+          <span class="btn danger">危险操作</span>
+          <span class="btn ghost">文字按钮</span>
+        </div>
+        <div style="max-width:340px">
+          <div class="field"><label>密码</label><div class="inp focus"><span class="val">••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
+            <div class="meter lv3"><span class="segs"><i></i><i></i><i></i></span><span class="txt">较强</span></div></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:18px 0">
+          <span class="tag ok">${ic('check')}已挂载 X:</span><span class="tag gold">隐藏卷</span>
+          <span class="tag">标准卷</span><span class="tag bad">无法打开</span>
+          <span class="tog on"><i></i></span><span class="cbx on">${ic('check')}</span>
+        </div>
+        <h3 style="margin-top:22px">四条设计原则</h3>
+        <div class="note gold"><span class="ni">${ic('info')}</span><span>
+          <b>一、界面不得成为档位痕迹。</b>任何入口在任何密码下都恒显，不得灰化、不得出现"高级功能"占位。<br>
+          <b>二、少即是可信。</b>一屏一件事，发丝线分隔代替色块堆叠，金色只用于当前焦点与主操作。<br>
+          <b>三、状态先于装饰。</b>盘符、容量、卷类型用等宽字呈现，可扫读、可截图核对。<br>
+          <b>四、危险动作要费力。</b>不可逆动作一律二次确认，且第二道需要键入确认词。</span></div>
+      </div>
+    </div>
+  </div>`,
+  bare: true,
+  notes: [
+    '基调从原型的<b>蓝紫仪表盘</b>改为<b>石墨底 + 香槟金</b>：加密产品的可信感来自克制，而不是渐变与阴影。',
+    '金色仅出现在三处：品牌标记、当前焦点（输入框/选中项）、主操作按钮。其余一律中性灰阶。',
+    '全部字体走系统栈（Segoe UI Variable / 微软雅黑），<b>不引入 Web 字体</b>：WebView2 离线环境不能依赖外链。',
+    '所有图标为内联 SVG 线性图标，<b>取代原型中的 emoji</b>（emoji 在不同 Windows 版本渲染不一致，且显廉价）。'
+  ],
+  refs: ['WebView2 离线', 'ui/card_session.html', '8.4 UI 层']
+});
+
+/* ===== 01 全流程地图 ===== */
+add({
+  g: '设计基线', t: '全流程地图', path: 'flow-map', st: 'spec', w: 1180, h: 620,
+  body: `<div class="dl" style="flex:1">
+    <h3>四段主流程 · 26 屏</h3>
+    <div class="flowmap">
+      <div class="fm"><h5>一 · 会话入口</h5><ol>
+        <li><em>02</em>连接安全组件</li><li><em>03</em>未插入安全卡</li><li><em>04</em>初始化安全卡</li>
+        <li><em>05</em>打开安全会话</li><li><em>06</em>认证失败</li><li><em>07</em>组件不可用</li></ol></div>
+      <div class="fm"><h5>二 · 主界面</h5><ol>
+        <li><em>08</em>仪表盘 · 空</li><li><em>09</em>仪表盘 · 有容器</li><li><em>10</em>容器详情</li>
+        <li><em>11</em>挂载中</li><li><em>12</em>无法打开的容器</li><li><em>13</em>拔卡即卸载</li></ol></div>
+      <div class="fm"><h5>三 · 创建容器</h5><ol>
+        <li><em>14</em>选择容器类型</li><li><em>15</em>标准容器参数</li><li><em>16</em>隐藏容器 · 第二密码</li>
+        <li><em>17</em>风险确认</li><li><em>18</em>创建执行</li><li><em>19</em>诱饵填充引导</li></ol></div>
+      <div class="fm"><h5>四 · 维护与数据</h5><ol>
+        <li><em>20</em>更新诱饵</li><li><em>21</em>完整性告警</li><li><em>22</em>明文导出</li>
+        <li><em>23</em>密文迁移</li><li><em>24</em>操作日志</li><li><em>25</em>设置</li></ol></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px">
+      <div class="note"><span class="ni">${ic('info')}</span><span><b>与旧原型的三处结构性差异：</b>① 删除"注册／忘记密码"（认证锚点在卡上，且忘记密码不实现）；② 侧栏不再按"加密盘／隐藏盘"分类，改为统一的<b>容器</b>视图；③ 应用内文件管理器降级为 v1.1，v1 只做只读状态展示。</span></div>
+      <div class="note warn"><span class="ni">${ic('alert')}</span><span><b>贯穿全流程的红线：</b>界面在任何密码下都必须逐字一致 —— 入口恒显、文案固定、不作第二密码校验、不留导出痕迹。屏 14／16／22 是三处最容易做错的地方。</span></div>
+    </div>
+  </div>`,
+  bare: true,
+  notes: [
+    '流程按"<b>先认证、再按可观察事实挂载</b>"组织：产品只知道卡记录是否有效、容器文件是否存在，不存在任何档位状态机。',
+    '旧原型的用户名/注册/忘记密码三件套已删除 —— 认证锚点是卡上的双信封，不是账号体系。',
+    '备份中心改名为<b>导出与迁移</b>：需求里的"备份"实为明文导出与密文迁移两条独立路径，语义不同、痕迹要求也不同。'
+  ],
+  refs: ['8.6 实现规则', 'N-06', 'Q-02 忘记密码不实现', 'Q-04']
+});
+
+/* ===== 会话入口 ===== */
+const GW = 460, GH = 620;
+
+add({
+  g: '一 · 会话入口', t: '正在连接安全组件', path: 'state:initializing', st: 'done', w: GW, h: GH,
+  body: gate({
+    mark: 'shield', title: '正在连接安全组件', sub: '正在与本机安全服务建立通道，请稍候。',
+    form: `<span class="btn block dis" style="justify-content:center"><span class="spin dark"></span>正在初始化</span>`,
+    foot: '安全通道建立中', footTone: 'off'
+  }),
+  notes: [
+    '首屏不出现任何输入框：状态未知时给出输入框，会让用户对着一个还不能受理的表单发呆。',
+    '窗口尺寸 460×620，<b>与主界面窗口刻意不同</b>：会话未打开时不呈现工作区骨架，避免"看起来已经进去了"的误判。',
+    '品牌标记 + 字距放大的字标 + 一道金色发丝线，是全流程唯一的品牌表达位置。'
+  ],
+  refs: ['P1.5', 'P2.15c 五态页', 'card_session.js: initializing']
+});
+
+add({
+  g: '一 · 会话入口', t: '未插入安全卡', path: 'state:no-card', st: 'done', w: GW, h: GH,
+  body: gate({
+    mark: 'card', markCls: 'muted', title: '请插入安全卡', sub: '插入安全卡后将自动继续。软件不会在无卡状态下保留任何会话。',
+    form: `<div class="note" style="margin-top:6px"><span class="ni">${ic('info')}</span><span>插卡后<b>不会自动登录</b>，仍需手动输入密码 —— 自动挂载与否认性不可兼得。</span></div>`,
+    foot: '等待安全卡', footTone: 'off'
+  }),
+  notes: [
+    '空状态用中性灰而非红色：未插卡是常态，不是错误。红色留给真正的危险动作。',
+    '此处顺带说明"插卡不自动登录"，把 Q-07 的取舍前置告知，避免用户以为是故障。',
+    '拔卡回到本屏时，全部卷已在后台卸载完成（见屏 13）。'
+  ],
+  refs: ['Q-07', 'A-02', 'P1.7 插拔监听']
+});
+
+add({
+  g: '一 · 会话入口', t: '初始化安全卡', path: 'state:initialization-required', st: 'done', w: GW, h: GH,
+  body: gate({
+    mark: 'key', title: '初始化安全卡', sub: '为这张卡设置日常密码。密码只存在于你的记忆里，卡上与本机都不保存明文。',
+    form: `
+      <div class="field"><label>设置日常密码</label>
+        <div class="inp focus"><span class="val">•••••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
+        <div class="meter lv3"><span class="segs"><i></i><i></i><i></i></span><span class="txt">较强</span></div>
+      </div>
+      <div class="field"><label>确认密码</label>
+        <div class="inp"><span class="val">•••••••••••••••</span><span class="eye">${ic('eyeOff')}</span></div>
+        <p class="hint">12 至 128 个字符。<b style="color:var(--text-2)">密码遗忘无法找回</b>，卡与密码任缺其一，数据都将永久不可读。</p>
+      </div>
+      <span class="btn pri block" style="margin-top:4px">${ic('shield')}初始化安全卡</span>`,
+    foot: '空白卡 · 尚未初始化', footTone: 'warn'
+  }),
+  notes: [
+    '三格强度条只反映长度区间（<12 不可用 / 12–17 可接受 / 18–128 较强），<b>不作字典或泄露库校验</b>——已决定暂缓。',
+    '"无法找回"必须写在初始化这一屏，而不是藏进帮助文档：这是 Q-02 客户已接受的代价，用户须在设置密码前知情。',
+    '一次性流程：卡记录只在此写入一次，产品不提供改密与重置入口。'
+  ],
+  refs: ['P2.12c 12–128 码点', 'P2.15f 三格强度', 'Q-02', 'N-06']
+});
+
+add({
+  g: '一 · 会话入口', t: '打开安全会话', path: 'state:login-required', st: 'done', w: GW, h: GH,
+  body: gate({
+    mark: 'unlock', title: '打开安全会话', sub: '输入密码以解封安全卡记录。',
+    form: `
+      <div class="field"><label>密码</label>
+        <div class="inp focus"><span class="val">••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
+      </div>
+      <span class="btn pri block" style="margin-top:4px">${ic('unlock')}打开安全会话</span>
+      <p class="hint" style="text-align:center;margin-top:14px">没有账号、没有注册、没有找回密码 —— 认证锚点就是这张卡。</p>`,
+    foot: '安全卡已就绪 · VK·7C2A'
+  }),
+  notes: [
+    '<b>只有一个输入框。</b>旧原型的用户名、注册、忘记密码三个页签全部删除：产品没有账号体系，注册已取消，忘记密码不实现。',
+    '不论输入哪一个密码，界面、耗时与提示<b>逐字一致</b>：两个等长信封恒定各认证一次，主信封成功也不提前返回。',
+    '登录成功后<b>默认不自动挂载任何卷</b>，因此本屏不出现"正在挂载 3 个卷"之类的进度 —— 五秒预算只约束用户手动挂载的单个卷。'
+  ],
+  refs: ['N-06 双信封', '8.6', '8.7.5 默认不自动挂载', 'P-002']
+});
+
+add({
+  g: '一 · 会话入口', t: '认证失败', path: 'state:login-required · error', st: 'done', w: GW, h: GH,
+  body: gate({
+    mark: 'unlock', title: '打开安全会话', sub: '输入密码以解封安全卡记录。',
+    form: `
+      <div class="field"><label>密码</label>
+        <div class="inp err"><span class="val">••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
+        <p class="hint err">密码不正确。</p>
+      </div>
+      <span class="btn pri block" style="margin-top:4px">${ic('unlock')}打开安全会话</span>
+      <p class="hint" style="text-align:center;margin-top:14px">连续失败不会锁卡，也不会留下记录。</p>`,
+    foot: '安全卡已就绪 · VK·7C2A', footTone: 'warn'
+  }),
+  notes: [
+    '错误文案固定为"密码不正确"一句，<b>不区分是哪一个信封失败</b>，也不提示剩余次数 —— 任何差异化反馈都在告诉对手"另一个密码存在"。',
+    '失败不写日志、不计数、不锁定：计数器本身就是一条本地痕迹。',
+    '输入框错误态用 1px 红边 + 极浅外光，不抖动、不弹窗 —— 抖动动画在胁迫场景下会被旁观者看见。'
+  ],
+  refs: ['8.4 本地状态层', '8.7.3 不得验证', 'N-06']
+});
+
+add({
+  g: '一 · 会话入口', t: '安全组件不可用', path: 'state:unavailable', st: 'done', w: GW, h: GH,
+  body: gate({
+    mark: 'alert', markCls: 'danger', title: '安全组件当前不可用', sub: '本机安全服务未响应，暂时无法打开会话。已挂载的卷仍可安全卸载。',
+    form: `
+      <span class="btn block">${ic('eject')}尝试安全卸载</span>
+      <div class="note danger" style="margin-top:14px"><span class="ni">${ic('alert')}</span><span>若此前有卷处于挂载状态，请先完成卸载再拔出安全卡，避免写入中断。</span></div>`,
+    foot: '安全服务无响应', footTone: 'danger'
+  }),
+  notes: [
+    '不可用态<b>仍保留卸载出口</b>：这是唯一比"打不开"更重要的事 —— 已挂载的明文卷必须能被收回。',
+    '不显示技术错误码与堆栈：错误细节写入本地诊断需要额外的痕迹面，v1 不做。',
+    '这一态同时覆盖驱动缺失、服务被杀、helper 崩溃三种情况，用户侧文案一致。'
+  ],
+  refs: ['P2.15a 统一卸载边界', 'card_session.js: unavailable']
+});
+
+/* ===== 二 · 主界面 ===== */
+const AW = 1180, AH = 760;
+const newBtn = `<span class="btn pri sm">${ic('plus')}新建容器</span>`;
+
+const rowC = o => `
+  <div class="row">
+    <span class="ic ${o.tone || ''}">${ic(o.icon || 'box')}</span>
+    <span class="nm">
+      <span class="t">${o.name}${o.tags || ''}</span>
+      <span class="p">${o.path}</span>
+    </span>
+    <span class="facts">
+      <span class="fact"><span class="fk">容量</span><span class="fv">${o.size}</span></span>
+      <span class="fact"><span class="fk">盘符</span><span class="fv">${o.drive}</span></span>
+      <span class="fact"><span class="fk">状态</span><span class="fv" style="color:${o.stColor || 'var(--text-2)'}">${o.state}</span></span>
+    </span>
+    <span class="ops">${o.ops}</span>
+  </div>`;
+
+const CONTAINERS = [
+  rowC({
+    name: '工作资料', tags: ` <span class="tag ok">${ic('check')}标准卷</span>`, icon: 'box', tone: 'on',
+    path: 'D:\\Vault\\work.vc', size: '64 GiB', drive: 'X:', state: '已挂载', stColor: 'var(--ok)',
+    ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
+  }),
+  rowC({
+    name: '影像存档', icon: 'box', path: 'E:\\Media\\photos.vc', size: '256 GiB', drive: '—', state: '未挂载',
+    ops: `<span class="btn sm">${ic('unlock')}挂载</span><span class="btn sm ghost">${ic('chevron')}</span>`
+  }),
+  rowC({
+    name: '归档 2019', tags: ` <span class="tag gold">${ic('layers')}隐藏卷</span>`, icon: 'box', tone: 'on',
+    path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
+    ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
+  })
+].join('');
+
+const TILES = (mounted, total) => `
+  <div class="tiles">
+    <div class="tile"><div class="k">安全卡</div><div class="v"><span class="ic">${ic('shield')}</span>已认证</div><div class="s">VK·7C2A · 拔出即卸载</div></div>
+    <div class="tile"><div class="k">已挂载卷</div><div class="v">${mounted} <small>/ ${total} 个容器</small></div><div class="s">卸载后盘符与驱动记录一并清除</div></div>
+    <div class="tile"><div class="k">登录后自动挂载</div><div class="v">已关闭</div><div class="s">可在设置中开启 · 默认关闭</div></div>
+  </div>`;
+
+add({
+  g: '二 · 主界面', t: '仪表盘 · 空状态', path: 'dashboard · empty', st: 'part', w: AW, h: AH,
+  body: app({
+    nav: 'dash', title: '仪表盘', sub: '会话已打开 · 本机尚无任何容器', acts: newBtn, count: '0',
+    body: `${TILES(0, 0)}
+      <div class="empty">
+        <div class="ic">${ic('box')}</div>
+        <h4>还没有容器</h4>
+        <p>容器是一个加密文件，挂载后在系统里显示为一个普通磁盘。你可以创建任意多个，放在本机任意位置。</p>
+        <span class="btn pri">${ic('plus')}新建容器</span>
+      </div>`
+  }),
+  notes: [
+    '<b>侧栏不再按"加密盘／隐藏盘"分类。</b>旧原型与当前实现都分了两栏，而分类展示本身就是档位痕迹 —— 统一为"容器"一个视图。',
+    '空状态不自动弹出建卷向导：卡已初始化但 A/B 均无，是一个合法的稳定入口状态。',
+    '"卡已认证"用中性金而不是绿色徽章 —— 绿色留给"已挂载"这一真正需要一眼分辨的状态。'
+  ],
+  refs: ['8.7.5 不按卷类型分类', '8.6 合法入口状态', 'P2.16a 认证后仪表盘']
+});
+
+add({
+  g: '二 · 主界面', t: '仪表盘 · 已有容器', path: 'dashboard · populated', st: 'part', w: AW, h: AH,
+  body: app({
+    nav: 'dash', title: '仪表盘', sub: '会话已打开 · 3 个容器 · 2 个已挂载', acts: `<span class="btn sm">${ic('eject')}全部卸载</span>${newBtn}`, count: '3',
+    body: `${TILES(2, 3)}
+      <div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div>
+      <div class="list">${CONTAINERS}</div>
+      <div class="note warn" style="margin-top:16px"><span class="ni">${ic('alert')}</span><span>
+        <b>所有容器共用同一对密码。</b>分开存放只带来容量与分类上的便利，<b>不构成安全隔离</b> —— 一个密码泄露，用它能打开的全部容器同时暴露。</span></div>`
+  }),
+  notes: [
+    '"隐藏卷"标签只在<b>挂载成功后</b>由驱动返回的卷类型渲染，不落盘、不缓存；用另一个密码登录时挂出的是外层卷，自然没有该标签，逻辑天然自洽。',
+    '密码共用的代价必须写在主界面而不是帮助里：这是与 VeraCrypt「每容器一套密码」相比实际付出的代价，不能让用户形成"分开放就分开保护"的错觉。',
+    '行式列表取代旧原型的大卡片网格：路径、容量、盘符用等宽字对齐，可直接扫读核对。'
+  ],
+  refs: ['8.7.1 密码模型', '8.7.5 隐藏卷标识', 'volume_provider.h:19']
+});
+
+add({
+  g: '二 · 主界面', t: '容器详情（只读）', path: 'containers · detail', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器', sub: '3 个容器 · 只读状态视图', acts: newBtn, count: '3',
+    body: `
+      <div class="list" style="margin-bottom:16px">${rowC({
+        name: '归档 2019', tags: ` <span class="tag gold">${ic('layers')}隐藏卷</span>`, icon: 'box', tone: 'on',
+        path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
+        ops: `<span class="btn sm">${ic('down')}</span>`
+      })}
+      <div style="padding:4px 18px 18px">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden">
+          ${[['容器路径', 'D:\\Vault\\archive.vc'], ['容量', '128 GiB'], ['卷类型', '隐藏卷'], ['盘符', 'Y:'],
+             ['文件系统', 'NTFS'], ['加密', 'AES-256-XTS'], ['派生', 'Argon2id 512M·2·1'], ['挂载于', '本次会话']]
+            .map(([k, v]) => `<div style="background:var(--ink-850);padding:13px 15px"><div class="fk" style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:600">${k}</div><div style="font-family:var(--mono);font-size:12.5px;margin-top:4px">${v}</div></div>`).join('')}
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <span class="btn sm">${ic('folder')}在资源管理器中打开</span>
+          <span class="btn sm">${ic('layers')}更新诱饵内容</span>
+          <span class="btn sm">${ic('send')}导出与迁移</span>
+          <span class="btn sm">${ic('eject')}卸载</span>
+          <span style="flex:1"></span>
+          <span class="btn sm ghost">${ic('trash')}从列表移除</span>
+        </div>
+        <div class="note" style="margin-top:14px"><span class="ni">${ic('info')}</span><span>
+          <b>应用不内置文件管理器。</b>卷挂载后就是一个普通盘符，增删改移请在资源管理器中完成 —— 在应用内重做一套文件管理器会新增"最近打开"一类痕迹面。</span></div>
+      </div></div>`
+  }),
+  notes: [
+    'v1 只做<b>只读状态展示</b>：路径来源、容量、卷类型、盘符。应用内浏览/删改/移动降级为 v1.1。',
+    '"更新诱饵内容"按钮<b>对每个容器恒显</b>，不因当前登录的是哪一个密码而增减 —— 按钮的有无本身就是档位。',
+    '"从列表移除"只删记录不删文件，且需二次确认；容器路径列表加密存放在标准容器内，本地磁盘零痕迹。'
+  ],
+  refs: ['8.7.5 降级 v1.1', '8.7.4 路径列表分层', '8.7.2 入口恒显']
+});
+
+add({
+  g: '二 · 主界面', t: '正在挂载', path: 'mount · in progress', st: 'part', w: AW, h: AH,
+  body: app({
+    nav: 'dash', title: '仪表盘', sub: '会话已打开 · 3 个容器 · 1 个已挂载', acts: newBtn, count: '3',
+    body: `${TILES(1, 3)}<div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div><div class="list">${CONTAINERS}</div>`
+  }),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>正在挂载 · 影像存档</h3></div>
+    <div class="dlg-b">
+      <div class="steps" style="margin-bottom:18px">
+        <div class="step done"><span class="n">${ic('check')}</span><span>解封安全卡记录</span><span class="tail">1.04s</span></div>
+        <div class="step done"><span class="n">${ic('check')}</span><span>派生卷密钥 · Argon2id</span><span class="tail">0.71s</span></div>
+        <div class="step now"><span class="n"><span class="spin dark" style="width:11px;height:11px"></span></span><span>挂载卷并分配盘符</span><span class="tail">…</span></div>
+      </div>
+      <div class="bar"><i style="width:62%"></i></div>
+      <p class="hint" style="display:flex;justify-content:space-between"><span>已用 2.4 秒</span><span>预算 5.0 秒</span></p>
+    </div>
+    <div class="dlg-f"><span class="btn">取消</span></div>
+  </div></div>`,
+  notes: [
+    '进度按<b>真实阶段</b>拆分，不用假进度条：解卡 1.04s、标准卷约 0.92s、隐藏卷 1.67s 都是 Spike 6 实测值。',
+    '五秒预算只约束<b>单个卷的手动挂载</b>；这是"默认不自动挂载"换来的余量，若日后开启自动挂载必须对卷数设上限。',
+    '挂载耗时不因卷类型而在文案上体现差异 —— 阶段名固定三行，隐藏卷不会多出一行。'
+  ],
+  refs: ['P-002 五秒预算', 'Spike 6', '8.7.5 自动挂载上限']
+});
+
+add({
+  g: '二 · 主界面', t: '无法打开的容器', path: 'dashboard · unopenable', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'dash', title: '仪表盘', sub: '会话已打开 · 4 个容器 · 2 个已挂载', acts: newBtn, count: '4',
+    body: `${TILES(2, 4)}
+      <div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div>
+      <div class="list">${CONTAINERS}${rowC({
+        name: '未命名容器', icon: 'alert', tone: 'bad', path: 'D:\\Vault\\tmp_5f2c.vc',
+        size: '32 GiB', drive: '—', state: '无法打开', stColor: 'var(--danger)',
+        ops: `<span class="btn sm">${ic('refresh')}重试</span><span class="btn sm ghost">${ic('trash')}</span>`
+      })}</div>
+      <div class="note danger" style="margin-top:16px"><span class="ni">${ic('alert')}</span><span>
+        <b>该容器无法用当前密码打开。</b>若不是你创建的，说明有人用另一个密码在这台机器上建过容器。建议核对该文件的来源与创建时间后再决定是否删除。</span></div>`
+  }),
+  notes: [
+    '这是设计里少见的"缺陷转功能"：对手用诱饵密码建的容器，真实用户挂不上 —— 于是这一行天然构成<b>入侵指示器</b>。',
+    '提示只陈述事实，<b>不推断"另一个密码"是谁的、也不提示尝试其它密码</b>。',
+    '"重试"与"移除"并列，不提供"用其它密码打开" —— 那个入口等于公开承认存在第二个密码。'
+  ],
+  refs: ['8.7.3 副作用', '8.4 UI 层']
+});
+
+add({
+  g: '二 · 主界面', t: '拔卡即卸载 · 占用告警', path: 'card removed · busy', st: 'done', w: AW, h: AH,
+  body: app({
+    nav: 'dash', title: '仪表盘', sub: '安全卡已拔出 · 正在卸载全部卷', acts: `<span class="btn pri sm dis">${ic('plus')}新建容器</span>`, count: '3',
+    body: `${TILES(1, 3)}<div class="sec-title"><h3>容器</h3><span class="m">正在收回全部盘符</span></div><div class="list">${CONTAINERS}</div>`
+  }),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>卷正被占用</h3></div>
+    <div class="dlg-b">
+      <div class="note danger" style="margin-bottom:16px"><span class="ni">${ic('alert')}</span><span>
+        安全卡已拔出，<b>X: 未能正常卸载</b> —— 该卷正被其他程序占用。强制卸载会立即断开卷，<b>未写完的数据将丢失</b>。</span></div>
+      <p class="hint">关闭占用该盘的程序后重试，是更安全的做法。</p>
+    </div>
+    <div class="dlg-f"><span class="btn">重试普通卸载</span><span class="btn danger">${ic('eject')}强制卸载</span></div>
+  </div></div>`,
+  notes: [
+    '拔卡即卸载是<b>安全需求</b>而非便利功能：模式 A 挂载期间驱动会报告 type=1，任意用户进程可查，必须靠拔卡压缩暴露窗口。',
+    '流程固定为"先普通卸载 → 精确判定 busy → 才提示强制"，不允许直接强制：强制卸载有真实数据风险。',
+    '本对话框在两种密码下完全一致，且不显示卷类型 —— 卸载告警不是展示"这是隐藏卷"的地方。'
+  ],
+  refs: ['P1.7 已验收', '8.4 运行期', 'MILESTONES P1.7']
+});
+
+/* ===== 三 · 创建容器 ===== */
+const dashBg = (sub, count) => app({
+  nav: 'box', title: '容器', sub: sub, acts: newBtn, count: count,
+  body: `<div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div><div class="list">${CONTAINERS}</div>`
+});
+
+add({
+  g: '三 · 创建容器', t: '选择容器类型', path: 'create · choose type', st: 'part', w: AW, h: AH,
+  body: dashBg('3 个容器 · 2 个已挂载', '3'),
+  overlay: `<div class="scrim"><div class="dlg wide">
+    <div class="dlg-h"><h3>新建容器</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <p class="lead">容器是一个加密文件，挂载后显示为一个普通磁盘。选择这个容器的结构：</p>
+      <div class="picks">
+        <div class="pick on">
+          <div class="ic">${ic('box')}</div>
+          <h4>标准容器</h4>
+          <p>一个加密卷。用你的密码登录后即可挂载，结构简单、容量全部可用。</p>
+        </div>
+        <div class="pick">
+          <div class="ic">${ic('layers')}</div>
+          <h4>含隐藏卷的容器</h4>
+          <p>同一个文件里有两层：外层放可以交出去的内容，内层放真正要保护的内容，两层各用一个密码打开。</p>
+        </div>
+      </div>
+      <div class="note" style="margin-top:16px"><span class="ni">${ic('info')}</span><span>
+        两种结构在磁盘上<b>字节不可区分</b>。选择哪一种，只有你自己知道。</span></div>
+    </div>
+    <div class="dlg-f"><span class="btn">取消</span><span class="btn pri">下一步${ic('chevron')}</span></div>
+  </div></div>`,
+  notes: [
+    '<b>两个入口恒显、视觉权重完全对等。</b>用任何一个密码登录，看到的都是这两张卡片 —— 少一个入口，对手只要比对一份全新安装就知道这台机器建过隐藏容器。',
+    '文案回避"档位/模式/胁迫"等内部词汇，只描述结构本身：这三个词一旦出现在界面上就是档位痕迹。',
+    '"字节不可区分"是本产品的卖点，也是唯一允许出现在这一屏的安全性说明 —— 且只在建卷路径里出现。'
+  ],
+  refs: ['8.7.2 入口恒显', '8.4 UI 层', '8.6 术语约定']
+});
+
+add({
+  g: '三 · 创建容器', t: '标准容器 · 参数', path: 'create · standard', st: 'part', w: AW, h: AH,
+  body: dashBg('3 个容器 · 2 个已挂载', '3'),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>新建标准容器</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <div class="field"><label>名称</label><div class="inp focus"><span class="val">工作资料<span class="caret"></span></span></div></div>
+      <div class="field"><label>保存位置</label>
+        <div style="display:flex;gap:8px">
+          <div class="inp mono" style="flex:1"><span class="val">D:\\Vault\\work.vc</span></div>
+          <span class="btn" style="flex:0 0 auto">${ic('folder')}浏览</span>
+        </div>
+      </div>
+      <div class="field"><label>容量</label>
+        <div class="inp" style="max-width:200px"><span class="val">64</span><span class="unit">GiB</span></div>
+        <p class="hint">可用范围 20 MiB – 1 TiB。容量在创建后不可更改。</p>
+      </div>
+      <div class="note gold"><span class="ni">${ic('shield')}</span><span>
+        创建过程需要<b>管理员权限</b>，系统会弹出确认窗口。所有类型的容器都会请求，与容器结构无关。</span></div>
+    </div>
+    <div class="dlg-f"><span class="btn">上一步</span><span class="btn pri">${ic('lock')}创建容器</span></div>
+  </div></div>`,
+  notes: [
+    '标准容器的卷密码<b>固定由卡派生</b>，因此这一屏不出现任何密码输入框 —— 绑定用户输入会让它在两个密码中的一个下打不开。',
+    '提权说明必须写成"所有类型都会请求"：只有隐藏容器提权、标准容器不提权，UAC 行为本身就泄露了档位。',
+    '当前实现（P2.16c）只有容量一项，名称与路径待补；容量单位仍是 MiB，正式稿建议按 GiB 呈现、内部仍按 MiB 传递。'
+  ],
+  refs: ['N-06 第 5 条', 'N-08 无条件提权', 'P2.16c 待审阅']
+});
+
+add({
+  g: '三 · 创建容器', t: '隐藏容器 · 第二密码', path: 'create · hidden', st: 'todo', w: AW, h: AH,
+  body: dashBg('3 个容器 · 2 个已挂载', '3'),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>新建含隐藏卷的容器</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <div class="field"><label>名称</label><div class="inp"><span class="val">归档 2019</span></div></div>
+      <div class="field"><label>保存位置</label><div class="inp mono"><span class="val">D:\\Vault\\archive.vc</span></div></div>
+      <div class="field"><label>总容量 · 内层容量</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="inp" style="width:150px"><span class="val">128</span><span class="unit">GiB</span></div>
+          <span style="color:var(--text-3)">/</span>
+          <div class="inp" style="width:150px"><span class="val">96</span><span class="unit">GiB</span></div>
+        </div>
+        <p class="hint">外层还需留出 32 GiB 用于放置可交出的内容。</p>
+      </div>
+      <div class="field"><label>为该容器设置诱饵密码</label>
+        <div class="inp focus"><span class="val">••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
+      </div>
+      <div class="field"><label>再次输入诱饵密码</label>
+        <div class="inp"><span class="val">••••••••••••</span><span class="eye">${ic('eyeOff')}</span></div>
+        <p class="hint">当前登录使用的密码打开<b style="color:var(--text-2)">内层</b>，这里设置的密码打开<b style="color:var(--text-2)">外层</b>。请务必输入正确 —— 软件不会、也无法替你校验它。</p>
+      </div>
+    </div>
+    <div class="dlg-f"><span class="btn">上一步</span><span class="btn pri">${ic('layers')}创建容器</span></div>
+  </div></div>`,
+  notes: [
+    '<b>第二个密码永不校验。</b>拿它去试解卡上的信封就能判定对错，但那等于向对手承认"存在一个特定的正确答案"。唯一允许的缓解是输入两遍。',
+    '提示文案<b>固定为"为该容器设置诱饵密码"</b>，绝不因登录身份而改成"请输入你的诱饵密码"—— 产品恒把当前登录密码当作真实密码、把新设密码当作诱饵密码，自己不判断处在哪一侧。',
+    '这是全流程<b>唯一一次</b>接触档位信息的时刻：用完即焚，不落配置、不落日志、不落临时文件、不落最近使用记录。'
+  ],
+  refs: ['8.7.3 不得验证', '8.7.2 逐字对称', '8.6 用完即焚']
+});
+
+add({
+  g: '三 · 创建容器', t: '风险确认', path: 'create · risk gate', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器', sub: '本机尚无任何容器', acts: newBtn, count: '0',
+    body: `<div class="empty"><div class="ic">${ic('box')}</div><h4>还没有容器</h4><p>容器是一个加密文件，挂载后在系统里显示为一个普通磁盘。</p></div>`
+  }),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>请先确认风险</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <div class="note danger" style="margin-bottom:18px"><span class="ni">${ic('alert')}</span><span>
+        这台机器上<b>还没有标准容器</b>。若继续，你的全部数据都会落在这一个容器的内层里 —— 而外层是准备交出去的部分，<b>对方向外层写入时会静默覆盖内层数据</b>，软件无法阻止，也不会有任何提示。</span></div>
+      <ul style="list-style:none;display:grid;gap:10px;font-size:12.5px;color:var(--text-2)">
+        <li style="display:flex;gap:9px"><span style="color:var(--text-3)">${ic('info')}</span><span>更稳妥的做法是：先建一个标准容器放日常资料，再建这个容器。</span></li>
+        <li style="display:flex;gap:9px"><span style="color:var(--text-3)">${ic('info')}</span><span>外层需要填入足量的可交出内容，会占掉相当一部分容量。</span></li>
+      </ul>
+      <div style="display:flex;gap:10px;align-items:flex-start;margin-top:18px;padding:13px 15px;border:1px solid var(--line-2);border-radius:10px">
+        <span class="cbx on">${ic('check')}</span>
+        <span style="font-size:12.5px;color:var(--text-2);line-height:1.6">我已理解上述后果，并选择继续。</span>
+      </div>
+    </div>
+    <div class="dlg-f"><span class="btn">返回</span><span class="btn danger">仍要继续</span></div>
+  </div></div>`,
+  notes: [
+    '对应 8.3 的"状态 6"：只有隐藏容器、没有标准容器。产品<b>不禁止</b>这一形态，但必须让用户明确知道代价。',
+    '继续按钮是危险色而非主色，且勾选前禁用 —— 不可逆动作要费力。',
+    '文案只谈"外层写入会覆盖内层"这一可观察后果，不出现"档三/胁迫模式"等内部词汇。'
+  ],
+  refs: ['8.3 状态 6 风险确认屏', 'Q-04 用户自担风险']
+});
+
+add({
+  g: '三 · 创建容器', t: '创建执行中', path: 'create · running', st: 'part', w: AW, h: AH,
+  body: dashBg('3 个容器 · 2 个已挂载', '3'),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>正在创建 · 归档 2019</h3></div>
+    <div class="dlg-b">
+      <div class="steps" style="margin-bottom:18px">
+        <div class="step done"><span class="n">${ic('check')}</span><span>确认管理员权限</span><span class="tail">已授权</span></div>
+        <div class="step done"><span class="n">${ic('check')}</span><span>分配容器文件</span><span class="tail">128 GiB</span></div>
+        <div class="step now"><span class="n"><span class="spin dark" style="width:11px;height:11px"></span></span><span>写入随机数据并格式化</span><span class="tail">41%</span></div>
+        <div class="step"><span class="n">4</span><span>挂载并分配盘符</span></div>
+      </div>
+      <div class="bar"><i style="width:41%"></i></div>
+      <p class="hint">大容量容器需要较长时间。此过程可以取消，已写入的文件会被清除。</p>
+    </div>
+    <div class="dlg-f"><span class="btn">取消创建</span></div>
+  </div></div>`,
+  notes: [
+    '步骤名称在两种容器类型下<b>条数与文案完全一致</b>：标准容器同样显示四步，不因结构不同而多出"创建隐藏卷"一行。',
+    '提权在第一步、无条件执行；失败时回到参数屏并保留已填内容，不留半成品文件。',
+    '取消需清理已分配的容器文件 —— 残留文件是可被观察的痕迹。'
+  ],
+  refs: ['N-08 提权', 'P1.4 建卷工具', '8.4 本地状态层']
+});
+
+add({
+  g: '三 · 创建容器', t: '诱饵填充引导', path: 'create · fill outer', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器', sub: '归档 2019 · 已创建', acts: '', count: '4',
+    body: `
+      <div class="note gold" style="margin-bottom:18px"><span class="ni">${ic('check')}</span><span>
+        <b>容器已创建并挂载为 Z:</b> 现在请向它放入一些"看起来重要、但你并不介意被看到"的资料。</span></div>
+      <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:16px">
+        <div>
+          <div style="border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:38px 30px;text-align:center;background:rgba(255,255,255,.015)">
+            <div style="width:42px;height:42px;border-radius:13px;margin:0 auto 14px;display:grid;place-items:center;color:var(--gold);border:1px solid rgba(200,169,106,.26);background:rgba(200,169,106,.07)">${ic('file')}</div>
+            <h4 style="font-size:14px;font-weight:600;margin-bottom:6px">把文件拖到这里</h4>
+            <p style="font-size:12.5px;color:var(--text-3);line-height:1.7;max-width:360px;margin:0 auto 16px">也可以直接在资源管理器里向 Z: 复制。旧照片、扫描件、往年单据是理想的选择 —— 它们本身就不需要更新。</p>
+            <span class="btn sm">${ic('folder')}选择文件</span>
+          </div>
+        </div>
+        <div>
+          <div style="border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);padding:18px 20px">
+            <div class="k" style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600">外层已用</div>
+            <div style="font-size:22px;font-weight:600;margin:8px 0 12px">26.4 <small style="font-size:13px;color:var(--text-3);font-weight:500">/ 32 GiB</small></div>
+            <div class="bar warn"><i style="width:82%"></i></div>
+            <p class="hint">已达建议的 80%。还可以再添加约 <b style="color:var(--text-2)">5.6 GiB</b>。</p>
+          </div>
+          <div class="note" style="margin-top:14px"><span class="ni">${ic('info')}</span><span>
+            外层看起来越空，越容易引起怀疑。填够之后，日后再想补充内容请从<b>更新诱饵内容</b>进入，不要直接写入。</span></div>
+        </div>
+      </div>`
+  }),
+  notes: [
+    '"还可添加 X GiB"一套算法服务两个场景：建卷时校验诱饵是否填够，日后维护时告知还能加多少。这是本产品明显优于 VeraCrypt 之处 —— 后者完全不显示。',
+    '引导只推荐<b>不需要更新的材料</b>（旧照片、扫描件、往年单据），从源头降低日后进入维护流程的频率 —— 每少用一次，就少一次被观察到的机会。',
+    '本屏是创建流程的最后一步，完成后不再有任何入口提示"该容器有隐藏层"。'
+  ],
+  refs: ['8.5 剩余可写空间', 'Q-01 硬性需求 2', 'Language.xml:529']
+});
+
+/* ===== 四 · 维护与数据 ===== */
+add({
+  g: '四 · 维护与数据', t: '更新诱饵 · 再次验证', path: 'maintain · verify', st: 'todo', w: AW, h: AH,
+  body: dashBg('3 个容器 · 2 个已挂载', '3'),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>更新诱饵内容 · 归档 2019</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <p class="lead">为了安全地打开外层，需要再次验证身份。</p>
+      <div class="field"><label>密码</label>
+        <div class="inp focus"><span class="val">••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
+      </div>
+      <div class="note"><span class="ni">${ic('info')}</span><span>
+        更新期间该容器会被<b>暂时卸载并重新挂载</b>，其间无法访问。完成后请正常卸载。</span></div>
+    </div>
+    <div class="dlg-f"><span class="btn">取消</span><span class="btn pri">${ic('unlock')}继续</span></div>
+  </div></div>`,
+  notes: [
+    '模式 C 需要<b>两个密码</b>：外层卷密码必须用户再输一次，内层密码由软件用当前会话自动派生 —— 用户全程不接触"保护模式"这个概念。',
+    '文案固定为"再次验证身份"，<b>不出现"诱饵密码""胁迫密码"字样</b>：这个对话框在任何密码登录下都长得一样。',
+    '同一容器不能挂载两次，所以流程必然是"先卸载内层 → 再以保护方式挂载外层"，这一点要在文案里提前告知，否则用户会以为卡死了。'
+  ],
+  refs: ['8.5 模式 C', '8.2 流程约束', 'N-05']
+});
+
+add({
+  g: '四 · 维护与数据', t: '维护会话 · 告警', path: 'maintain · protected', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '更新诱饵内容', sub: '归档 2019 · 外层已挂载为 Z:', acts: `<span class="btn sm">${ic('eject')}结束并卸载</span>`, count: '3',
+    body: `
+      <div class="note gold" style="margin-bottom:16px"><span class="ni">${ic('shield')}</span><span>
+        <b>写入保护已开启。</b>你现在可以向 Z: 添加或替换内容，内层数据受驱动硬拦保护，不会被覆盖。</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div style="border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);padding:18px 20px">
+          <div style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600">外层剩余可写</div>
+          <div style="font-size:22px;font-weight:600;margin:8px 0 12px">5.6 <small style="font-size:13px;color:var(--text-3);font-weight:500">GiB</small></div>
+          <div class="bar warn"><i style="width:82%"></i></div>
+          <p class="hint">已用 26.4 / 32 GiB · 建议保持在 80% 以上</p>
+        </div>
+        <div style="border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);padding:18px 20px">
+          <div style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600">诱饵内容新鲜度</div>
+          <div style="font-size:22px;font-weight:600;margin:8px 0 12px">最近修改 <small style="font-size:13px;color:var(--text-3);font-weight:500">14 个月前</small></div>
+          <div class="bar danger"><i style="width:88%"></i></div>
+          <p class="hint">时间戳过于陈旧容易引起怀疑，建议补充几份新内容。</p>
+        </div>
+      </div>
+      <div class="note danger" style="margin-bottom:14px"><span class="ni">${ic('alert')}</span><span>
+        <b>写入被拦截：容量已满。</b>刚才的写入操作触碰到了受保护区域，已被拒绝，<b>该卷现在整体不可写</b>。请结束本次维护并重新挂载；未写完的文件需要重新添加。</span></div>
+      <div class="note warn"><span class="ni">${ic('alert')}</span><span>
+        <b>完整性校验未通过。</b>本容器的内层校验值与上次记录不一致，可能曾被写入覆盖。请在结束维护后核对内层数据是否完整。</span></div>`
+  }),
+  notes: [
+    'VeraCrypt 在保护被触发时只把类型栏改成 <code style="font-family:var(--mono)">Outer(!)</code>；本产品给出明确告警 + 后果说明 + 下一步指引，因为目标用户是个人用户，不是懂行的人。',
+    '"整卷转为不可写"是驱动的既有行为（官方刻意伪装成整机故障），产品能做的是<b>解释它</b>，而不是掩盖它。',
+    '完整性校验告警对应 N-07 机制 1：维护清单 + 登录核对 + 告警。校验值不得暴露内层尺寸等可推断隐藏层存在的数据。',
+    '⚠️ <b>待评审：</b>本屏只在"该容器确实有内层"时才有意义，而 8.7.2 要求入口恒显。建议做法是入口恒显、进入后按实际结构渲染，此点需与 8.5 一并复核。'
+  ],
+  refs: ['8.5', 'R-01 副作用', 'N-07 机制 1', '8.7.2 待复核']
+});
+
+add({
+  g: '四 · 维护与数据', t: '明文导出 · 第二道确认', path: 'export · plaintext', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'send', title: '导出与迁移', sub: '把数据带出容器，或把容器带到另一台机器', acts: '', count: '3',
+    body: `
+      <div class="picks" style="max-width:760px;margin-bottom:18px">
+        <div class="pick on"><div class="ic">${ic('file')}</div><h4>明文导出</h4><p>把容器里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p></div>
+        <div class="pick"><div class="ic">${ic('box')}</div><h4>密文迁移</h4><p>原样复制容器文件本身，用于换机或备份。仍需原卡与原密码才能打开。</p></div>
+      </div>
+      <div class="note"><span class="ni">${ic('info')}</span><span>本页<b>不记录任何导出历史</b>，也不会记住上次使用的目标路径。</span></div>`
+  }),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>确认明文导出</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <div class="note danger" style="margin-bottom:16px"><span class="ni">${ic('alert')}</span><span>
+        即将把 <b>工作资料</b> 的 1,284 个文件<b>以明文写入</b> <span style="font-family:var(--mono)">F:\\Export\\</span>。导出后这些文件不再受本软件保护，也无法再收回。</span></div>
+      <div class="field"><label>请键入 <b style="color:var(--text)">明文导出</b> 以确认</label>
+        <div class="inp focus"><span class="val">明文导出<span class="caret"></span></span></div>
+      </div>
+    </div>
+    <div class="dlg-f"><span class="btn">取消</span><span class="btn danger">${ic('send')}开始导出</span></div>
+  </div></div>`,
+  notes: [
+    '两道确认：第一道是选择目标路径时的风险说明，第二道要求<b>键入确认词</b>。不可逆动作不接受一次点击。',
+    '<b>零痕迹是本屏最容易做错的地方</b>：备份是常规功能，几乎所有软件都会记住上次导出目录 —— 一记就击穿否认性。本产品一律不写日志、不写最近使用、不写上次路径。',
+    '明文导出后的数据由用户自行负责，这是 Q-04 已确认的口径："给足自由度，用户自担风险"。'
+  ],
+  refs: ['Q-04 可验收项 3', '8.4 本地状态层', 'N-03 结案']
+});
+
+add({
+  g: '四 · 维护与数据', t: '密文迁移导出', path: 'export · migrate', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'send', title: '导出与迁移', sub: '把数据带出容器，或把容器带到另一台机器', acts: '', count: '3',
+    body: `
+      <div class="picks" style="max-width:760px;margin-bottom:18px">
+        <div class="pick"><div class="ic">${ic('file')}</div><h4>明文导出</h4><p>把容器里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p></div>
+        <div class="pick on"><div class="ic">${ic('box')}</div><h4>密文迁移</h4><p>原样复制容器文件本身，用于换机或备份。仍需原卡与原密码才能打开。</p></div>
+      </div>
+      <div class="list" style="margin-bottom:16px">
+        ${rowC({ name: '工作资料', icon: 'box', path: 'D:\\Vault\\work.vc', size: '64 GiB', drive: 'X:', state: '已选择', stColor: 'var(--gold)', ops: `<span class="cbx on">${ic('check')}</span>` })}
+        ${rowC({ name: '归档 2019', icon: 'box', path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '未选择', ops: `<span class="cbx"></span>` })}
+      </div>
+      <div class="field" style="max-width:560px"><label>目标位置</label>
+        <div style="display:flex;gap:8px"><div class="inp mono" style="flex:1"><span class="val ph">选择一个位置…</span></div><span class="btn">${ic('folder')}浏览</span></div>
+      </div>
+      <div class="note gold" style="max-width:760px"><span class="ni">${ic('shield')}</span><span>
+        迁移只复制容器文件本身，<b>不导出根密钥、密码或任何恢复材料</b>。在新机器上打开这些容器，仍然需要原来那张卡和原来的密码。</span></div>
+      <div style="display:flex;gap:8px;margin-top:18px"><span class="btn pri">${ic('send')}开始迁移</span><span class="btn ghost">取消</span></div>`
+  }),
+  notes: [
+    '迁移是"原样复制既有容器"，不是重新加密：因此速度只受磁盘限制，也不产生任何新的密钥材料。',
+    '选中列表只显示<b>当前密码能打开的容器</b>；打不开的容器不出现在此，避免"存在但不可用"暴露给对手。',
+    '同样不记录目标路径与历史。'
+  ],
+  refs: ['Q-04 补充', '8.7.4 分层视图']
+});
+
+add({
+  g: '四 · 维护与数据', t: '操作日志', path: 'log', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'clock', title: '操作日志', sub: '仅本次会话与最近 30 天 · 存放在标准容器内', acts: `<span class="btn sm">${ic('trash')}清空日志</span>`, count: '3',
+    body: `
+      <div class="list" style="padding:14px 4px 4px">
+        <table class="log">
+          <thead><tr><th>时间</th><th>事件</th><th>对象</th><th>结果</th></tr></thead>
+          <tbody>
+            ${[['09-01 09:12:04', '打开会话', 'VK·7C2A', '成功'],
+               ['09-01 09:12:31', '挂载容器', 'work.vc → X:', '成功'],
+               ['09-01 09:12:48', '挂载容器', 'archive.vc → Y:', '成功'],
+               ['09-01 10:47:15', '创建容器', 'media.vc · 256 GiB', '成功'],
+               ['09-01 14:03:22', '卸载容器', 'X:', '成功'],
+               ['08-31 18:30:10', '安全卡拔出', '已卸载 2 个卷', '成功'],
+               ['08-31 18:29:55', '强制卸载', 'Y: · 被占用', '完成 · 有数据风险']]
+              .map(r => `<tr><td class="t">${r[0]}</td><td>${r[1]}</td><td class="o">${r[2]}</td><td style="color:${r[3].includes('风险') ? 'var(--warn)' : 'var(--text-2)'}">${r[3]}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="note" style="margin-top:16px"><span class="ni">${ic('info')}</span><span>
+        为保护你的否认性，以下内容<b>从不记录</b>：卷的结构与类型、导出与迁移的动作与目标路径、密码尝试与失败次数、任何容器的内部尺寸。</span></div>`
+  }),
+  notes: [
+    '日志属于"本地状态层"，受不可区分性约束：<b>禁止出现"挂载隐藏卷""启用保护"一类事件</b>，也禁止记录导出动作。',
+    '日志本体<b>存放在标准容器内</b>（随容器加密），本机磁盘不留明文日志文件 —— 与容器路径列表同一处理方式。',
+    '"事件/对象/结果"三列在两种密码下产生的记录必须同构：同样的动作、同样的措辞、同样的条数。',
+    '把"从不记录什么"明写在界面上，既是对用户的承诺，也是验收时的对照表。'
+  ],
+  refs: ['8.4 日志分离', '8.6', 'P3 逐字节比对']
+});
+
+add({
+  g: '四 · 维护与数据', t: '设置', path: 'settings', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'gear', title: '设置', sub: '会话与安全策略', acts: '', count: '3',
+    body: `
+      <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start">
+        <div>
+          <div class="set-grp"><h4>会话</h4>
+            <div class="set-r"><span class="st"><b>登录后自动挂载全部容器</b><span>默认关闭。开启后，登录耗时会随容器数量线性增加。</span></span><span class="tog"><i></i></span></div>
+            <div class="set-r"><span class="st"><b>记住容器位置</b><span>容器路径加密存放在标准容器内，本机磁盘不留痕迹。关闭后每次需手动选择容器文件。</span></span><span class="tog on"><i></i></span></div>
+            <div class="set-r"><span class="st"><b>拔出安全卡时立即卸载全部卷</b><span>这是安全机制，不可关闭。</span></span><span class="tog on lock"><i></i></span></div>
+          </div>
+          <div class="set-grp"><h4>关于</h4>
+            <div class="kv"><span class="k">版本</span><span class="v">1.0.0 · build 20260901</span></div>
+            <div class="kv"><span class="k">卷加密</span><span class="v">AES-256-XTS</span></div>
+            <div class="kv"><span class="k">密钥派生</span><span class="v">Argon2id · m=512MiB t=2 p=1</span></div>
+            <div class="kv"><span class="k">安全卡</span><span class="v">VK·7C2A · 已初始化</span></div>
+            <div class="kv"><span class="k">代码签名</span><span class="v">已签名 · EV</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="note warn"><span class="ni">${ic('alert')}</span><span>
+            <b>没有"修改密码"和"找回密码"。</b>密码是打开你数据的唯一钥匙，产品既不保存它，也无法重置它。卡与密码任缺其一，数据都将永久不可读。</span></div>
+          <div class="note" style="margin-top:14px"><span class="ni">${ic('info')}</span><span>
+            设置项刻意保持极少。每多一个开关，就多一处可能泄露使用方式的本地记录。</span></div>
+        </div>
+      </div>`
+  }),
+  notes: [
+    '"自动挂载"是<b>唯一允许落盘的开关</b>：它是单一布尔量，对模式与档位完全不敏感，不构成档位痕迹。',
+    '默认关闭同时解开了五秒预算的死结 —— 三个以上卷即超预算，而并行挂载已实测无效。若日后默认开启，必须对自动挂载的卷数设上限或与客户重新协商预算。',
+    '拔卡即卸载的开关<b>恒为开启且锁定</b>，展示它是为了让用户知道该机制存在，而不是给他关掉的机会。',
+    '不提供改密与找回：与 Q-02 的客户口径一致，也避免诱饵密码持有者借重置探测日常信封。'
+  ],
+  refs: ['8.7.5 可落盘', 'P-002', 'Q-02', 'Q-07']
+});
+
+/* ---------- 渲染 ---------- */
+const ST = {
+  done: ['已实现', 'done'], part: ['部分实现', 'part'],
+  todo: ['未实现', 'todo'], spec: ['设计基线', 'change']
+};
+const navEl = document.getElementById('index-nav');
+const frameScale = document.getElementById('frameScale');
+const frameWrap = document.querySelector('.frame-wrap');
+const stageBody = document.getElementById('stageBody');
+const notesEl = document.getElementById('notes');
+let cur = 0;
+
+(() => {
+  let last = '';
+  navEl.innerHTML = S.map((s, i) => {
+    const head = s.g !== last ? `<div class="grp-label">${s.g}</div>` : '';
+    last = s.g;
+    return head + `<button class="nav-s" data-i="${i}">
+      <span class="num">${String(i).padStart(2, '0')}</span>
+      <span class="label">${s.t}</span>
+      <span class="dot dot-${s.st}"></span>
+    </button>`;
+  }).join('');
+})();
+
+const fit = () => {
+  const s = S[cur];
+  const avail = stageBody.clientWidth - 56;
+  const k = Math.min(1, avail / s.w);
+  frameScale.style.transform = `scale(${k})`;
+  frameWrap.style.height = (s.h * k) + 'px';
+};
+
+const show = i => {
+  cur = i;
+  const s = S[i];
+  document.getElementById('sTitle').textContent = s.t;
+  document.getElementById('sPath').textContent = s.path;
+  document.getElementById('sChip').innerHTML = `<span class="chip ${ST[s.st][1]}"><i></i>${ST[s.st][0]}</span>`;
+  frameScale.innerHTML = `<div class="win" style="width:${s.w}px;height:${s.h}px">
+    <div class="titlebar">
+      <div class="tb-brand"><span class="glyph">${ic('shield')}</span><span>USB Vault</span></div>
+      <div class="tb-ctl"><i>${ic('min')}</i><i>${ic('max')}</i><i>${ic('close')}</i></div>
+    </div>
+    <div class="win-body">${s.body}</div>
+    ${s.overlay || ''}
+  </div>`;
+  notesEl.innerHTML = `
+    <div class="note-card"><h3>设计说明</h3><ul>${s.notes.map(n => `<li>${n}</li>`).join('')}</ul></div>
+    <div class="note-card"><h3>依据与状态</h3>
+      <div style="margin-bottom:14px"><span class="chip ${ST[s.st][1]}"><i></i>${ST[s.st][0]}</span></div>
+      <div class="refs">${s.refs.map(r => `<span class="ref">${r}</span>`).join('')}</div>
+    </div>`;
+  navEl.querySelectorAll('.nav-s').forEach(b => b.classList.toggle('on', +b.dataset.i === i));
+  stageBody.scrollTop = 0;
+  fit();
+  location.hash = 'p' + i;
+};
+
+navEl.addEventListener('click', e => {
+  const b = e.target.closest('.nav-s');
+  if (b) show(+b.dataset.i);
+});
+document.getElementById('prev').onclick = () => show((cur - 1 + S.length) % S.length);
+document.getElementById('next').onclick = () => show((cur + 1) % S.length);
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'j') show((cur + 1) % S.length);
+  if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'k') show((cur - 1 + S.length) % S.length);
+});
+window.addEventListener('resize', fit);
+const start = parseInt((location.hash || '').replace('#p', ''), 10);
+show(Number.isInteger(start) && start >= 0 && start < S.length ? start : 0);
+
+</script>
+</body>
+</html>
