@@ -40,6 +40,13 @@ class CardLoginMountSessionRuntime {
   virtual void create_standard(
       std::wstring_view target_path, std::uint64_t size_bytes,
       const security::SecureBuffer& volume_password) = 0;
+  // Creates one self-contained outer+hidden container. The helper decides the
+  // hidden size from the real allocation bitmap when zero is requested.
+  virtual void create_with_hidden(
+      std::wstring_view target_path, std::uint64_t outer_size_bytes,
+      std::uint64_t hidden_size_bytes,
+      const security::SecureBuffer& outer_password,
+      const security::SecureBuffer& hidden_password) = 0;
   virtual void publish_created(std::wstring_view staging_path,
                                std::wstring_view target_path) = 0;
   virtual void remove_incomplete(std::wstring_view staging_path) = 0;
@@ -94,6 +101,10 @@ class CardLoginMountSessionCore final {
   void create_container_a(std::uint64_t size_bytes);
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes);
+  std::uint32_t create_container_b(
+      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      const security::SecureBuffer& login_password_utf8,
+      const security::SecureBuffer& decoy_password_utf8);
   std::uint32_t mount_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>

@@ -96,6 +96,17 @@ class ProductionCardLoginMountSessionRuntime final
     creator_.create_standard(target_path, size_bytes, volume_password);
   }
 
+  void create_with_hidden(
+      const std::wstring_view target_path,
+      const std::uint64_t outer_size_bytes,
+      const std::uint64_t hidden_size_bytes,
+      const security::SecureBuffer& outer_password,
+      const security::SecureBuffer& hidden_password) override {
+    creator_.create_with_hidden(target_path, outer_size_bytes,
+                                hidden_size_bytes, outer_password,
+                                hidden_password);
+  }
+
   void publish_created(const std::wstring_view staging_path,
                        const std::wstring_view target_path) override {
     const std::wstring staging(staging_path);
@@ -212,6 +223,16 @@ void CardLoginMountSession::create_container_a(
 std::uint32_t CardLoginMountSession::create_container(
     const std::wstring_view path, const std::uint64_t size_bytes) {
   return impl_->core.create_container(path, size_bytes);
+}
+
+std::uint32_t CardLoginMountSession::create_container_b(
+    const std::uint64_t outer_size_bytes,
+    const std::uint64_t hidden_size_bytes,
+    const security::SecureBuffer& login_password_utf8,
+    const security::SecureBuffer& decoy_password_utf8) {
+  return impl_->core.create_container_b(outer_size_bytes, hidden_size_bytes,
+                                        login_password_utf8,
+                                        decoy_password_utf8);
 }
 
 std::uint32_t CardLoginMountSession::mount_container(
@@ -458,6 +479,81 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     return id;
   } catch (...) {
     volume_password.clear();
+    if (staging_owned && !published) {
+      cleanup_incomplete_container(runtime_, staging_path,
+                                   std::current_exception());
+    }
+    throw;
+  }
+}
+
+std::uint32_t CardLoginMountSessionCore::create_container_b(
+    const std::uint64_t outer_size_bytes,
+    const std::uint64_t hidden_size_bytes,
+    const security::SecureBuffer& login_password_utf8,
+    const security::SecureBuffer& decoy_password_utf8) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "container creation requires an authenticated card session");
+  }
+  if (outer_size_bytes == 0 || outer_size_bytes % 512ULL != 0 ||
+      hidden_size_bytes % 512ULL != 0 ||
+      hidden_size_bytes >= outer_size_bytes) {
+    throw std::invalid_argument(
+        "outer and hidden sizes must be aligned and leave room for the outer "
+        "volume");
+  }
+  if (login_password_utf8.size() == 0 || decoy_password_utf8.size() == 0) {
+    throw std::invalid_argument(
+        "both volume passwords are required in clear text");
+  }
+
+  const std::wstring_view path = layout_.container_b.path;
+  if (find_by_path(state_, path) != nullptr) {
+    throw std::logic_error("container path is already adopted");
+  }
+  const std::wstring staging_path = staging_path_for(path);
+  if (runtime_.container_exists(path) ||
+      runtime_.container_exists(staging_path)) {
+    throw std::system_error(std::make_error_code(std::errc::file_exists),
+                            "container creation target already exists");
+  }
+
+  // The password the caller is logged in under opens the hidden volume; the
+  // password set here opens the outer one. The session never decides which of
+  // the two the caller "really" uses.
+  security::SecureBuffer outer_password = runtime_.derive_container_password(
+      decoy_password_utf8, authentication_.root_secret_,
+      layout_.container_b.salt);
+  security::SecureBuffer hidden_password = runtime_.derive_container_password(
+      login_password_utf8, authentication_.root_secret_,
+      layout_.container_b.salt);
+  bool staging_owned = false;
+  bool published = false;
+  try {
+    runtime_.create_with_hidden(staging_path, outer_size_bytes,
+                                hidden_size_bytes, outer_password,
+                                hidden_password);
+    staging_owned = true;
+    runtime_.publish_created(staging_path, path);
+    published = true;
+
+    const wchar_t drive_letter = reserve_drive_letter();
+    static_cast<void>(runtime_.mount_created(
+        path, hidden_password,
+        {.drive_letter = drive_letter,
+         .prf = volume::Pkcs5Prf::sha512,
+         .pim = 0,
+         .read_only = false,
+         .notify_shell = false}));
+    const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
+    outer_password.clear();
+    hidden_password.clear();
+    runtime_.notify_mounted(drive_letter);
+    return id;
+  } catch (...) {
+    outer_password.clear();
+    hidden_password.clear();
     if (staging_owned && !published) {
       cleanup_incomplete_container(runtime_, staging_path,
                                    std::current_exception());

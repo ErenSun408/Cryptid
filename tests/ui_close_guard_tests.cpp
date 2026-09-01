@@ -51,6 +51,13 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container(std::wstring_view, std::uint64_t) override {
     throw std::logic_error("not used by close guard");
   }
+  std::uint32_t create_container_b(
+      std::uint64_t, std::uint64_t,
+      const usb_vault::security::SecureBuffer&,
+      const usb_vault::security::SecureBuffer&) override {
+    throw std::logic_error("container B is outside the close contract");
+  }
+
   std::uint32_t mount_container(std::wstring_view) override {
     throw std::logic_error("not used by close guard");
   }

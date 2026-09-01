@@ -89,6 +89,16 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual std::uint32_t create_container(std::wstring_view path,
                                          std::uint64_t size_bytes) = 0;
 
+  // Creates the single outer+hidden container at the fixed layout path and
+  // mounts its hidden volume. The outer volume opens with the decoy password
+  // and the hidden volume with the password the caller is logged in under, so
+  // both inputs are required in clear text and are consumed here. Only one
+  // such container exists, which keeps the card record out of this operation.
+  virtual std::uint32_t create_container_b(
+      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      const security::SecureBuffer& login_password_utf8,
+      const security::SecureBuffer& decoy_password_utf8) = 0;
+
   // Adopts and mounts an existing standard container at the caller-selected
   // path. The session refuses a path it has already adopted.
   virtual std::uint32_t mount_container(std::wstring_view path) = 0;
@@ -134,6 +144,10 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void create_container_a(std::uint64_t size_bytes) override;
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes) override;
+  std::uint32_t create_container_b(
+      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      const security::SecureBuffer& login_password_utf8,
+      const security::SecureBuffer& decoy_password_utf8) override;
   std::uint32_t mount_container(std::wstring_view path) override;
   void unmount_container(std::uint32_t id) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;

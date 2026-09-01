@@ -4843,4 +4843,49 @@
   `vikey_helper_blob_backend`、helper 的 blob IPC 操作、`p1_7` 夹具与诊断、P1 卡重置工具、
   blob 往返探针，以及依附其上的 `vikey_card_store_tests` 与 `vikey_helper_process_tests`。
   这条链会动到 helper 协议，须单独评审后再切。
-- 提交：待定（`[cleanup]remove the P1 application chain`）。
+- 提交：`77a5ac5 [cleanup]remove the P1 application chain`。
+
+### 小切片 16k：隐藏盘容器 B 的会话层建卷
+
+#### 需求审计与最少切片规划
+
+- 用户要求先做 B 类容器的最少建卷流程，当前不追求安全性细节，测试始终在稳定插卡状态下进行。
+- 审计既有实现后确认底座已经就绪，缺口只在中间层：
+  - ✅ `VolumeCreator::create_with_hidden`（P1.4）已能建外层+隐藏卷，含 UAC、位图扫描与进度；
+  - ✅ `rewrap_card_record_v1`（P2.1）已能把根重新封进两个等长信封；
+  - ✅ `MountOrchestrator` 登录时已按 `KDF(S, 用户输入)` 挂 B —— 输入什么就挂出外层还是隐藏卷；
+  - ❌ 会话层没有建 B 的入口，运行时接口只有 `create_standard`；
+  - ❌ 卡记录服务没有"设置诱饵口令"的操作；
+  - ❌ 控制器／COM／页面没有 B 的建卷路径。
+- **完整 B 流程的最少切片数：4。** 16k 会话层建卷（本切片）→ 16l 卡记录设诱饵口令 →
+  16m UI 全链（控制器＋COM＋页面＋契约＋WebView2 夹具）→ 16n 登录后把 B 纳入容器列表。
+  16k 与 16l 是两个互不相关的子系统，合并可以压到 3 刀，但会牺牲单独回退能力。
+- 三条为"最少"服务的默认取舍，均已记录：
+  1. **B 固定使用 `ContainerLayout::container_b` 的路径，全机只允许一个**。这样 8.7.6
+     「首个 B 的卡记录改写时机」这个待定项根本不会出现，也不需要在 UI 里选路径。
+  2. **建 B 必须让用户再输一次当前登录口令**：manual 策略在登录成功后立刻清掉了口令明文，
+     而隐藏卷密码 `KDF(S, P_real)` 需要明文，会话不可能凭 S 反推。
+  3. **顺序为先建容器、再改写卡记录**（16l 接线）；中途失败时容器在、诱饵口令未生效，可重试。
+
+#### 实现
+
+- 运行时接口新增 `create_with_hidden`，生产实现直接转发到 `VolumeCreator`。
+- `IAuthenticatedCardVolumeSession::create_container_b(outer_bytes, hidden_bytes,
+  login_password, decoy_password)`：校验认证与尺寸（两者 512 对齐、隐藏卷必须小于外层）、
+  拒绝已存在或已接管的目标，然后**用登录口令派生隐藏卷密码、用新设口令派生外层密码**，
+  复用 A 已有的 staging → publish → 分配盘符 → 挂载 → 接管事务，失败时清理未发布的暂存文件。
+  挂载的是隐藏卷（当前登录者那一侧），接管后与其它容器同列。
+- 产品恒把"当前登录口令"当真实口令、把"新设口令"当诱饵口令，不判断自己处在哪一侧（8.7.2）。
+
+#### 测试、安全复核与提交状态
+
+- 会话测试新增三例：派生出的两个卷密码必须不同且分别落到外层/隐藏、事件序列为
+  `exists → derive×2 → create:hidden → publish → allocate → mount → notify`、接管后可在
+  `container_statuses()` 中看到；未认证、尺寸不可用（0／非 512 对齐／隐藏卷 ≥ 外层）、空口令
+  一律在触碰运行时之前拒绝；格式化失败后不留会话状态。
+- 夹具补强两处：测试布局给容器 B 一个与 A 不同的 salt（原先两者都是全零，派生分支无法区分），
+  `require_events` 失败时改为打印实际事件序列，便于定位。
+- 完整 CTest **44/45**（唯一失败仍是实体卡不在位的 `vikey_helper_process_tests`）。
+- 安全复核：口令明文只在本次调用内存在，派生完即清零；跨边界仍只有 id／文件名／容量／盘符，
+  没有引入档位、卷类型或"这是 B"的持久化标记。本切片没有触碰卡记录，也没有真实建卷。
+- 提交：待定（`[P2.16]create the hidden volume container`）。

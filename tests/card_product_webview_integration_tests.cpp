@@ -84,6 +84,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, size_bytes);
   }
 
+  std::uint32_t create_container_b(std::uint64_t, std::uint64_t,
+                                   const SecureBuffer&,
+                                   const SecureBuffer&) override {
+    throw std::logic_error("container B is not part of this slice");
+  }
+
   std::uint32_t mount_container(const std::wstring_view path) override {
     ++mount_calls;
     for (Adopted& entry : containers) {

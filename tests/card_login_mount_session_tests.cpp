@@ -63,6 +63,9 @@ void require(const bool condition, const char* const message) {
   result.container_a.drive_letter = L'X';
   result.container_b.path = L"C:\\vault\\b.hc";
   result.container_b.drive_letter = L'Y';
+  // The two containers derive under different salts, exactly as the
+  // production layout does; otherwise this fixture cannot tell them apart.
+  result.container_b.salt.fill(std::byte{0xB0});
   return result;
 }
 
@@ -87,6 +90,10 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::vector<wchar_t> free_drive_letters{L'X', L'W', L'V'};
   bool fail_allocate{};
   std::uint64_t other_size_bytes{};
+  std::uint64_t outer_size{};
+  std::uint64_t hidden_size{};
+  std::vector<std::byte> hidden_outer_password;
+  std::vector<std::byte> hidden_inner_password;
   std::vector<std::wstring> other_existing;
   std::vector<std::wstring> other_staging;
   std::vector<std::string> events;
@@ -188,6 +195,17 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       const SecureBuffer& password_input,
       const SecureBuffer& root,
       const usb_vault::security::KdfV1Salt& salt) override {
+    require(root.size() == usb_vault::card::kCardRecordV1RootSecretSize,
+            "creation received the wrong authenticated root");
+    if (salt == layout().container_b.salt) {
+      events.emplace_back("derive:B");
+      std::string material = "derived-b-";
+      for (const std::byte value : password_input.bytes()) {
+        material.push_back(static_cast<char>(value));
+      }
+      material.resize(28, '.');
+      return bytes(material);
+    }
     events.emplace_back("derive:A");
     require(password_input.size() == 5 &&
                 password_input.bytes()[0] == std::byte{'d'} &&
@@ -196,8 +214,6 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
                 password_input.bytes()[3] == std::byte{'k'} &&
                 password_input.bytes()[4] == std::byte{'A'},
             "creation did not use the fixed diskA input");
-    require(root.size() == usb_vault::card::kCardRecordV1RootSecretSize,
-            "creation received the wrong authenticated root");
     require(salt == layout().container_a.salt,
             "every standard container must share the fixed A salt");
     return bytes("derived-container-a-password");
@@ -223,6 +239,33 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       other_size_bytes = size_bytes;
       other_staging.emplace_back(target_path);
     }
+  }
+
+  void create_with_hidden(
+      const std::wstring_view target_path,
+      const std::uint64_t outer_size_bytes,
+      const std::uint64_t hidden_size_bytes,
+      const SecureBuffer& outer_password,
+      const SecureBuffer& hidden_password) override {
+    events.emplace_back("create:hidden");
+    require(target_path == L"C:\\vault\\b.hc.preparing",
+            "hidden creation did not use the container B staging path");
+    require(outer_size_bytes != 0 && outer_size_bytes % 512ULL == 0 &&
+                hidden_size_bytes % 512ULL == 0 &&
+                hidden_size_bytes < outer_size_bytes,
+            "hidden creation received unusable sizes");
+    require(outer_password.size() == 28 && hidden_password.size() == 28,
+            "hidden creation received the wrong derived passwords");
+    outer_size = outer_size_bytes;
+    hidden_size = hidden_size_bytes;
+    hidden_outer_password.assign(outer_password.bytes().begin(),
+                                 outer_password.bytes().end());
+    hidden_inner_password.assign(hidden_password.bytes().begin(),
+                                 hidden_password.bytes().end());
+    require(hidden_outer_password != hidden_inner_password,
+            "both volumes were created with the same password");
+    if (fail_create) throw std::runtime_error("create failed");
+    other_staging.emplace_back(target_path);
   }
 
   void publish_created(const std::wstring_view staging_path,
@@ -301,12 +344,21 @@ void require_throws(Action&& action, const char* const message) {
 
 void require_events(const FakeRuntime& runtime,
                     const std::initializer_list<std::string_view> expected) {
-  require(runtime.events.size() == expected.size(),
-          "runtime event count differed");
+  bool matched = runtime.events.size() == expected.size();
   std::size_t index = 0;
   for (const std::string_view event : expected) {
-    require(runtime.events[index] == event, "runtime event order differed");
+    if (!matched) break;
+    matched = runtime.events[index] == event;
     ++index;
+  }
+  if (!matched) {
+    std::string observed;
+    for (const std::string& event : runtime.events) {
+      if (!observed.empty()) observed += ", ";
+      observed += event;
+    }
+    throw std::runtime_error("runtime event sequence differed; observed: " +
+                             observed);
   }
 }
 
@@ -591,6 +643,89 @@ void test_container_a_notify_failure_retains_mount_state() {
   require_events(runtime, {"unmount:A"});
 }
 
+void test_container_b_creation_derives_both_volume_passwords() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  authentication.establish(root_secret());
+
+  const std::uint32_t id = session.create_container_b(
+      64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("login-password"), bytes("decoy-password"));
+
+  require(id != 0, "container B creation returned no identifier");
+  require(runtime.outer_size == 64ULL * 1024ULL * 1024ULL &&
+              runtime.hidden_size == 16ULL * 1024ULL * 1024ULL,
+          "container B was created with the wrong sizes");
+  require_events(runtime,
+                 {"exists:final-other", "exists:stage-other", "derive:B",
+                  "derive:B", "create:hidden", "publish:other", "allocate",
+                  "mount-created:other", "notify:A"});
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].id == id &&
+              statuses[0].mounted && statuses[0].name == L"b.hc",
+          "container B was not adopted as a mounted container");
+  require(session.mounted(), "container B creation left no active volume");
+}
+
+void test_container_b_creation_rejects_unusable_input() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(session.create_container_b(
+            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+            bytes("login-password"), bytes("decoy-password")));
+      },
+      "unauthenticated container B creation was accepted");
+
+  authentication.establish(root_secret());
+  for (const auto [outer, hidden] : {
+           std::pair<std::uint64_t, std::uint64_t>{0, 0},
+           std::pair<std::uint64_t, std::uint64_t>{513, 0},
+           std::pair<std::uint64_t, std::uint64_t>{1024, 513},
+           std::pair<std::uint64_t, std::uint64_t>{1024, 1024}}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          static_cast<void>(session.create_container_b(
+              outer, hidden, bytes("login-password"),
+              bytes("decoy-password")));
+        },
+        "container B accepted an unusable size pair");
+  }
+  require_throws<std::invalid_argument>(
+      [&] {
+        static_cast<void>(session.create_container_b(
+            1024, 512, SecureBuffer(), bytes("decoy-password")));
+      },
+      "container B accepted an empty login password");
+  require(runtime.events.empty(),
+          "a rejected container B request still reached the runtime");
+}
+
+void test_container_b_creation_cleans_a_failed_format() {
+  FakeRuntime runtime;
+  runtime.fail_create = true;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  authentication.establish(root_secret());
+
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(session.create_container_b(
+            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+            bytes("login-password"), bytes("decoy-password")));
+      },
+      "a failed container B format was not reported");
+  require(session.container_statuses().empty() && !session.mounted(),
+          "a failed container B creation left session state behind");
+}
+
 void test_container_a_status_projects_live_file_and_mount_facts() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -813,6 +948,9 @@ int main() {
     test_container_a_creation_reports_cleanup_failure();
     test_container_a_mount_failure_keeps_published_container();
     test_container_a_notify_failure_retains_mount_state();
+    test_container_b_creation_derives_both_volume_passwords();
+    test_container_b_creation_rejects_unusable_input();
+    test_container_b_creation_cleans_a_failed_format();
     test_container_a_status_projects_live_file_and_mount_facts();
     test_manual_policy_authenticates_without_mounting();
     test_manual_policy_still_serializes_and_allows_creation();
