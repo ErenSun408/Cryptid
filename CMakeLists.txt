@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(usb_vault LANGUAGES C CXX)
+project(usb_vault VERSION 0.2.0 LANGUAGES C CXX)
 
 # CMake learns Ninja's MSVC /showIncludes marker while identifying the
 # compiler. On a Chinese Windows console configured with a legacy code page,

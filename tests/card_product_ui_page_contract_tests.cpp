@@ -1,3 +1,6 @@
+#include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/security/kdf_v1.h"
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -13,6 +16,10 @@
 
 #ifndef USB_VAULT_CARD_PRODUCT_UI_SCRIPT
 #error USB_VAULT_CARD_PRODUCT_UI_SCRIPT must name the product UI script
+#endif
+
+#ifndef USB_VAULT_PRODUCT_VERSION
+#error USB_VAULT_PRODUCT_VERSION must name the CMake product version
 #endif
 
 namespace {
@@ -37,6 +44,19 @@ void require(const bool condition, const char* const message) {
   require(input.is_open(), "could not open a packaged product UI source");
   return {std::istreambuf_iterator<char>(input),
           std::istreambuf_iterator<char>()};
+}
+
+// Returns the markup of one dashboard section so a contract can be scoped to
+// it instead of to the whole page.
+[[nodiscard]] std::string dashboard_section(const std::string_view page,
+                                            const std::string_view name) {
+  const std::string opening =
+      "<section id=\"dashboard-section-" + std::string(name) + "\"";
+  const std::size_t start = page.find(opening);
+  require(start != std::string_view::npos, "dashboard section is missing");
+  const std::size_t end = page.find("</section>", start);
+  require(end != std::string_view::npos, "dashboard section is unterminated");
+  return std::string(page.substr(start, end - start));
 }
 
 [[nodiscard]] std::string lower_ascii(std::string value) {
@@ -64,7 +84,7 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-16m-container-b\"></script>") !=
+              "<script src=\"card_session.js?v=p2-17a-settings\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -97,12 +117,11 @@ void test_authenticated_dashboard_is_real_state_only() {
   require(count_occurrences(page, "data-create-kind=\"encrypted\"") == 2 &&
               count_occurrences(page, "data-create-kind=\"hidden\"") == 2,
           "dashboard and management views lack both creation entries");
-  require(count_occurrences(page, "aria-disabled=\"true\"") == 4 &&
-              count_occurrences(page, "data-tooltip=\"正在开发中\"") == 4 &&
+  require(count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 3 &&
+              count_occurrences(page, "data-tooltip=\"正在开发中\"") == 3 &&
               page.find("文件管理") != std::string::npos &&
               page.find("备份中心") != std::string::npos &&
-              page.find("操作历史") != std::string::npos &&
-              page.find("系统设置") != std::string::npos,
+              page.find("操作历史") != std::string::npos,
           "unfinished navigation is not visibly present and unavailable");
   require(script.find(
               "const showDashboard = currentState === nativeState.authenticated;") !=
@@ -127,6 +146,82 @@ void test_authenticated_dashboard_is_real_state_only() {
     require(page.find(emoji) == std::string::npos,
             "product dashboard still contains an emoji icon");
   }
+}
+
+void test_settings_page_is_static_and_matches_the_native_facts() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string settings = dashboard_section(page, "settings");
+
+  require(page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
+                    " data-section=\"settings\">") != std::string::npos &&
+              count_occurrences(page, "data-section=\"") ==
+                  count_occurrences(page, "id=\"dashboard-section-") &&
+              settings.find("系统设置") != std::string::npos,
+          "settings is not a reachable dashboard section like the others");
+
+  // Three switches, of which only the card-removal unmount is a real product
+  // guarantee: it is locked on because 8.4 treats the unmount as part of
+  // deniability, so it must never be presented as something a user can turn
+  // off. The other two are the switches requirements 8.7.5 and 8.7.4 define.
+  require(count_occurrences(settings, "role=\"switch\"") == 3 &&
+              count_occurrences(settings, "data-setting=\"") == 2 &&
+              settings.find("data-setting=\"auto-mount\" "
+                            "aria-label=\"登录后自动挂载全部容器\"") !=
+                  std::string::npos &&
+              settings.find("data-setting=\"remember-containers\" "
+                            "aria-label=\"记住容器位置\"") != std::string::npos,
+          "settings switches do not match the two defined settings");
+  require(settings.find("<span class=\"settings-switch\" role=\"switch\" "
+                        "aria-checked=\"true\" aria-disabled=\"true\"") !=
+              std::string::npos &&
+              count_occurrences(settings, "aria-disabled=\"true\"") == 1 &&
+              settings.find("拔出安全卡时立即卸载全部卷") != std::string::npos,
+          "the card-removal unmount is not a locked, unactuatable switch");
+  require(settings.find("<input") == std::string::npos,
+          "settings page must not use form inputs");
+
+  // Neither remaining switch has a backing store yet: 8.7.5 needs the first
+  // local configuration artifact and 8.7.4 needs the encrypted, layered
+  // container list. Until those land the switches must stay page-local, so
+  // nothing here may reach the native bridge or any browser storage.
+  require(count_occurrences(script, "data-setting") == 1 &&
+              script.find("control.setAttribute(\"aria-checked\", "
+                          "enabled ? \"false\" : \"true\");") !=
+                  std::string::npos,
+          "a settings switch does more than flip its own state");
+  for (const std::string_view store : {"localStorage", "sessionStorage",
+                                       "indexedDB", "document.cookie"}) {
+    require(page.find(store) == std::string::npos &&
+                script.find(store) == std::string::npos,
+            "the product page persists state in browser storage");
+  }
+
+  const std::string derivation =
+      "Argon2id · m=" +
+      std::to_string(usb_vault::security::kKdfV1MemoryKib / 1024U) +
+      " MiB · t=" +
+      std::to_string(usb_vault::security::kKdfV1Iterations) + " · p=" +
+      std::to_string(usb_vault::security::kKdfV1Parallelism);
+  const std::string record =
+      std::to_string(usb_vault::card::kCardRecordV1Size) +
+      " 字节 · AES-256-GCM + HMAC-SHA-256";
+  require(settings.find(derivation) != std::string::npos &&
+              settings.find(record) != std::string::npos &&
+              settings.find("AES-256-XTS") != std::string::npos &&
+              settings.find("HMAC-SHA-512") != std::string::npos,
+          "about facts have drifted from the native cryptographic baseline");
+  require(settings.find("id=\"settings-product-version\">" USB_VAULT_PRODUCT_VERSION
+                        "<") != std::string::npos,
+          "about version has drifted from the CMake product version");
+
+  // The projection deliberately carries no hardware identity, so the page has
+  // nothing truthful to print about the card itself, and code signing is a P3
+  // deliverable that does not exist yet.
+  require(settings.find("安全卡状态") == std::string::npos &&
+              settings.find("代码签名") == std::string::npos &&
+              settings.find("EV") == std::string::npos,
+          "settings page claims a card identity or a signature it cannot have");
 }
 
 void test_five_states_are_complete_and_vendor_neutral() {
@@ -453,6 +548,7 @@ int main() {
   try {
     test_page_has_route_specific_password_surfaces();
     test_authenticated_dashboard_is_real_state_only();
+    test_settings_page_is_static_and_matches_the_native_facts();
     test_five_states_are_complete_and_vendor_neutral();
     test_bridge_calls_are_narrow_and_route_specific();
     test_container_creation_form_is_bounded();

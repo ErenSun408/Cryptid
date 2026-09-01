@@ -48,6 +48,8 @@
     Array.from(document.querySelectorAll(".dashboard-nav"));
   const dashboardSections =
     Array.from(document.querySelectorAll(".dashboard-section"));
+  const settingSwitches =
+    Array.from(document.querySelectorAll("[data-setting]"));
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-kind]"));
   const creationDialog = document.getElementById("create-volume-dialog");
@@ -930,6 +932,15 @@
       if (!busy && currentState === nativeState.authenticated) {
         showDashboardSection(item.dataset.section);
       }
+    });
+  }
+  // Settings switches are page-local for now: nothing here reaches the native
+  // bridge and nothing is written to disk, so a reload restores the defaults.
+  // Each switch gets its store when its own slice lands.
+  for (const control of settingSwitches) {
+    control.addEventListener("click", () => {
+      const enabled = control.getAttribute("aria-checked") === "true";
+      control.setAttribute("aria-checked", enabled ? "false" : "true");
     });
   }
   for (const button of creationButtons) {

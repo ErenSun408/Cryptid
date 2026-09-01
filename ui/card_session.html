@@ -279,6 +279,37 @@
     }
     .section-note svg { flex: 0 0 auto; width: .9rem; height: .9rem; margin-top: .15rem; }
 
+    /* ================= 系统设置 ================= */
+    .settings-group { max-width: 34rem; }
+    .settings-group + .settings-group { margin-top: 1.5rem; }
+    .settings-group h3 { margin: 0 0 .7rem; font-size: .85rem; font-weight: 600; }
+    .settings-card { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
+    .settings-row { display: flex; align-items: center; gap: 1rem; padding: .9rem 1rem; border-top: 1px solid var(--line); }
+    .settings-row:first-child { border-top: 0; }
+    .settings-copy { min-width: 0; flex: 1; }
+    .settings-copy b { font-size: .85rem; font-weight: 600; }
+    .settings-lock { flex: 0 0 auto; color: var(--text-3); }
+    .settings-lock svg { width: .9rem; height: .9rem; }
+    .settings-switch {
+      position: relative; flex: 0 0 auto; width: 2.4rem; height: 1.35rem; padding: 0;
+      border: 1px solid var(--line-2); border-radius: 999px; background: rgba(255, 255, 255, .05);
+      cursor: pointer; transition: background-color 140ms ease, border-color 140ms ease;
+    }
+    .settings-switch::after {
+      content: ""; position: absolute; top: 50%; left: .17rem;
+      width: .93rem; height: .93rem; border-radius: 50%; background: var(--text-3);
+      transform: translateY(-50%);
+      transition: transform 140ms ease, background-color 140ms ease;
+    }
+    .settings-switch:hover:not([aria-disabled="true"]) { border-color: var(--line-3); }
+    .settings-switch[aria-checked="true"] { border-color: rgba(200, 169, 106, .5); background: rgba(200, 169, 106, .3); }
+    .settings-switch[aria-checked="true"]::after { background: var(--gold-2); transform: translate(1rem, -50%); }
+    .settings-switch[aria-disabled="true"] { cursor: default; }
+    .settings-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .7rem 1rem; border-top: 1px solid var(--line); }
+    .settings-kv:first-child { border-top: 0; }
+    .settings-kv-label { font-size: .74rem; color: var(--text-3); }
+    .settings-kv-value { font-family: var(--mono); font-size: .78rem; text-align: right; }
+
     /* ================= 建卷对话框 ================= */
     .modal-overlay {
       position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
@@ -475,10 +506,10 @@
           <span class="nav-label">操作历史</span>
         </div>
         <div class="sidebar-label">系统</div>
-        <div class="nav-item nav-item-disabled" role="link" aria-disabled="true" tabindex="0" title="正在开发中" data-tooltip="正在开发中">
+        <button class="nav-item dashboard-nav" type="button" data-section="settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.6 7.6 0 000-2l2-1.5-2-3.4-2.4 1a8 8 0 00-1.7-1L14.9 3H9.1l-.4 3.1a8 8 0 00-1.7 1l-2.4-1-2 3.4L4.6 11a7.6 7.6 0 000 2l-2 1.5 2 3.4 2.4-1a8 8 0 001.7 1l.4 3.1h5.8l.4-3.1a8 8 0 001.7-1l2.4 1 2-3.4-2-1.5z"></path></svg>
           <span class="nav-label">系统设置</span>
-        </div>
+        </button>
       </nav>
 
       <main class="content">
@@ -541,6 +572,45 @@
             <div class="overview-copy"><h4>等待建卷功能接入</h4><p>隐藏盘建卷入口已经就位；真实创建与卡记录事务将在后续切片接入。</p></div>
           </article>
         </section>
+
+        <section id="dashboard-section-settings" class="dashboard-section" aria-labelledby="settings-title">
+          <div class="section-header">
+            <div><h2 id="settings-title">系统设置</h2><p>会话策略与产品信息</p></div>
+          </div>
+          <div class="settings-group">
+            <h3>会话</h3>
+            <div class="settings-card">
+              <div class="settings-row">
+                <span class="settings-copy"><b>登录后自动挂载全部容器</b></span>
+                <button class="settings-switch" type="button" role="switch" aria-checked="false"
+                        data-setting="auto-mount" aria-label="登录后自动挂载全部容器"></button>
+              </div>
+              <div class="settings-row">
+                <span class="settings-copy"><b>记住容器位置</b></span>
+                <button class="settings-switch" type="button" role="switch" aria-checked="true"
+                        data-setting="remember-containers" aria-label="记住容器位置"></button>
+              </div>
+              <div class="settings-row">
+                <span class="settings-copy"><b>拔出安全卡时立即卸载全部卷</b></span>
+                <span class="settings-lock" title="安全机制，不可关闭">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.2"></rect><path d="M8.2 10.5V7.6a3.8 3.8 0 017.6 0v2.9"></path></svg>
+                </span>
+                <span class="settings-switch" role="switch" aria-checked="true" aria-disabled="true"
+                      aria-label="拔出安全卡时立即卸载全部卷"></span>
+              </div>
+            </div>
+          </div>
+          <div class="settings-group">
+            <h3>关于</h3>
+            <div class="settings-card">
+              <div class="settings-kv"><span class="settings-kv-label">卷加密</span><span class="settings-kv-value">AES-256-XTS</span></div>
+              <div class="settings-kv"><span class="settings-kv-label">卷头 PRF</span><span class="settings-kv-value">HMAC-SHA-512</span></div>
+              <div class="settings-kv"><span class="settings-kv-label">卷密码派生</span><span class="settings-kv-value">Argon2id · m=512 MiB · t=2 · p=1</span></div>
+              <div class="settings-kv"><span class="settings-kv-label">安全卡记录</span><span class="settings-kv-value">216 字节 · AES-256-GCM + HMAC-SHA-256</span></div>
+              <div class="settings-kv"><span class="settings-kv-label">产品版本</span><span class="settings-kv-value" id="settings-product-version">0.2.0</span></div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
   </section>
@@ -597,6 +667,6 @@
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-16m-container-b"></script>
+  <script src="card_session.js?v=p2-17a-settings"></script>
 </body>
 </html>

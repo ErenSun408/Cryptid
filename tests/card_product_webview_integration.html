@@ -58,8 +58,8 @@
            data-tooltip="正在开发中">备份中心</div>
       <div role="link" aria-disabled="true" title="正在开发中"
            data-tooltip="正在开发中">操作历史</div>
-      <div role="link" aria-disabled="true" title="正在开发中"
-           data-tooltip="正在开发中">系统设置</div>
+      <button class="dashboard-nav" type="button"
+              data-section="settings">系统设置</button>
     </nav>
     <section id="dashboard-section-dashboard" class="dashboard-section active">
       <button type="button" data-create-kind="encrypted">新建</button>
@@ -74,6 +74,14 @@
     </section>
     <section id="dashboard-section-hidden" class="dashboard-section">
       <button type="button" data-create-kind="hidden">新建隐藏盘</button>
+    </section>
+    <section id="dashboard-section-settings" class="dashboard-section">
+      <button type="button" role="switch" aria-checked="false"
+              data-setting="auto-mount">登录后自动挂载全部容器</button>
+      <button type="button" role="switch" aria-checked="true"
+              data-setting="remember-containers">记住容器位置</button>
+      <span role="switch" aria-checked="true" aria-disabled="true"
+            >拔出安全卡时立即卸载全部卷</span>
     </section>
   </section>
   <div id="create-volume-dialog" role="dialog" hidden>
@@ -99,7 +107,7 @@
     <button id="create-volume-cancel" type="button">返回</button>
     <button id="create-volume-continue" type="button">创建加密盘</button>
   </div>
-  <script src="card_session.js?v=p2-16m-container-b"></script>
-  <script src="card_product_webview_integration.js?v=p2-16m-container-b"></script>
+  <script src="card_session.js?v=p2-17a-settings"></script>
+  <script src="card_product_webview_integration.js?v=p2-17a-settings"></script>
 </body>
 </html>

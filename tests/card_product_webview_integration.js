@@ -29,6 +29,10 @@ chrome.webview.postMessage("driver-loaded");
     '[data-create-kind="encrypted"]');
   const encryptedList = encryptedSection.querySelector(
     "[data-container-list]");
+  const settingsNavigation =
+    document.querySelector('[data-section="settings"]');
+  const settingsSection =
+    document.getElementById("dashboard-section-settings");
   const containerRows = () =>
     Array.from(encryptedList.querySelectorAll(".container-row"));
   const containerFacts = (row) =>
@@ -176,6 +180,38 @@ chrome.webview.postMessage("driver-loaded");
   if (!encryptedNavigation.classList.contains("active") ||
       !encryptedSection.classList.contains("active")) {
     request("fail-dashboard-navigation");
+    return;
+  }
+
+  settingsNavigation.click();
+  if (!settingsSection.classList.contains("active") ||
+      encryptedSection.classList.contains("active")) {
+    request("fail-settings-navigation");
+    return;
+  }
+  // Both switches flip in place; the locked one is not actuatable at all.
+  const autoMount = settingsSection.querySelector('[data-setting="auto-mount"]');
+  const lockedUnmount = settingsSection.querySelector('[aria-disabled="true"]');
+  if (autoMount.getAttribute("aria-checked") !== "false" ||
+      lockedUnmount.getAttribute("aria-checked") !== "true") {
+    request("fail-settings-defaults");
+    return;
+  }
+  autoMount.click();
+  lockedUnmount.click();
+  if (autoMount.getAttribute("aria-checked") !== "true" ||
+      lockedUnmount.getAttribute("aria-checked") !== "true") {
+    request("fail-settings-switch");
+    return;
+  }
+  autoMount.click();
+  if (autoMount.getAttribute("aria-checked") !== "false") {
+    request("fail-settings-switch");
+    return;
+  }
+  encryptedNavigation.click();
+  if (!encryptedSection.classList.contains("active")) {
+    request("fail-settings-navigation");
     return;
   }
   encryptedCreate.click();

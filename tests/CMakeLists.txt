@@ -744,9 +744,14 @@ add_executable(card_product_ui_page_contract_tests
   card_product_ui_page_contract_tests.cpp
 )
 
+target_include_directories(card_product_ui_page_contract_tests PRIVATE
+  "${PROJECT_SOURCE_DIR}/include"
+)
+
 target_compile_definitions(card_product_ui_page_contract_tests PRIVATE
   USB_VAULT_CARD_PRODUCT_UI_PAGE="${PROJECT_SOURCE_DIR}/ui/card_session.html"
   USB_VAULT_CARD_PRODUCT_UI_SCRIPT="${PROJECT_SOURCE_DIR}/ui/card_session.js"
+  USB_VAULT_PRODUCT_VERSION="${PROJECT_VERSION}"
 )
 
 usb_vault_configure_target(card_product_ui_page_contract_tests)

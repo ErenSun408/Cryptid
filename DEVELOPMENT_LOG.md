@@ -5056,4 +5056,98 @@
   已在上文明确记为达成目标状态的代价。
 - 🟡 遗留：只有布局里固定的两个容器能在登录后被列出，用户自选路径的容器仍不持久化
   （8.7.4 的加密分层清单未做）；实体卡与真实建卷仍未验证。
-- 提交：待定（`[P2.16]mount adopted containers without retyping`）。
+- 提交：`5413de9 [P2.16]mount adopted containers without retyping`。
+
+### 小切片 17a：开放系统设置页
+
+#### 需求审计与决策
+
+- 16o 已提交为 `5413de9`。侧栏「系统设置」此前是禁用占位项。设计稿
+  （`usb-vault_ui-design.html:1155`）给这一页定了 3 个开关 + 关于块 + 2 条说明，
+  且自带一条原则：「设置项刻意保持极少。每多一个开关，就多一处可能泄露使用方式的本地记录」。
+  因此本切片的做法是**从设计稿的既定条目里落地**，而不是新增设置项。
+- 三个开关的现状裁定：
+  - **拔卡即卸载** —— 已实现（P1.7 强制卸载 + P2.13f HID 生命周期），基本需求-3，
+    8.4 视其为否认性的组成部分。做成**锁定常开、不可操作**的开关。
+  - **登录后自动挂载全部容器** —— 8.7.5 明确授权落盘，`LoginMountPolicy` 也已就位
+    （`card_login_mount_session.h:24`），但它必须在**登录之前**被读到，因此不能存进容器 A，
+    会成为产品的**第一个本地持久化产物**并直接进入 P3 的逐字节比对验收。
+    🔴 另有 8.7.5 的红字约束：开启后必须对自动挂载的卷数设上限或重谈 P-002 五秒预算。
+  - **记住容器位置** —— 依赖 8.7.4 的加密分层容器清单（存于容器 A 内），该清单未实现
+    （见 16o 遗留）。
+- **用户决定（2026-09-02）**：先按设计稿把两个开关的 UI 正常做出来，不做未实现的后端，
+  也不做禁用或「正在开发中」标注。已向用户说明代价：**两个开关目前只活在当前页面，
+  刷新即回默认值**，「记住容器位置」显示为开启并不代表路径真的被保存。
+  后端分别由 17b（8.7.5 落盘产物 + 卷数上限）与 8.7.4 的容器清单切片补齐。
+- 关于块的两条设计稿条目被否决：
+  1. 「安全卡 · VK·7C2A」—— `card_product_ui_session_controller.h:21-24` 的不变量明确要求
+     投影不暴露硬件标识，卡序列号跨 UI 边界会直接破掉它，且是天然的本地状态泄露点；
+  2. 「代码签名 · 已签名 · EV」—— EV 签名是 P3 交付物，现在写上去即为不实陈述。
+     两行均删除，并由契约测试断言它们不会回来。
+- 设计稿右侧的两条说明文案与每行副标题按用户要求一并去掉，行内只留标题与开关。
+- **不能加的一类开关**已一并记录：例如「挂载外层时保护隐藏卷」。按 R-01，保护与否是模式的
+  自动结果（模式 B 绝不开、模式 C 自动开），一旦做成开关，它在档二下就是一个处于关闭态的
+  相关开关项，正撞 `需求梳理清单_v2.md:1907`。同理不加「默认建卷目录／上次导出路径」
+  （Q-04 可验收项 3 点名的最易漏项）与语言／主题／开机自启这类零产品价值的本地偏好。
+- 三个开关本身**不构成 8.4 痕迹**：它们在档二与档三下的存在与默认值完全相同，
+  8.4 禁止的是"处于关闭态的**档位相关**开关项"，与这三项无关。
+
+#### 实现
+
+- 侧栏禁用占位 `<div>` 改为 `<button class="nav-item dashboard-nav" data-section="settings">`，
+  新增 `#dashboard-section-settings`。分区切换沿用既有的
+  `.dashboard-nav` / `.dashboard-section` 泛化实现，未改动路由代码。
+- 会话组三行开关，顺序同设计稿：登录后自动挂载全部容器（默认关，依 8.7.5）、
+  记住容器位置（默认开，依设计稿）、拔出安全卡时立即卸载全部卷（开且锁定）。
+  前两者是 `<button role="switch">`，锁定项是 `<span role="switch" aria-disabled="true">`
+  并配一枚锁形图标 —— **锁定项不是按钮，点击它不进入任何处理器**。
+- 关于组五行：卷加密 `AES-256-XTS`、卷头 PRF `HMAC-SHA-512`、卷密码派生
+  `Argon2id · m=512 MiB · t=2 · p=1`、安全卡记录 `216 字节 · AES-256-GCM + HMAC-SHA-256`、
+  产品版本。
+- `card_session.js` 新增 `[data-setting]` 的点击处理器，**只翻转自身 `aria-checked`**：
+  不触碰原生桥、不写任何浏览器存储、不参与 `busy` 串行化（它不产生任何副作用）。
+  脚本缓存串同步升为 `p2-17a-settings`。
+- 版本号来源定为 CMake：`project(usb_vault VERSION 0.2.0)`，经
+  `USB_VAULT_PRODUCT_VERSION` 编译定义传给契约测试与页面做绑定校验。
+  ⚠️ `0.2.0` 是本切片给出的占位版本号，正式版本方案待定。
+- 未新增任何 COM 接口、原生投影字段或本地文件写入。
+
+#### 测试、安全复核与提交状态
+
+- 页面契约测试新增 `test_settings_page_is_static_and_matches_the_native_facts`，
+  并为该测试目标加上 `include/` 与产品版本定义，使其可直接读取原生常量：
+  - 断言设置页可达且 `data-section` 数与 `dashboard-section-` 数相等；
+  - 断言段内恰有 3 个 `role="switch"`、2 个 `data-setting`，锁定项是带
+    `aria-disabled="true"` 的非按钮且全段仅此一个 `aria-disabled`，段内无 `<input>`；
+  - 🔴 **两条"尚未落盘"的守卫**：脚本中 `data-setting` 只出现一次（仅用于选取），
+    且处理器体恰为翻转 `aria-checked` 一行；页面与脚本**均不得出现**
+    `localStorage`／`sessionStorage`／`indexedDB`／`document.cookie`。
+    17b 接入落盘时必须显式改这两条，改不动就说明动到了不该动的地方；
+  - 关于块的 Argon2id 参数由 `kKdfV1MemoryKib/1024`、`kKdfV1Iterations`、
+    `kKdfV1Parallelism` 拼出后比对，记录长度由 `kCardRecordV1Size` 比对，
+    版本由 `USB_VAULT_PRODUCT_VERSION` 比对 —— 任一漂移即失败；
+  - 断言设置页不含「安全卡状态」「代码签名」「EV」。
+- `test_authenticated_dashboard_is_real_state_only` 的禁用导航断言改为按
+  `class="nav-item nav-item-disabled"` 计数（3 个），不再按全页 `aria-disabled` 计数 ——
+  后者已被设置页的锁定开关污染，是这次唯一一处因新增元素而必须收紧作用域的断言。
+- **三条负向验证**（临时改文件后重跑，确认守卫真的会咬）：版本改成 `9.9.9` →
+  `FAIL: about version has drifted from the CMake product version`；插入
+  `<input type="checkbox">` → `FAIL: settings page offers a control this slice cannot persist`
+  （该守卫在本次改为开关后已按上述新形态重写）；在处理器里加一行 `localStorage.setItem` →
+  `FAIL: the product page persists state in browser storage`。三次均已还原。
+- 真实 WebView2 假后端夹具新增设置页一段：点击导航后设置页 `active`、加密盘页让出；
+  两个开关的默认值为关／开；点击自动挂载翻转为开、再点回关；**点击锁定项后其状态不变**；
+  最后切回加密盘页继续原流程。夹具的 `card_product_webview_integration.html` 是独立维护的
+  结构副本，已同步补上导航、分区与三个开关，失败令牌表新增 `fail-settings-navigation`、
+  `fail-settings-defaults`、`fail-settings-switch`。夹具退出 0。
+- 三套构建：Debug CTest **44/45**（唯一失败为实体卡不在位时的 `vikey_helper_process_tests`，
+  `0x93 card communication failed`；插卡后的 `/analyze` 运行该例即通过）；
+  MSVC `/analyze` 构建退出 0、无任何项目诊断，CTest **45/45**；
+  AddressSanitizer CTest **43/45**，失败的 `vikey_helper_process_tests` 与
+  `vikey_helper_hid_compatibility_tests` 均因 ASan 下 helper 子进程以 `0xC0000135`
+  （DLL not found）启动失败 —— 既有环境限制，与本切片改动的文件无链接关系。
+- 安全复核：本切片不写本机磁盘、不新增跨边界字段、不展示硬件标识或任何档位／模式／
+  容器形态信息；三个开关的存在与默认值在档二与档三下完全相同，不构成 8.4 意义上的痕迹。
+- 🟡 遗留：登录后自动挂载与记住容器位置**只有 UI，没有后端**，状态不持久；
+  `0.2.0` 为占位版本号。
+- 提交：待定（`[P2.17]open the settings page`）。
