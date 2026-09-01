@@ -371,19 +371,6 @@ usb_vault_configure_target(card_initialization_service_tests)
 add_test(NAME card_initialization_service_tests
   COMMAND card_initialization_service_tests)
 
-add_executable(fixed_blob_card_store_tests
-  fixed_blob_card_store_tests.cpp
-)
-
-target_link_libraries(fixed_blob_card_store_tests
-  PRIVATE
-    usb_vault_core
-)
-
-usb_vault_configure_target(fixed_blob_card_store_tests)
-
-add_test(NAME fixed_blob_card_store_tests COMMAND fixed_blob_card_store_tests)
-
 add_executable(vikey_card_store_tests
   vikey_card_store_tests.cpp
 )
@@ -699,24 +686,6 @@ set_tests_properties(vikey_helper_hid_compatibility_tests PROPERTIES
   SKIP_RETURN_CODE 77
 )
 
-add_executable(application_session_tests
-  application_session_tests.cpp
-)
-
-target_include_directories(application_session_tests
-  PRIVATE
-    ${PROJECT_SOURCE_DIR}/src
-)
-
-target_link_libraries(application_session_tests
-  PRIVATE
-    usb_vault_core
-)
-
-usb_vault_configure_target(application_session_tests)
-
-add_test(NAME application_session_tests COMMAND application_session_tests)
-
 add_executable(card_presence_controller_tests
   card_presence_controller_tests.cpp
 )
@@ -758,19 +727,6 @@ usb_vault_configure_target(password_ingress_tests)
 
 add_test(NAME password_ingress_tests COMMAND password_ingress_tests)
 
-add_executable(ui_session_controller_tests
-  ui_session_controller_tests.cpp
-)
-
-target_link_libraries(ui_session_controller_tests
-  PRIVATE
-    usb_vault_core
-)
-
-usb_vault_configure_target(ui_session_controller_tests)
-
-add_test(NAME ui_session_controller_tests COMMAND ui_session_controller_tests)
-
 add_executable(ui_close_guard_tests
   ui_close_guard_tests.cpp
 )
@@ -783,19 +739,6 @@ target_link_libraries(ui_close_guard_tests
 usb_vault_configure_target(ui_close_guard_tests)
 
 add_test(NAME ui_close_guard_tests COMMAND ui_close_guard_tests)
-
-add_executable(ui_page_contract_tests
-  ui_page_contract_tests.cpp
-)
-
-target_compile_definitions(ui_page_contract_tests PRIVATE
-  USB_VAULT_UI_PAGE="${PROJECT_SOURCE_DIR}/ui/index.html"
-  USB_VAULT_UI_SCRIPT="${PROJECT_SOURCE_DIR}/ui/session.js"
-)
-
-usb_vault_configure_target(ui_page_contract_tests)
-
-add_test(NAME ui_page_contract_tests COMMAND ui_page_contract_tests)
 
 add_executable(card_product_ui_page_contract_tests
   card_product_ui_page_contract_tests.cpp
@@ -823,19 +766,6 @@ target_link_libraries(webview_password_array_tests
 usb_vault_configure_target(webview_password_array_tests)
 
 add_test(NAME webview_password_array_tests COMMAND webview_password_array_tests)
-
-add_executable(webview_host_object_tests
-  webview_host_object_tests.cpp
-)
-
-target_link_libraries(webview_host_object_tests
-  PRIVATE
-    usb_vault_core
-)
-
-usb_vault_configure_target(webview_host_object_tests)
-
-add_test(NAME webview_host_object_tests COMMAND webview_host_object_tests)
 
 if(USB_VAULT_BUILD_UI)
   add_executable(card_product_webview_integration_tests WIN32 EXCLUDE_FROM_ALL
@@ -874,41 +804,6 @@ if(USB_VAULT_BUILD_UI)
       "${PROJECT_SOURCE_DIR}/ui/card_session.js"
   )
 
-  add_executable(webview_typed_array_integration_tests WIN32 EXCLUDE_FROM_ALL
-    webview_typed_array_integration_tests.cpp
-  )
-
-  target_include_directories(webview_typed_array_integration_tests PRIVATE
-    "${webview2_sdk_SOURCE_DIR}/build/native/include"
-  )
-
-  target_link_libraries(webview_typed_array_integration_tests PRIVATE
-    usb_vault_core
-    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-    Ole32
-    Shlwapi
-  )
-
-  usb_vault_configure_target(webview_typed_array_integration_tests)
-
-  add_custom_command(TARGET webview_typed_array_integration_tests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/webview_session_integration.html"
-            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/webview_session_integration.html"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/ui/session.js"
-            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/session.js"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/webview_typed_array_integration.js"
-            "$<TARGET_FILE_DIR:webview_typed_array_integration_tests>/webview_typed_array_integration.js"
-    VERBATIM
-  )
-  set_property(TARGET webview_typed_array_integration_tests APPEND PROPERTY
-    LINK_DEPENDS
-      "${CMAKE_CURRENT_SOURCE_DIR}/webview_session_integration.html"
-      "${CMAKE_CURRENT_SOURCE_DIR}/webview_typed_array_integration.js"
-      "${PROJECT_SOURCE_DIR}/ui/session.js"
-  )
 endif()
 
 add_executable(secure_buffer_copy_compile_fail EXCLUDE_FROM_ALL

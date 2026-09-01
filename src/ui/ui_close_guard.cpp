@@ -18,10 +18,6 @@ template <typename Controller>
 
 }  // namespace
 
-bool prepare_ui_session_for_close(UiSessionController& controller) noexcept {
-  return prepare_for_close(controller);
-}
-
 bool prepare_ui_session_for_close(
     CardProductUiSessionController& controller) noexcept {
   return prepare_for_close(controller);

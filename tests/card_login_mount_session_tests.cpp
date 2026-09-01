@@ -1,6 +1,5 @@
 #include "application/card_login_mount_session_internal.h"
 
-#include "usb_vault/application/application_session.h"
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/card/card_record_v1.h"
 
@@ -35,9 +34,6 @@ static_assert(std::derived_from<
 static_assert(std::derived_from<
               CardLoginMountSession,
               usb_vault::application::IActiveVolumeSession>);
-static_assert(!std::derived_from<
-              CardLoginMountSession,
-              usb_vault::application::IApplicationSessionActions>);
 
 void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);

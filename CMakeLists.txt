@@ -131,7 +131,6 @@ if(MSVC)
 endif()
 
 add_library(usb_vault_core STATIC
-  src/application/application_session.cpp
   src/application/card_authentication_session.cpp
   src/application/card_login_mount_session.cpp
   src/application/card_device_lifecycle_controller.cpp
@@ -145,7 +144,6 @@ add_library(usb_vault_core STATIC
   src/card/card_record_service.cpp
   src/card/card_record_v1.cpp
   src/card/card_record_v1_inspection.cpp
-  src/card/fixed_blob_card_store.cpp
   src/security/argon2id_runtime.cpp
   src/security/confirmed_password.cpp
   src/security/kdf_v1.cpp
@@ -156,8 +154,6 @@ add_library(usb_vault_core STATIC
   src/ui/card_product_ui_session_controller.cpp
   src/ui/password_ingress.cpp
   src/ui/ui_close_guard.cpp
-  src/ui/ui_session_controller.cpp
-  src/ui/webview_host_object.cpp
   src/ui/webview_password_array.cpp
   src/volume/mount_request.cpp
   src/volume/unmount_retry.cpp
@@ -570,87 +566,6 @@ if(USB_VAULT_BUILD_UI)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   )
   FetchContent_MakeAvailable(webview2_sdk)
-
-  add_executable(usb_vault_app WIN32
-    tools/app/main.cpp
-  )
-  target_include_directories(usb_vault_app PRIVATE
-    "${webview2_sdk_SOURCE_DIR}/build/native/include"
-  )
-  target_link_libraries(usb_vault_app PRIVATE
-    usb_vault_core
-    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-    Ole32
-    Shlwapi
-  )
-  target_compile_definitions(usb_vault_app PRIVATE UNICODE _UNICODE)
-  usb_vault_configure_target(usb_vault_app)
-
-  add_custom_command(TARGET usb_vault_app POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/ui/index.html"
-            "$<TARGET_FILE_DIR:usb_vault_app>/index.html"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/ui/session.js"
-            "$<TARGET_FILE_DIR:usb_vault_app>/session.js"
-    VERBATIM
-  )
-  set_property(TARGET usb_vault_app APPEND PROPERTY LINK_DEPENDS
-    "${CMAKE_SOURCE_DIR}/ui/index.html"
-    "${CMAKE_SOURCE_DIR}/ui/session.js"
-  )
-
-  # Separate opt-in application wired to the network-enabled ViKey
-  # development backend. It is excluded from default builds and still
-  # requires an explicit runtime acknowledgement plus exact artifact digests.
-  add_executable(usb_vault_vikey_development_app WIN32 EXCLUDE_FROM_ALL
-    tools/app/main.cpp
-  )
-  target_include_directories(usb_vault_vikey_development_app PRIVATE
-    "${webview2_sdk_SOURCE_DIR}/build/native/include"
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-  )
-  target_link_libraries(usb_vault_vikey_development_app PRIVATE
-    usb_vault_core
-    usb_vault_vikey_development_credentials
-    usb_vault_vikey_helper_blob_backend
-    usb_vault_windows_hid_notifications
-    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-    Ole32
-    Shell32
-    Shlwapi
-  )
-  target_compile_definitions(usb_vault_vikey_development_app PRIVATE
-    UNICODE
-    _UNICODE
-    USB_VAULT_VIKEY_DEVELOPMENT_APP
-  )
-  add_dependencies(usb_vault_vikey_development_app
-    usb_vault_vikey_helper
-    usb_vault_volume_creator
-  )
-  usb_vault_configure_target(usb_vault_vikey_development_app)
-
-  add_dependencies(usb_vault_p1_7_development_container_fixture
-    usb_vault_vikey_development_app
-    usb_vault_vikey_helper
-    usb_vault_volume_creator
-  )
-
-  add_custom_command(TARGET usb_vault_vikey_development_app POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/ui/index.html"
-            "$<TARGET_FILE_DIR:usb_vault_vikey_development_app>/index.html"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/ui/session.js"
-            "$<TARGET_FILE_DIR:usb_vault_vikey_development_app>/session.js"
-    VERBATIM
-  )
-  set_property(TARGET usb_vault_vikey_development_app APPEND PROPERTY
-    LINK_DEPENDS
-    "${CMAKE_SOURCE_DIR}/ui/index.html"
-    "${CMAKE_SOURCE_DIR}/ui/session.js"
-  )
 
   # Separate opt-in P2 application. It reuses the development credential and
   # network-enabled helper deployment boundary, but composes only the formal

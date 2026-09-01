@@ -250,11 +250,4 @@ security::SecureBuffer consume_webview_password_array(
   return consume_variant_byte_array(array, info.size);
 }
 
-void submit_webview_password_array(VARIANT& password_bytes,
-                                   UiSessionController& controller) {
-  security::SecureBuffer password =
-      consume_webview_password_array(password_bytes);
-  controller.submit_password(password.bytes());
-}
-
 }  // namespace usb_vault::ui

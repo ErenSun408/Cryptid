@@ -4806,4 +4806,41 @@
 - 安全复核：本切片只减不增，自动化边界的方法数从 19 降到 15，没有新增入参、出参或状态。
 - ⚠️ P2 开发应用 exe 本次**未能重新链接**（`LNK1168`，用户正在运行该程序）。源码与页面已是最新，
   下次构建即可覆盖。
-- 提交：待定（`[ui]drop the single-container bridge`）。
+- 提交：`4a388ff [ui]drop the single-container bridge`。
+
+### 小切片 16j：移除 P1 应用链
+
+#### 需求审计与实现
+
+- 用户决定后续只在 P2 现有基础上改动，P1 阶段的内容可以清理。审计依赖关系后确认 P1 应用链的
+  唯一生产消费方是 `tools/app/main.cpp` 的非 P2 分支，边界干净；ViKey 的 P1 blob／helper 链
+  （32 字节卡存储、blob backend、helper blob 操作、p1_7 夹具与探针）耦合到 helper IPC，
+  单独作为下一个边界，本切片不动。
+- 删除 19 个文件：P1 页面资产（`ui/index.html`、`ui/session.js`）、`ApplicationSession`
+  及其内部头、`UiSessionController`、P1 `webview_host_object`、`FixedBlobCardStore`，
+  以及只为它们存在的 7 个测试文件与两个 WebView2 夹具资产。
+- `tools/app/main.cpp` 按"P2 恒定义、P1 开发应用恒未定义"求值后折叠：668 → 517 行，
+  预处理条件从 55 条降到 **0 条**，组合根只剩 P2 一条链路。
+- CMake 移除 `usb_vault_app` 与 `usb_vault_vikey_development_app` 两个可执行目标，
+  从 `usb_vault_core` 移除四个 P1 源文件；测试工程移除六个 P1 目标。
+- `webview_password_array` 删除只为 P1 控制器存在的 `submit_webview_password_array`；
+  `ui_close_guard` 删除 P1 重载，只保留产品重载。
+
+#### 测试、安全复核与提交状态
+
+- `webview_password_array_tests` **改打到共享入口上**而不是删掉：七个用例改为直接调用
+  `consume_webview_password_array` 并校验消费结果与源数组擦除，只删掉两个纯粹验证"转发给 P1
+  会话"的用例（等价的失败擦除覆盖已在 P2 宿主测试里）。`ui_close_guard_tests` 删除三个 P1 用例，
+  保留产品用例；`card_login_mount_session_tests` 删除"未派生自 `IApplicationSessionActions`"的
+  静态断言（该接口已不存在）。
+- 完整 CTest 从 50 项降到 45 项，**44/45 通过**：唯一失败仍是实体卡不在位的
+  `vikey_helper_process_tests`。真实 WebView2 假后端夹具重跑退出 0。
+- 安全复核：本切片只删除，不新增任何接口、状态或落盘；P2 组合根不再有任何条件编译分支，
+  阅读与审计面积明显收窄。
+- ⚠️ P2 开发应用 exe 仍未能重新链接（`LNK1168`，用户正在运行该程序）；`main.cpp` 目标文件已
+  编译通过，关闭程序后重新构建即可。
+- 🟡 下一个边界（未做）：ViKey P1 blob 链 —— `vikey_card_store.cpp`（32 字节）、
+  `vikey_helper_blob_backend`、helper 的 blob IPC 操作、`p1_7` 夹具与诊断、P1 卡重置工具、
+  blob 往返探针，以及依附其上的 `vikey_card_store_tests` 与 `vikey_helper_process_tests`。
+  这条链会动到 helper 协议，须单独评审后再切。
+- 提交：待定（`[cleanup]remove the P1 application chain`）。
