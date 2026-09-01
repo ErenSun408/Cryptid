@@ -39,6 +39,7 @@
     document.getElementById("dashboard-volume-state");
   const dashboardContainerCount =
     document.getElementById("dashboard-container-count");
+  const navContainerCount = document.getElementById("nav-container-count");
   const dashboardStatus = document.getElementById("dashboard-status");
   const containerLists =
     Array.from(document.querySelectorAll("[data-container-list]"));
@@ -361,7 +362,9 @@
       if (containers.length === 0) {
         const empty = document.createElement("p");
         empty.className = "container-empty";
-        empty.textContent = "还没有加密盘。新建一个，或打开已有的加密盘文件。";
+        empty.textContent =
+          "还没有容器。容器是一个加密文件，挂载后在系统里显示为一个普通磁盘。" +
+          "新建一个，或导入已有的容器文件。";
         list.appendChild(empty);
         continue;
       }
@@ -378,6 +381,7 @@
     document.body.dataset.view = showDashboard ? "dashboard" : "session";
     dashboardVolumeState.textContent = activeVolumes ? "已挂载" : "未挂载";
     dashboardContainerCount.textContent = String(containers.length);
+    navContainerCount.textContent = String(containers.length);
     renderContainers();
     dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
     dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
@@ -779,15 +783,15 @@
 
   const mountExistingContainer = () => runContainerAction(
     () => bridge.mountContainer(),
-    "无法打开该加密盘，请确认文件与当前安全卡匹配。");
+    "无法导入该容器，请确认文件与当前安全卡匹配。");
 
   const mountAdoptedContainer = (id) => runContainerAction(
     () => bridge.mountAdoptedContainer(id),
-    "无法挂载该加密盘，请稍后重试。");
+    "无法挂载该容器，请稍后重试。");
 
   const unmountAdoptedContainer = (id) => runContainerAction(
     () => bridge.unmountContainer(id),
-    "无法卸载该加密盘，请关闭占用文件后重试。");
+    "无法卸载该容器，请关闭占用文件后重试。");
 
   const createContainerB = async () => {
     const sizes = containerBSizes();

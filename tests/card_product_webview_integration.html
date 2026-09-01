@@ -49,9 +49,8 @@
       <button class="dashboard-nav active" type="button"
               data-section="dashboard" aria-current="page">仪表盘</button>
       <button class="dashboard-nav" type="button"
-              data-section="encrypted">加密盘管理</button>
-      <button class="dashboard-nav" type="button"
-              data-section="hidden">隐藏盘管理</button>
+              data-section="containers">容器<span
+              id="nav-container-count">0</span></button>
       <div role="link" aria-disabled="true" title="正在开发中"
            data-tooltip="正在开发中">文件管理</div>
       <div role="link" aria-disabled="true" title="正在开发中"
@@ -64,16 +63,14 @@
     <section id="dashboard-section-dashboard" class="dashboard-section active">
       <button type="button" data-create-kind="encrypted">新建</button>
       <button type="button" data-create-kind="hidden">新建</button>
-      <button type="button" data-mount-existing>打开已有</button>
+      <button type="button" data-mount-existing>导入</button>
       <div class="container-list" data-container-list></div>
     </section>
-    <section id="dashboard-section-encrypted" class="dashboard-section">
+    <section id="dashboard-section-containers" class="dashboard-section">
       <button type="button" data-create-kind="encrypted">新建加密盘</button>
-      <button type="button" data-mount-existing>打开已有加密盘</button>
-      <div class="container-list" data-container-list></div>
-    </section>
-    <section id="dashboard-section-hidden" class="dashboard-section">
       <button type="button" data-create-kind="hidden">新建隐藏盘</button>
+      <button type="button" data-mount-existing>导入容器</button>
+      <div class="container-list" data-container-list></div>
     </section>
     <section id="dashboard-section-settings" class="dashboard-section">
       <button type="button" role="switch" aria-checked="false"

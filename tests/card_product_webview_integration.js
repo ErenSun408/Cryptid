@@ -21,20 +21,20 @@ chrome.webview.postMessage("driver-loaded");
     document.getElementById("dashboard-volume-state");
   const dashboardContainerCount =
     document.getElementById("dashboard-container-count");
-  const encryptedNavigation =
-    document.querySelector('[data-section="encrypted"]');
-  const encryptedSection =
-    document.getElementById("dashboard-section-encrypted");
-  const encryptedCreate = encryptedSection.querySelector(
+  const containersNavigation =
+    document.querySelector('[data-section="containers"]');
+  const containersSection =
+    document.getElementById("dashboard-section-containers");
+  const containersCreate = containersSection.querySelector(
     '[data-create-kind="encrypted"]');
-  const encryptedList = encryptedSection.querySelector(
+  const containersList = containersSection.querySelector(
     "[data-container-list]");
   const settingsNavigation =
     document.querySelector('[data-section="settings"]');
   const settingsSection =
     document.getElementById("dashboard-section-settings");
   const containerRows = () =>
-    Array.from(encryptedList.querySelectorAll(".container-row"));
+    Array.from(containersList.querySelectorAll(".container-row"));
   const containerFacts = (row) =>
     Array.from(row.querySelectorAll(".container-fact-value"))
       .map((fact) => fact.textContent);
@@ -171,21 +171,21 @@ chrome.webview.postMessage("driver-loaded");
       !action.hidden || !surface.hidden || dashboard.hidden ||
       !dashboardUnmount.hidden || dashboardVolumeState.textContent !== "未挂载" ||
       dashboardContainerCount.textContent !== "0" ||
-      encryptedCreate.hidden || containerRows().length !== 0) {
+      containersCreate.hidden || containerRows().length !== 0) {
     request("fail-initialization-submit");
     return;
   }
 
-  encryptedNavigation.click();
-  if (!encryptedNavigation.classList.contains("active") ||
-      !encryptedSection.classList.contains("active")) {
+  containersNavigation.click();
+  if (!containersNavigation.classList.contains("active") ||
+      !containersSection.classList.contains("active")) {
     request("fail-dashboard-navigation");
     return;
   }
 
   settingsNavigation.click();
   if (!settingsSection.classList.contains("active") ||
-      encryptedSection.classList.contains("active")) {
+      containersSection.classList.contains("active")) {
     request("fail-settings-navigation");
     return;
   }
@@ -209,12 +209,12 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-settings-switch");
     return;
   }
-  encryptedNavigation.click();
-  if (!encryptedSection.classList.contains("active")) {
+  containersNavigation.click();
+  if (!containersSection.classList.contains("active")) {
     request("fail-settings-navigation");
     return;
   }
-  encryptedCreate.click();
+  containersCreate.click();
   if (creationDialog.hidden || creationTitle.textContent !== "新建加密盘" ||
       creationCapacity.value !== "64" || creationContinue.disabled) {
     request("fail-creation-entry");
@@ -264,7 +264,7 @@ chrome.webview.postMessage("driver-loaded");
         "integration.hc" &&
       row.querySelector(".container-state").textContent === "已挂载" &&
       facts.length === 2 && facts[0] === "64 MiB" && facts[1] === "D:" &&
-      !encryptedCreate.hidden;
+      !containersCreate.hidden;
   })) {
     request("fail-creation-submit");
     return;

@@ -109,14 +109,20 @@ void test_authenticated_dashboard_is_real_state_only() {
               std::string::npos &&
               page.find("id=\"dashboard-section-dashboard\"") !=
                   std::string::npos &&
-              page.find("id=\"dashboard-section-encrypted\"") !=
-                  std::string::npos &&
-              page.find("id=\"dashboard-section-hidden\"") !=
+              page.find("id=\"dashboard-section-containers\"") !=
                   std::string::npos,
           "authenticated dashboard shell is incomplete");
+  // 8.7.5 forbids presenting containers by volume type, so there is one list
+  // and one management view. Both creation entries still appear in both, which
+  // 8.7 requires: hiding one would tell an observer what this machine holds.
   require(count_occurrences(page, "data-create-kind=\"encrypted\"") == 2 &&
-              count_occurrences(page, "data-create-kind=\"hidden\"") == 2,
-          "dashboard and management views lack both creation entries");
+              count_occurrences(page, "data-create-kind=\"hidden\"") == 2 &&
+              count_occurrences(page, "data-container-list") == 2 &&
+              page.find("id=\"dashboard-section-hidden\"") ==
+                  std::string::npos &&
+              page.find("id=\"dashboard-section-encrypted\"") ==
+                  std::string::npos,
+          "containers are still split by volume type");
   require(count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 3 &&
               count_occurrences(page, "data-tooltip=\"正在开发中\"") == 3 &&
               page.find("文件管理") != std::string::npos &&
