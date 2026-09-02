@@ -383,6 +383,31 @@ target_link_libraries(usb_vault_vikey_development_credentials
 )
 usb_vault_configure_target(usb_vault_vikey_development_credentials)
 
+# Small current-user configurator for the three development-only Credential
+# Manager entries. It is explicitly built and distributed only with the ViKey
+# development package, never as part of the normal product target graph.
+add_executable(usb_vault_vikey_development_credentials_config
+  WIN32 EXCLUDE_FROM_ALL
+  tools/vikey_development_credentials_config/main.cpp
+)
+target_include_directories(
+  usb_vault_vikey_development_credentials_config PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(
+  usb_vault_vikey_development_credentials_config PRIVATE UNICODE _UNICODE)
+target_link_options(
+  usb_vault_vikey_development_credentials_config PRIVATE
+  "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+)
+target_link_libraries(
+  usb_vault_vikey_development_credentials_config PRIVATE
+  usb_vault_vikey_development_credentials
+)
+usb_vault_configure_target(
+  usb_vault_vikey_development_credentials_config)
+
 add_executable(usb_vault_vikey_helper WIN32
   tools/vikey_helper/main.cpp
   src/card/verified_local_artifact.cpp

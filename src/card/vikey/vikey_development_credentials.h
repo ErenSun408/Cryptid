@@ -7,6 +7,19 @@
 
 namespace usb_vault::card::vikey::development {
 
+enum class CredentialField {
+  user_sn,
+  api_key,
+  user_pin,
+};
+
+// Applies the same fixed development-card shape accepted by VikeySession:
+// UserSN and API key are hexadecimal ASCII, while the PIN is alphanumeric
+// ASCII. This performs no Credential Manager access.
+[[nodiscard]] bool valid_credential_value(
+    CredentialField field,
+    std::span<const std::byte> value) noexcept;
+
 // Decodes the byte layouts produced by Windows Credential Manager into locked
 // memory. Exposed for deterministic tests; it does not access Credential
 // Manager itself.
@@ -20,5 +33,11 @@ class WindowsCredentialProvider final : public IVikeyCredentialProvider {
  public:
   [[nodiscard]] VikeyCredentialSet load_credentials() override;
 };
+
+// Validates all three values before the first write, then replaces the fixed
+// generic credentials for the current Windows user. Values are persisted only
+// on this machine. This is development-only and is not a production secret
+// provisioning boundary.
+void store_credentials(VikeyCredentialSet credentials);
 
 }  // namespace usb_vault::card::vikey::development

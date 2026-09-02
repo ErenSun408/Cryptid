@@ -5606,3 +5606,45 @@
   update target 仍绑定探测所得的非零硬件 ID；未新增密码、S、硬件标识或记录原文的 UI 暴露／日志；
   P2.14c 的“成功交接前撤销上下文”及 R-03 / 8.6 均保持不变。
 - 提交：用户已批准；本节随 `[P2.17]reinspect the card before record writes` 提交，未推送。
+
+### 小切片 18a：ViKey 开发凭据配置程序
+
+#### 需求与既有实现审计
+
+- 用户要求把手工打开 Windows 凭据管理器的流程收敛成一个最小配置程序，供开发测试包录入
+  UserSN、API Key 与用户 PIN。本切片只配置**当前 Windows 用户、当前机器**上的开发凭据，
+  不访问安全卡、不启动 helper、不加载 `ViKey.dll`，也不把它扩展为生产凭据部署方案。
+- 复核既有 `WindowsCredentialProvider`、`VikeySession` 和小切片 11 的实体卡结论后，沿用三个固定
+  Generic Credential 目标：`usb-vault-vikey-dev-user-sn`、`usb-vault-vikey-dev-api-key`、
+  `usb-vault-vikey-dev-user-pin`。输入规则与真实会话保持一致：UserSN 为 32 个十六进制 ASCII，
+  API Key 为 128 个十六进制 ASCII，用户 PIN 为 8 个字母或数字。
+- 工具仍为 `EXCLUDE_FROM_ALL` 的开发目标；普通产品构建图与正式 helper 不因此获得写凭据能力。
+
+#### 实现
+
+- 新增 Win32 GUI `usb_vault_vikey_development_credentials_config`：三个 `ES_PASSWORD` 遮蔽输入框，
+  输入长度由控件限制，全部长度与字符集合法前保存按钮保持禁用；窗口不提供命令行秘密参数、显示
+  开关、剪贴板日志或自动读取／回显现有值。
+- 页面文本明确“仅限开发卡和非生产材料”。保存时把三个 UTF-16 控件值逐项转换进锁页
+  `SecureBuffer`，拒绝非 ASCII，然后调用共享验证器；中间宽字符缓冲与 ASCII 缓冲均由析构清零。
+- `store_credentials()` 在第一次 `CredWriteW` 之前验证完整三项，以 `CRED_TYPE_GENERIC`、
+  `CRED_PERSIST_LOCAL_MACHINE` 写入固定目标；随后复用正式读取器复读三项并逐字节比对。系统返回的
+  Credential Blob 仍在 `CredFree` 前由既有 RAII 清零。程序以 `asInvoker` 运行，不要求管理员权限。
+- 写入 API 没有多凭据事务：若 Windows 在第二或第三项失败，可能留下已更新的前缀。失败文案不会
+  宣称未修改，而是要求修正后重新保存**全部三项**；成功才清空三个控件并报告已复读验证。
+
+#### 验证、安全复核与遗留
+
+- 扩展 `vikey_development_credentials_tests`，覆盖 UserSN/API Key/PIN 的合法字符集、错误长度、
+  非法字符与未知字段。Debug、MSVC `/analyze`、ASan 三套目标均构建成功且该测试均通过；
+  `/analyze` 无项目诊断，ASan 未报告内存错误。
+- Debug GUI 做了两次“空输入、隐藏启动、确认消息循环存活、关闭指定新进程”的烟测，均通过且没有
+  调用 `CredWriteW`。依赖表只有 `ADVAPI32`、`KERNEL32`、`USER32`、`GDI32` 与 MSVC Debug 运行库，
+  没有 ViKey、网络、Shell 或提权依赖；`git diff --check` 通过。
+- 安全复核：凭据值不会进入仓库、命令行、日志或错误文案；C++ 侧临时副本使用锁页内存并清零。
+  但 Win32 Edit 控件自身仍会在进程普通内存持有输入，且当前用户上下文中的其他程序可读取 Generic
+  Credential，因此此工具只能承载当前开发卡的非生产材料，不能作为量产秘密管理结论。
+- ⚠️ 未执行真实三项写入验收，以免覆盖开发机现有可用凭据；用户可在审阅后用真实值执行一次，
+  再启动既有 P2 开发程序完成闭环。当前生成的是 Debug EXE，仍依赖 Debug VC 运行库；给其他机器
+  下载的 Release／自包含打包属于下一独立切片。
+- 提交：待用户审阅决定（建议 `[P2.18]add the ViKey credential configurator`）。
