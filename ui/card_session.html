@@ -371,17 +371,53 @@
     .workflow-step:first-child .step-number { color: var(--gold); border-color: rgba(200, 169, 106, .45); }
     .creation-form { margin-top: 1.1rem; }
     .creation-form label { display: block; margin-bottom: .4rem; font-size: .78rem; font-weight: 500; color: var(--text-2); }
-    .creation-capacity-row { display: flex; align-items: center; gap: .5rem; }
-    .creation-capacity-row input {
+    .capacity-field { display: flex; align-items: center; gap: .5rem; }
+    .capacity-field input {
       width: 8rem; height: 2.4rem; padding: 0 .7rem;
       border: 1px solid var(--line-2); border-radius: .5rem;
       background: var(--ink-850); color: var(--text); font-family: var(--mono);
     }
-    .creation-capacity-row input:focus {
+    .capacity-field input:focus {
       outline: none; border-color: rgba(200, 169, 106, .55);
       box-shadow: 0 0 0 3px rgba(200, 169, 106, .1);
     }
-    .creation-capacity-row span, .creation-hint { font-size: .75rem; color: var(--text-3); }
+    .capacity-unit { font-size: .75rem; color: var(--text-3); }
+    .unit-picker { position: relative; }
+    .unit-button {
+      display: inline-flex; align-items: center; gap: .4rem; height: 2.4rem;
+      padding: 0 .55rem 0 .7rem; border: 1px solid var(--line-2); border-radius: .5rem;
+      background: var(--ink-850); color: var(--text-2); font-size: .78rem; cursor: pointer;
+    }
+    .unit-button:hover:not(:disabled) { border-color: var(--line-3); color: var(--text); }
+    .unit-button:disabled { cursor: not-allowed; opacity: .45; }
+    .unit-button svg { width: .85rem; height: .85rem; color: var(--text-3); }
+    .unit-list {
+      position: absolute; z-index: 5; top: calc(100% + .3rem); left: 0; min-width: 100%;
+      display: grid; padding: .25rem; border: 1px solid var(--line-2); border-radius: .5rem;
+      background: var(--ink-750); box-shadow: 0 .7rem 1.6rem -.6rem rgba(0, 0, 0, .8);
+    }
+    .unit-option {
+      padding: .4rem .6rem; border-radius: .35rem; text-align: left;
+      font-size: .78rem; color: var(--text-2); cursor: pointer;
+    }
+    .unit-option:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+    .unit-option[aria-selected="true"] { color: var(--gold); }
+    .creation-error { margin: .45rem 0 0; font-size: .75rem; line-height: 1.6; color: var(--danger); }
+    .creation-note {
+      display: flex; align-items: flex-start; gap: .6rem; padding: .7rem .8rem;
+      border: 1px solid rgba(200, 169, 106, .32); border-radius: .55rem;
+      background: rgba(200, 169, 106, .07);
+      font-size: .75rem; line-height: 1.65; color: var(--text-2);
+    }
+    .creation-note svg { flex: 0 0 auto; width: .9rem; height: .9rem; margin-top: .16rem; color: var(--gold); }
+    #create-type-note { margin-top: 1.1rem; }
+    .creation-check {
+      display: flex; align-items: flex-start; gap: .6rem; margin-top: .9rem;
+      padding: .7rem .8rem; border: 1px solid var(--line-2); border-radius: .55rem;
+      font-size: .75rem; line-height: 1.65; color: var(--text-2); cursor: pointer;
+    }
+    .creation-check input { flex: 0 0 auto; width: .9rem; height: .9rem; margin: .2rem 0 0; accent-color: var(--gold); }
+    .creation-hint { font-size: .75rem; color: var(--text-3); }
     .creation-hint { margin: .45rem 0 0; line-height: 1.65; }
     .creation-password {
       width: 100%; height: 2.4rem; padding: 0 .7rem;
@@ -649,48 +685,85 @@
             <span class="type-pick-copy">一个双层结构的容器，含一个外层卷与一个隐藏卷，使用诱饵密码或日常密码进行解密与挂载。</span>
           </button>
         </div>
+        <div id="create-type-note" class="creation-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+          <span>创建过程需要管理员权限，系统稍后会弹出确认窗口。</span>
+        </div>
         <div id="create-volume-workflow" class="workflow-preview" aria-label="建卷流程预览" hidden>
           <div class="workflow-step"><span class="step-number">1</span><span>确认容量并选择保存位置</span></div>
           <div class="workflow-step"><span class="step-number">2</span><span>完成管理员权限确认</span></div>
-          <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载加密盘</span></div>
+          <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载容器</span></div>
         </div>
         <div id="create-container-form" class="creation-form" hidden>
-          <label for="create-container-capacity">加密盘容量</label>
-          <div class="creation-capacity-row">
+          <label for="create-container-capacity">容量</label>
+          <div class="capacity-field">
             <input id="create-container-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="64">
-            <span>MiB</span>
+      <div class="unit-picker">
+        <button id="create-container-unit" class="unit-button" type="button" data-unit="mib"
+                aria-haspopup="listbox" aria-expanded="false" aria-label="容量单位">
+          <span class="unit-name">MiB</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10.5l4-4 4 4"></path><path d="M8 13.5l4 4 4-4"></path></svg>
+        </button>
+        <div class="unit-list" role="listbox" aria-label="容量单位" hidden>
+          <button class="unit-option" type="button" role="option" aria-selected="true" data-unit="mib">MiB</button>
+          <button class="unit-option" type="button" role="option" aria-selected="false" data-unit="gib">GiB</button>
+          <button class="unit-option" type="button" role="option" aria-selected="false" data-unit="tib">TiB</button>
+        </div>
+      </div>
           </div>
-          <p class="creation-hint">请输入 20 至 1048576 MiB 的整数（1 MiB = 1024×1024 字节）。</p>
+          <p class="creation-hint">可用范围 20 MiB 至 1 TiB 的整数。容量在创建后不可更改。</p>
+          <p id="create-container-error" class="creation-error" hidden></p>
         </div>
         <div id="create-container-b-form" class="creation-form" hidden>
-          <label for="create-container-b-capacity">隐藏盘总容量</label>
-          <div class="creation-capacity-row">
+          <label for="create-container-b-capacity">总容量</label>
+          <div class="capacity-field">
             <input id="create-container-b-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="128">
-            <span>MiB</span>
+      <div class="unit-picker">
+        <button id="create-container-b-unit" class="unit-button" type="button" data-unit="mib"
+                aria-haspopup="listbox" aria-expanded="false" aria-label="容量单位">
+          <span class="unit-name">MiB</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10.5l4-4 4 4"></path><path d="M8 13.5l4 4 4-4"></path></svg>
+        </button>
+        <div class="unit-list" role="listbox" aria-label="容量单位" hidden>
+          <button class="unit-option" type="button" role="option" aria-selected="true" data-unit="mib">MiB</button>
+          <button class="unit-option" type="button" role="option" aria-selected="false" data-unit="gib">GiB</button>
+          <button class="unit-option" type="button" role="option" aria-selected="false" data-unit="tib">TiB</button>
+        </div>
+      </div>
           </div>
-          <label for="create-container-b-hidden-capacity" style="margin-top:.9rem">其中内层容量</label>
-          <div class="creation-capacity-row">
+          <label for="create-container-b-hidden-capacity" style="margin-top:.9rem">内层容量</label>
+          <div class="capacity-field">
             <input id="create-container-b-hidden-capacity" type="number" inputmode="numeric" min="1" max="1048575" step="1" value="96">
-            <span>MiB</span>
+            <span id="create-container-b-unit-echo" class="capacity-unit">MiB</span>
           </div>
-          <p class="creation-hint">外层需要留出足够空间放置可以交出的内容，因此内层必须小于总容量。</p>
-          <label for="create-container-b-password" style="margin-top:.9rem">当前密码</label>
-          <input id="create-container-b-password" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <p class="creation-hint">内层卷至多占总容量的 3/4，其余留给外层放置可以交出的内容。</p>
+          <p id="create-container-b-error" class="creation-error" hidden></p>
           <label for="create-container-b-second" style="margin-top:.9rem">为该容器设置诱饵密码</label>
           <input id="create-container-b-second" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
           <label for="create-container-b-second-confirmation" style="margin-top:.9rem">再次输入诱饵密码</label>
           <input id="create-container-b-second-confirmation" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
-          <p class="creation-hint">诱饵密码同样需要 12 至 128 个字符。当前密码打开内层，这里设置的密码打开外层。请务必输入正确 —— 软件不会、也无法替你校验它。</p>
+          <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
+          <div class="creation-note" style="margin-top:.9rem">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+            <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。</span>
+          </div>
+          <label class="creation-check" for="create-container-b-acknowledge">
+            <input id="create-container-b-acknowledge" type="checkbox">
+            <span>创建这个容器会重写安全卡记录。卡上同时只能保留两个密码：这里设置的诱饵密码，以及当前登录使用的密码。原先记录的第三个密码将不再能打开这张卡。</span>
+          </label>
         </div>
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
       </div>
       <div class="modal-footer">
-        <button id="create-volume-cancel" class="modal-button" type="button">取消</button>
+        <button id="create-volume-cancel" class="modal-button" type="button">
+          <svg id="create-volume-back-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M15 6l-6 6 6 6"></path></svg>
+          <span id="create-volume-cancel-label">取消</span>
+        </button>
         <button id="create-volume-continue" class="modal-button primary" type="button">下一步</button>
       </div>
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-17c-create-flow"></script>
+  <script src="card_session.js?v=p2-17d-container-parameters"></script>
 </body>
 </html>

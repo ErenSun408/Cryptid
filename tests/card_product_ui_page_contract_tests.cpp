@@ -68,8 +68,9 @@ void require(const bool condition, const char* const message) {
 
 void test_page_has_route_specific_password_surfaces() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
-  // Two session inputs plus the three the hidden-volume creation form needs.
-  require(count_occurrences(page, "type=\"password\"") == 5,
+  // Two session inputs plus the two the hidden-volume creation form needs.
+  // The password the session was opened under is not among them.
+  require(count_occurrences(page, "type=\"password\"") == 4,
           "product page must have exactly the session and creation inputs");
   require(page.find("id=\"card-password\"") != std::string::npos &&
               page.find("id=\"card-password-confirmation\"") !=
@@ -78,13 +79,13 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("id=\"confirmation-field\" class=\"field\" hidden") !=
               std::string::npos,
           "confirmation must start hidden outside initialization");
-  require(count_occurrences(page, "autocomplete=\"off\"") == 5 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 5,
+  require(count_occurrences(page, "autocomplete=\"off\"") == 4 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 4,
           "every product password control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-17c-create-flow\"></script>") !=
+              "<script src=\"card_session.js?v=p2-17d-container-parameters\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -364,21 +365,35 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
                   std::string::npos &&
               page.find("id=\"create-container-b-hidden-capacity\"") !=
                   std::string::npos &&
-              page.find("id=\"create-container-b-password\"") !=
-                  std::string::npos &&
               page.find("id=\"create-container-b-second\"") !=
                   std::string::npos &&
               page.find("id=\"create-container-b-second-confirmation\"") !=
+                  std::string::npos &&
+              page.find("id=\"create-container-b-acknowledge\"") !=
                   std::string::npos,
           "the hidden container form is incomplete");
+  // The password the session was opened under is never asked for again: the
+  // session still holds it, so the page has no field for it and the bridge
+  // call has no argument for it.
+  require(page.find("create-container-b-password") == std::string::npos &&
+              script.find("containerBPassword") == std::string::npos,
+          "the page still asks for the password it was opened with");
   // 8.7.2: the wording is fixed and never adapts to who is logged in.
   require(page.find("为该容器设置诱饵密码") != std::string::npos &&
               page.find("再次输入诱饵密码") != std::string::npos &&
-              page.find("请务必输入正确 —— 软件不会、也无法替你校验它") !=
+              page.find("若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致") !=
                   std::string::npos,
           "the second password prompt is not the fixed symmetric wording");
+  // The card holds two passwords at once, so creating this container drops
+  // whichever third one was recorded. That has to be acknowledged, and the
+  // acknowledgement reads the same under either login.
+  require(page.find("创建这个容器会重写安全卡记录") != std::string::npos &&
+              script.find("containerBAcknowledge.checked") !=
+                  std::string::npos,
+          "the card record rewrite is committed without an acknowledgement");
   require(script.find("await bridge.createContainerBMib(sizes.outer, "
-                      "sizes.hidden,") != std::string::npos,
+                      "sizes.hidden,\n                                         "
+                      "secondBytes, confirmationBytes);") != std::string::npos,
           "the page does not create the hidden container through the bridge");
   // 8.7.3: entering it twice is the only permitted check. The page must not
   // claim the second password is right or wrong.
@@ -404,8 +419,24 @@ void test_container_creation_form_is_bounded() {
               page.find("id=\"create-volume-status\"") !=
                   std::string::npos,
           "container A dialog lacks its fixed capacity and status controls");
+  // A capacity is typed in whichever unit the picker shows and always reaches
+  // the bridge in MiB, so the bounds are checked after the conversion.
+  require(script.find("const kMinimumCapacityMib = 20;") != std::string::npos &&
+              script.find("const kMaximumCapacityMib = 1024 * 1024;") !=
+                  std::string::npos &&
+              script.find("{ mib: 1, gib: 1024, tib: 1024 * 1024 }") !=
+                  std::string::npos &&
+              script.find("if (value > kMaximumCapacityMib) return "
+                          "\"容量超出最大值。\";") != std::string::npos &&
+              script.find("if (value < kMinimumCapacityMib) return "
+                          "\"容量低于最小值。\";") != std::string::npos,
+          "capacity bounds are not enforced on the converted value");
+  // The outer volume must stay large enough to hold credible handover
+  // content, so the inner one is capped at three quarters of the total.
+  require(script.find("if (hidden * 4 > outer * 3) return \"内层容量过载。\";") !=
+              std::string::npos,
+          "the three-quarter rule for the inner volume is missing");
   require(script.find("const containerCapacityMib") != std::string::npos &&
-              script.find("value >= minimum &&") != std::string::npos &&
               script.find("creationKind !== \"encrypted\"") !=
                   std::string::npos &&
               script.find("creationKind !== \"hidden\"") !=
@@ -413,7 +444,7 @@ void test_container_creation_form_is_bounded() {
           "creation routing does not bind each capacity to its own flow");
   require(script.find("请选择保存位置，随后确认管理员权限") !=
               std::string::npos &&
-              script.find("创建成功，可以开始使用加密盘") !=
+              script.find("创建成功，可以开始使用。") !=
                   std::string::npos &&
               script.find("已取消创建。") != std::string::npos &&
               script.find("若容器已完成但未挂载，请重新插卡后重试") !=

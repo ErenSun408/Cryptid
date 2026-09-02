@@ -62,28 +62,76 @@
     document.getElementById("create-volume-description");
   const creationCloseButton = document.getElementById("create-volume-close");
   const creationCancelButton = document.getElementById("create-volume-cancel");
+  const creationCancelLabel =
+    document.getElementById("create-volume-cancel-label");
+  const creationBackIcon = document.getElementById("create-volume-back-icon");
   const creationContinueButton =
     document.getElementById("create-volume-continue");
   const containerForm = document.getElementById("create-container-form");
   const containerCapacity =
     document.getElementById("create-container-capacity");
+  const containerError = document.getElementById("create-container-error");
   const creationStatus = document.getElementById("create-volume-status");
   const creationWorkflow = document.getElementById("create-volume-workflow");
+  const creationTypeNote = document.getElementById("create-type-note");
   const containerBForm = document.getElementById("create-container-b-form");
   const containerBCapacity =
     document.getElementById("create-container-b-capacity");
   const containerBHiddenCapacity =
     document.getElementById("create-container-b-hidden-capacity");
-  const containerBPassword =
-    document.getElementById("create-container-b-password");
   const containerBSecond =
     document.getElementById("create-container-b-second");
   const containerBSecondConfirmation =
     document.getElementById("create-container-b-second-confirmation");
+  const containerBAcknowledge =
+    document.getElementById("create-container-b-acknowledge");
+  const containerBError =
+    document.getElementById("create-container-b-error");
   const containerBInputs = [
-    containerBCapacity, containerBHiddenCapacity, containerBPassword,
-    containerBSecond, containerBSecondConfirmation,
+    containerBCapacity, containerBHiddenCapacity, containerBSecond,
+    containerBSecondConfirmation, containerBAcknowledge,
   ];
+
+  // Capacities are entered in whichever unit the picker shows and always
+  // reach the bridge in MiB. Nothing else in the page works in another unit.
+  const kCapacityUnits = Object.freeze(
+    { mib: 1, gib: 1024, tib: 1024 * 1024 });
+  const kCapacityUnitNames = Object.freeze(
+    { mib: "MiB", gib: "GiB", tib: "TiB" });
+  const kMinimumCapacityMib = 20;
+  const kMaximumCapacityMib = 1024 * 1024;
+
+  const makeUnitPicker = (button, fields, echo = null) => ({
+    button,
+    echo,
+    fields,
+    list: button.parentElement.querySelector(".unit-list"),
+    options: Array.from(button.parentElement.querySelectorAll(".unit-option")),
+    name: button.querySelector(".unit-name"),
+  });
+
+  const containerUnit = makeUnitPicker(
+    document.getElementById("create-container-unit"),
+    [{
+      input: containerCapacity,
+      minimum: kMinimumCapacityMib,
+      maximum: kMaximumCapacityMib,
+    }]);
+  // The two hidden-container capacities are compared against each other, so
+  // they share one unit and can never be read in different ones.
+  const containerBUnit = makeUnitPicker(
+    document.getElementById("create-container-b-unit"),
+    [{
+      input: containerBCapacity,
+      minimum: kMinimumCapacityMib,
+      maximum: kMaximumCapacityMib,
+    }, {
+      input: containerBHiddenCapacity,
+      minimum: 1,
+      maximum: kMaximumCapacityMib - 1,
+    }],
+    document.getElementById("create-container-b-unit-echo"));
+  const unitPickers = [containerUnit, containerBUnit];
 
   let bridge = null;
   let currentState = null;
@@ -157,24 +205,80 @@
     }
   };
 
-  const positiveInteger = (raw, minimum, maximum) => {
-    const text = raw.trim();
+  const closeUnitLists = () => {
+    for (const picker of unitPickers) {
+      picker.list.hidden = true;
+      picker.button.setAttribute("aria-expanded", "false");
+    }
+  };
+
+  // Switching the unit rewrites the reachable bounds of every field it
+  // governs, so the spinner and the validation below never disagree.
+  const applyCapacityUnit = (picker, unit) => {
+    const factor = kCapacityUnits[unit] || 1;
+    picker.button.dataset.unit = unit;
+    picker.name.textContent = kCapacityUnitNames[unit];
+    if (picker.echo !== null) {
+      picker.echo.textContent = kCapacityUnitNames[unit];
+    }
+    for (const option of picker.options) {
+      option.setAttribute(
+        "aria-selected", option.dataset.unit === unit ? "true" : "false");
+    }
+    for (const field of picker.fields) {
+      field.input.min = String(Math.max(1, Math.ceil(field.minimum / factor)));
+      field.input.max =
+        String(Math.max(1, Math.floor(field.maximum / factor)));
+    }
+  };
+
+  const capacityMib = (input, picker) => {
+    const text = input.value.trim();
     if (!/^[0-9]+$/.test(text)) return null;
-    const value = Number(text);
-    return Number.isSafeInteger(value) && value >= minimum &&
-      value <= maximum
-      ? value
-      : null;
+    const value = Number(text) * (kCapacityUnits[picker.button.dataset.unit] ||
+                                  1);
+    return Number.isSafeInteger(value) ? value : null;
+  };
+
+  // Every rejection names the field it is about. An empty string means the
+  // capacities are usable, which is also what enables the submit button.
+  const containerCapacityProblem = () => {
+    const value = capacityMib(containerCapacity, containerUnit);
+    if (value === null) return "请输入整数容量。";
+    if (value > kMaximumCapacityMib) return "容量超出最大值。";
+    if (value < kMinimumCapacityMib) return "容量低于最小值。";
+    return "";
   };
 
   const containerCapacityMib = () =>
-    positiveInteger(containerCapacity.value, 20, 1048576);
+    containerCapacityProblem() === ""
+      ? capacityMib(containerCapacity, containerUnit)
+      : null;
+
+  const containerBProblem = () => {
+    const outer = capacityMib(containerBCapacity, containerBUnit);
+    const hidden = capacityMib(containerBHiddenCapacity, containerBUnit);
+    if (outer === null || hidden === null) return "请输入整数容量。";
+    if (outer > kMaximumCapacityMib) return "容量超出最大值。";
+    if (outer < kMinimumCapacityMib) return "容量低于最小值。";
+    if (hidden < 1) return "内层容量低于最小值。";
+    // The outer volume has to hold enough handover content to stay credible,
+    // so the inner one is capped at three quarters of the total.
+    if (hidden * 4 > outer * 3) return "内层容量过载。";
+    return "";
+  };
 
   const containerBSizes = () => {
-    const outer = positiveInteger(containerBCapacity.value, 20, 1048576);
-    const hidden = positiveInteger(containerBHiddenCapacity.value, 1, 1048575);
-    if (outer === null || hidden === null || hidden >= outer) return null;
-    return { outer, hidden };
+    if (containerBProblem() !== "") return null;
+    return {
+      outer: capacityMib(containerBCapacity, containerBUnit),
+      hidden: capacityMib(containerBHiddenCapacity, containerBUnit),
+    };
+  };
+
+  const showFieldProblem = (element, message) => {
+    element.textContent = message;
+    element.hidden = message === "";
   };
 
   const normalizedLength = (value) => {
@@ -187,10 +291,10 @@
 
   const containerBInputReady = () => {
     const second = normalizedLength(containerBSecond.value);
-    return containerBSizes() !== null &&
-      containerBPassword.value.length !== 0 && second !== null &&
+    return containerBSizes() !== null && second !== null &&
       second >= 12 && second <= 128 &&
-      containerBSecond.value === containerBSecondConfirmation.value;
+      containerBSecond.value === containerBSecondConfirmation.value &&
+      containerBAcknowledge.checked;
   };
 
   const updateCreationAvailability = () => {
@@ -218,22 +322,37 @@
           button.dataset.createKind === creationKind ? "true" : "false");
       button.disabled = busy || !authenticated || !choosing;
     }
+    creationTypeNote.hidden = !choosing;
     containerCapacity.disabled = busy || !authenticated || choosing ||
       !encrypted || creationCompleted;
+    containerUnit.button.disabled = containerCapacity.disabled;
     for (const input of containerBInputs) {
       input.disabled = busy || !authenticated || choosing || !hiddenVolume ||
         creationCompleted;
     }
+    containerBUnit.button.disabled = containerBCapacity.disabled;
+    if (containerUnit.button.disabled && containerBUnit.button.disabled) {
+      closeUnitLists();
+    }
+    showFieldProblem(
+      containerError,
+      choosing || !encrypted || creationCompleted
+        ? ""
+        : containerCapacityProblem());
+    showFieldProblem(
+      containerBError,
+      choosing || !hiddenVolume || creationCompleted
+        ? ""
+        : containerBProblem());
     creationCloseButton.disabled = busy;
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
-    creationContinueButton.textContent = choosing
-      ? "下一步"
-      : hiddenVolume ? "创建隐藏盘" : "创建加密盘";
-    creationCancelButton.textContent = creationCompleted
+    creationContinueButton.textContent = choosing ? "下一步" : "创建容器";
+    creationCancelLabel.textContent = creationCompleted
       ? "完成"
       : choosing ? "取消" : "上一步";
+    creationBackIcon.hidden = choosing || creationCompleted;
   };
 
   const kCreationTypeLead =
@@ -247,21 +366,26 @@
       return;
     }
     const hiddenVolume = creationKind === "hidden";
-    creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
+    creationTitle.textContent = hiddenVolume
+      ? "新建含隐藏卷的容器"
+      : "新建标准容器";
     creationDescription.textContent = hiddenVolume
-      ? "隐藏盘在同一个文件里有内外两层，各用一个密码打开。创建过程将请求管理员权限。"
-      : "请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。";
+      ? "请设置总容量与内层容量，并为这个容器设置一个诱饵密码。"
+      : "请设置容器容量。接着会让你选择保存位置。";
   };
 
   // Leaving a parameter step discards what was typed on it: a decoy password
   // must not outlive the step that asked for it.
   const resetCreationInputs = () => {
+    applyCapacityUnit(containerUnit, "mib");
+    applyCapacityUnit(containerBUnit, "mib");
+    closeUnitLists();
     containerCapacity.value = "64";
     containerBCapacity.value = "128";
     containerBHiddenCapacity.value = "96";
-    containerBPassword.value = "";
     containerBSecond.value = "";
     containerBSecondConfirmation.value = "";
+    containerBAcknowledge.checked = false;
   };
 
   const focusCreationType = () => {
@@ -280,7 +404,8 @@
     creationCompleted = false;
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
-    creationCancelButton.textContent = "取消";
+    creationCancelLabel.textContent = "取消";
+    creationBackIcon.hidden = true;
   };
 
   const showDashboardSection = (sectionName) => {
@@ -869,49 +994,42 @@
     if (sizes === null || !containerBInputReady() ||
         creationKind !== "hidden" ||
         currentState !== nativeState.authenticated) {
-      creationStatus.textContent = "请检查容量与两次输入的诱饵密码。";
+      creationStatus.textContent = "请检查容量、诱饵密码与下方的确认项。";
       creationStatus.dataset.tone = "error";
       updateCreationAvailability();
       return;
     }
 
-    let encodedLogin = null;
     let encodedSecond = null;
     let encodedConfirmation = null;
-    let loginBytes = null;
     let secondBytes = null;
     let confirmationBytes = null;
     busy = true;
-    creationStatus.textContent = "正在写入安全卡并创建隐藏盘。";
+    creationStatus.textContent = "正在写入安全卡并创建容器。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     try {
       try {
         const encoder = new TextEncoder();
-        encodedLogin = encoder.encode(containerBPassword.value);
         encodedSecond = encoder.encode(containerBSecond.value);
         encodedConfirmation =
           encoder.encode(containerBSecondConfirmation.value);
-        loginBytes = Array.from(encodedLogin);
         secondBytes = Array.from(encodedSecond);
         confirmationBytes = Array.from(encodedConfirmation);
       } finally {
-        containerBPassword.value = "";
         containerBSecond.value = "";
         containerBSecondConfirmation.value = "";
-        wipe(encodedLogin);
         wipe(encodedSecond);
         wipe(encodedConfirmation);
-        encodedLogin = null;
         encodedSecond = null;
         encodedConfirmation = null;
       }
       try {
+        // The password this session was opened under stays native: the page
+        // never received it back and never sends it anywhere.
         await bridge.createContainerBMib(sizes.outer, sizes.hidden,
-                                         loginBytes, secondBytes,
-                                         confirmationBytes);
+                                         secondBytes, confirmationBytes);
       } finally {
-        wipe(loginBytes);
         wipe(secondBytes);
         wipe(confirmationBytes);
       }
@@ -919,8 +1037,8 @@
       busy = false;
       creationCompleted = true;
       render(messageForCurrentState());
-      creationDescription.textContent = "隐藏盘已经创建并挂载。";
-      creationStatus.textContent = "创建成功，可以开始使用隐藏盘。";
+      creationDescription.textContent = "容器已经创建并挂载。";
+      creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
     } catch (_) {
@@ -935,12 +1053,11 @@
       if (!creationDialog.hidden &&
           currentState === nativeState.authenticated) {
         creationStatus.textContent =
-          "创建失败。请确认当前密码无误后重试。";
+          "创建失败。请稍后重试。";
         creationStatus.dataset.tone = "error";
         updateCreationAvailability();
       }
     } finally {
-      wipe(loginBytes);
       wipe(secondBytes);
       wipe(confirmationBytes);
       if (externalRefreshPending) {
@@ -953,7 +1070,7 @@
     const sizeMib = containerCapacityMib();
     if (sizeMib === null || creationKind !== "encrypted" ||
         currentState !== nativeState.authenticated) {
-      creationStatus.textContent = "请输入有效的加密盘容量。";
+      creationStatus.textContent = "请检查容量设置。";
       creationStatus.dataset.tone = "error";
       updateCreationAvailability();
       return;
@@ -975,8 +1092,8 @@
         return;
       }
       creationCompleted = true;
-      creationDescription.textContent = "加密盘已经创建并挂载。";
-      creationStatus.textContent = "创建成功，可以开始使用加密盘。";
+      creationDescription.textContent = "容器已经创建并挂载。";
+      creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
     } catch (_) {
@@ -1078,21 +1195,49 @@
     });
   }
   for (const input of [containerCapacity, ...containerBInputs]) {
-    input.addEventListener("input", () => {
-      creationStatus.textContent = "";
-      creationStatus.dataset.tone = "";
-      updateCreationAvailability();
-    });
+    for (const name of ["input", "change"]) {
+      input.addEventListener(name, () => {
+        creationStatus.textContent = "";
+        creationStatus.dataset.tone = "";
+        updateCreationAvailability();
+      });
+    }
   }
+  for (const picker of unitPickers) {
+    picker.button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (picker.button.disabled) return;
+      const opening = picker.list.hidden;
+      closeUnitLists();
+      picker.list.hidden = !opening;
+      picker.button.setAttribute("aria-expanded", opening ? "true" : "false");
+    });
+    for (const option of picker.options) {
+      option.addEventListener("click", (event) => {
+        event.stopPropagation();
+        applyCapacityUnit(picker, option.dataset.unit);
+        closeUnitLists();
+        creationStatus.textContent = "";
+        creationStatus.dataset.tone = "";
+        updateCreationAvailability();
+        picker.button.focus();
+      });
+    }
+  }
+  document.addEventListener("click", () => closeUnitLists());
   creationDialog.addEventListener("click", (event) => {
     if (event.target === creationDialog) {
       closeCreationFlow();
     }
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !creationDialog.hidden) {
-      closeCreationFlow();
+    if (event.key !== "Escape" || creationDialog.hidden) return;
+    // An open unit list is the innermost thing Escape can close.
+    if (unitPickers.some((picker) => !picker.list.hidden)) {
+      closeUnitLists();
+      return;
     }
+    closeCreationFlow();
   });
   dashboardUnmountButton.addEventListener("click", async () => {
     if (!busy && currentState === nativeState.authenticated && activeVolumes) {

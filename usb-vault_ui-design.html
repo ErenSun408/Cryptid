@@ -369,6 +369,8 @@ const P = {
   eject:'<path d="M5 14.5h14"/><path d="M12 4.5l6 7H6l6-7z"/><path d="M6 18.5h12"/>',
   trash:'<path d="M4.5 7h15"/><path d="M9.5 7V5.2h5V7"/><path d="M6.5 7l.9 12.2h9.2L17.5 7"/>',
   chevron:'<path d="M9 6l6 6-6 6"/>',
+  back:'<path d="M15 6l-6 6 6 6"/>',
+  sort:'<path d="M8 10.5l4-4 4 4"/><path d="M8 13.5l4 4 4-4"/>',
   down:'<path d="M6 9l6 6 6-6"/>',
   file:'<path d="M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0 001.5-1.5V8.5l-5-5z"/><path d="M13.5 3.5v5h5"/>',
   layers:'<path d="M12 3.5l8.5 4.6L12 12.7 3.5 8.1 12 3.5z"/><path d="M3.5 15.9L12 20.5l8.5-4.6"/><path d="M3.5 12L12 16.6 20.5 12"/>'
@@ -835,14 +837,17 @@ add({
           <p>一个双层结构的容器，含一个外层卷与一个隐藏卷，使用诱饵密码或日常密码进行解密与挂载。</p>
         </div>
       </div>
+      <div class="note gold" style="margin-top:16px"><span class="ni">${ic('alert')}</span><span>
+        创建过程需要<b>管理员权限</b>，系统稍后会弹出确认窗口。</span></div>
     </div>
     <div class="dlg-f"><span class="btn">取消</span><span class="btn pri">下一步${ic('chevron')}</span></div>
   </div></div>`,
   notes: [
     '<b>两个入口恒显、视觉权重完全对等。</b>用任何一个密码登录，看到的都是这两张卡片 —— 少一个入口，对手只要比对一份全新安装就知道这台机器建过隐藏容器。',
-    '文案回避"档位/模式/胁迫"等内部词汇，只描述结构本身：这三个词一旦出现在界面上就是档位痕迹。'
+    '文案回避"档位/模式/胁迫"等内部词汇，只描述结构本身：这三个词一旦出现在界面上就是档位痕迹。',
+    '提权说明放在<b>选择容器类型之前</b>：早期稿把它放在参数屏并靠"所有类型都会请求"一句话保证对称，而放在这里，它在用户做出选择之前就已出现，结构上不可能因类型而异。'
   ],
-  refs: ['8.7.2 入口恒显', '8.4 UI 层', '8.6 术语约定']
+  refs: ['8.7.2 入口恒显', '8.4 UI 层', '8.6 术语约定', 'N-08 无条件提权']
 });
 
 add({
@@ -859,20 +864,21 @@ add({
         </div>
       </div>
       <div class="field"><label>容量</label>
-        <div class="inp" style="max-width:200px"><span class="val">64</span><span class="unit">GiB</span></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="inp" style="width:150px"><span class="val">64</span></div>
+          <span class="btn sm" style="gap:6px">GiB${ic('sort')}</span>
+        </div>
         <p class="hint">可用范围 20 MiB – 1 TiB。容量在创建后不可更改。</p>
       </div>
-      <div class="note gold"><span class="ni">${ic('shield')}</span><span>
-        创建过程需要<b>管理员权限</b>，系统会弹出确认窗口。所有类型的容器都会请求，与容器结构无关。</span></div>
     </div>
-    <div class="dlg-f"><span class="btn">上一步</span><span class="btn pri">${ic('lock')}创建容器</span></div>
+    <div class="dlg-f"><span class="btn">${ic('back')}上一步</span><span class="btn pri">创建容器</span></div>
   </div></div>`,
   notes: [
     '标准容器的卷密码<b>固定由卡派生</b>，因此这一屏不出现任何密码输入框 —— 绑定用户输入会让它在两个密码中的一个下打不开。',
-    '提权说明必须写成"所有类型都会请求"：只有隐藏容器提权、标准容器不提权，UAC 行为本身就泄露了档位。',
-    '当前实现（P2.16c）只有容量一项，名称与路径待补；容量单位仍是 MiB，正式稿建议按 GiB 呈现、内部仍按 MiB 传递。'
+    '提权说明已前移到选择容器类型那一屏：放在选择之前，就无需再靠文案声明"所有类型都会请求"。',
+    '<b>单位可切换</b>（MiB / GiB / TiB），越界即禁用创建并在容量框下方红字说明；内部一律按 MiB 传递。名称与路径仍待补。'
   ],
-  refs: ['N-06 第 5 条', 'N-08 无条件提权', 'P2.16c 待审阅']
+  refs: ['N-06 第 5 条', 'N-08 无条件提权', 'P2.17d 已实现']
 });
 
 add({
@@ -889,24 +895,31 @@ add({
           <span style="color:var(--text-3)">/</span>
           <div class="inp" style="width:150px"><span class="val">96</span><span class="unit">GiB</span></div>
         </div>
-        <p class="hint">外层还需留出 32 GiB 用于放置可交出的内容。</p>
+        <p class="hint">内层卷至多占总容量的 3/4，其余留给外层放置可以交出的内容。</p>
       </div>
       <div class="field"><label>为该容器设置诱饵密码</label>
         <div class="inp focus"><span class="val">••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
       </div>
       <div class="field"><label>再次输入诱饵密码</label>
         <div class="inp"><span class="val">••••••••••••</span><span class="eye">${ic('eyeOff')}</span></div>
-        <p class="hint">当前登录使用的密码打开<b style="color:var(--text-2)">内层</b>，这里设置的密码打开<b style="color:var(--text-2)">外层</b>。请务必输入正确 —— 软件不会、也无法替你校验它。</p>
+      </div>
+      <div class="note gold"><span class="ni">${ic('alert')}</span><span>
+        注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。</span></div>
+      <div style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:13px 15px;border:1px solid var(--line-2);border-radius:10px">
+        <span class="cbx on">${ic('check')}</span>
+        <span style="font-size:12.5px;color:var(--text-2);line-height:1.6">创建这个容器会重写安全卡记录。卡上同时只能保留两个密码：这里设置的诱饵密码，以及当前登录使用的密码。原先记录的第三个密码将不再能打开这张卡。</span>
       </div>
     </div>
-    <div class="dlg-f"><span class="btn">上一步</span><span class="btn pri">${ic('layers')}创建容器</span></div>
+    <div class="dlg-f"><span class="btn">${ic('back')}上一步</span><span class="btn pri">创建容器</span></div>
   </div></div>`,
   notes: [
     '<b>第二个密码永不校验。</b>拿它去试解卡上的信封就能判定对错，但那等于向对手承认"存在一个特定的正确答案"。唯一允许的缓解是输入两遍。',
     '提示文案<b>固定为"为该容器设置诱饵密码"</b>，绝不因登录身份而改成"请输入你的诱饵密码"—— 产品恒把当前登录密码当作真实密码、把新设密码当作诱饵密码，自己不判断处在哪一侧。',
-    '这是全流程<b>唯一一次</b>接触档位信息的时刻：用完即焚，不落配置、不落日志、不落临时文件、不落最近使用记录。'
+    '这是全流程<b>唯一一次</b>接触档位信息的时刻：用完即焚，不落配置、不落日志、不落临时文件、不落最近使用记录。',
+    '<b>不再要求重输日常密码。</b>会话已持有本次登录用的那个口令，重封卡记录时直接取用 —— 取的是"登录用的那一个"，不是"日常密码"，因此在两种登录下逐字对称。',
+    '<b>卡记录只有两个信封。</b>建这个容器等于把记录重写为"此处设置的诱饵密码 + 当前登录密码"，第三个密码会被挤掉；勾选项是这一后果的明示确认，两种登录下文案完全相同。'
   ],
-  refs: ['8.7.3 不得验证', '8.7.2 逐字对称', '8.6 用完即焚']
+  refs: ['8.7.3 不得验证', '8.7.2 逐字对称', '8.6 用完即焚', 'card_record_v1 双信封']
 });
 
 add({

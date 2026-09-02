@@ -41,6 +41,8 @@ chrome.webview.postMessage("driver-loaded");
   const creationDialog = document.getElementById("create-volume-dialog");
   const creationTitle = document.getElementById("create-volume-title");
   const creationCancel = document.getElementById("create-volume-cancel");
+  const creationCancelLabel =
+    document.getElementById("create-volume-cancel-label");
   const creationContinue = document.getElementById("create-volume-continue");
   const creationCapacity =
     document.getElementById("create-container-capacity");
@@ -52,11 +54,18 @@ chrome.webview.postMessage("driver-loaded");
     document.getElementById("create-container-b-capacity");
   const hiddenInnerCapacity =
     document.getElementById("create-container-b-hidden-capacity");
-  const hiddenPassword =
-    document.getElementById("create-container-b-password");
   const hiddenSecond = document.getElementById("create-container-b-second");
   const hiddenSecondConfirmation =
     document.getElementById("create-container-b-second-confirmation");
+  const hiddenError = document.getElementById("create-container-b-error");
+  const hiddenAcknowledge =
+    document.getElementById("create-container-b-acknowledge");
+  const capacityUnit = document.getElementById("create-container-unit");
+  const capacityUnitList = capacityUnit.parentElement
+    .querySelector(".unit-list");
+  const capacityUnitOption = (unit) => capacityUnit.parentElement
+    .querySelector(`.unit-option[data-unit="${unit}"]`);
+  const capacityError = document.getElementById("create-container-error");
   const creationStatus = document.getElementById("create-volume-status");
   const instruction = "请输入并确认日常密码，至少12字符。";
 
@@ -223,7 +232,7 @@ chrome.webview.postMessage("driver-loaded");
   if (creationDialog.hidden || typeStep.hidden ||
       creationTitle.textContent !== "新建容器" ||
       creationContinue.textContent !== "下一步" ||
-      creationCancel.textContent !== "取消" ||
+      creationCancelLabel.textContent !== "取消" ||
       standardPick.getAttribute("aria-checked") !== "true" ||
       hiddenPick.getAttribute("aria-checked") !== "false" ||
       creationContinue.disabled) {
@@ -231,9 +240,11 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
   creationContinue.click();
-  if (!typeStep.hidden || creationTitle.textContent !== "新建加密盘" ||
-      creationCancel.textContent !== "上一步" ||
-      creationCapacity.value !== "64" || creationContinue.disabled) {
+  if (!typeStep.hidden || creationTitle.textContent !== "新建标准容器" ||
+      creationCancelLabel.textContent !== "上一步" ||
+      creationContinue.textContent !== "创建容器" ||
+      creationCapacity.value !== "64" || capacityUnit.dataset.unit !== "mib" ||
+      creationContinue.disabled) {
     request("fail-creation-entry");
     return;
   }
@@ -254,10 +265,36 @@ chrome.webview.postMessage("driver-loaded");
   }
   creationCapacity.value = "19";
   creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
-  if (!creationContinue.disabled) {
+  if (!creationContinue.disabled || capacityError.hidden ||
+      capacityError.textContent !== "容量低于最小值。") {
     request("fail-creation-validation");
     return;
   }
+  // 1 TiB is the largest container, so two of them in GiB is over the top.
+  creationCapacity.value = "2048";
+  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  capacityUnit.click();
+  if (capacityUnitList.hidden) {
+    request("fail-creation-unit");
+    return;
+  }
+  capacityUnitOption("gib").click();
+  if (!capacityUnitList.hidden || capacityUnit.dataset.unit !== "gib" ||
+      capacityUnit.querySelector(".unit-name").textContent !== "GiB" ||
+      !creationContinue.disabled || capacityError.hidden ||
+      capacityError.textContent !== "容量超出最大值。") {
+    request("fail-creation-unit");
+    return;
+  }
+  // The same field in GiB has to reach the bridge multiplied by 1024.
+  creationCapacity.value = "1";
+  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  if (creationContinue.disabled || !capacityError.hidden) {
+    request("fail-creation-unit");
+    return;
+  }
+  capacityUnit.click();
+  capacityUnitOption("mib").click();
   creationCapacity.value = "64";
   creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
   creationContinue.click();
@@ -283,7 +320,8 @@ chrome.webview.postMessage("driver-loaded");
     if (surface.dataset.busy !== "false" ||
         dashboardVolumeState.textContent !== "已挂载" ||
         dashboardUnmount.hidden || !creationCapacity.disabled ||
-        !creationContinue.disabled || creationCancel.textContent !== "完成" ||
+        !creationContinue.disabled ||
+        creationCancelLabel.textContent !== "完成" ||
         creationStatus.dataset.tone !== "success" ||
         dashboardContainerCount.textContent !== "1" ||
         containerRows().length !== 1) {
@@ -322,10 +360,32 @@ chrome.webview.postMessage("driver-loaded");
   }
   creationContinue.click();
   typeInto(hiddenCapacity, "128");
-  typeInto(hiddenInnerCapacity, "96");
-  typeInto(hiddenPassword, "p\u0000ä");
+  typeInto(hiddenInnerCapacity, "97");
   typeInto(hiddenSecond, "second-password-value");
   typeInto(hiddenSecondConfirmation, "second-password-value");
+  hiddenAcknowledge.checked = true;
+  hiddenAcknowledge.dispatchEvent(new Event("change", { bubbles: true }));
+  // 97 of 128 is past three quarters, so the inner volume is refused before
+  // anything reaches the bridge.
+  if (!creationContinue.disabled ||
+      hiddenError.textContent !== "内层容量过载。") {
+    request("fail-hidden-capacity-rule");
+    return;
+  }
+  typeInto(hiddenInnerCapacity, "96");
+  if (creationContinue.disabled || !hiddenError.hidden) {
+    request("fail-hidden-capacity-rule");
+    return;
+  }
+  // The acknowledgement is the last gate: without it nothing is submitted.
+  hiddenAcknowledge.checked = false;
+  hiddenAcknowledge.dispatchEvent(new Event("change", { bubbles: true }));
+  if (!creationContinue.disabled) {
+    request("fail-hidden-acknowledgement");
+    return;
+  }
+  hiddenAcknowledge.checked = true;
+  hiddenAcknowledge.dispatchEvent(new Event("change", { bubbles: true }));
   if (creationDialog.hidden || creationContinue.disabled) {
     request("fail-hidden-creation");
     return;
@@ -333,8 +393,8 @@ chrome.webview.postMessage("driver-loaded");
   creationContinue.click();
   if (!await waitFor(() => surface.dataset.busy === "false" &&
       dashboardContainerCount.textContent === "2" &&
-      containerRows().length === 2 && hiddenPassword.value === "" &&
-      hiddenSecond.value === "" &&
+      containerRows().length === 2 && hiddenSecond.value === "" &&
+      hiddenSecondConfirmation.value === "" &&
       creationStatus.dataset.tone === "success")) {
     request("fail-hidden-creation");
     return;

@@ -82,6 +82,7 @@
   <div id="create-volume-dialog" role="dialog" data-step="type" hidden>
     <h3 id="create-volume-title">新建容器</h3>
     <p id="create-volume-description"></p>
+    <div id="create-type-note"></div>
     <button id="create-volume-close" type="button">关闭</button>
     <div id="create-type-step" role="radiogroup">
       <button type="button" role="radio" aria-checked="true"
@@ -90,25 +91,59 @@
               data-create-kind="hidden">含隐藏卷的容器</button>
     </div>
     <div id="create-container-form" hidden>
-      <label for="create-container-capacity">加密盘容量</label>
+      <label for="create-container-capacity">容量</label>
       <input id="create-container-capacity" type="number" min="20"
              max="1048576" step="1" value="64">
+      <div>
+        <button id="create-container-unit" type="button" data-unit="mib"
+                aria-haspopup="listbox" aria-expanded="false">
+          <span class="unit-name">MiB</span>
+        </button>
+        <div class="unit-list" role="listbox" hidden>
+          <button class="unit-option" type="button" role="option"
+                  aria-selected="true" data-unit="mib">MiB</button>
+          <button class="unit-option" type="button" role="option"
+                  aria-selected="false" data-unit="gib">GiB</button>
+          <button class="unit-option" type="button" role="option"
+                  aria-selected="false" data-unit="tib">TiB</button>
+        </div>
+      </div>
+      <p id="create-container-error" hidden></p>
     </div>
     <div id="create-volume-workflow" hidden></div>
     <div id="create-container-b-form" hidden>
       <input id="create-container-b-capacity" type="number" min="20"
              max="1048576" step="1" value="128">
+      <div>
+        <button id="create-container-b-unit" type="button" data-unit="mib"
+                aria-haspopup="listbox" aria-expanded="false">
+          <span class="unit-name">MiB</span>
+        </button>
+        <div class="unit-list" role="listbox" hidden>
+          <button class="unit-option" type="button" role="option"
+                  aria-selected="true" data-unit="mib">MiB</button>
+          <button class="unit-option" type="button" role="option"
+                  aria-selected="false" data-unit="gib">GiB</button>
+          <button class="unit-option" type="button" role="option"
+                  aria-selected="false" data-unit="tib">TiB</button>
+        </div>
+      </div>
       <input id="create-container-b-hidden-capacity" type="number" min="1"
              max="1048575" step="1" value="96">
-      <input id="create-container-b-password" type="password">
+      <span id="create-container-b-unit-echo">MiB</span>
+      <p id="create-container-b-error" hidden></p>
       <input id="create-container-b-second" type="password">
       <input id="create-container-b-second-confirmation" type="password">
+      <input id="create-container-b-acknowledge" type="checkbox">
     </div>
     <output id="create-volume-status"></output>
-    <button id="create-volume-cancel" type="button">取消</button>
+    <button id="create-volume-cancel" type="button">
+      <svg id="create-volume-back-icon" viewBox="0 0 24 24" hidden></svg>
+      <span id="create-volume-cancel-label">取消</span>
+    </button>
     <button id="create-volume-continue" type="button">下一步</button>
   </div>
-  <script src="card_session.js?v=p2-17c-create-flow"></script>
-  <script src="card_product_webview_integration.js?v=p2-17c-create-flow"></script>
+  <script src="card_session.js?v=p2-17d-container-parameters"></script>
+  <script src="card_product_webview_integration.js?v=p2-17d-container-parameters"></script>
 </body>
 </html>
