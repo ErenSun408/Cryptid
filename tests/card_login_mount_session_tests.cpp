@@ -7,6 +7,7 @@
 #include <concepts>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +25,9 @@ using usb_vault::application::detail::SessionContainer;
 using usb_vault::application::ContainerCreationCleanupError;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::MountSessionResult;
+using usb_vault::application::OperationEvent;
+using usb_vault::application::OperationKind;
+using usb_vault::application::OperationOutcome;
 using usb_vault::application::detail::CardLoginMountSessionCore;
 using usb_vault::application::detail::CardLoginMountSessionRuntime;
 using usb_vault::security::SecureBuffer;
@@ -373,6 +377,22 @@ void require_events(const FakeRuntime& runtime,
     throw std::runtime_error("runtime event sequence differed; observed: " +
                              observed);
   }
+}
+
+void require_operation(const OperationEvent& event,
+                       const std::uint64_t sequence,
+                       const OperationKind kind,
+                       const OperationOutcome outcome,
+                       const std::wstring_view container_name,
+                       const wchar_t drive_letter,
+                       const char* const message) {
+  require(
+      event.sequence == sequence && event.completed_at_unix_ms > 0 &&
+          event.kind == kind && event.outcome == outcome &&
+          event.container_name == container_name &&
+          event.container_name.find_first_of(L"\\/") == std::wstring::npos &&
+          event.drive_letter == drive_letter,
+      message);
 }
 
 void test_all_container_shapes_establish_authentication() {
@@ -739,22 +759,26 @@ void test_forced_release_drops_the_captured_volume_password() {
 
   // Card removal releases the volumes and the captured password with them.
   static_cast<void>(session.force_unmount_active());
+  require(session.operation_history().empty(),
+          "card removal retained the closed session's operation history");
   require_throws<std::logic_error>(
       [&] { session.mount_adopted_container(hidden_id); },
       "the hidden container was mounted after its password was dropped");
+}
 
+void test_deliberate_release_keeps_the_captured_volume_password() {
   // A deliberate unmount keeps it so the same session can mount again.
-  CardAuthenticationSession second_authentication;
-  FakeRuntime second_runtime = runtime_with_both_containers();
-  CardLoginMountSessionCore second(second_authentication, second_runtime,
-                                   layout(), LoginMountPolicy::manual);
-  second.consume_authenticated_login(root_secret(),
-                                     bytes("login-password"));
-  const std::uint32_t second_hidden = second.container_statuses()[0].id;
-  second.mount_adopted_container(second_hidden);
-  second.unmount_active();
-  second.mount_adopted_container(second_hidden);
-  require(second.container_statuses()[0].mounted,
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime = runtime_with_both_containers();
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+  const std::uint32_t hidden_id = session.container_statuses()[0].id;
+  session.mount_adopted_container(hidden_id);
+  session.unmount_active();
+  session.mount_adopted_container(hidden_id);
+  require(session.container_statuses()[0].mounted,
           "a deliberate unmount blocked a later mount in the same session");
 }
 
@@ -871,12 +895,12 @@ void test_container_b_creation_rejects_unusable_input() {
   // instead of inventing a substitute.
   CardAuthenticationSession bare_authentication;
   FakeRuntime bare_runtime;
-  CardLoginMountSessionCore bare(bare_authentication, bare_runtime, layout(),
-                                 LoginMountPolicy::manual);
+  const auto bare = std::make_unique<CardLoginMountSessionCore>(
+      bare_authentication, bare_runtime, layout(), LoginMountPolicy::manual);
   bare_authentication.establish(root_secret());
   require_throws<std::logic_error>(
       [&] {
-        static_cast<void>(bare.create_container_b(
+        static_cast<void>(bare->create_container_b(
             64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
             bytes("decoy-password")));
       },
@@ -955,13 +979,13 @@ void test_container_a_status_projects_live_file_and_mount_facts() {
   FakeRuntime mounted_runtime;
   mounted_runtime.mount_a = true;
   mounted_runtime.container_a_exists = true;
-  CardLoginMountSessionCore mounted_session(
+  const auto mounted_session = std::make_unique<CardLoginMountSessionCore>(
       mounted_authentication, mounted_runtime, layout(),
       LoginMountPolicy::mount_on_login);
-  mounted_session.consume_authenticated_login(root_secret(),
+  mounted_session->consume_authenticated_login(root_secret(),
                                                bytes("login-password"));
   mounted_runtime.events.clear();
-  const auto mounted = mounted_session.container_a_status();
+  const auto mounted = mounted_session->container_a_status();
   require(mounted.exists && mounted.mounted &&
               mounted.size_bytes == 64ULL * 1024ULL * 1024ULL &&
               mounted.drive_letter == L'X',
@@ -969,7 +993,7 @@ void test_container_a_status_projects_live_file_and_mount_facts() {
 
   mounted_runtime.container_a_exists = false;
   require_throws<std::runtime_error>(
-      [&] { static_cast<void>(mounted_session.container_a_status()); },
+      [&] { static_cast<void>(mounted_session->container_a_status()); },
       "missing backing file was hidden for a recorded A mount");
 }
 
@@ -1140,6 +1164,180 @@ void test_unmount_active_releases_every_adopted_container() {
           "unmount_active dropped the adopted containers");
 }
 
+void test_operation_history_records_only_committed_session_facts() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(
+      authentication, runtime, layout(), LoginMountPolicy::manual);
+
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  std::vector<OperationEvent> history = session.operation_history();
+  require(history.size() == 1,
+          "opening a session did not replace history with one event");
+  require_operation(history[0],
+                    1,
+                    OperationKind::session_opened,
+                    OperationOutcome::succeeded,
+                    L"",
+                    wchar_t{},
+                    "the session-open event exposed a target or wrong result");
+
+  session.clear_operation_history();
+  require(session.operation_history().empty(),
+          "clearing history recorded another event");
+  static_cast<void>(session.create_container(L"C:\\vault\\work.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  history = session.operation_history();
+  require(history.size() == 2,
+          "successful creation was not split into create and mount facts");
+  require_operation(history[0],
+                    1,
+                    OperationKind::container_created,
+                    OperationOutcome::succeeded,
+                    L"work.hc",
+                    wchar_t{},
+                    "creation history retained a path or a drive");
+  require_operation(history[1],
+                    2,
+                    OperationKind::container_mounted,
+                    OperationOutcome::succeeded,
+                    L"work.hc",
+                    L'X',
+                    "mount history did not retain the confirmed drive");
+
+  session.unmount_container(1);
+  authentication.clear_authentication();
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  history = session.operation_history();
+  require(history.size() == 1 && history[0].sequence == 1 &&
+              history[0].kind == OperationKind::session_opened,
+          "a new authenticated session retained the previous history");
+}
+
+void test_operation_history_distinguishes_publish_from_mount_failure() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(
+      authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  session.clear_operation_history();
+  runtime.fail_created_mount = true;
+
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(session.create_container(L"C:\\vault\\published.hc",
+                                                   64ULL * 1024ULL * 1024ULL));
+      },
+      "the injected post-publication mount failure was accepted");
+  const std::vector<OperationEvent> history = session.operation_history();
+  require(history.size() == 2,
+          "a partial creation did not produce two authoritative facts");
+  require_operation(history[0],
+                    1,
+                    OperationKind::container_created,
+                    OperationOutcome::succeeded,
+                    L"published.hc",
+                    wchar_t{},
+                    "the published container was falsely recorded as failed");
+  require_operation(history[1],
+                    2,
+                    OperationKind::container_mounted,
+                    OperationOutcome::failed,
+                    L"published.hc",
+                    wchar_t{},
+                    "the failed mount invented a drive letter");
+}
+
+void test_operation_history_records_prepublication_and_unmount_failures() {
+  {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    const auto session = std::make_unique<CardLoginMountSessionCore>(
+        authentication, runtime, layout(), LoginMountPolicy::manual);
+    session->consume_authenticated_login(root_secret(),
+                                         bytes("login-password"));
+    session->clear_operation_history();
+    runtime.fail_create = true;
+    require_throws<std::runtime_error>(
+        [&] {
+          static_cast<void>(session->create_container(
+              L"C:\\vault\\failed.hc", 64ULL * 1024ULL * 1024ULL));
+        },
+        "the injected format failure was accepted");
+    const std::vector<OperationEvent> history = session->operation_history();
+    require(history.size() == 1,
+            "a prepublication failure produced a mount event");
+    require_operation(history[0],
+                      1,
+                      OperationKind::container_created,
+                      OperationOutcome::failed,
+                      L"failed.hc",
+                      wchar_t{},
+                      "a failed format was not recorded generically");
+  }
+
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(
+      authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(L"C:\\vault\\work.hc",
+                                                    64ULL * 1024ULL * 1024ULL);
+  session.clear_operation_history();
+  runtime.fail_unmount_a = true;
+  require_throws<std::runtime_error>(
+      [&] { session.unmount_container(id); },
+      "the injected unmount failure was accepted");
+  require(session.mounted(), "a failed unmount cleared the live mounted state");
+  runtime.fail_unmount_a = false;
+  session.unmount_container(id);
+
+  const std::vector<OperationEvent> history = session.operation_history();
+  require(history.size() == 2,
+          "unmount failure and retry were not both retained");
+  require_operation(history[0],
+                    1,
+                    OperationKind::container_unmounted,
+                    OperationOutcome::failed,
+                    L"work.hc",
+                    L'X',
+                    "failed unmount history lost its still-active drive");
+  require_operation(history[1],
+                    2,
+                    OperationKind::container_unmounted,
+                    OperationOutcome::succeeded,
+                    L"work.hc",
+                    L'X',
+                    "successful unmount history lost its released drive");
+}
+
+void test_operation_history_discards_only_the_oldest_events_at_capacity() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(
+      authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(L"C:\\vault\\bounded.hc",
+                                                    64ULL * 1024ULL * 1024ULL);
+  session.clear_operation_history();
+  runtime.fail_unmount_a = true;
+
+  for (std::size_t attempt = 0; attempt < 130; ++attempt) {
+    require_throws<std::runtime_error>(
+        [&] { session.unmount_container(id); },
+        "the injected bounded-history unmount failure was accepted");
+  }
+
+  const std::vector<OperationEvent> history = session.operation_history();
+  require(history.size() == usb_vault::application::kOperationHistoryCapacity,
+          "operation history exceeded its fixed capacity");
+  require(history.front().sequence == 3 &&
+              history.front().kind == OperationKind::container_unmounted &&
+              history.back().sequence == 130 &&
+              history.back().kind == OperationKind::container_unmounted,
+          "operation history did not retain the newest events in order");
+}
+
 }  // namespace
 
 int main() {
@@ -1159,6 +1357,7 @@ int main() {
     test_manual_login_captures_the_hidden_volume_password_only();
     test_adopted_containers_mount_without_further_input();
     test_forced_release_drops_the_captured_volume_password();
+    test_deliberate_release_keeps_the_captured_volume_password();
     test_login_adopts_every_mounted_container();
     test_standard_mount_refuses_the_hidden_container_path();
     test_container_b_creation_derives_both_volume_passwords();
@@ -1172,6 +1371,10 @@ int main() {
     test_unmounted_container_can_be_mounted_again();
     test_mount_requires_authentication_and_an_existing_file();
     test_unmount_active_releases_every_adopted_container();
+    test_operation_history_records_only_committed_session_facts();
+    test_operation_history_distinguishes_publish_from_mount_failure();
+    test_operation_history_records_prepublication_and_unmount_failures();
+    test_operation_history_discards_only_the_oldest_events_at_capacity();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

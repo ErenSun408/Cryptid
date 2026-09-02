@@ -10,6 +10,7 @@
 
 #include <Windows.h>
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -258,9 +259,15 @@ ContainerAStatus CardLoginMountSession::container_a_status() {
   return impl_->core.container_a_status();
 }
 
-void CardLoginMountSession::unmount_active() {
-  impl_->core.unmount_active();
+std::vector<OperationEvent> CardLoginMountSession::operation_history() {
+  return impl_->core.operation_history();
 }
+
+void CardLoginMountSession::clear_operation_history() noexcept {
+  impl_->core.clear_operation_history();
+}
+
+void CardLoginMountSession::unmount_active() { impl_->core.unmount_active(); }
 
 bool CardLoginMountSession::force_unmount_active() {
   return impl_->core.force_unmount_active();
@@ -388,6 +395,67 @@ CardLoginMountSessionCore::CardLoginMountSessionCore(
       layout_(std::move(layout)),
       login_mount_policy_(login_mount_policy) {}
 
+void CardLoginMountSessionCore::record_operation(
+    const OperationKind kind,
+    const OperationOutcome outcome,
+    const std::wstring_view container_name,
+    const wchar_t drive_letter) noexcept {
+  try {
+    const auto completed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch());
+    OperationEvent event{
+        .sequence = state_.next_operation_sequence,
+        .completed_at_unix_ms = completed.count(),
+        .kind = kind,
+        .outcome = outcome,
+        .container_name = std::wstring(container_name),
+        .drive_letter = drive_letter,
+    };
+
+    const bool full = state_.operation_count == state_.operation_events.size();
+    const std::size_t slot = (state_.operation_start + state_.operation_count) %
+                             state_.operation_events.size();
+    const std::size_t destination = full ? state_.operation_start : slot;
+    state_.operation_events[destination] = std::move(event);
+    if (full) {
+      state_.operation_start =
+          (state_.operation_start + 1) % state_.operation_events.size();
+    } else {
+      ++state_.operation_count;
+    }
+    ++state_.next_operation_sequence;
+  } catch (...) {
+    // History is informational. Allocation or clock failure must never change
+    // the result of the security or volume operation being recorded.
+  }
+}
+
+std::vector<OperationEvent> CardLoginMountSessionCore::operation_history() {
+  std::vector<OperationEvent> result;
+  result.reserve(state_.operation_count);
+  for (std::size_t index = 0; index < state_.operation_count; ++index) {
+    const std::size_t slot =
+        (state_.operation_start + index) % state_.operation_events.size();
+    result.push_back(state_.operation_events[slot]);
+  }
+  return result;
+}
+
+void CardLoginMountSessionCore::clear_operation_history() noexcept {
+  for (OperationEvent& event : state_.operation_events) {
+    event.container_name.clear();
+    event.sequence = 0;
+    event.completed_at_unix_ms = 0;
+    event.kind = OperationKind::session_opened;
+    event.outcome = OperationOutcome::succeeded;
+    event.drive_letter = wchar_t{};
+  }
+  state_.operation_start = 0;
+  state_.operation_count = 0;
+  state_.next_operation_sequence = 1;
+}
+
 void CardLoginMountSessionCore::consume_authenticated_login(
     security::SecureBuffer root_secret,
     security::SecureBuffer login_password_utf8) {
@@ -400,6 +468,9 @@ void CardLoginMountSessionCore::consume_authenticated_login(
 
   try {
     authentication_.establish(std::move(root_secret));
+    clear_operation_history();
+    record_operation(OperationKind::session_opened,
+                     OperationOutcome::succeeded);
     state_.container_b_password = security::SecureBuffer();
     // Retained for the card-record rewrite alone. It is the password itself
     // rather than a derivative because rewrapping an envelope needs the
@@ -499,29 +570,49 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                             "container creation target already exists");
   }
 
-  security::SecureBuffer volume_password = derive_standard_password();
+  const std::wstring container_name = file_name_of(path);
+  security::SecureBuffer volume_password;
   bool staging_owned = false;
   bool published = false;
+  bool mounted = false;
   try {
+    volume_password = derive_standard_password();
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
     runtime_.publish_created(staging_path, path);
     published = true;
+    record_operation(OperationKind::container_created,
+                     OperationOutcome::succeeded,
+                     container_name);
 
     const wchar_t drive_letter = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_created(
-        path, volume_password,
-        {.drive_letter = drive_letter,
-         .prf = volume::Pkcs5Prf::sha512,
-         .pim = 0,
-         .read_only = false,
-         .notify_shell = false}));
+    static_cast<void>(runtime_.mount_created(path,
+                                             volume_password,
+                                             {.drive_letter = drive_letter,
+                                              .prf = volume::Pkcs5Prf::sha512,
+                                              .pim = 0,
+                                              .read_only = false,
+                                              .notify_shell = false}));
+    mounted = true;
+    record_operation(OperationKind::container_mounted,
+                     OperationOutcome::succeeded,
+                     container_name,
+                     drive_letter);
     const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
     volume_password.clear();
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
     volume_password.clear();
+    if (!published) {
+      record_operation(OperationKind::container_created,
+                       OperationOutcome::failed,
+                       container_name);
+    } else if (!mounted) {
+      record_operation(OperationKind::container_mounted,
+                       OperationOutcome::failed,
+                       container_name);
+    }
     if (staging_owned && !published) {
       cleanup_incomplete_container(runtime_, staging_path,
                                    std::current_exception());
@@ -564,36 +655,51 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     throw std::system_error(std::make_error_code(std::errc::file_exists),
                             "container creation target already exists");
   }
+  const std::wstring container_name = file_name_of(path);
 
   // The password the caller is logged in under opens the hidden volume; the
   // password set here opens the outer one. The session never decides which of
   // the two the caller "really" uses.
-  security::SecureBuffer outer_password = runtime_.derive_container_password(
-      decoy_password_utf8, authentication_.root_secret_,
-      layout_.container_b.salt);
-  security::SecureBuffer hidden_password = runtime_.derive_container_password(
-      state_.login_password, authentication_.root_secret_,
-      layout_.container_b.salt);
+  security::SecureBuffer outer_password;
+  security::SecureBuffer hidden_password;
   bool staging_owned = false;
   bool published = false;
+  bool mounted = false;
   try {
-    runtime_.create_with_hidden(staging_path, outer_size_bytes,
-                                hidden_size_bytes, outer_password,
+    outer_password =
+        runtime_.derive_container_password(decoy_password_utf8,
+                                           authentication_.root_secret_,
+                                           layout_.container_b.salt);
+    hidden_password =
+        runtime_.derive_container_password(state_.login_password,
+                                           authentication_.root_secret_,
+                                           layout_.container_b.salt);
+    runtime_.create_with_hidden(staging_path,
+                                outer_size_bytes,
+                                hidden_size_bytes,
+                                outer_password,
                                 hidden_password);
     staging_owned = true;
     runtime_.publish_created(staging_path, path);
     published = true;
+    record_operation(OperationKind::container_created,
+                     OperationOutcome::succeeded,
+                     container_name);
 
     const wchar_t drive_letter = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_created(
-        path, hidden_password,
-        {.drive_letter = drive_letter,
-         .prf = volume::Pkcs5Prf::sha512,
-         .pim = 0,
-         .read_only = false,
-         .notify_shell = false}));
-    const std::uint32_t id =
-        adopt(state_, path, drive_letter, true, true).id;
+    static_cast<void>(runtime_.mount_created(path,
+                                             hidden_password,
+                                             {.drive_letter = drive_letter,
+                                              .prf = volume::Pkcs5Prf::sha512,
+                                              .pim = 0,
+                                              .read_only = false,
+                                              .notify_shell = false}));
+    mounted = true;
+    record_operation(OperationKind::container_mounted,
+                     OperationOutcome::succeeded,
+                     container_name,
+                     drive_letter);
+    const std::uint32_t id = adopt(state_, path, drive_letter, true, true).id;
     // The same value the login path derives when the container already
     // exists. Retaining it here is what lets this container be unmounted and
     // mounted again in the session that created it.
@@ -605,6 +711,15 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
   } catch (...) {
     outer_password.clear();
     hidden_password.clear();
+    if (!published) {
+      record_operation(OperationKind::container_created,
+                       OperationOutcome::failed,
+                       container_name);
+    } else if (!mounted) {
+      record_operation(OperationKind::container_mounted,
+                       OperationOutcome::failed,
+                       container_name);
+    }
     if (staging_owned && !published) {
       cleanup_incomplete_container(runtime_, staging_path,
                                    std::current_exception());
@@ -630,39 +745,50 @@ void CardLoginMountSessionCore::mount_adopted_container(
         "no container is adopted under that identifier");
   }
   if (entry->mounted) return;
-  if (!runtime_.container_exists(entry->path)) {
-    throw std::system_error(
-        std::make_error_code(std::errc::no_such_file_or_directory),
-        "adopted container file is no longer present");
-  }
-
-  const bool hidden_volume = entry->release_first;
-  if (hidden_volume && state_.container_b_password.empty()) {
-    throw std::logic_error(
-        "this container can only be opened by the login that captured it");
-  }
+  const std::wstring container_name = entry->name;
   security::SecureBuffer standard_password;
-  if (!hidden_volume) standard_password = derive_standard_password();
-  const security::SecureBuffer& volume_password =
-      hidden_volume ? state_.container_b_password : standard_password;
-
-  const wchar_t drive_letter = reserve_drive_letter();
+  bool mounted = false;
   try {
-    static_cast<void>(runtime_.mount_created(
-        entry->path, volume_password,
-        {.drive_letter = drive_letter,
-         .prf = volume::Pkcs5Prf::sha512,
-         .pim = 0,
-         .read_only = false,
-         .notify_shell = false}));
+    if (!runtime_.container_exists(entry->path)) {
+      throw std::system_error(
+          std::make_error_code(std::errc::no_such_file_or_directory),
+          "adopted container file is no longer present");
+    }
+
+    const bool hidden_volume = entry->release_first;
+    if (hidden_volume && state_.container_b_password.empty()) {
+      throw std::logic_error(
+          "this container can only be opened by the login that captured it");
+    }
+    if (!hidden_volume) standard_password = derive_standard_password();
+    const security::SecureBuffer& volume_password =
+        hidden_volume ? state_.container_b_password : standard_password;
+    const wchar_t drive_letter = reserve_drive_letter();
+    static_cast<void>(runtime_.mount_created(entry->path,
+                                             volume_password,
+                                             {.drive_letter = drive_letter,
+                                              .prf = volume::Pkcs5Prf::sha512,
+                                              .pim = 0,
+                                              .read_only = false,
+                                              .notify_shell = false}));
+    mounted = true;
+    record_operation(OperationKind::container_mounted,
+                     OperationOutcome::succeeded,
+                     container_name,
+                     drive_letter);
+    standard_password.clear();
+    entry->drive_letter = drive_letter;
+    entry->mounted = true;
+    runtime_.notify_mounted(drive_letter);
   } catch (...) {
     standard_password.clear();
+    if (!mounted) {
+      record_operation(OperationKind::container_mounted,
+                       OperationOutcome::failed,
+                       container_name);
+    }
     throw;
   }
-  standard_password.clear();
-  entry->drive_letter = drive_letter;
-  entry->mounted = true;
-  runtime_.notify_mounted(drive_letter);
 }
 
 std::uint32_t CardLoginMountSessionCore::mount_container(
@@ -677,32 +803,44 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
     throw std::logic_error(
         "mounting a container requires an authenticated card session");
   }
+  const std::wstring container_name = file_name_of(path);
   if (const SessionContainer* const adopted = find_by_path(state_, path);
       adopted != nullptr && adopted->mounted) {
     throw std::logic_error("container is already mounted");
   }
-  if (!runtime_.container_exists(path)) {
-    throw std::system_error(
-        std::make_error_code(std::errc::no_such_file_or_directory),
-        "container file is unavailable");
-  }
-
-  security::SecureBuffer volume_password = derive_standard_password();
+  security::SecureBuffer volume_password;
+  bool mounted = false;
   try {
+    if (!runtime_.container_exists(path)) {
+      throw std::system_error(
+          std::make_error_code(std::errc::no_such_file_or_directory),
+          "container file is unavailable");
+    }
+    volume_password = derive_standard_password();
     const wchar_t drive_letter = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_created(
-        path, volume_password,
-        {.drive_letter = drive_letter,
-         .prf = volume::Pkcs5Prf::sha512,
-         .pim = 0,
-         .read_only = false,
-         .notify_shell = false}));
+    static_cast<void>(runtime_.mount_created(path,
+                                             volume_password,
+                                             {.drive_letter = drive_letter,
+                                              .prf = volume::Pkcs5Prf::sha512,
+                                              .pim = 0,
+                                              .read_only = false,
+                                              .notify_shell = false}));
+    mounted = true;
+    record_operation(OperationKind::container_mounted,
+                     OperationOutcome::succeeded,
+                     container_name,
+                     drive_letter);
     const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
     volume_password.clear();
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
     volume_password.clear();
+    if (!mounted) {
+      record_operation(OperationKind::container_mounted,
+                       OperationOutcome::failed,
+                       container_name);
+    }
     throw;
   }
 }
@@ -711,10 +849,23 @@ void CardLoginMountSessionCore::unmount_container(const std::uint32_t id) {
   for (SessionContainer& container : state_.containers) {
     if (container.id != id) continue;
     if (!container.mounted) return;
-    static_cast<void>(runtime_.unmount(container.drive_letter));
-    container.mounted = false;
-    container.drive_letter = wchar_t{};
-    return;
+    const wchar_t drive_letter = container.drive_letter;
+    try {
+      static_cast<void>(runtime_.unmount(drive_letter));
+      container.mounted = false;
+      container.drive_letter = wchar_t{};
+      record_operation(OperationKind::container_unmounted,
+                       OperationOutcome::succeeded,
+                       container.name,
+                       drive_letter);
+      return;
+    } catch (...) {
+      record_operation(OperationKind::container_unmounted,
+                       OperationOutcome::failed,
+                       container.name,
+                       drive_letter);
+      throw;
+    }
   }
   throw std::invalid_argument("no container is adopted under that identifier");
 }
@@ -775,9 +926,22 @@ void CardLoginMountSessionCore::unmount_active() {
       if (!container.mounted || container.release_first != release_first) {
         continue;
       }
-      static_cast<void>(runtime_.unmount(container.drive_letter));
-      container.mounted = false;
-      container.drive_letter = wchar_t{};
+      const wchar_t drive_letter = container.drive_letter;
+      try {
+        static_cast<void>(runtime_.unmount(drive_letter));
+        container.mounted = false;
+        container.drive_letter = wchar_t{};
+        record_operation(OperationKind::container_unmounted,
+                         OperationOutcome::succeeded,
+                         container.name,
+                         drive_letter);
+      } catch (...) {
+        record_operation(OperationKind::container_unmounted,
+                         OperationOutcome::failed,
+                         container.name,
+                         drive_letter);
+        throw;
+      }
     }
   }
 }
@@ -788,6 +952,7 @@ bool CardLoginMountSessionCore::force_unmount_active() {
   // mount the container again in the same session.
   state_.container_b_password = security::SecureBuffer();
   state_.login_password = security::SecureBuffer();
+  clear_operation_history();
   bool forced = false;
   for (const bool release_first : {true, false}) {
     for (SessionContainer& container : state_.containers) {

@@ -33,6 +33,8 @@ using usb_vault::ui::CardProductUiState;
 using usb_vault::ui::ContainerUiStatus;
 using usb_vault::ui::kContainerCreationMaximumMib;
 using usb_vault::ui::kContainerCreationMinimumMib;
+using usb_vault::ui::OperationUiKind;
+using usb_vault::ui::OperationUiOutcome;
 
 static_assert(std::derived_from<CardEntryContextController,
                                 ICardEntryActions>);
@@ -174,9 +176,19 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
             .drive_letter = container_a_mounted ? L'X' : wchar_t{}};
   }
 
-  void consume_authenticated_login(
-      SecureBuffer root,
-      SecureBuffer login_password_utf8) override {
+  [[nodiscard]] std::vector<usb_vault::application::OperationEvent>
+  operation_history() override {
+    ++operation_history_calls;
+    return operation_events;
+  }
+
+  void clear_operation_history() noexcept override {
+    ++clear_operation_history_calls;
+    operation_events.clear();
+  }
+
+  void consume_authenticated_login(SecureBuffer root,
+                                   SecureBuffer login_password_utf8) override {
     ++consume_calls;
     login_bytes.assign(login_password_utf8.bytes().begin(),
                        login_password_utf8.bytes().end());
@@ -244,6 +256,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   CardAuthenticationSession& authentication_;
   std::vector<std::byte> login_bytes;
   std::vector<Adopted> containers;
+  std::vector<usb_vault::application::OperationEvent> operation_events;
   std::wstring created_path;
   std::wstring mounted_path;
   std::uint64_t created_size_bytes{};
@@ -274,6 +287,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int unmount_container_calls{};
   int mount_adopted_calls{};
   int container_statuses_calls{};
+  int operation_history_calls{};
+  int clear_operation_history_calls{};
   bool fail_after_authentication{};
   bool mount_on_success{};
   bool mounted_state{};
@@ -831,6 +846,98 @@ void test_inconsistent_container_status_fails_closed() {
       "UI displayed a drive letter for an unmounted container");
 }
 
+void test_operation_history_is_authenticated_sanitized_and_clearable() {
+  Fixture fixture;
+  require(fixture.controller.operation_history().empty() &&
+              fixture.volume.operation_history_calls == 0,
+          "an unauthenticated page queried operation history");
+  require_throws<std::system_error>(
+      [&] { fixture.controller.clear_operation_history(); },
+      "an unauthenticated page cleared operation history");
+
+  fixture.authentication.establish(root_secret());
+  fixture.volume.operation_events = {
+      {.sequence = 1,
+       .completed_at_unix_ms = 1788253200000,
+       .kind = usb_vault::application::OperationKind::session_opened,
+       .outcome = usb_vault::application::OperationOutcome::succeeded},
+      {.sequence = 2,
+       .completed_at_unix_ms = 1788253201000,
+       .kind = usb_vault::application::OperationKind::container_mounted,
+       .outcome = usb_vault::application::OperationOutcome::succeeded,
+       .container_name = L"work.hc",
+       .drive_letter = L'X'},
+  };
+  const auto events = fixture.controller.operation_history();
+  require(events.size() == 2 &&
+              events[0].kind == OperationUiKind::session_opened &&
+              events[0].outcome == OperationUiOutcome::succeeded &&
+              events[0].container_name.empty() &&
+              events[1].kind == OperationUiKind::container_mounted &&
+              events[1].container_name == L"work.hc" &&
+              events[1].drive_letter == L'X',
+          "the controller changed a valid operation history projection");
+
+  fixture.controller.clear_operation_history();
+  require(fixture.volume.operation_events.empty() &&
+              fixture.volume.clear_operation_history_calls == 1,
+          "clear operation history did not reach the native session once");
+}
+
+void test_operation_history_rejects_paths_and_impossible_shapes() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.operation_events = {{
+      .sequence = 1,
+      .completed_at_unix_ms = 1788253200000,
+      .kind = usb_vault::application::OperationKind::container_created,
+      .outcome = usb_vault::application::OperationOutcome::succeeded,
+      .container_name = L"D:\\Vault\\work.hc",
+  }};
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.operation_history()); },
+      "operation history exposed a full container path");
+
+  fixture.volume.operation_events[0] = {
+      .sequence = 2,
+      .completed_at_unix_ms = 1788253201000,
+      .kind = usb_vault::application::OperationKind::container_mounted,
+      .outcome = usb_vault::application::OperationOutcome::failed,
+      .container_name = L"work.hc",
+      .drive_letter = L'X',
+  };
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.operation_history()); },
+      "a failed mount invented a confirmed drive in UI history");
+
+  fixture.volume.operation_events[0] = {
+      .sequence = 3,
+      .completed_at_unix_ms = 1788253202000,
+      .kind = usb_vault::application::OperationKind::session_opened,
+      .outcome = usb_vault::application::OperationOutcome::failed,
+  };
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.operation_history()); },
+      "a failed authentication attempt entered operation history");
+
+  fixture.volume.operation_events.assign(
+      usb_vault::application::kOperationHistoryCapacity + 1, {});
+  for (std::size_t index = 0;
+       index < fixture.volume.operation_events.size(); ++index) {
+    fixture.volume.operation_events[index] = {
+        .sequence = index + 1,
+        .completed_at_unix_ms =
+            1788253200000 + static_cast<std::int64_t>(index),
+        .kind = usb_vault::application::OperationKind::container_created,
+        .outcome = usb_vault::application::OperationOutcome::succeeded,
+        .container_name = L"work.hc",
+    };
+  }
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.operation_history()); },
+      "an oversized operation history crossed the UI boundary");
+}
+
 }  // namespace
 
 int main() {
@@ -850,6 +957,8 @@ int main() {
     test_container_b_commits_the_card_before_the_volume();
     test_container_b_rejects_unusable_requests();
     test_inconsistent_container_status_fails_closed();
+    test_operation_history_is_authenticated_sanitized_and_clearable();
+    test_operation_history_rejects_paths_and_impossible_shapes();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

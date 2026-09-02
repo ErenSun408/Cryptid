@@ -40,6 +40,29 @@ struct ContainerUiStatus final {
   wchar_t drive_letter{};
 };
 
+enum class OperationUiKind : std::uint8_t {
+  session_opened = 0,
+  container_created = 1,
+  container_mounted = 2,
+  container_unmounted = 3,
+};
+
+enum class OperationUiOutcome : std::uint8_t {
+  succeeded = 0,
+  failed = 1,
+};
+
+// Closed, current-session-only projection for the page. `container_name` is a
+// file name, never a path, and no free-form diagnostic field exists.
+struct OperationUiEvent final {
+  std::uint64_t sequence{};
+  std::int64_t completed_at_unix_ms{};
+  OperationUiKind kind{OperationUiKind::session_opened};
+  OperationUiOutcome outcome{OperationUiOutcome::succeeded};
+  std::wstring container_name;
+  wchar_t drive_letter{};
+};
+
 // Native product UI boundary for P2. Mutable bridge inputs are wiped on every
 // path. Initialization performs two independent NFC ingresses before creating
 // a confirmation proof; login always accepts exactly one input and delegates
@@ -90,6 +113,8 @@ class CardProductUiSessionController final {
   // Live facts for every adopted container, in adoption order. Returns an
   // empty list on every route other than `authenticated`.
   [[nodiscard]] std::vector<ContainerUiStatus> container_statuses();
+  [[nodiscard]] std::vector<OperationUiEvent> operation_history();
+  void clear_operation_history();
 
  private:
   application::ICardEntryActions& entry_;

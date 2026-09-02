@@ -4,6 +4,7 @@
 #include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/application/mount_orchestrator.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -43,6 +44,35 @@ struct ContainerStatus final {
   std::wstring name;
   bool mounted{};
   std::uint64_t size_bytes{};
+  wchar_t drive_letter{};
+};
+
+// One best-effort, process-local fact from the current authenticated session.
+// The schema is intentionally closed: no free-form detail, full path, card
+// identity, password role, container shape, volume type, or export activity can
+// enter the history through this boundary.
+enum class OperationKind : std::uint8_t {
+  session_opened = 0,
+  container_created = 1,
+  container_mounted = 2,
+  container_unmounted = 3,
+};
+
+enum class OperationOutcome : std::uint8_t {
+  succeeded = 0,
+  failed = 1,
+};
+
+inline constexpr std::size_t kOperationHistoryCapacity = 128;
+
+struct OperationEvent final {
+  std::uint64_t sequence{};
+  std::int64_t completed_at_unix_ms{};
+  OperationKind kind{OperationKind::session_opened};
+  OperationOutcome outcome{OperationOutcome::succeeded};
+  // File name only. Empty only for `session_opened`.
+  std::wstring container_name;
+  // Present for a confirmed mount or an attempted/completed unmount only.
   wchar_t drive_letter{};
 };
 
@@ -131,6 +161,11 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // shape, or historical state crosses this boundary.
   [[nodiscard]] virtual ContainerAStatus container_a_status() = 0;
 
+  // Returns a bounded snapshot of the current authenticated session only.
+  // Nothing is persisted, and opening a new session replaces the old history.
+  [[nodiscard]] virtual std::vector<OperationEvent> operation_history() = 0;
+  virtual void clear_operation_history() noexcept = 0;
+
  protected:
   IAuthenticatedCardVolumeSession() noexcept = default;
 };
@@ -170,6 +205,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void unmount_container(std::uint32_t id) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
+  [[nodiscard]] std::vector<OperationEvent> operation_history() override;
+  void clear_operation_history() noexcept override;
 
   void unmount_active() override;
   [[nodiscard]] bool force_unmount_active() override;

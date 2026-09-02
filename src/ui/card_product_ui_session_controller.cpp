@@ -308,4 +308,85 @@ CardProductUiSessionController::container_statuses() {
   return result;
 }
 
+std::vector<OperationUiEvent>
+CardProductUiSessionController::operation_history() {
+  if (state() != CardProductUiState::authenticated) return {};
+
+  const std::vector<application::OperationEvent> events =
+      volume_session_.operation_history();
+  if (events.size() > application::kOperationHistoryCapacity) {
+    throw std::runtime_error("operation history exceeds its fixed capacity");
+  }
+  std::vector<OperationUiEvent> result;
+  result.reserve(events.size());
+  for (const application::OperationEvent& event : events) {
+    if (event.sequence == 0 || event.completed_at_unix_ms <= 0 ||
+        event.container_name.find_first_of(L"\\/") != std::wstring::npos) {
+      throw std::runtime_error("operation history event is inconsistent");
+    }
+
+    OperationUiKind kind{};
+    switch (event.kind) {
+      case application::OperationKind::session_opened:
+        kind = OperationUiKind::session_opened;
+        break;
+      case application::OperationKind::container_created:
+        kind = OperationUiKind::container_created;
+        break;
+      case application::OperationKind::container_mounted:
+        kind = OperationUiKind::container_mounted;
+        break;
+      case application::OperationKind::container_unmounted:
+        kind = OperationUiKind::container_unmounted;
+        break;
+      default:
+        throw std::runtime_error("operation history kind is unknown");
+    }
+
+    OperationUiOutcome outcome{};
+    switch (event.outcome) {
+      case application::OperationOutcome::succeeded:
+        outcome = OperationUiOutcome::succeeded;
+        break;
+      case application::OperationOutcome::failed:
+        outcome = OperationUiOutcome::failed;
+        break;
+      default:
+        throw std::runtime_error("operation history outcome is unknown");
+    }
+
+    const bool has_name = !event.container_name.empty();
+    const bool has_drive =
+        event.drive_letter >= L'A' && event.drive_letter <= L'Z';
+    const bool no_drive = event.drive_letter == wchar_t{};
+    const bool valid_shape =
+        (kind == OperationUiKind::session_opened && !has_name && no_drive &&
+         outcome == OperationUiOutcome::succeeded) ||
+        (kind == OperationUiKind::container_created && has_name && no_drive) ||
+        (kind == OperationUiKind::container_mounted && has_name &&
+         ((outcome == OperationUiOutcome::succeeded && has_drive) ||
+          (outcome == OperationUiOutcome::failed && no_drive))) ||
+        (kind == OperationUiKind::container_unmounted && has_name && has_drive);
+    if (!valid_shape) {
+      throw std::runtime_error("operation history fields are inconsistent");
+    }
+
+    result.push_back({.sequence = event.sequence,
+                      .completed_at_unix_ms = event.completed_at_unix_ms,
+                      .kind = kind,
+                      .outcome = outcome,
+                      .container_name = event.container_name,
+                      .drive_letter = event.drive_letter});
+  }
+  return result;
+}
+
+void CardProductUiSessionController::clear_operation_history() {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "clearing operation history is not available in the current UI state");
+  }
+  volume_session_.clear_operation_history();
+}
+
 }  // namespace usb_vault::ui

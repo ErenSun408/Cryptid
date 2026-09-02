@@ -197,6 +197,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t next_id{1};
   bool reject_create{};
   bool fail_container_statuses{};
+  bool fail_operation_history{};
   int create_calls{};
   int mount_calls{};
   int unmount_container_calls{};
@@ -208,8 +209,21 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
             .drive_letter = container_a_mounted ? L'X' : wchar_t{}};
   }
 
-  void consume_authenticated_login(
-      SecureBuffer root, SecureBuffer login_password_utf8) override {
+  [[nodiscard]] std::vector<usb_vault::application::OperationEvent>
+  operation_history() override {
+    if (fail_operation_history) {
+      throw std::runtime_error("operation history query failed");
+    }
+    return operation_events;
+  }
+
+  void clear_operation_history() noexcept override {
+    ++clear_operation_history_calls;
+    operation_events.clear();
+  }
+
+  void consume_authenticated_login(SecureBuffer root,
+                                   SecureBuffer login_password_utf8) override {
     ++consume_calls;
     login_bytes.assign(login_password_utf8.bytes().begin(),
                        login_password_utf8.bytes().end());
@@ -235,6 +249,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   CardAuthenticationSession& authentication_;
   std::vector<std::byte> login_bytes;
+  std::vector<usb_vault::application::OperationEvent> operation_events;
   bool mount_on_login{};
   bool mounted_state{};
   bool reject_unmount{};
@@ -246,6 +261,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int consume_calls{};
   int create_a_calls{};
   int unmount_calls{};
+  int clear_operation_history_calls{};
 };
 
 class FakeEntry final : public ICardEntryActions {
@@ -549,6 +565,52 @@ class InitializationArguments final {
   const ULONG count = result.ulVal;
   static_cast<void>(::VariantClear(&result));
   return count;
+}
+
+[[nodiscard]] ULONG invoke_operation_count(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"getOperationCount"),
+                                IID_NULL,
+                                LOCALE_INVARIANT,
+                                DISPATCH_METHOD,
+                                &parameters,
+                                &result,
+                                nullptr,
+                                nullptr)),
+          "operation count query failed");
+  require(result.vt == VT_UI4, "operation count returned the wrong type");
+  const ULONG count = result.ulVal;
+  static_cast<void>(::VariantClear(&result));
+  return count;
+}
+
+[[nodiscard]] LONG invoke_operation_number(IDispatch& host,
+                                           const wchar_t* const name,
+                                           const std::uint32_t index) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(host, name, index, &result, nullptr)),
+          "operation numeric fact query failed");
+  require(result.vt == VT_I4, "operation numeric fact returned the wrong type");
+  const LONG value = result.lVal;
+  static_cast<void>(::VariantClear(&result));
+  return value;
+}
+
+[[nodiscard]] double invoke_operation_time(IDispatch& host,
+                                           const std::uint32_t index) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(
+              host, L"getOperationCompletedAtUnixMs", index, &result, nullptr)),
+          "operation completion time query failed");
+  require(result.vt == VT_R8,
+          "operation completion time returned the wrong type");
+  const double value = result.dblVal;
+  static_cast<void>(::VariantClear(&result));
+  return value;
 }
 
 [[nodiscard]] ULONG invoke_container_number(IDispatch& host,
@@ -988,6 +1050,74 @@ void test_container_query_failure_does_not_invent_facts() {
   static_cast<void>(::VariantClear(&result));
 }
 
+void test_operation_history_is_read_only_typed_and_clearable() {
+  Fixture fixture;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  require(invoke_operation_count(*host.Get()) == 0,
+          "an unauthenticated route exposed operation history");
+
+  fixture.authentication.establish(root_secret());
+  fixture.volume.operation_events = {
+      {.sequence = 1,
+       .completed_at_unix_ms = 1788253200000,
+       .kind = usb_vault::application::OperationKind::session_opened,
+       .outcome = usb_vault::application::OperationOutcome::succeeded},
+      {.sequence = 2,
+       .completed_at_unix_ms = 1788253201000,
+       .kind = usb_vault::application::OperationKind::container_mounted,
+       .outcome = usb_vault::application::OperationOutcome::succeeded,
+       .container_name = L"work.hc",
+       .drive_letter = L'X'},
+  };
+  require(
+      invoke_operation_count(*host.Get()) == 2 &&
+          invoke_operation_time(*host.Get(), 1) == 1788253201000.0 &&
+          invoke_operation_number(*host.Get(), L"getOperationKind", 1) == 2 &&
+          invoke_operation_number(*host.Get(), L"getOperationOutcome", 1) ==
+              0 &&
+          invoke_container_text(*host.Get(), L"getOperationContainerName", 1) ==
+              L"work.hc" &&
+          invoke_container_text(*host.Get(), L"getOperationDriveLetter", 1) ==
+              L"X:",
+      "operation history lost a typed native fact");
+
+  DISPPARAMS no_arguments{};
+  require(host->Invoke(member_id(*host.Get(), L"clearOperationHistory"),
+                       IID_NULL,
+                       LOCALE_INVARIANT,
+                       DISPATCH_METHOD,
+                       &no_arguments,
+                       nullptr,
+                       nullptr,
+                       nullptr) == S_OK &&
+              fixture.volume.clear_operation_history_calls == 1 &&
+              invoke_operation_count(*host.Get()) == 0,
+          "the clear-history action did not remove the current-session facts");
+}
+
+void test_operation_history_query_failures_do_not_invent_facts() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.fail_operation_history = true;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(
+      host->Invoke(member_id(*host.Get(), L"getOperationCount"),
+                   IID_NULL,
+                   LOCALE_INVARIANT,
+                   DISPATCH_METHOD,
+                   &parameters,
+                   &result,
+                   nullptr,
+                   nullptr) == E_FAIL &&
+          invoke_with_number(
+              *host.Get(), L"getOperationKind", 0, &result, nullptr) == E_FAIL,
+      "a failed history query returned a substitute fact");
+  static_cast<void>(::VariantClear(&result));
+}
+
 }  // namespace
 
 int main() {
@@ -1003,6 +1133,8 @@ int main() {
     test_adopted_container_mount_and_unmount_route_through_identifiers();
     test_container_b_creation_consumes_four_reversed_arguments();
     test_container_query_failure_does_not_invent_facts();
+    test_operation_history_is_read_only_typed_and_clearable();
+    test_operation_history_query_failures_do_not_invent_facts();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

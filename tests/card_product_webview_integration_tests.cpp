@@ -28,6 +28,9 @@ using usb_vault::application::CardEntryRoute;
 using usb_vault::application::ContainerAStatus;
 using usb_vault::application::IAuthenticatedCardVolumeSession;
 using usb_vault::application::ICardEntryActions;
+using usb_vault::application::OperationEvent;
+using usb_vault::application::OperationKind;
+using usb_vault::application::OperationOutcome;
 using usb_vault::security::ConfirmedPassword;
 using usb_vault::security::OfflineCardPasswordPolicy;
 using usb_vault::security::SecureBuffer;
@@ -91,9 +94,21 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     created_size_bytes = size_bytes;
     if (fail_next_create) {
       fail_next_create = false;
+      record(OperationKind::container_created,
+             OperationOutcome::failed,
+             file_name(path));
       throw std::runtime_error("injected container creation failure");
     }
-    return adopt(path, size_bytes);
+    const std::uint32_t id = adopt(path, size_bytes);
+    const Adopted& entry = containers.back();
+    record(OperationKind::container_created,
+           OperationOutcome::succeeded,
+           entry.name);
+    record(OperationKind::container_mounted,
+           OperationOutcome::succeeded,
+           entry.name,
+           entry.drive_letter);
+    return id;
   }
 
   std::uint32_t create_container_b(
@@ -104,7 +119,16 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     created_b_outer_bytes = outer_size_bytes;
     created_b_hidden_bytes = hidden_size_bytes;
     b_decoy_matched = equals(decoy_password_utf8.bytes(), kSecondPassword);
-    return adopt(L"C:/vault/hidden.hc", outer_size_bytes);
+    const std::uint32_t id = adopt(L"C:/vault/hidden.hc", outer_size_bytes);
+    const Adopted& entry = containers.back();
+    record(OperationKind::container_created,
+           OperationOutcome::succeeded,
+           entry.name);
+    record(OperationKind::container_mounted,
+           OperationOutcome::succeeded,
+           entry.name,
+           entry.drive_letter);
+    return id;
   }
 
   // The page no longer sends the login input back, so the card record has to
@@ -131,9 +155,19 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
       if (entry.path != path) continue;
       entry.mounted = true;
       mounted_state = true;
+      record(OperationKind::container_mounted,
+             OperationOutcome::succeeded,
+             entry.name,
+             entry.drive_letter);
       return entry.id;
     }
-    return adopt(path, 64ULL * 1024ULL * 1024ULL);
+    const std::uint32_t id = adopt(path, 64ULL * 1024ULL * 1024ULL);
+    const Adopted& entry = containers.back();
+    record(OperationKind::container_mounted,
+           OperationOutcome::succeeded,
+           entry.name,
+           entry.drive_letter);
+    return id;
   }
 
   void mount_adopted_container(std::uint32_t) override {
@@ -144,6 +178,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     for (Adopted& entry : containers) {
       if (entry.id != id) continue;
       entry.mounted = false;
+      record(OperationKind::container_unmounted,
+             OperationOutcome::succeeded,
+             entry.name,
+             entry.drive_letter);
       return;
     }
     throw std::invalid_argument(
@@ -174,21 +212,39 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     bool mounted{};
   };
 
+  [[nodiscard]] static std::wstring file_name(const std::wstring_view path) {
+    const std::size_t separator = path.find_last_of(L"/\\");
+    return std::wstring(separator == std::wstring_view::npos
+                            ? path
+                            : path.substr(separator + 1));
+  }
+
+  void record(const OperationKind kind,
+              const OperationOutcome outcome,
+              const std::wstring_view name = {},
+              const wchar_t drive_letter = wchar_t{}) {
+    operation_events.push_back(
+        {.sequence = next_operation_sequence,
+         .completed_at_unix_ms =
+             1'700'000'000'000LL +
+             static_cast<std::int64_t>(next_operation_sequence) * 1000,
+         .kind = kind,
+         .outcome = outcome,
+         .container_name = std::wstring(name),
+         .drive_letter = drive_letter});
+    ++next_operation_sequence;
+  }
+
   std::uint32_t adopt(const std::wstring_view path,
                       const std::uint64_t size_bytes) {
-    const std::size_t separator = path.find_last_of(L"/");
-    const std::wstring_view name = separator == std::wstring_view::npos
-                                       ? path
-                                       : path.substr(separator + 1);
     const std::uint32_t id = next_id++;
-    containers.push_back(
-        {.id = id,
-         .path = std::wstring(path),
-         .name = std::wstring(name),
-         .size_bytes = size_bytes,
-         .drive_letter = static_cast<wchar_t>(
-             L'D' + static_cast<wchar_t>(containers.size())),
-         .mounted = true});
+    containers.push_back({.id = id,
+                          .path = std::wstring(path),
+                          .name = file_name(path),
+                          .size_bytes = size_bytes,
+                          .drive_letter = static_cast<wchar_t>(
+                              L'D' + static_cast<wchar_t>(containers.size())),
+                          .mounted = true});
     mounted_state = true;
     return id;
   }
@@ -208,13 +264,26 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
             .drive_letter = container_a_mounted ? L'X' : wchar_t{}};
   }
 
-  void consume_authenticated_login(
-      SecureBuffer root, SecureBuffer login_password_utf8) override {
+  [[nodiscard]] std::vector<usb_vault::application::OperationEvent>
+  operation_history() override {
+    return operation_events;
+  }
+
+  void clear_operation_history() noexcept override {
+    operation_events.clear();
+    ++clear_operation_calls;
+  }
+
+  void consume_authenticated_login(SecureBuffer root,
+                                   SecureBuffer login_password_utf8) override {
     static constexpr std::byte kExpected[]{
         std::byte{0x70}, std::byte{0x00}, std::byte{0xC3}, std::byte{0xA4}};
     login_payload_matched = equals(login_password_utf8.bytes(), kExpected);
     authentication_.establish(std::move(root));
     login_password_utf8.clear();
+    operation_events.clear();
+    next_operation_sequence = 1;
+    record(OperationKind::session_opened, OperationOutcome::succeeded);
     container_a_mounted = container_a_exists;
     mounted_state = true;
     ++consume_calls;
@@ -238,6 +307,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   CardAuthenticationSession& authentication_;
+  std::vector<usb_vault::application::OperationEvent> operation_events;
+  std::uint64_t next_operation_sequence{1};
   bool mounted_state{};
   bool login_payload_matched{};
   bool fail_next_create_a{true};
@@ -247,6 +318,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int create_a_calls{};
   int consume_calls{};
   int unmount_calls{};
+  int clear_operation_calls{};
 };
 
 class FakeEntry final : public ICardEntryActions {
@@ -398,7 +470,8 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.containers.size() == 2 &&
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
-         g_volume.unmount_calls == 1 && !g_volume.mounted();
+         g_volume.clear_operation_calls == 1 && g_volume.unmount_calls == 1 &&
+         !g_volume.mounted();
 }
 
 [[nodiscard]] int failure_exit_code(const wchar_t* const message) noexcept {
@@ -416,6 +489,9 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-settings-navigation",
       L"fail-settings-defaults",
       L"fail-settings-switch",
+      L"fail-operation-history",
+      L"fail-operation-clear",
+      L"fail-operation-reset",
       L"fail-creation-type-step",
       L"fail-creation-entry",
       L"fail-creation-back-step",

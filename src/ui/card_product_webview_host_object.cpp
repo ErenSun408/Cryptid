@@ -32,8 +32,14 @@ constexpr DISPID kGetContainerMountedId = 17;
 constexpr DISPID kGetContainerSizeMibId = 18;
 constexpr DISPID kGetContainerDriveLetterId = 19;
 constexpr DISPID kCreateContainerBMibId = 20;
-constexpr wchar_t kSubmitLoginPasswordBytesName[] =
-    L"submitLoginPasswordBytes";
+constexpr DISPID kGetOperationCountId = 21;
+constexpr DISPID kGetOperationCompletedAtId = 22;
+constexpr DISPID kGetOperationKindId = 23;
+constexpr DISPID kGetOperationOutcomeId = 24;
+constexpr DISPID kGetOperationContainerNameId = 25;
+constexpr DISPID kGetOperationDriveLetterId = 26;
+constexpr DISPID kClearOperationHistoryId = 27;
+constexpr wchar_t kSubmitLoginPasswordBytesName[] = L"submitLoginPasswordBytes";
 constexpr wchar_t kSubmitInitializationPasswordBytesName[] =
     L"submitInitializationPasswordBytes";
 constexpr wchar_t kUnmountName[] = L"unmount";
@@ -51,6 +57,15 @@ constexpr wchar_t kGetContainerSizeMibName[] = L"getContainerSizeMib";
 constexpr wchar_t kGetContainerDriveLetterName[] =
     L"getContainerDriveLetter";
 constexpr wchar_t kCreateContainerBMibName[] = L"createContainerBMib";
+constexpr wchar_t kGetOperationCountName[] = L"getOperationCount";
+constexpr wchar_t kGetOperationCompletedAtName[] =
+    L"getOperationCompletedAtUnixMs";
+constexpr wchar_t kGetOperationKindName[] = L"getOperationKind";
+constexpr wchar_t kGetOperationOutcomeName[] = L"getOperationOutcome";
+constexpr wchar_t kGetOperationContainerNameName[] =
+    L"getOperationContainerName";
+constexpr wchar_t kGetOperationDriveLetterName[] = L"getOperationDriveLetter";
+constexpr wchar_t kClearOperationHistoryName[] = L"clearOperationHistory";
 
 class PasswordArgumentsWiper final {
  public:
@@ -84,6 +99,26 @@ class PasswordArgumentsWiper final {
     default:
       return 4;
   }
+}
+
+[[nodiscard]] LONG operation_kind_wire_value(
+    const OperationUiKind kind) noexcept {
+  switch (kind) {
+    case OperationUiKind::session_opened:
+      return 0;
+    case OperationUiKind::container_created:
+      return 1;
+    case OperationUiKind::container_mounted:
+      return 2;
+    case OperationUiKind::container_unmounted:
+    default:
+      return 3;
+  }
+}
+
+[[nodiscard]] LONG operation_outcome_wire_value(
+    const OperationUiOutcome outcome) noexcept {
+  return outcome == OperationUiOutcome::succeeded ? 0 : 1;
 }
 
 class CardProductWebViewHostObject final : public IDispatch {
@@ -196,6 +231,34 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kCreateContainerBMibId;
       return S_OK;
     }
+    if (matches(names[0], kGetOperationCountName)) {
+      ids[0] = kGetOperationCountId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetOperationCompletedAtName)) {
+      ids[0] = kGetOperationCompletedAtId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetOperationKindName)) {
+      ids[0] = kGetOperationKindId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetOperationOutcomeName)) {
+      ids[0] = kGetOperationOutcomeId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetOperationContainerNameName)) {
+      ids[0] = kGetOperationContainerNameId;
+      return S_OK;
+    }
+    if (matches(names[0], kGetOperationDriveLetterName)) {
+      ids[0] = kGetOperationDriveLetterId;
+      return S_OK;
+    }
+    if (matches(names[0], kClearOperationHistoryName)) {
+      ids[0] = kClearOperationHistoryId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -236,8 +299,19 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetContainerMountedId:
       case kGetContainerSizeMibId:
       case kGetContainerDriveLetterId:
-        return invoke_container_fact(member, parameters, result,
-                                     argument_error);
+        return invoke_container_fact(
+            member, parameters, result, argument_error);
+      case kGetOperationCountId:
+        return invoke_operation_count(parameters, result);
+      case kGetOperationCompletedAtId:
+      case kGetOperationKindId:
+      case kGetOperationOutcomeId:
+      case kGetOperationContainerNameId:
+      case kGetOperationDriveLetterId:
+        return invoke_operation_fact(
+            member, parameters, result, argument_error);
+      case kClearOperationHistoryId:
+        return invoke_clear_operation_history(parameters);
       default:
         return DISP_E_MEMBERNOTFOUND;
     }
@@ -514,6 +588,82 @@ class CardProductWebViewHostObject final : public IDispatch {
               drive, status.drive_letter == wchar_t{} ? 0U : 2U, result);
         }
       }
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_operation_count(DISPPARAMS* const parameters,
+                                 VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (result == nullptr) return S_OK;
+    try {
+      const std::vector<OperationUiEvent> events =
+          controller_.operation_history();
+      ::VariantInit(result);
+      result->vt = VT_UI4;
+      result->ulVal = static_cast<ULONG>(events.size());
+      return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_operation_fact(const DISPID member,
+                                DISPPARAMS* const parameters,
+                                VARIANT* const result,
+                                UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t index = 0;
+    if (!exact_uint32(parameters->rgvarg[0], index)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    if (result == nullptr) return S_OK;
+    try {
+      const std::vector<OperationUiEvent> events =
+          controller_.operation_history();
+      if (index >= events.size()) return E_INVALIDARG;
+      const OperationUiEvent& event = events[index];
+      ::VariantInit(result);
+      switch (member) {
+        case kGetOperationCompletedAtId:
+          result->vt = VT_R8;
+          result->dblVal = static_cast<double>(event.completed_at_unix_ms);
+          return S_OK;
+        case kGetOperationKindId:
+          result->vt = VT_I4;
+          result->lVal = operation_kind_wire_value(event.kind);
+          return S_OK;
+        case kGetOperationOutcomeId:
+          result->vt = VT_I4;
+          result->lVal = operation_outcome_wire_value(event.outcome);
+          return S_OK;
+        case kGetOperationContainerNameId:
+          return complete_string(event.container_name.c_str(),
+                                 static_cast<UINT>(event.container_name.size()),
+                                 result);
+        case kGetOperationDriveLetterId:
+        default: {
+          const wchar_t drive[] = {event.drive_letter, L':'};
+          return complete_string(
+              drive, event.drive_letter == wchar_t{} ? 0U : 2U, result);
+        }
+      }
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT
+  invoke_clear_operation_history(DISPPARAMS* const parameters) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    try {
+      controller_.clear_operation_history();
+      return S_OK;
     } catch (...) {
       return E_FAIL;
     }

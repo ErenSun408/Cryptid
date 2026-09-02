@@ -51,6 +51,10 @@
     Array.from(document.querySelectorAll(".dashboard-section"));
   const settingSwitches =
     Array.from(document.querySelectorAll("[data-setting]"));
+  const operationHistoryBody =
+    document.getElementById("operation-history-body");
+  const operationHistoryClear =
+    document.getElementById("operation-history-clear");
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
@@ -100,6 +104,13 @@
     { mib: "MiB", gib: "GiB", tib: "TiB" });
   const kMinimumCapacityMib = 20;
   const kMaximumCapacityMib = 1024 * 1024;
+  const operationKind = Object.freeze({
+    sessionOpened: 0,
+    containerCreated: 1,
+    containerMounted: 2,
+    containerUnmounted: 3,
+  });
+  const operationOutcome = Object.freeze({ succeeded: 0, failed: 1 });
 
   const makeUnitPicker = (button, fields, echo = null) => ({
     button,
@@ -139,6 +150,9 @@
   // Live projection of the containers this session has adopted. Nothing here
   // is stored: it is rebuilt from the native side on every refresh.
   let containers = [];
+  // Bounded, native-owned facts from this authenticated session. Like the
+  // container projection, this array is rebuilt and never persisted by JS.
+  let operationEvents = [];
   let busy = true;
   let externalRefreshPending = false;
   let creationKind = null;
@@ -570,6 +584,66 @@
     }
   };
 
+  const twoDigits = (value) => String(value).padStart(2, "0");
+
+  const formatOperationTime = (unixMs) => {
+    const time = new Date(unixMs);
+    return `${time.getFullYear()}-${twoDigits(time.getMonth() + 1)}-` +
+      `${twoDigits(time.getDate())} ${twoDigits(time.getHours())}:` +
+      `${twoDigits(time.getMinutes())}:${twoDigits(time.getSeconds())}`;
+  };
+
+  const operationEventName = (kind) => [
+    "打开会话", "创建容器", "挂载容器", "卸载容器",
+  ][kind];
+
+  const operationTarget = (event) => {
+    if (event.kind === operationKind.sessionOpened) return "—";
+    return event.drive === ""
+      ? event.name
+      : `${event.name} → ${event.drive}`;
+  };
+
+  const renderOperationHistory = () => {
+    while (operationHistoryBody.firstChild !== null) {
+      operationHistoryBody.removeChild(operationHistoryBody.firstChild);
+    }
+    if (operationEvents.length === 0) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 4;
+      cell.className = "operation-empty";
+      cell.textContent = "当前会话还没有操作记录。";
+      row.appendChild(cell);
+      operationHistoryBody.appendChild(row);
+      return;
+    }
+
+    for (let index = operationEvents.length - 1; index >= 0; index -= 1) {
+      const event = operationEvents[index];
+      const row = document.createElement("tr");
+      const time = document.createElement("td");
+      time.className = "operation-time";
+      time.textContent = formatOperationTime(event.completedAtUnixMs);
+      const kind = document.createElement("td");
+      kind.className = "operation-event";
+      kind.textContent = operationEventName(event.kind);
+      const target = document.createElement("td");
+      target.className = "operation-target";
+      target.textContent = operationTarget(event);
+      const outcome = document.createElement("td");
+      outcome.className = "operation-result";
+      outcome.dataset.outcome = event.outcome === operationOutcome.succeeded
+        ? "succeeded"
+        : "failed";
+      outcome.textContent = event.outcome === operationOutcome.succeeded
+        ? "成功"
+        : "失败";
+      row.append(time, kind, target, outcome);
+      operationHistoryBody.appendChild(row);
+    }
+  };
+
   const updateProductSurface = () => {
     const showDashboard = currentState === nativeState.authenticated;
     surface.hidden = showDashboard;
@@ -579,6 +653,7 @@
     dashboardContainerCount.textContent = String(containers.length);
     navContainerCount.textContent = String(containers.length);
     renderContainers();
+    renderOperationHistory();
     dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
     dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
     // Every creation entry stays visible on every route the page can reach.
@@ -589,6 +664,8 @@
     for (const button of mountExistingButtons) {
       button.disabled = busy || !showDashboard;
     }
+    operationHistoryClear.disabled =
+      busy || !showDashboard || operationEvents.length === 0;
     if (!showDashboard) {
       closeCreationFlow(true);
       showDashboardSection("dashboard");
@@ -714,6 +791,7 @@
       throw new Error("invalid native session state");
     }
     const nextContainers = [];
+    const nextOperationEvents = [];
     if (nextState === nativeState.authenticated) {
       const count = await bridge.getContainerCount();
       if (!Number.isInteger(count) || count < 0 || count > 4096) {
@@ -739,6 +817,48 @@
         }
         nextContainers.push({ id, name, mounted, sizeMib, drive });
       }
+
+      const operationCount = await bridge.getOperationCount();
+      if (!Number.isInteger(operationCount) || operationCount < 0 ||
+          operationCount > 128) {
+        throw new Error("invalid operation count");
+      }
+      for (let index = 0; index < operationCount; index += 1) {
+        const completedAtUnixMs =
+          await bridge.getOperationCompletedAtUnixMs(index);
+        const kind = await bridge.getOperationKind(index);
+        const outcome = await bridge.getOperationOutcome(index);
+        const name = await bridge.getOperationContainerName(index);
+        const drive = await bridge.getOperationDriveLetter(index);
+        const validTime = Number.isSafeInteger(completedAtUnixMs) &&
+          completedAtUnixMs > 0;
+        const validKind = Number.isInteger(kind) &&
+          kind >= operationKind.sessionOpened &&
+          kind <= operationKind.containerUnmounted;
+        const validOutcome = Number.isInteger(outcome) &&
+          outcome >= operationOutcome.succeeded &&
+          outcome <= operationOutcome.failed;
+        const validName = typeof name === "string" &&
+          name.indexOf("/") === -1 && name.indexOf("\\") === -1;
+        const validDriveText = typeof drive === "string";
+        const hasName = validName && name.length !== 0;
+        const hasDrive = validDriveText && /^[A-Z]:$/.test(drive);
+        const noDrive = drive === "";
+        const validShape =
+          (kind === operationKind.sessionOpened &&
+           outcome === operationOutcome.succeeded && !hasName && noDrive) ||
+          (kind === operationKind.containerCreated && hasName && noDrive) ||
+          (kind === operationKind.containerMounted && hasName &&
+           ((outcome === operationOutcome.succeeded && hasDrive) ||
+            (outcome === operationOutcome.failed && noDrive))) ||
+          (kind === operationKind.containerUnmounted && hasName && hasDrive);
+        if (!validTime || !validKind || !validOutcome || !validName ||
+            !validDriveText || !validShape) {
+          throw new Error("invalid operation event");
+        }
+        nextOperationEvents.push(
+          { completedAtUnixMs, kind, outcome, name, drive });
+      }
     }
     currentState = nextActiveVolumes &&
         nextState !== nativeState.authenticated &&
@@ -747,6 +867,7 @@
       : nextState;
     activeVolumes = nextActiveVolumes;
     containers = nextContainers;
+    operationEvents = nextOperationEvents;
   };
 
   const messageForCurrentState = () => {
@@ -1126,6 +1247,14 @@
       }
     });
   }
+  operationHistoryClear.addEventListener("click", async () => {
+    if (!busy && currentState === nativeState.authenticated &&
+        operationEvents.length !== 0) {
+      await runContainerAction(
+        () => bridge.clearOperationHistory(),
+        "无法清空当前会话日志，请稍后重试。");
+    }
+  });
   // Settings switches are page-local for now: nothing here reaches the native
   // bridge and nothing is written to disk, so a reload restores the defaults.
   // Each switch gets its store when its own slice lands.

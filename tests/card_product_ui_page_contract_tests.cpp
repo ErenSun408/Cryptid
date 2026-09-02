@@ -85,7 +85,15 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-17d-container-parameters\"></script>") !=
+              "<script "
+              "src=\"card_session.js?v=p2-17e-operation-history\"></script>") !=
+                  std::string::npos &&
+              count_occurrences(page, "<script") == 1,
+          "product page must load only its packaged controller");
+  require(
+      count_occurrences(page, "class=\"password-visibility\"") == 2 &&
+          page.find("aria-controls=\"card-password\"") != std::string::npos &&
+          page.find("aria-controls=\"card-password-confirmation\"") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -118,23 +126,28 @@ void test_authenticated_dashboard_is_real_state_only() {
   // shapes are offered inside that entry instead, both always present: 8.7
   // requires it, because hiding one would tell an observer what this machine
   // holds.
-  require(count_occurrences(page, "data-create-container") == 2 &&
-              count_occurrences(page, "data-create-kind=\"encrypted\"") == 1 &&
-              count_occurrences(page, "data-create-kind=\"hidden\"") == 1 &&
-              count_occurrences(page, "data-container-list") == 2 &&
-              page.find("id=\"dashboard-section-hidden\"") ==
-                  std::string::npos &&
-              page.find("id=\"dashboard-section-encrypted\"") ==
-                  std::string::npos,
-          "containers are still split by volume type");
-  require(count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 3 &&
-              count_occurrences(page, "data-tooltip=\"正在开发中\"") == 3 &&
-              page.find("文件管理") != std::string::npos &&
-              page.find("备份中心") != std::string::npos &&
-              page.find("操作历史") != std::string::npos,
-          "unfinished navigation is not visibly present and unavailable");
-  require(script.find(
-              "const showDashboard = currentState === nativeState.authenticated;") !=
+  require(
+      count_occurrences(page, "data-create-container") == 2 &&
+          count_occurrences(page, "data-create-kind=\"encrypted\"") == 1 &&
+          count_occurrences(page, "data-create-kind=\"hidden\"") == 1 &&
+          count_occurrences(page, "data-container-list") == 2 &&
+          page.find("id=\"dashboard-section-hidden\"") == std::string::npos &&
+          page.find("id=\"dashboard-section-encrypted\"") == std::string::npos,
+      "containers are still split by volume type");
+  require(
+      count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 2 &&
+          count_occurrences(page, "data-tooltip=\"正在开发中\"") == 2 &&
+          page.find("文件管理") != std::string::npos &&
+          page.find("备份中心") != std::string::npos &&
+          page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
+                    " data-section=\"history\">") != std::string::npos &&
+          page.find("操作日志") != std::string::npos,
+      "unfinished navigation is not visibly present and unavailable");
+  require(
+      script.find("const showDashboard = currentState === "
+                  "nativeState.authenticated;") != std::string::npos &&
+          script.find("surface.hidden = showDashboard;") != std::string::npos &&
+          script.find("dashboard.hidden = !showDashboard;") !=
               std::string::npos &&
               script.find("surface.hidden = showDashboard;") !=
                   std::string::npos &&
@@ -315,6 +328,58 @@ void test_bridge_calls_are_narrow_and_route_specific() {
           "the page still reads the retired single-container bridge");
   require(script.find("bridge.submitPasswordBytes") == std::string::npos,
           "product page reused the incompatible P1 submission method");
+}
+
+void test_operation_history_is_bounded_session_only_and_inert() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string history = dashboard_section(page, "history");
+
+  require(
+      history.find("操作日志") != std::string::npos &&
+          history.find("仅保留当前安全会话，退出或重新认证后清除") !=
+              std::string::npos &&
+          history.find("id=\"operation-history-clear\"") != std::string::npos &&
+          history.find("id=\"operation-history-body\"") != std::string::npos &&
+          history.find("最近 30 天") == std::string::npos,
+      "operation history does not state its current-session lifetime");
+  require(history.find("密码尝试") != std::string::npos &&
+              history.find("卡标识") != std::string::npos &&
+              history.find("容器类型与结构") != std::string::npos &&
+              history.find("完整路径") != std::string::npos,
+          "operation history does not disclose its deliberate omissions");
+
+  for (const std::string_view call :
+       {"await bridge.getOperationCount();",
+        "await bridge.getOperationCompletedAtUnixMs(index);",
+        "await bridge.getOperationKind(index);",
+        "await bridge.getOperationOutcome(index);",
+        "await bridge.getOperationContainerName(index);",
+        "await bridge.getOperationDriveLetter(index);",
+        "() => bridge.clearOperationHistory()"}) {
+    require(script.find(call) != std::string::npos,
+            "operation history omits a required native bridge call");
+  }
+  require(
+      script.find("operationCount > 128") != std::string::npos &&
+          script.find("Number.isSafeInteger(completedAtUnixMs)") !=
+              std::string::npos &&
+          script.find("name.indexOf(\"/\") === -1") != std::string::npos &&
+          script.find("name.indexOf(\"\\\\\") === -1") != std::string::npos &&
+          script.find("throw new Error(\"invalid operation event\")") !=
+              std::string::npos,
+      "operation history accepts an unbounded or unsafe projection");
+  require(script.find("target.textContent = operationTarget(event);") !=
+                  std::string::npos &&
+              script.find("outcome.textContent =") != std::string::npos &&
+              script.find("innerHTML") == std::string::npos,
+          "operation history renders native text as executable markup");
+  for (const std::string_view store :
+       {"localStorage", "sessionStorage", "indexedDB", "document.cookie"}) {
+    require(page.find(store) == std::string::npos &&
+                script.find(store) == std::string::npos,
+            "operation history is persisted in browser storage");
+  }
 }
 
 void test_container_collection_replaces_the_single_container_display() {
@@ -591,6 +656,7 @@ int main() {
     test_settings_page_is_static_and_matches_the_native_facts();
     test_five_states_are_complete_and_vendor_neutral();
     test_bridge_calls_are_narrow_and_route_specific();
+    test_operation_history_is_bounded_session_only_and_inert();
     test_container_creation_form_is_bounded();
     test_hidden_container_form_is_symmetric_and_never_validated();
     test_container_collection_replaces_the_single_container_display();

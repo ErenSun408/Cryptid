@@ -33,6 +33,15 @@ chrome.webview.postMessage("driver-loaded");
     document.querySelector('[data-section="settings"]');
   const settingsSection =
     document.getElementById("dashboard-section-settings");
+  const historyNavigation =
+    document.querySelector('[data-section="history"]');
+  const historySection =
+    document.getElementById("dashboard-section-history");
+  const historyBody = document.getElementById("operation-history-body");
+  const historyClear = document.getElementById("operation-history-clear");
+  const historyRows = () => Array.from(historyBody.querySelectorAll("tr"));
+  const historyCells = (row) =>
+    Array.from(row.querySelectorAll("td")).map((cell) => cell.textContent);
   const containerRows = () =>
     Array.from(containersList.querySelectorAll(".container-row"));
   const containerFacts = (row) =>
@@ -405,6 +414,35 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
 
+  historyNavigation.click();
+  const recordedRows = historyRows();
+  const expectedOperations = [
+    ["挂载容器", "hidden.hc → E:", "成功"],
+    ["创建容器", "hidden.hc", "成功"],
+    ["挂载容器", "integration.hc → D:", "成功"],
+    ["创建容器", "integration.hc", "成功"],
+    ["创建容器", "integration.hc", "失败"],
+  ];
+  if (!historySection.classList.contains("active") ||
+      recordedRows.length !== expectedOperations.length ||
+      historyClear.disabled || expectedOperations.some((expected, index) => {
+        const cells = historyCells(recordedRows[index]);
+        return cells.length !== 4 || cells[0].length !== 19 ||
+          cells[1] !== expected[0] || cells[2] !== expected[1] ||
+          cells[3] !== expected[2];
+      })) {
+    request("fail-operation-history");
+    return;
+  }
+  historyClear.click();
+  if (!await waitFor(() => historyRows().length === 1 &&
+      historyCells(historyRows()[0]).join("") ===
+        "当前会话还没有操作记录。" && historyClear.disabled)) {
+    request("fail-operation-clear");
+    return;
+  }
+  containersNavigation.click();
+
   request("request-login");
   if (!await waitForState("login-required") ||
       !confirmationField.hidden || password.disabled || surface.hidden ||
@@ -436,6 +474,14 @@ chrome.webview.postMessage("driver-loaded");
       dashboardContainerCount.textContent !== "2" ||
       containerFacts(containerRows()[0]).join("/") !== "64 MiB/D:") {
     request("fail-login-success");
+    return;
+  }
+  historyNavigation.click();
+  if (!historySection.classList.contains("active") ||
+      historyRows().length !== 1 ||
+      historyCells(historyRows()[0]).slice(1).join("/") !==
+        "打开会话/—/成功" || historyClear.disabled) {
+    request("fail-operation-reset");
     return;
   }
 

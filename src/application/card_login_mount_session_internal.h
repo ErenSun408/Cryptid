@@ -1,21 +1,18 @@
 #pragma once
 
-#include "usb_vault/application/card_authentication_session.h"
-#include "usb_vault/application/mount_orchestrator.h"
-#include "usb_vault/security/secure_buffer.h"
-#include "usb_vault/volume/unmount_retry.h"
-
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace usb_vault::application {
-struct ContainerAStatus;
-struct ContainerStatus;
-enum class LoginMountPolicy;
-}
+#include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/application/card_login_mount_session.h"
+#include "usb_vault/application/mount_orchestrator.h"
+#include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/volume/unmount_retry.h"
 
 namespace usb_vault::application::detail {
 
@@ -85,6 +82,11 @@ struct CardLoginMountSessionState final {
   // the retained value opens nothing else: not the card record, not a
   // standard container, and it cannot be typed at the password prompt.
   security::SecureBuffer container_b_password;
+  std::array<OperationEvent, ::usb_vault::application::kOperationHistoryCapacity>
+      operation_events;
+  std::size_t operation_start{};
+  std::size_t operation_count{};
+  std::uint64_t next_operation_sequence{1};
   // The password this session was opened under. Unlike the derived value
   // above it is the password itself, kept for the one operation that cannot
   // use a derivative: rewriting the card record so a second password opens it
@@ -125,8 +127,10 @@ class CardLoginMountSessionCore final {
   void unmount_container(std::uint32_t id);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
-  [[nodiscard]] ::usb_vault::application::ContainerAStatus
-  container_a_status();
+  [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();
+  [[nodiscard]] std::vector<::usb_vault::application::OperationEvent>
+  operation_history();
+  void clear_operation_history() noexcept;
   void unmount_active();
   [[nodiscard]] bool force_unmount_active();
   [[nodiscard]] bool mounted() const noexcept;
@@ -134,6 +138,10 @@ class CardLoginMountSessionCore final {
  private:
   [[nodiscard]] security::SecureBuffer derive_standard_password();
   [[nodiscard]] wchar_t reserve_drive_letter();
+  void record_operation(::usb_vault::application::OperationKind kind,
+                        ::usb_vault::application::OperationOutcome outcome,
+                        std::wstring_view container_name = {},
+                        wchar_t drive_letter = wchar_t{}) noexcept;
 
   CardAuthenticationSession& authentication_;
   CardLoginMountSessionRuntime& runtime_;

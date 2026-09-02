@@ -55,8 +55,8 @@
            data-tooltip="正在开发中">文件管理</div>
       <div role="link" aria-disabled="true" title="正在开发中"
            data-tooltip="正在开发中">备份中心</div>
-      <div role="link" aria-disabled="true" title="正在开发中"
-           data-tooltip="正在开发中">操作历史</div>
+      <button class="dashboard-nav" type="button"
+              data-section="history">操作日志</button>
       <button class="dashboard-nav" type="button"
               data-section="settings">系统设置</button>
     </nav>
@@ -69,6 +69,10 @@
       <button type="button" data-create-container>新建容器</button>
       <button type="button" data-mount-existing>导入容器</button>
       <div class="container-list" data-container-list></div>
+    </section>
+    <section id="dashboard-section-history" class="dashboard-section">
+      <button id="operation-history-clear" type="button">清空日志</button>
+      <table><tbody id="operation-history-body"></tbody></table>
     </section>
     <section id="dashboard-section-settings" class="dashboard-section">
       <button type="button" role="switch" aria-checked="false"
@@ -143,7 +147,7 @@
     </button>
     <button id="create-volume-continue" type="button">下一步</button>
   </div>
-  <script src="card_session.js?v=p2-17d-container-parameters"></script>
-  <script src="card_product_webview_integration.js?v=p2-17d-container-parameters"></script>
+  <script src="card_session.js?v=p2-17e-operation-history"></script>
+  <script src="card_product_webview_integration.js?v=p2-17e-operation-history"></script>
 </body>
 </html>
