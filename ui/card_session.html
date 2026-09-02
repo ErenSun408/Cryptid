@@ -175,9 +175,15 @@
       border: 1px solid var(--line-2); background: rgba(255, 255, 255, .03);
       color: var(--text); font-size: .78rem; font-weight: 600; cursor: pointer;
     }
-    .shell-button:hover, .modal-button:hover:not(:disabled) {
+    .shell-button:hover:not(:disabled), .modal-button:hover:not(:disabled) {
       border-color: var(--line-3); background: rgba(255, 255, 255, .06);
     }
+    /* Without this a disabled shell button keeps its full colour and reads as
+       clickable, while the browser silently swallows every click. */
+    .shell-button:disabled, .create-button:disabled {
+      cursor: not-allowed; opacity: .45;
+    }
+    .shell-button.danger:disabled { color: var(--text-3); border-color: var(--line); }
     .shell-button svg, .create-button svg, .modal-button svg { width: .95rem; height: .95rem; }
     .create-button {
       color: #14160f; border-color: transparent;
@@ -342,6 +348,7 @@
     .settings-card.danger { border-color: rgba(217, 107, 98, .32); }
     .danger-row { display: flex; align-items: flex-start; gap: 1rem; padding: .9rem 1rem; }
     .danger-copy { min-width: 0; flex: 1; font-size: .74rem; line-height: 1.7; color: var(--text-3); }
+    .danger-blocked { display: block; margin-top: .45rem; color: var(--warn); }
     .danger-copy b { display: block; margin-bottom: .2rem; font-size: .85rem; font-weight: 600; color: var(--text); }
     .modal-button.danger {
       color: #fff; border-color: transparent; background: var(--danger);
@@ -708,6 +715,7 @@
                 <span class="danger-copy">
                   <b>重新初始化安全卡</b>
                   销毁当前卡的认证密钥，从而回到初始化状态。以当前密钥加密的容器文件将无法再被打开。
+                  <span id="reset-card-blocked" class="danger-blocked" hidden></span>
                 </span>
                 <button id="reset-card-open" class="shell-button danger" type="button">重新初始化安全卡</button>
               </div>

@@ -381,13 +381,16 @@ CardProductUiSessionController::operation_history() {
   return result;
 }
 
+bool CardProductUiSessionController::can_reset_card_record() const noexcept {
+  return state() == CardProductUiState::authenticated;
+}
+
 void CardProductUiSessionController::reset_card_record() {
-  if (state() != CardProductUiState::authenticated) {
+  if (!can_reset_card_record()) {
     throw_wrong_route(
         "resetting the security card is not available in the current UI "
         "state");
   }
-
   // A mount that outlives its key material would hold a drive letter nothing
   // can release, so an attached volume stops the operation before the card is
   // written at all.
@@ -398,7 +401,7 @@ void CardProductUiSessionController::reset_card_record() {
         "the card cannot be reset while a volume is still mounted");
   }
 
-  entry_.reset_card_record();
+  entry_.reset_card_record(authentication_);
 
   // Nothing derived from the destroyed identity may outlive it.
   volume_session_.release_session_secrets();

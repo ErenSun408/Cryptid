@@ -370,7 +370,12 @@ class FakeEntry final : public ICardEntryActions {
     second_password_utf8.clear();
   }
 
-  void reset_card_record() override {
+  void reset_card_record(
+      const usb_vault::application::IVolatileCardAuthenticationSession&
+          authentication) override {
+    if (!authentication.authenticated()) {
+      throw std::runtime_error("card reset was not authenticated");
+    }
     ++reset_calls;
     route = CardEntryRoute::unavailable;
   }

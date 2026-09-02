@@ -68,6 +68,8 @@ constexpr wchar_t kGetOperationDriveLetterName[] = L"getOperationDriveLetter";
 constexpr wchar_t kClearOperationHistoryName[] = L"clearOperationHistory";
 constexpr DISPID kResetCardRecordId = 28;
 constexpr wchar_t kResetCardRecordName[] = L"resetCardRecord";
+constexpr DISPID kCanResetCardRecordId = 29;
+constexpr wchar_t kCanResetCardRecordName[] = L"canResetCardRecord";
 
 class PasswordArgumentsWiper final {
  public:
@@ -266,6 +268,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kResetCardRecordId;
       return S_OK;
     }
+    if (matches(names[0], kCanResetCardRecordName)) {
+      ids[0] = kCanResetCardRecordId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -321,6 +327,8 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_clear_operation_history(parameters);
       case kResetCardRecordId:
         return invoke_reset_card_record(parameters);
+      case kCanResetCardRecordId:
+        return invoke_can_reset_card_record(parameters, result);
       default:
         return DISP_E_MEMBERNOTFOUND;
     }
@@ -665,6 +673,18 @@ class CardProductWebViewHostObject final : public IDispatch {
     } catch (...) {
       return E_FAIL;
     }
+  }
+
+  HRESULT invoke_can_reset_card_record(DISPPARAMS* const parameters,
+                                      VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    bool available = false;
+    try {
+      available = controller_.can_reset_card_record();
+    } catch (...) {
+      return E_FAIL;
+    }
+    return complete_selection(available, result);
   }
 
   HRESULT invoke_reset_card_record(DISPPARAMS* const parameters) noexcept {

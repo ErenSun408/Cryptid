@@ -70,6 +70,9 @@ void CardEntryContextController::initialize_and_authenticate(
         "card initialization requires a fresh eligible insertion");
   }
 
+  // Retired up front, and left retired on every failure below: a card whose
+  // initialization tore halfway is in a state nobody knows, and no retry may
+  // run against it.
   route_ = CardEntryRoute::unavailable;
   std::unique_ptr<IReadOnlyCardEntryInspection> context =
       std::move(context_);
@@ -95,17 +98,22 @@ void CardEntryContextController::set_second_card_password(
     throw std::invalid_argument(
         "both card record passwords are required");
   }
-  if (route_ != CardEntryRoute::login_required || !context_) {
-    existing_password_utf8.clear();
-    second_password_utf8.clear();
-    throw std::system_error(
-        card::make_error_code(card::CardError::invalid_operation),
-        "card record update requires a fresh initialized insertion");
-  }
-
+  // Login success deliberately destroys its one-shot insertion context. A
+  // later record update starts from a new read-only inspection and binds its
+  // write target to the card that is physically present at that moment.
+  route_ = CardEntryRoute::unavailable;
+  context_.reset();
+  std::unique_ptr<IReadOnlyCardEntryInspection> context;
   std::unique_ptr<card::ICardUpdateTarget> target;
   try {
-    target = source_.make_update_target(*context_);
+    context = source_.inspect_inserted_card();
+    if (!context || CardEntryRouter::route(*context) !=
+                        CardEntryRoute::login_required) {
+      throw std::system_error(
+          card::make_error_code(card::CardError::invalid_operation),
+          "card record update requires a fresh initialized insertion");
+    }
+    target = source_.make_update_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),
@@ -127,16 +135,30 @@ void CardEntryContextController::set_second_card_password(
   }
 }
 
-void CardEntryContextController::reset_card_record() {
-  if (route_ != CardEntryRoute::login_required || !context_) {
+void CardEntryContextController::reset_card_record(
+    const IVolatileCardAuthenticationSession& authentication) {
+  if (!authentication.authenticated()) {
     throw std::system_error(
         card::make_error_code(card::CardError::invalid_operation),
-        "card reset requires a fresh initialized insertion");
+        "card reset requires an authenticated session");
   }
 
+  // Never revive the insertion consumed by login. The destructive operation
+  // receives a new adapter-authenticated observation and binds the write to
+  // that exact card.
+  route_ = CardEntryRoute::unavailable;
+  context_.reset();
+  std::unique_ptr<IReadOnlyCardEntryInspection> context;
   std::unique_ptr<card::ICardUpdateTarget> target;
   try {
-    target = source_.make_update_target(*context_);
+    context = source_.inspect_inserted_card();
+    if (!context || CardEntryRouter::route(*context) !=
+                        CardEntryRoute::login_required) {
+      throw std::system_error(
+          card::make_error_code(card::CardError::invalid_operation),
+          "card reset requires a fresh initialized insertion");
+    }
+    target = source_.make_update_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),

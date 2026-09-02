@@ -5573,3 +5573,36 @@
   这一整层。已向用户说明，用户维持关闭应用的方案。
 - ⚠️ 构建期两次 `LNK1168`：开发 EXE 正在运行导致无法写入，与改动无关。
 - 提交：待定（`[P2.17]reset the security card from settings`）。
+
+### 小切片 17h：保持一次性插卡上下文并恢复重置可达性
+
+#### 提交后审计与修正决策
+
+- 17g 已提交为 `5bbcf04`。提交后的真实组合审计发现：P2.14c 在初始化或登录成功前会按设计撤销
+  一次性插卡上下文，因此已认证页面虽然显示重置入口，原实现仍要求 `login_required` route 与旧
+  context，生产组合中会得到 `invalid_operation`。同一问题也使初始化后立即设置第二密码不可达。
+- 一份未提交的候选改动尝试在初始化和登录成功后重新绑定 context。该方案未采用：它会破坏
+  P2.14c 已验证的边界——成功处理器收到 S 与登录输入前必须先撤销插卡上下文，不能为了后续写卡
+  复活或长期保留旧硬件／介质观察。
+- 最终方案是写卡动作自己执行一次新的只读 `inspect_inserted_card()`，只接受当下仍路由为
+  `initialized_v1` 的实体卡，并从该新上下文构造与同一硬件 ID 绑定的短生命周期 update target。
+  成功和任何失败都会销毁该新上下文；登录／初始化的一次性语义保持不变。
+- 破坏性重置额外接收 `IVolatileCardAuthenticationSession` 作为显式授权门。未认证调用在加载
+  凭据或访问适配器之前拒绝；产品 UI 只有认证态返回可用，且仍先卸载全部卷，未卸载干净则不写卡。
+
+#### 实现与验证
+
+- `CardEntryContextController::set_second_card_password()` 与 `reset_card_record()` 改为新鲜探测、
+  固定路由检查、创建 update target、执行记录事务后立即退休；控制器不再依赖已经消费的 route/context。
+- UI controller 新增窄能力查询 `can_reset_card_record()`，COM bridge 只返回布尔值；设置页据此禁用
+  不可达按钮并显示明确原因。重置失败文案不再声称“安全卡未被改动”，因为写入阶段异常无法作此保证。
+- 单元测试覆盖：初始化后旧上下文已销毁但第二密码写入可通过第二次探测完成；登录成功同样不保留
+  context；未认证重置零适配器访问；认证重置只探测／写入一次并留下精确 provisioning marker；
+  UI、COM 和 WebView fake 均验证认证授权参数。
+- Debug 全量 CTest **45/45**：43 项实际通过，2 项按环境限制跳过；受影响 6 项在 Debug、
+  MSVC `/analyze`、ASan 三套均通过。三套 WebView2 集成程序均退出 0；`/analyze` 无项目诊断，
+  ASan 未报告内存错误；两个 JS 文件 `node --check` 通过；`git diff --check` 通过。
+- 安全复核：未保存或复活旧插卡上下文；新探测只在用户确认写动作时发生并在动作末尾销毁；
+  update target 仍绑定探测所得的非零硬件 ID；未新增密码、S、硬件标识或记录原文的 UI 暴露／日志；
+  P2.14c 的“成功交接前撤销上下文”及 R-03 / 8.6 均保持不变。
+- 提交：用户已批准；本节随 `[P2.17]reinspect the card before record writes` 提交，未推送。

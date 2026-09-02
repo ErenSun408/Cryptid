@@ -50,6 +50,7 @@ void require(const bool condition, const char* const message) {
 
 struct State final {
   CardEntryContextController* controller{};
+  int put_calls{};
   std::vector<std::byte> record;
   int factory_calls{};
   int read_calls{};
@@ -109,6 +110,42 @@ class FakeLoginTarget final : public ICardLoginTarget {
   int local_reads_{};
 };
 
+class FakeRecordStore final : public usb_vault::card::ICardStore {
+ public:
+  explicit FakeRecordStore(State& state) noexcept : state_(state) {}
+
+  [[nodiscard]] SecureBuffer get_blob() override {
+    SecureBuffer result(state_.record.size());
+    std::ranges::copy(state_.record, result.bytes().begin());
+    return result;
+  }
+
+  void put_blob(const SecureBuffer& blob) override {
+    ++state_.put_calls;
+    state_.record.assign(blob.bytes().begin(), blob.bytes().end());
+  }
+
+  [[nodiscard]] usb_vault::card::CardCapabilities capabilities()
+      const noexcept override {
+    return {};
+  }
+
+ private:
+  State& state_;
+};
+
+class FakeUpdateTarget final : public usb_vault::card::ICardUpdateTarget {
+ public:
+  explicit FakeUpdateTarget(State& state) noexcept : store_(state) {}
+
+  [[nodiscard]] usb_vault::card::ICardStore& card_store() noexcept override {
+    return store_;
+  }
+
+ private:
+  FakeRecordStore store_;
+};
+
 class FakeSource final : public ICardEntryInspectionSource {
  public:
   [[nodiscard]] std::unique_ptr<IReadOnlyCardEntryInspection>
@@ -130,6 +167,11 @@ class FakeSource final : public ICardEntryInspectionSource {
     }
     if (state.return_null_target) return nullptr;
     return std::make_unique<FakeLoginTarget>(state);
+  }
+
+  [[nodiscard]] std::unique_ptr<usb_vault::card::ICardUpdateTarget>
+  make_update_target(const IReadOnlyCardEntryInspection&) override {
+    return std::make_unique<FakeUpdateTarget>(state);
   }
 
   State state;
@@ -294,6 +336,36 @@ void test_noncredential_failures_invalidate_context() {
   }
 }
 
+void test_login_update_uses_a_fresh_inspection(
+    const InitializedCardRecordV1& initialized) {
+  FakeSource source;
+  source.state.record = copy_bytes(initialized.record.bytes());
+  CardEntryContextController controller(source);
+  source.state.controller = &controller;
+  RecordingConsumer consumer(controller);
+  require(controller.handle_arrival() == CardEntryRoute::login_required,
+          "login fixture reached the wrong route");
+
+  controller.authenticate_login(consumer,
+                                secure_text("correct-login-password"));
+  require(consumer.calls == 1, "login did not hand off");
+
+  require(controller.current_route() == CardEntryRoute::unavailable &&
+              !controller.has_context(),
+          "login retained its one-shot insertion");
+
+  // Updating the record remains reachable, but through a new adapter
+  // inspection rather than the context consumed by login.
+  controller.set_second_card_password(secure_text("correct-login-password"),
+                                      secure_text("second-login-password"));
+  require(source.state.put_calls == 1,
+          "a logged-in session could not rewrite the card record");
+  require(source.state.inspections_destroyed == 2 &&
+              controller.current_route() == CardEntryRoute::unavailable &&
+              !controller.has_context(),
+          "the record rewrite did not retire its fresh inspection");
+}
+
 void test_wrong_routes_reject_without_target_creation() {
   for (const auto [media, logical] : {
            std::pair{CardEntryMediaEvidence::initializable_media,
@@ -333,6 +405,7 @@ int main() {
     test_credential_rejection_preserves_context_for_retry(initialized);
     test_success_recheck_rejects_record_change(initialized);
     test_noncredential_failures_invalidate_context();
+    test_login_update_uses_a_fresh_inspection(initialized);
     test_wrong_routes_reject_without_target_creation();
     std::cout << "card_entry_login_controller_tests passed\n";
     return 0;

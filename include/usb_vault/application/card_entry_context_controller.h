@@ -86,11 +86,12 @@ class ICardEntryActions {
   virtual void set_second_card_password(
       security::SecureBuffer existing_password_utf8,
       security::SecureBuffer second_password_utf8) = 0;
-  // Returns the current insertion's record to the provisioning marker. This
-  // destroys the root secret and every derivation that depended on it. The
-  // insertion is retired either way, because its route was fixed when the card
-  // was still initialized and no longer describes what the card holds.
-  virtual void reset_card_record() = 0;
+  // Re-inspects the physically present card and returns an initialized record
+  // to the provisioning marker. The authenticated session is an explicit
+  // authorization gate; the one-shot login context is never retained or
+  // revived. The fresh insertion is retired on every outcome.
+  virtual void reset_card_record(
+      const IVolatileCardAuthenticationSession& authentication) = 0;
   [[nodiscard]] virtual std::optional<CardEntryRoute>
   current_route() const noexcept = 0;
 
@@ -130,7 +131,8 @@ class CardEntryContextController final : public ICardEntryActions {
   void set_second_card_password(
       security::SecureBuffer existing_password_utf8,
       security::SecureBuffer second_password_utf8) override;
-  void reset_card_record() override;
+  void reset_card_record(
+      const IVolatileCardAuthenticationSession& authentication) override;
 
   // No value means no accepted physical insertion is currently present.
   [[nodiscard]] std::optional<CardEntryRoute>

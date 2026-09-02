@@ -355,8 +355,13 @@ class FakeEntry final : public ICardEntryActions {
     }
   }
 
-  void reset_card_record() override {
+  void reset_card_record(
+      const usb_vault::application::IVolatileCardAuthenticationSession&
+          authentication) override {
     ++reset_calls;
+    if (!authentication.authenticated()) {
+      throw std::runtime_error("card reset was not authenticated");
+    }
     if (reject_reset) throw std::runtime_error("card reset failed");
     route = CardEntryRoute::unavailable;
   }
@@ -847,6 +852,15 @@ void test_container_b_rejects_unusable_requests() {
 }
 
 void test_card_reset_releases_the_session_and_refuses_while_mounted() {
+  Fixture unauthenticated;
+  require(!unauthenticated.controller.can_reset_card_record(),
+          "an unauthenticated session offered the reset");
+  require_throws<std::system_error>(
+      [&] { unauthenticated.controller.reset_card_record(); },
+      "an unauthenticated session reset the card");
+  require(unauthenticated.entry.reset_calls == 0,
+          "the card was written without authentication");
+
   Fixture mounted;
   mounted.authentication.establish(root_secret());
   mounted.chooser.new_path = L"D:\\Vault\\work.hc";
@@ -865,6 +879,8 @@ void test_card_reset_releases_the_session_and_refuses_while_mounted() {
   fixture.authentication.establish(root_secret());
   fixture.chooser.new_path = L"D:\\Vault\\work.hc";
   require(fixture.controller.create_container(64), "creation was refused");
+  require(fixture.controller.can_reset_card_record(),
+          "an authenticated session did not offer the reset");
 
   fixture.controller.reset_card_record();
 

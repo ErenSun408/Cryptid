@@ -68,6 +68,7 @@
   const resetConfirmButton = document.getElementById("reset-card-confirm");
   const resetAcknowledge = document.getElementById("reset-card-acknowledge");
   const resetStatus = document.getElementById("reset-card-status");
+  const resetBlocked = document.getElementById("reset-card-blocked");
   const creationDialog = document.getElementById("create-volume-dialog");
   const creationTypeStep = document.getElementById("create-type-step");
   const creationTitle = document.getElementById("create-volume-title");
@@ -169,6 +170,10 @@
   // "params" collects what that shape needs.
   let creationStep = "type";
   let creationCompleted = false;
+  // Native capability gate for the destructive reset action. The entry layer
+  // never keeps the one-shot login/initialization context for this; it performs
+  // a new physical-card inspection only after the user confirms the action.
+  let cardResetAvailable = false;
 
   const setVisible = (element, visible) => {
     element.hidden = !visible;
@@ -418,13 +423,22 @@
   };
 
   const updateResetAvailability = () => {
-    const authenticated = currentState === nativeState.authenticated;
-    resetOpenButton.disabled = busy || !authenticated;
-    resetAcknowledge.disabled = busy || !authenticated;
+    const ready = currentState === nativeState.authenticated &&
+      cardResetAvailable;
+    resetOpenButton.disabled = busy || !ready;
+    // A greyed button with only a hover tooltip reads as a dead control, so
+    // the reason it cannot run is written where the button is.
+    const blocked = currentState === nativeState.authenticated &&
+      !cardResetAvailable;
+    resetBlocked.hidden = !blocked;
+    resetBlocked.textContent = blocked
+      ? "当前会话无法重新初始化安全卡。请拔出后重新插卡并登录。"
+      : "";
+    resetAcknowledge.disabled = busy || !ready;
     resetCloseButton.disabled = busy;
     resetCancelButton.disabled = busy;
     resetConfirmButton.disabled =
-      busy || !authenticated || !resetAcknowledge.checked;
+      busy || !ready || !resetAcknowledge.checked;
   };
 
   const closeResetFlow = (force = false) => {
@@ -834,7 +848,13 @@
     }
     const nextContainers = [];
     const nextOperationEvents = [];
+    let nextResetAvailable = false;
     if (nextState === nativeState.authenticated) {
+      const resetAvailable = await bridge.canResetCardRecord();
+      if (resetAvailable !== true && resetAvailable !== false) {
+        throw new Error("invalid card reset availability");
+      }
+      nextResetAvailable = resetAvailable;
       const count = await bridge.getContainerCount();
       if (!Number.isInteger(count) || count < 0 || count > 4096) {
         throw new Error("invalid container count");
@@ -908,6 +928,7 @@
       ? nativeState.unavailable
       : nextState;
     activeVolumes = nextActiveVolumes;
+    cardResetAvailable = nextResetAvailable;
     containers = nextContainers;
     operationEvents = nextOperationEvents;
   };
@@ -1180,8 +1201,12 @@
       render(messageForCurrentState());
       updateResetAvailability();
       if (!resetDialog.hidden) {
-        resetStatus.textContent =
-          "重新初始化失败，安全卡未被改动。请先卸载全部卷后重试。";
+        // Only the mounted case is knowable from here. Every other failure
+        // gets a message that does not invent a cause, and none of them claim
+        // the card is untouched: a failure inside the write cannot promise it.
+        resetStatus.textContent = activeVolumes
+          ? "重新初始化未开始：仍有卷处于挂载状态，请先全部卸载后重试。"
+          : "重新初始化未能完成。请拔出安全卡重新插入后重试。";
         resetStatus.dataset.tone = "error";
       }
     }

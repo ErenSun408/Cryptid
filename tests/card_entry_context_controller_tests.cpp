@@ -1,6 +1,10 @@
 #include "usb_vault/application/card_entry_context_controller.h"
 
+#include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/card/card_initialization_service.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/security/confirmed_password.h"
+#include "usb_vault/security/offline_card_password_policy.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -100,6 +104,22 @@ class FakeUpdateTarget final : public usb_vault::card::ICardUpdateTarget {
   FakeRecordStore& store_;
 };
 
+class FakeInitializationTarget final
+    : public usb_vault::card::ICardInitializationTarget {
+ public:
+  explicit FakeInitializationTarget(FakeRecordStore& store) noexcept
+      : store_(store) {}
+
+  void ensure_provisioning_record() override {}
+
+  [[nodiscard]] usb_vault::card::ICardStore& card_store() noexcept override {
+    return store_;
+  }
+
+ private:
+  FakeRecordStore& store_;
+};
+
 class FakeSource final : public ICardEntryInspectionSource {
  public:
   [[nodiscard]] std::unique_ptr<IReadOnlyCardEntryInspection>
@@ -123,12 +143,19 @@ class FakeSource final : public ICardEntryInspectionSource {
     return std::make_unique<FakeUpdateTarget>(record);
   }
 
+  [[nodiscard]] std::unique_ptr<usb_vault::card::ICardInitializationTarget>
+  make_initialization_target(const IReadOnlyCardEntryInspection&) override {
+    if (!support_initialization) return nullptr;
+    return std::make_unique<FakeInitializationTarget>(record);
+  }
+
   Lifetime lifetime;
   std::vector<InspectionSpec> specs;
   std::size_t next{};
   bool throw_on_call{false};
   bool return_null{false};
   bool support_updates{false};
+  bool support_initialization{false};
   int update_target_calls{};
   FakeRecordStore record;
 };
@@ -140,14 +167,11 @@ class FakeSource final : public ICardEntryInspectionSource {
   return result;
 }
 
-void test_second_card_password_requires_the_login_route() {
+void test_second_card_password_requires_a_fresh_initialized_inspection() {
   FakeSource source;
   source.specs.push_back({CardEntryMediaEvidence::initializable_media,
                           CardRecordState::provisioned_uninitialized});
   CardEntryContextController controller(source);
-  require(controller.handle_arrival() ==
-              CardEntryRoute::initialization_required,
-          "arrival reached the wrong route");
 
   bool rejected = false;
   try {
@@ -157,11 +181,10 @@ void test_second_card_password_requires_the_login_route() {
     rejected = true;
   }
   require(rejected && source.update_target_calls == 0,
-          "a record update was attempted outside the login route");
-  require(controller.current_route() ==
-                  CardEntryRoute::initialization_required &&
-              controller.has_context(),
-          "a rejected route check disturbed the insertion");
+          "a non-initialized fresh inspection reached a record update");
+  require(controller.current_route() == CardEntryRoute::unavailable &&
+              !controller.has_context(),
+          "a rejected fresh inspection was retained");
 }
 
 void test_second_card_password_rejects_empty_input_without_retiring() {
@@ -190,7 +213,6 @@ void test_second_card_password_retires_the_insertion_on_failure() {
   source.specs.push_back({CardEntryMediaEvidence::product_record,
                           CardRecordState::initialized_v1});
   CardEntryContextController controller(source);
-  static_cast<void>(controller.handle_arrival());
 
   bool reported = false;
   try {
@@ -216,7 +238,6 @@ void test_second_card_password_rewrites_the_record_once() {
   source.record.blob.assign(initialized.bytes().begin(),
                             initialized.bytes().end());
   CardEntryContextController controller(source);
-  static_cast<void>(controller.handle_arrival());
 
   controller.set_second_card_password(secure_text("entry-daily-password"),
                                       secure_text("entry-second-password"));
@@ -231,9 +252,85 @@ void test_second_card_password_rewrites_the_record_once() {
       stored.bytes(), secure_text("entry-second-password"));
   require(std::ranges::equal(existing_root.bytes(), second_root.bytes()),
           "the rewritten record no longer opens with both passwords");
-  require(controller.current_route() == CardEntryRoute::login_required &&
-              controller.has_context(),
-          "a successful record update retired the insertion");
+  require(controller.current_route() == CardEntryRoute::unavailable &&
+              !controller.has_context(),
+          "a successful record update retained its fresh inspection");
+}
+
+void test_initialization_retires_then_update_reinspects() {
+  FakeSource source;
+  source.support_updates = true;
+  source.support_initialization = true;
+  source.specs.push_back({CardEntryMediaEvidence::initializable_media,
+                          CardRecordState::provisioned_uninitialized});
+  source.specs.push_back({CardEntryMediaEvidence::product_record,
+                          CardRecordState::initialized_v1});
+  SecureBuffer marker =
+      usb_vault::card::provision_uninitialized_card_record_v1();
+  source.record.blob.assign(marker.bytes().begin(), marker.bytes().end());
+  CardEntryContextController controller(source);
+  require(controller.handle_arrival() ==
+              CardEntryRoute::initialization_required,
+          "a provisioning card did not route to initialization");
+
+  usb_vault::security::OfflineCardPasswordPolicy password_policy;
+  usb_vault::application::CardAuthenticationSession authentication;
+  controller.initialize_and_authenticate(
+      authentication,
+      usb_vault::security::confirm_password(
+          password_policy, secure_text("entry-daily-password"),
+          secure_text("entry-daily-password")));
+  require(authentication.authenticated(),
+          "initialization did not establish authentication");
+  require(controller.current_route() == CardEntryRoute::unavailable &&
+              !controller.has_context(),
+          "initialization retained its consumed insertion");
+
+  // The update starts from a second, read-only observation rather than
+  // reviving the insertion that initialization consumed.
+  controller.set_second_card_password(secure_text("entry-daily-password"),
+                                      secure_text("entry-second-password"));
+  require(source.record.put_calls == 2,
+          "the freshly initialized insertion could not rewrite the record");
+  require(source.lifetime.source_calls == 2 &&
+              source.lifetime.destroyed == 2 &&
+              controller.current_route() == CardEntryRoute::unavailable &&
+              !controller.has_context(),
+          "the update did not use and retire a fresh insertion");
+}
+
+void test_reset_requires_authentication_and_reinspects() {
+  FakeSource source;
+  source.support_updates = true;
+  source.specs.push_back({CardEntryMediaEvidence::product_record,
+                          CardRecordState::initialized_v1});
+  SecureBuffer initialized = usb_vault::card::initialize_card_record_v1(
+      secure_text("reset-daily-password"));
+  source.record.blob.assign(initialized.bytes().begin(),
+                            initialized.bytes().end());
+  CardEntryContextController controller(source);
+  usb_vault::application::CardAuthenticationSession authentication;
+
+  bool rejected = false;
+  try {
+    controller.reset_card_record(authentication);
+  } catch (const std::system_error&) {
+    rejected = true;
+  }
+  require(rejected && source.lifetime.source_calls == 0 &&
+              source.update_target_calls == 0,
+          "an unauthenticated reset reached the adapter");
+
+  SecureBuffer root(usb_vault::card::kCardRecordV1RootSecretSize);
+  authentication.establish(std::move(root));
+  controller.reset_card_record(authentication);
+  require(source.lifetime.source_calls == 1 &&
+              source.update_target_calls == 1 &&
+              source.record.put_calls == 1 &&
+              usb_vault::card::inspect_card_record(source.record.blob) ==
+                  CardRecordState::provisioned_uninitialized &&
+              source.lifetime.destroyed == 1 && !controller.has_context(),
+          "an authenticated reset did not use and retire a fresh insertion");
 }
 
 void test_starts_without_card_or_context() {
@@ -354,11 +451,13 @@ void test_source_failures_fail_closed_without_context() {
 
 int main() {
   try {
-    test_second_card_password_requires_the_login_route();
-  test_second_card_password_rejects_empty_input_without_retiring();
-  test_second_card_password_retires_the_insertion_on_failure();
-  test_second_card_password_rewrites_the_record_once();
-  test_starts_without_card_or_context();
+    test_second_card_password_requires_a_fresh_initialized_inspection();
+    test_second_card_password_rejects_empty_input_without_retiring();
+    test_second_card_password_retires_the_insertion_on_failure();
+    test_second_card_password_rewrites_the_record_once();
+    test_initialization_retires_then_update_reinspects();
+    test_reset_requires_authentication_and_reinspects();
+    test_starts_without_card_or_context();
     test_arrival_routes_once_and_retains_context();
     test_new_arrival_destroys_old_binding_before_inspection();
     test_removal_destroys_context_and_clears_route();
