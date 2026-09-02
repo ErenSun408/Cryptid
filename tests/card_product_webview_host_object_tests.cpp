@@ -217,6 +217,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return operation_events;
   }
 
+  void release_session_secrets() noexcept override {}
+
   void clear_operation_history() noexcept override {
     ++clear_operation_history_calls;
     operation_events.clear();
@@ -301,6 +303,9 @@ class FakeEntry final : public ICardEntryActions {
     second_password_utf8.clear();
   }
 
+  void reset_card_record() override { ++reset_calls; }
+
+  int reset_calls{};
   std::vector<std::byte> existing_password_bytes;
   std::vector<std::byte> second_password_bytes;
   int second_password_calls{};
@@ -465,11 +470,20 @@ class InitializationArguments final {
   bool confirmation_is_array_{true};
 };
 
+class RecordingCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
+ public:
+  void request_close() noexcept override { ++close_calls; }
+
+  int close_calls{};
+};
+
+RecordingCloseSink g_close_sink;
+
 [[nodiscard]] ComPtr<IDispatch> make_host(
     CardProductUiSessionController& controller) {
   ComPtr<IDispatch> host;
-  require(SUCCEEDED(create_card_product_webview_host_object(controller,
-                                                             &host)),
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              controller, &g_close_sink, &host)),
           "product host creation failed");
   return host;
 }

@@ -211,6 +211,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     throw std::logic_error("forced unmount is outside the UI contract");
   }
 
+  void release_session_secrets() noexcept override {
+    ++release_secrets_calls;
+  }
+
   [[nodiscard]] bool mounted() const noexcept override {
     return mounted_state;
   }
@@ -302,6 +306,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int create_a_calls{};
   int container_a_status_calls{};
   int unmount_calls{};
+  int release_secrets_calls{};
 };
 
 class FakeEntry final : public ICardEntryActions {
@@ -349,6 +354,15 @@ class FakeEntry final : public ICardEntryActions {
       throw std::runtime_error("card record update failed");
     }
   }
+
+  void reset_card_record() override {
+    ++reset_calls;
+    if (reject_reset) throw std::runtime_error("card reset failed");
+    route = CardEntryRoute::unavailable;
+  }
+
+  int reset_calls{};
+  bool reject_reset{};
 
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override {
@@ -832,6 +846,45 @@ void test_container_b_rejects_unusable_requests() {
           "the three-quarter boundary refused the size it must allow");
 }
 
+void test_card_reset_releases_the_session_and_refuses_while_mounted() {
+  Fixture mounted;
+  mounted.authentication.establish(root_secret());
+  mounted.chooser.new_path = L"D:\\Vault\\work.hc";
+  require(mounted.controller.create_container(64), "creation was refused");
+  mounted.volume.reject_unmount = true;
+
+  // A mount that outlives its key material would hold a drive letter nothing
+  // can release, so the card must not be written at all.
+  require_throws<std::runtime_error>(
+      [&] { mounted.controller.reset_card_record(); },
+      "a still-mounted session reset the card");
+  require(mounted.entry.reset_calls == 0,
+          "the card was written while a volume was still attached");
+
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  require(fixture.controller.create_container(64), "creation was refused");
+
+  fixture.controller.reset_card_record();
+
+  require(fixture.entry.reset_calls == 1, "the card record was not reset");
+  require(!fixture.volume.mounted(),
+          "the reset left a volume attached");
+  // Nothing derived from the destroyed identity may outlive it.
+  require(fixture.volume.release_secrets_calls == 1 &&
+              fixture.volume.clear_operation_history_calls >= 1 &&
+              !fixture.authentication.authenticated(),
+          "the reset left session material behind");
+  require(fixture.controller.state() != CardProductUiState::authenticated,
+          "the reset left the page on an authenticated route");
+
+  // A route that is no longer authenticated cannot reset again.
+  require_throws<std::system_error>(
+      [&] { fixture.controller.reset_card_record(); },
+      "a released session reset the card a second time");
+}
+
 void test_inconsistent_container_status_fails_closed() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -956,6 +1009,7 @@ int main() {
     test_adopted_container_remounts_without_reselecting_its_file();
     test_container_b_commits_the_card_before_the_volume();
     test_container_b_rejects_unusable_requests();
+    test_card_reset_releases_the_session_and_refuses_while_mounted();
     test_inconsistent_container_status_fails_closed();
     test_operation_history_is_authenticated_sanitized_and_clearable();
     test_operation_history_rejects_paths_and_impossible_shapes();

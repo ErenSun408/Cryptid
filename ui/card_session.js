@@ -61,6 +61,13 @@
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
     Array.from(document.querySelectorAll("[data-create-kind]"));
+  const resetOpenButton = document.getElementById("reset-card-open");
+  const resetDialog = document.getElementById("reset-card-dialog");
+  const resetCloseButton = document.getElementById("reset-card-close");
+  const resetCancelButton = document.getElementById("reset-card-cancel");
+  const resetConfirmButton = document.getElementById("reset-card-confirm");
+  const resetAcknowledge = document.getElementById("reset-card-acknowledge");
+  const resetStatus = document.getElementById("reset-card-status");
   const creationDialog = document.getElementById("create-volume-dialog");
   const creationTypeStep = document.getElementById("create-type-step");
   const creationTitle = document.getElementById("create-volume-title");
@@ -410,6 +417,25 @@
     if (selected) selected.focus();
   };
 
+  const updateResetAvailability = () => {
+    const authenticated = currentState === nativeState.authenticated;
+    resetOpenButton.disabled = busy || !authenticated;
+    resetAcknowledge.disabled = busy || !authenticated;
+    resetCloseButton.disabled = busy;
+    resetCancelButton.disabled = busy;
+    resetConfirmButton.disabled =
+      busy || !authenticated || !resetAcknowledge.checked;
+  };
+
+  const closeResetFlow = (force = false) => {
+    if (busy && !force) return;
+    resetDialog.hidden = true;
+    resetAcknowledge.checked = false;
+    resetStatus.textContent = "";
+    resetStatus.dataset.tone = "";
+    updateResetAvailability();
+  };
+
   const closeCreationFlow = (force = false) => {
     if (busy && !force) return;
     resetCreationInputs();
@@ -668,7 +694,9 @@
     }
     operationHistoryClear.disabled =
       busy || !showDashboard || operationEvents.length === 0;
+    updateResetAvailability();
     if (!showDashboard) {
+      closeResetFlow(true);
       closeCreationFlow(true);
       showDashboardSection("dashboard");
     }
@@ -1124,6 +1152,41 @@
     () => bridge.unmountContainer(id),
     "无法卸载该容器，请关闭占用文件后重试。");
 
+  const resetCardRecord = async () => {
+    if (busy || currentState !== nativeState.authenticated ||
+        !resetAcknowledge.checked) {
+      return;
+    }
+    busy = true;
+    resetStatus.textContent = "正在卸载全部卷并重写安全卡。";
+    resetStatus.dataset.tone = "";
+    render(messageForCurrentState());
+    updateResetAvailability();
+    try {
+      await bridge.resetCardRecord();
+      // The native side closes the window once the record is committed, so
+      // the page stays on this message instead of routing to a state that
+      // describes a card this session can no longer act on.
+      resetStatus.textContent = "已重新初始化，正在关闭应用。";
+      resetStatus.dataset.tone = "success";
+    } catch (_) {
+      try {
+        await refreshNativeState();
+      } catch (_) {
+        currentState = nativeState.unavailable;
+        activeVolumes = true;
+      }
+      busy = false;
+      render(messageForCurrentState());
+      updateResetAvailability();
+      if (!resetDialog.hidden) {
+        resetStatus.textContent =
+          "重新初始化失败，安全卡未被改动。请先卸载全部卷后重试。";
+        resetStatus.dataset.tone = "error";
+      }
+    }
+  };
+
   const createContainerB = async () => {
     const sizes = containerBSizes();
     if (sizes === null || !containerBInputReady() ||
@@ -1291,6 +1354,23 @@
       updateCreationAvailability();
     });
   }
+  resetOpenButton.addEventListener("click", () => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    resetAcknowledge.checked = false;
+    resetStatus.textContent = "";
+    resetStatus.dataset.tone = "";
+    resetDialog.hidden = false;
+    updateResetAvailability();
+  });
+  resetCloseButton.addEventListener("click", () => closeResetFlow());
+  resetCancelButton.addEventListener("click", () => closeResetFlow());
+  resetAcknowledge.addEventListener("change", () => updateResetAvailability());
+  resetConfirmButton.addEventListener("click", async () => {
+    await resetCardRecord();
+  });
+  resetDialog.addEventListener("click", (event) => {
+    if (event.target === resetDialog) closeResetFlow();
+  });
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => {
     if (busy) return;
@@ -1374,6 +1454,10 @@
     }
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !resetDialog.hidden) {
+      closeResetFlow();
+      return;
+    }
     if (event.key !== "Escape" || creationDialog.hidden) return;
     // An open unit list is the innermost thing Escape can close.
     if (unitPickers.some((picker) => !picker.list.hidden)) {

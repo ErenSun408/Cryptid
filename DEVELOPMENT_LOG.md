@@ -5509,3 +5509,67 @@
 - 全量 CTest 见提交记录。
 - ⚠️ 构建期一次 `LNK1168`：开发 EXE 正在运行导致无法写入，关闭后重建通过，与改动无关。
 - 提交：待定（`[ui]drop the duplicate card badge and show login progress`）。
+
+### 小切片 17g：设置页重新初始化安全卡
+
+#### 需求审计与决策
+
+- 17f 已提交为 `4f22a4f`。用户要求在设置页增加把一张 `initialized_v1` 卡破坏性退回
+  provisioning 状态的正式入口，并给出了另一位 agent 的流程方案（设置页执行、成功后自动关闭
+  应用、下次启动由现有入口路由进初始化页）。
+- **实现前逐条核实该方案的三个前提，均成立**：
+  1. `provision_uninitialized_card_record_v1()`（`card_record_v1.h`）已存在，产出的正是受控
+     出厂流程写的那个精确 marker；
+  2. `commit_card_record_journal_v1` 调用的 `validate_logical_record`
+     （`card_record_journal_v1.cpp:366`）**同时接受** `provisioned_uninitialized` 与
+     `initialized_v1`，不存在阻挡 initialized → provisioning 的状态机守卫，因此不需要新增
+     helper IPC；
+  3. `card_entry_router.cpp:20` 已把 provisioning marker 路由到初始化页。
+- ⚠️ 一处不可用：`provision_card_record_journal_v1` 在检测到 product evidence 时会显式拒绝，
+  那是出厂路径。重置必须走普通 `commit` 路径。
+- 关闭应用是必需的而非偷懒：`CardEntryContextController` 的注释写明它为**至多一次物理插入**
+  持有固定路由，重置后这张卡不再符合被路由时的形态，进程内无法重新分类。
+
+#### 实现
+
+- `CardRecordService::reset_to_provisioning()`：只接受 `initialized_v1`；写入 marker 后
+  **复读比对**，不一致即 `fail_unverified_write()`。marker 与出厂产物逐字节相同，卡上不留任何
+  被替换身份的痕迹。
+- `ICardEntryActions::reset_card_record()` / `CardEntryContextController`：复用既有
+  `make_update_target`；**成功与失败都退休该插入**（route → `unavailable`、context 释放）。
+- `CardProductUiSessionController::reset_card_record()`：先 `unmount_active()`，
+  🔴 **仍有挂载则抛错且完全不写卡**——挂载会比打开它的密钥活得久，那个盘符将永远没人回收
+  （`unmount_active` / `force_unmount_active` 都靠 `state_.containers` 遍历）。
+  写卡成功后释放会话密钥、清操作日志、清 S。
+- 新增 `IAuthenticatedCardVolumeSession::release_session_secrets()`：清空
+  `login_password` 与 `container_b_password`。
+  🟡 原打算借 `force_unmount_active()` 顺手清，但控制器测试的 fake 里写着
+  `throw std::logic_error("forced unmount is outside the UI contract")`——那是在说借错了门，
+  遂改为显式接口。
+- 新增 `IUiCloseRequestSink`（`card_product_webview_host_object.h`）与 `resetCardRecord`
+  桥方法。提交成功后 `PostMessageW(WM_CLOSE)`——用 Post 不用 Send，让 WebView2 的这次调用
+  先完成栈展开。开发应用实现该 sink，测试夹具传 `nullptr` 或记录用的假实现。
+- 页面：设置页新增「安全卡」危险区与确认弹窗，勾选前「重新初始化」保持禁用，
+  支持 Esc 与点击遮罩关闭。成功后页面停在「已重新初始化，正在关闭应用。」而不刷新状态——
+  刷新会短暂路由到一个本会话已无法操作的卡。
+- 资源版本号 `?v=p2-17f-login-progress` → `?v=p2-17g-card-reset`。
+
+#### 测试、安全复核与提交状态
+
+- `card_record_service_tests` 新增三项：重置后卡上是逐字节精确的 marker、原两个密码都只得到
+  状态拒绝（不是凭据答案）、卡可再次初始化；非 initialized 状态拒绝且 `put_calls == 0`；
+  🔴 写入未落卡时必须报错且记录不变——否则用户会以为密钥已销毁而其实还在。
+- `card_product_ui_session_controller_tests` 新增：已挂载时拒绝且 `entry.reset_calls == 0`；
+  成功后密钥释放、日志清空、S 清除、路由不再是 authenticated、再次调用被拒。
+- 页面契约新增：危险区元素齐全、三句代价文案在位、`resetAcknowledge.checked` 与
+  `bridge.resetCardRecord()` 都在。
+- 全量 CTest 44/45（唯一失败为需实体卡的 `vikey_helper_process_tests`）；
+  WebView2 集成测试退出 0。
+- 安全复核：重置只在已认证态可达；写卡前强制无挂载；写后复读校验；marker 与出厂产物不可区分；
+  会话密钥、操作日志与 S 全部释放；插入被退休，不会继续在错误路由上操作。
+  桥方法不接受任何参数，页面无法影响写入内容。
+- 🟡 备选方案（未采用，成本更低）：重置后不关应用，改为提示拔出并重新插卡，
+  由现有 `CardDeviceLifecycleController` 到达路径重新定路由，可省掉 `IUiCloseRequestSink`
+  这一整层。已向用户说明，用户维持关闭应用的方案。
+- ⚠️ 构建期两次 `LNK1168`：开发 EXE 正在运行导致无法写入，与改动无关。
+- 提交：待定（`[P2.17]reset the security card from settings`）。

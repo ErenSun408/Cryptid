@@ -338,6 +338,17 @@
     .settings-switch[aria-checked="true"] { border-color: rgba(200, 169, 106, .5); background: rgba(200, 169, 106, .3); }
     .settings-switch[aria-checked="true"]::after { background: var(--gold-2); transform: translate(1rem, -50%); }
     .settings-switch[aria-disabled="true"] { cursor: default; }
+    .settings-group.danger h3 { color: var(--danger); }
+    .settings-card.danger { border-color: rgba(217, 107, 98, .32); }
+    .danger-row { display: flex; align-items: flex-start; gap: 1rem; padding: .9rem 1rem; }
+    .danger-copy { min-width: 0; flex: 1; font-size: .74rem; line-height: 1.7; color: var(--text-3); }
+    .danger-copy b { display: block; margin-bottom: .2rem; font-size: .85rem; font-weight: 600; color: var(--text); }
+    .modal-button.danger {
+      color: #fff; border-color: transparent; background: var(--danger);
+    }
+    .modal-button.danger:hover:not(:disabled) { background: #e07b72; }
+    .shell-button.danger { flex: 0 0 auto; color: var(--danger); border-color: rgba(217, 107, 98, .32); }
+    .shell-button.danger:hover:not(:disabled) { color: #fff; border-color: transparent; background: var(--danger); }
     .settings-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .7rem 1rem; border-top: 1px solid var(--line); }
     .settings-kv:first-child { border-top: 0; }
     .settings-kv-label { font-size: .74rem; color: var(--text-3); }
@@ -690,6 +701,18 @@
               </div>
             </div>
           </div>
+          <div class="settings-group danger">
+            <h3>安全卡</h3>
+            <div class="settings-card danger">
+              <div class="danger-row">
+                <span class="danger-copy">
+                  <b>重新初始化安全卡</b>
+                  销毁当前卡的认证密钥，从而回到初始化状态。以当前密钥加密的容器文件将无法再被打开。
+                </span>
+                <button id="reset-card-open" class="shell-button danger" type="button">重新初始化安全卡</button>
+              </div>
+            </div>
+          </div>
           <div class="settings-group">
             <h3>关于</h3>
             <div class="settings-card">
@@ -704,6 +727,33 @@
       </main>
     </div>
   </section>
+
+  <div id="reset-card-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-card-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="reset-card-title">重新初始化安全卡</h3>
+        <button id="reset-card-close" class="modal-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p>重新初始化会销毁安全卡上的认证密钥。现有容器文件不会被删除，但将永久无法打开。此操作不可撤销。</p>
+        <div class="creation-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+          <span>完成后应用会立即关闭。下次打开时这张卡会回到「初始化安全卡」。</span>
+        </div>
+        <label class="creation-check" for="reset-card-acknowledge">
+          <input id="reset-card-acknowledge" type="checkbox">
+          <span>我已理解这张卡当前能打开的全部容器都将永久无法打开。</span>
+        </label>
+        <output id="reset-card-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="reset-card-cancel" class="modal-button" type="button">取消</button>
+        <button id="reset-card-confirm" class="modal-button danger" type="button" disabled>重新初始化</button>
+      </div>
+    </div>
+  </div>
 
   <div id="create-volume-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="create-volume-title" data-step="type" hidden>
     <div class="modal">
@@ -806,6 +856,6 @@
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-17f-login-progress"></script>
+  <script src="card_session.js?v=p2-17g-card-reset"></script>
 </body>
 </html>

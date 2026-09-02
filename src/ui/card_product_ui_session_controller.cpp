@@ -381,6 +381,31 @@ CardProductUiSessionController::operation_history() {
   return result;
 }
 
+void CardProductUiSessionController::reset_card_record() {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "resetting the security card is not available in the current UI "
+        "state");
+  }
+
+  // A mount that outlives its key material would hold a drive letter nothing
+  // can release, so an attached volume stops the operation before the card is
+  // written at all.
+  volume_session_.unmount_active();
+  if (volume_session_.mounted()) {
+    throw std::system_error(
+        card::make_error_code(card::CardError::invalid_operation),
+        "the card cannot be reset while a volume is still mounted");
+  }
+
+  entry_.reset_card_record();
+
+  // Nothing derived from the destroyed identity may outlive it.
+  volume_session_.release_session_secrets();
+  volume_session_.clear_operation_history();
+  authentication_.clear_authentication();
+}
+
 void CardProductUiSessionController::clear_operation_history() {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route(

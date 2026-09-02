@@ -147,6 +147,38 @@ void CardRecordService::set_second_password(
   }
 }
 
+void CardRecordService::reset_to_provisioning() {
+  security::SecureBuffer current = store_.get_blob();
+  const CardRecordState state = inspect_card_record(current.bytes());
+  if (state != CardRecordState::initialized_v1) {
+    throw UnexpectedCardRecordState(state);
+  }
+
+  // The marker is the same public framing the controlled provisioning process
+  // writes, so a reset card is byte-for-byte an unused one. No record of the
+  // identity it replaced survives anywhere on the card.
+  const security::SecureBuffer marker =
+      provision_uninitialized_card_record_v1();
+
+  std::exception_ptr write_failure;
+  try {
+    store_.put_blob(marker);
+  } catch (...) {
+    write_failure = std::current_exception();
+  }
+
+  security::SecureBuffer observed;
+  try {
+    observed = store_.get_blob();
+  } catch (...) {
+    fail_unverified_write();
+  }
+  if (!equal_bytes(observed.bytes(), marker.bytes())) {
+    if (write_failure) std::rethrow_exception(write_failure);
+    fail_unverified_write();
+  }
+}
+
 security::SecureBuffer CardRecordService::authenticate(
     security::SecureBuffer password_utf8) {
   security::SecureBuffer record = store_.get_blob();

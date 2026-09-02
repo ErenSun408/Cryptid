@@ -44,6 +44,14 @@ class CardRecordService final {
   void set_second_password(security::SecureBuffer existing_password_utf8,
                            security::SecureBuffer second_password_utf8);
 
+  // Replaces an initialized record with the exact provisioning marker, which
+  // destroys both envelopes and with them the only copy of the root secret.
+  // Every container that root opened becomes permanently unopenable; the
+  // container files themselves are untouched. Only an initialized record may
+  // be reset, and the write is verified by reading the record back, so a
+  // reported failure that actually landed is accepted.
+  void reset_to_provisioning();
+
   // Consumes the password. Only an initialized v1 record reaches the KDF;
   // provisioning, legacy, unsupported, and malformed states are reported via
   // UnexpectedCardRecordState and never converted into initialization.

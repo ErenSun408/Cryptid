@@ -86,7 +86,7 @@ void test_page_has_route_specific_password_surfaces() {
           "product password inputs must not use browser form submission");
   require(page.find(
               "<script "
-              "src=\"card_session.js?v=p2-17f-login-progress\"></script>") !=
+              "src=\"card_session.js?v=p2-17g-card-reset\"></script>") !=
                   std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -474,6 +474,28 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
           "the deferred hidden-volume placeholder is still present");
 }
 
+void test_card_reset_is_gated_and_states_its_cost() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("id=\"reset-card-open\"") != std::string::npos &&
+              page.find("id=\"reset-card-dialog\"") != std::string::npos &&
+              page.find("id=\"reset-card-acknowledge\"") !=
+                  std::string::npos &&
+              page.find("id=\"reset-card-confirm\"") != std::string::npos,
+          "the card reset entry or its confirmation is incomplete");
+  // The operation destroys the only copy of the root secret. The page has to
+  // say what that costs before it can be started at all.
+  require(page.find("销毁安全卡上的认证密钥") != std::string::npos &&
+              page.find("现有容器文件不会被删除，但将永久无法打开") !=
+                  std::string::npos &&
+              page.find("此操作不可撤销") != std::string::npos,
+          "the reset confirmation does not state what it destroys");
+  require(script.find("resetAcknowledge.checked") != std::string::npos &&
+              script.find("await bridge.resetCardRecord();") !=
+                  std::string::npos,
+          "the reset is committed without an acknowledgement");
+}
+
 void test_container_creation_form_is_bounded() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
@@ -657,6 +679,7 @@ int main() {
     test_five_states_are_complete_and_vendor_neutral();
     test_bridge_calls_are_narrow_and_route_specific();
     test_operation_history_is_bounded_session_only_and_inert();
+    test_card_reset_is_gated_and_states_its_cost();
     test_container_creation_form_is_bounded();
     test_hidden_container_form_is_symmetric_and_never_validated();
     test_container_collection_replaces_the_single_container_display();

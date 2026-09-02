@@ -131,6 +131,7 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] std::vector<::usb_vault::application::OperationEvent>
   operation_history();
   void clear_operation_history() noexcept;
+  void release_session_secrets() noexcept;
   void unmount_active();
   [[nodiscard]] bool force_unmount_active();
   [[nodiscard]] bool mounted() const noexcept;

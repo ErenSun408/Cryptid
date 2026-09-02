@@ -127,6 +127,40 @@ void CardEntryContextController::set_second_card_password(
   }
 }
 
+void CardEntryContextController::reset_card_record() {
+  if (route_ != CardEntryRoute::login_required || !context_) {
+    throw std::system_error(
+        card::make_error_code(card::CardError::invalid_operation),
+        "card reset requires a fresh initialized insertion");
+  }
+
+  std::unique_ptr<card::ICardUpdateTarget> target;
+  try {
+    target = source_.make_update_target(*context_);
+    if (!target) {
+      throw std::system_error(
+          card::make_error_code(card::CardError::backend_unavailable),
+          "card adapter cannot update this insertion");
+    }
+    card::CardRecordService service(target->card_store());
+    service.reset_to_provisioning();
+  } catch (...) {
+    target.reset();
+    // The card may hold either record after a failed write, so the insertion
+    // is retired and the user reinserts instead of continuing on a context
+    // whose state is no longer known.
+    route_ = CardEntryRoute::unavailable;
+    context_.reset();
+    throw;
+  }
+
+  // A committed reset retires the insertion just as hard: this context was
+  // routed as an initialized card, and that route is fixed for its lifetime.
+  target.reset();
+  route_ = CardEntryRoute::unavailable;
+  context_.reset();
+}
+
 void CardEntryContextController::authenticate_login(
     ICardLoginSuccessConsumer& success_consumer,
     security::SecureBuffer login_password_utf8) {

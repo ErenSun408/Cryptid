@@ -78,12 +78,20 @@
     <section id="dashboard-section-settings" class="dashboard-section">
       <button type="button" role="switch" aria-checked="false"
               data-setting="auto-mount">登录后自动挂载全部容器</button>
+      <button id="reset-card-open" type="button">重新初始化安全卡</button>
       <button type="button" role="switch" aria-checked="true"
               data-setting="remember-containers">记住容器位置</button>
       <span role="switch" aria-checked="true" aria-disabled="true"
             >拔出安全卡时立即卸载全部卷</span>
     </section>
   </section>
+  <div id="reset-card-dialog" role="dialog" hidden>
+    <button id="reset-card-close" type="button">关闭</button>
+    <input id="reset-card-acknowledge" type="checkbox">
+    <output id="reset-card-status"></output>
+    <button id="reset-card-cancel" type="button">取消</button>
+    <button id="reset-card-confirm" type="button" disabled>重新初始化</button>
+  </div>
   <div id="create-volume-dialog" role="dialog" data-step="type" hidden>
     <h3 id="create-volume-title">新建容器</h3>
     <p id="create-volume-description"></p>
@@ -148,7 +156,7 @@
     </button>
     <button id="create-volume-continue" type="button">下一步</button>
   </div>
-  <script src="card_session.js?v=p2-17f-login-progress"></script>
-  <script src="card_product_webview_integration.js?v=p2-17f-login-progress"></script>
+  <script src="card_session.js?v=p2-17g-card-reset"></script>
+  <script src="card_product_webview_integration.js?v=p2-17g-card-reset"></script>
 </body>
 </html>

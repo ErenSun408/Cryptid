@@ -217,6 +217,86 @@ void test_second_password_opens_the_same_record() {
           "the two passwords no longer open the same root");
 }
 
+void test_reset_returns_the_card_to_the_provisioning_marker() {
+  SecureBuffer provisioning = marker();
+  const std::vector<std::byte> expected = copy_bytes(provisioning.bytes());
+  FakeCardStore store(provisioning.bytes());
+  CardRecordService service(store);
+
+  SecureBuffer root = service.initialize_and_authenticate(
+      secure_text("service-daily-password-v1"));
+  static_cast<void>(root);
+  service.set_second_password(secure_text("service-daily-password-v1"),
+                              secure_text("service-second-password-v1"));
+
+  service.reset_to_provisioning();
+
+  // A reset card is byte-for-byte an unused one: neither envelope, nor any
+  // trace of the identity they held, survives on the card.
+  require(store.blob == expected,
+          "reset did not leave the exact provisioning marker");
+  require(service.inspect() == CardRecordState::provisioned_uninitialized,
+          "reset did not return the card to the provisioning state");
+
+  // Both passwords that used to open the record now open nothing, and the
+  // failure is the ordinary state rejection rather than a credential answer.
+  for (const char* const password : {"service-daily-password-v1",
+                                     "service-second-password-v1"}) {
+    bool rejected = false;
+    try {
+      static_cast<void>(service.authenticate(secure_text(password)));
+    } catch (const UnexpectedCardRecordState& error) {
+      rejected =
+          error.observed() == CardRecordState::provisioned_uninitialized;
+    }
+    require(rejected, "a reset card still answered a password");
+  }
+
+  // The card is initializable again, which is the whole point of the reset.
+  SecureBuffer fresh =
+      service.initialize_and_authenticate(secure_text("service-new-daily-v1"));
+  require(fresh.size() == kCardRecordV1RootSecretSize,
+          "a reset card could not be initialized again");
+}
+
+void test_reset_requires_an_initialized_record() {
+  SecureBuffer provisioning = marker();
+  FakeCardStore store(provisioning.bytes());
+  CardRecordService service(store);
+
+  bool rejected = false;
+  try {
+    service.reset_to_provisioning();
+  } catch (const UnexpectedCardRecordState& error) {
+    rejected =
+        error.observed() == CardRecordState::provisioned_uninitialized;
+  }
+  require(rejected, "reset accepted a card that was not initialized");
+  require(store.put_calls == 0, "a refused reset still wrote the card");
+}
+
+void test_reset_write_outcome_is_verified_against_the_card() {
+  SecureBuffer provisioning = marker();
+  FakeCardStore store(provisioning.bytes());
+  CardRecordService service(store);
+  static_cast<void>(service.initialize_and_authenticate(
+      secure_text("service-daily-password-v1")));
+  const std::vector<std::byte> initialized = copy_bytes(store.blob);
+
+  // A write the card did not actually take must not be reported as a reset:
+  // the user would believe the key material is gone while it is still there.
+  store.behavior = WriteBehavior::throw_without_write;
+  bool failed = false;
+  try {
+    service.reset_to_provisioning();
+  } catch (const std::system_error&) {
+    failed = true;
+  }
+  require(failed, "an unwritten reset was reported as successful");
+  require(store.blob == initialized,
+          "a failed reset changed the card record");
+}
+
 void test_second_password_requires_an_initialized_record() {
   SecureBuffer provisioning = marker();
   FakeCardStore store(provisioning.bytes());
@@ -406,6 +486,9 @@ int main() {
     test_public_states_are_reported_without_password_work();
     test_initialization_enters_authenticated_state();
     test_second_password_opens_the_same_record();
+    test_reset_returns_the_card_to_the_provisioning_marker();
+    test_reset_requires_an_initialized_record();
+    test_reset_write_outcome_is_verified_against_the_card();
   test_second_password_requires_an_initialized_record();
   test_second_password_write_failure_is_verified_against_the_card();
   test_non_provisioning_states_never_initialize();

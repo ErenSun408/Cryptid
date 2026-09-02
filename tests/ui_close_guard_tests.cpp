@@ -39,6 +39,9 @@ class FakeProductEntry final : public ICardEntryActions {
   void set_second_card_password(SecureBuffer, SecureBuffer) override {
     throw std::logic_error("not used by close guard");
   }
+  void reset_card_record() override {
+    throw std::logic_error("card reset is outside the close contract");
+  }
   [[nodiscard]] std::optional<usb_vault::application::CardEntryRoute>
   current_route() const noexcept override {
     return std::nullopt;
@@ -89,6 +92,8 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   operation_history() override {
     throw std::logic_error("not used by close guard");
   }
+  void release_session_secrets() noexcept override {}
+
   void clear_operation_history() noexcept override {}
   void unmount_active() override {
     ++unmount_calls;

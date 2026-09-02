@@ -166,6 +166,12 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   [[nodiscard]] virtual std::vector<OperationEvent> operation_history() = 0;
   virtual void clear_operation_history() noexcept = 0;
 
+  // Releases every secret this session retained: the input it was opened
+  // under and anything derived from it. The card identity they came from no
+  // longer exists, so nothing may keep operating on them. Adopted containers
+  // stay in the list, unopenable, which is exactly what they now are.
+  virtual void release_session_secrets() noexcept = 0;
+
  protected:
   IAuthenticatedCardVolumeSession() noexcept = default;
 };
@@ -207,6 +213,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;
   void clear_operation_history() noexcept override;
+  void release_session_secrets() noexcept override;
 
   void unmount_active() override;
   [[nodiscard]] bool force_unmount_active() override;

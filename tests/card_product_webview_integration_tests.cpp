@@ -269,6 +269,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return operation_events;
   }
 
+  void release_session_secrets() noexcept override {}
+
   void clear_operation_history() noexcept override {
     operation_events.clear();
     ++clear_operation_calls;
@@ -368,6 +370,12 @@ class FakeEntry final : public ICardEntryActions {
     second_password_utf8.clear();
   }
 
+  void reset_card_record() override {
+    ++reset_calls;
+    route = CardEntryRoute::unavailable;
+  }
+
+  int reset_calls{};
   bool second_password_existing_matched{};
   bool second_password_new_matched{};
   int second_password_calls{};
@@ -608,7 +616,7 @@ void initialize_webview(const HWND window) {
                       ComPtr<IDispatch> host_object;
                       current = usb_vault::ui::
                           create_card_product_webview_host_object(
-                              g_ui_session, &host_object);
+                              g_ui_session, nullptr, &host_object);
                       if (FAILED(current)) {
                         fail_and_close(window);
                         return current;

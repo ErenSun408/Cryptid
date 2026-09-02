@@ -116,6 +116,13 @@ class CardProductUiSessionController final {
   [[nodiscard]] std::vector<OperationUiEvent> operation_history();
   void clear_operation_history();
 
+  // Destroys the authentication key material on the card and returns it to the
+  // provisioning marker, then releases everything this session derived from it.
+  // Refuses while a volume is still attached: the card is never written while a
+  // mount would outlive the key that opens it. Container files are untouched
+  // and stay on disk, permanently unopenable.
+  void reset_card_record();
+
  private:
   application::ICardEntryActions& entry_;
   application::CardAuthenticationSession& authentication_;

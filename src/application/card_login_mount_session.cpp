@@ -267,6 +267,10 @@ void CardLoginMountSession::clear_operation_history() noexcept {
   impl_->core.clear_operation_history();
 }
 
+void CardLoginMountSession::release_session_secrets() noexcept {
+  impl_->core.release_session_secrets();
+}
+
 void CardLoginMountSession::unmount_active() { impl_->core.unmount_active(); }
 
 bool CardLoginMountSession::force_unmount_active() {
@@ -731,6 +735,11 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
 security::SecureBuffer CardLoginMountSessionCore::copy_session_password() {
   if (!authentication_.authenticated()) return security::SecureBuffer();
   return duplicate_secret(state_.login_password);
+}
+
+void CardLoginMountSessionCore::release_session_secrets() noexcept {
+  state_.container_b_password = security::SecureBuffer();
+  state_.login_password = security::SecureBuffer();
 }
 
 void CardLoginMountSessionCore::mount_adopted_container(

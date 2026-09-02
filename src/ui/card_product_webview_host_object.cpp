@@ -66,6 +66,8 @@ constexpr wchar_t kGetOperationContainerNameName[] =
     L"getOperationContainerName";
 constexpr wchar_t kGetOperationDriveLetterName[] = L"getOperationDriveLetter";
 constexpr wchar_t kClearOperationHistoryName[] = L"clearOperationHistory";
+constexpr DISPID kResetCardRecordId = 28;
+constexpr wchar_t kResetCardRecordName[] = L"resetCardRecord";
 
 class PasswordArgumentsWiper final {
  public:
@@ -123,9 +125,10 @@ class PasswordArgumentsWiper final {
 
 class CardProductWebViewHostObject final : public IDispatch {
  public:
-  explicit CardProductWebViewHostObject(
-      CardProductUiSessionController& controller) noexcept
-      : controller_(controller) {}
+  CardProductWebViewHostObject(
+      CardProductUiSessionController& controller,
+      IUiCloseRequestSink* const close_sink) noexcept
+      : controller_(controller), close_sink_(close_sink) {}
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                            void** result) noexcept override {
@@ -259,6 +262,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kClearOperationHistoryId;
       return S_OK;
     }
+    if (matches(names[0], kResetCardRecordName)) {
+      ids[0] = kResetCardRecordId;
+      return S_OK;
+    }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -312,6 +319,8 @@ class CardProductWebViewHostObject final : public IDispatch {
             member, parameters, result, argument_error);
       case kClearOperationHistoryId:
         return invoke_clear_operation_history(parameters);
+      case kResetCardRecordId:
+        return invoke_reset_card_record(parameters);
       default:
         return DISP_E_MEMBERNOTFOUND;
     }
@@ -658,6 +667,19 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  HRESULT invoke_reset_card_record(DISPPARAMS* const parameters) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    try {
+      controller_.reset_card_record();
+    } catch (...) {
+      return E_FAIL;
+    }
+    // Only a committed reset asks for the close, and it asks after the card
+    // and the session are already consistent.
+    if (close_sink_ != nullptr) close_sink_->request_close();
+    return S_OK;
+  }
+
   HRESULT
   invoke_clear_operation_history(DISPPARAMS* const parameters) noexcept {
     if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -769,17 +791,19 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   std::atomic<ULONG> references_{1};
   CardProductUiSessionController& controller_;
+  IUiCloseRequestSink* close_sink_{};
 };
 
 }  // namespace
 
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
+    IUiCloseRequestSink* const close_sink,
     IDispatch** const result) noexcept {
   if (result == nullptr) return E_POINTER;
   *result = nullptr;
   auto* const object =
-      new (std::nothrow) CardProductWebViewHostObject(controller);
+      new (std::nothrow) CardProductWebViewHostObject(controller, close_sink);
   if (object == nullptr) return E_OUTOFMEMORY;
   *result = object;
   return S_OK;

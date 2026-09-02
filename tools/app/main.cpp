@@ -40,6 +40,22 @@ constexpr wchar_t kWindowTitle[] = L"USB Vault - ViKey 开发模式";
 constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
+HWND g_main_window{};
+
+// Posted rather than sent: the reset returns through the WebView2 dispatch
+// first, so the window is destroyed after the call that asked for it has
+// finished unwinding.
+class MainWindowCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
+ public:
+  void request_close() noexcept override {
+    if (g_main_window != nullptr) {
+      static_cast<void>(::PostMessageW(g_main_window, WM_CLOSE, 0, 0));
+    }
+  }
+};
+
+MainWindowCloseSink g_close_sink;
+
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
@@ -357,7 +373,7 @@ void initialize_webview(const HWND window) {
                       ComPtr<IDispatch> host_object;
                       current = usb_vault::ui::
                           create_card_product_webview_host_object(
-                              *g_ui_session, &host_object);
+                              *g_ui_session, &g_close_sink, &host_object);
                       if (FAILED(current)) {
                         return current;
                       }
@@ -483,6 +499,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   const HWND window = ::CreateWindowExW(
       0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
       CW_USEDEFAULT, 900, 640, nullptr, nullptr, instance, nullptr);
+  g_main_window = window;
   if (window == nullptr) {
     show_failure(L"窗口创建失败。");
     ::CoUninitialize();
