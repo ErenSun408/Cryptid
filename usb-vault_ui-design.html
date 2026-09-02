@@ -822,28 +822,25 @@ add({
   overlay: `<div class="scrim"><div class="dlg wide">
     <div class="dlg-h"><h3>新建容器</h3><span class="x">${ic('close')}</span></div>
     <div class="dlg-b">
-      <p class="lead">容器是一个加密文件，挂载后显示为一个普通磁盘。选择这个容器的结构：</p>
+      <p class="lead">容器是一个加密文件，挂载后显示为一个普通磁盘。请选择要创建的容器类型：</p>
       <div class="picks">
         <div class="pick on">
           <div class="ic">${ic('box')}</div>
           <h4>标准容器</h4>
-          <p>一个加密卷。用你的密码登录后即可挂载，结构简单、容量全部可用。</p>
+          <p>一个标准结构的容器，含一个加密卷，使用日常密码进行解密与挂载。</p>
         </div>
         <div class="pick">
           <div class="ic">${ic('layers')}</div>
           <h4>含隐藏卷的容器</h4>
-          <p>同一个文件里有两层：外层放可以交出去的内容，内层放真正要保护的内容，两层各用一个密码打开。</p>
+          <p>一个双层结构的容器，含一个外层卷与一个隐藏卷，使用诱饵密码或日常密码进行解密与挂载。</p>
         </div>
       </div>
-      <div class="note" style="margin-top:16px"><span class="ni">${ic('info')}</span><span>
-        两种结构在磁盘上<b>字节不可区分</b>。选择哪一种，只有你自己知道。</span></div>
     </div>
     <div class="dlg-f"><span class="btn">取消</span><span class="btn pri">下一步${ic('chevron')}</span></div>
   </div></div>`,
   notes: [
     '<b>两个入口恒显、视觉权重完全对等。</b>用任何一个密码登录，看到的都是这两张卡片 —— 少一个入口，对手只要比对一份全新安装就知道这台机器建过隐藏容器。',
-    '文案回避"档位/模式/胁迫"等内部词汇，只描述结构本身：这三个词一旦出现在界面上就是档位痕迹。',
-    '"字节不可区分"是本产品的卖点，也是唯一允许出现在这一屏的安全性说明 —— 且只在建卷路径里出现。'
+    '文案回避"档位/模式/胁迫"等内部词汇，只描述结构本身：这三个词一旦出现在界面上就是档位痕迹。'
   ],
   refs: ['8.7.2 入口恒显', '8.4 UI 层', '8.6 术语约定']
 });

@@ -84,7 +84,7 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
-              "<script src=\"card_session.js?v=p2-17a-settings\"></script>") !=
+              "<script src=\"card_session.js?v=p2-17c-create-flow\"></script>") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -113,10 +113,13 @@ void test_authenticated_dashboard_is_real_state_only() {
                   std::string::npos,
           "authenticated dashboard shell is incomplete");
   // 8.7.5 forbids presenting containers by volume type, so there is one list
-  // and one management view. Both creation entries still appear in both, which
-  // 8.7 requires: hiding one would tell an observer what this machine holds.
-  require(count_occurrences(page, "data-create-kind=\"encrypted\"") == 2 &&
-              count_occurrences(page, "data-create-kind=\"hidden\"") == 2 &&
+  // and one management view, each reached from one creation entry. The two
+  // shapes are offered inside that entry instead, both always present: 8.7
+  // requires it, because hiding one would tell an observer what this machine
+  // holds.
+  require(count_occurrences(page, "data-create-container") == 2 &&
+              count_occurrences(page, "data-create-kind=\"encrypted\"") == 1 &&
+              count_occurrences(page, "data-create-kind=\"hidden\"") == 1 &&
               count_occurrences(page, "data-container-list") == 2 &&
               page.find("id=\"dashboard-section-hidden\"") ==
                   std::string::npos &&

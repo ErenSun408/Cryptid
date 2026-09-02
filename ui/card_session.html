@@ -337,6 +337,26 @@
     .modal-close svg { width: .9rem; height: .9rem; }
     .modal-body { padding: 1.25rem; max-height: calc(100vh - 9rem); overflow-y: auto; }
     .modal-body > p { margin: 0 0 1.1rem; font-size: .8rem; line-height: 1.7; color: var(--text-2); }
+    .modal-overlay[data-step="type"] .modal { width: min(40rem, 100%); }
+    .type-picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+    .type-pick {
+      display: block; padding: 1rem; text-align: left; border-radius: .65rem;
+      border: 1px solid var(--line-2); background: rgba(255, 255, 255, .02);
+      cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease;
+    }
+    .type-pick:hover:not(:disabled) { border-color: var(--line-3); }
+    .type-pick:disabled { cursor: not-allowed; opacity: .45; }
+    .type-pick[aria-checked="true"] {
+      border-color: rgba(200, 169, 106, .5); background: rgba(200, 169, 106, .07);
+    }
+    .type-pick-icon {
+      display: grid; place-items: center; width: 1.9rem; height: 1.9rem; margin-bottom: .7rem;
+      border-radius: .55rem; color: var(--text-2); background: rgba(255, 255, 255, .05);
+    }
+    .type-pick-icon svg { width: .95rem; height: .95rem; }
+    .type-pick[aria-checked="true"] .type-pick-icon { color: var(--gold); background: rgba(200, 169, 106, .14); }
+    .type-pick-title { display: block; margin-bottom: .35rem; font-size: .82rem; font-weight: 600; }
+    .type-pick-copy { display: block; font-size: .74rem; line-height: 1.65; color: var(--text-3); }
     .workflow-preview { display: grid; gap: .15rem; }
     .workflow-step {
       display: flex; align-items: center; gap: .7rem; padding: .6rem .7rem;
@@ -395,6 +415,7 @@
       .sidebar-label, .nav-label, .nav-count { display: none; }
       .nav-item { justify-content: center; padding-inline: .4rem; }
       .stats-row { grid-template-columns: 1fr; }
+      .type-picks { grid-template-columns: 1fr; }
       .content { padding: 1rem; }
     }
   </style>
@@ -538,8 +559,9 @@
               <div><h3>容器</h3><p class="overview-sub">按当前密码可打开的容器</p></div>
               <div class="overview-actions">
                 <button class="shell-button" type="button" data-mount-existing>导入</button>
-                <button class="create-button" type="button" data-create-kind="encrypted">新建加密盘</button>
-                <button class="create-button" type="button" data-create-kind="hidden">新建隐藏盘</button>
+                <button class="create-button" type="button" data-create-container>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>新建容器
+                </button>
               </div>
             </div>
             <div class="container-list" data-container-list></div>
@@ -551,8 +573,9 @@
             <div><h2 id="containers-title">容器</h2><p>创建、导入、挂载和卸载容器，数量不限</p></div>
             <div class="overview-actions">
               <button class="shell-button" type="button" data-mount-existing>导入容器</button>
-              <button class="create-button" type="button" data-create-kind="encrypted">新建加密盘</button>
-              <button class="create-button" type="button" data-create-kind="hidden">新建隐藏盘</button>
+              <button class="create-button" type="button" data-create-container>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>新建容器
+              </button>
             </div>
           </div>
           <div class="container-list" data-container-list></div>
@@ -604,17 +627,29 @@
     </div>
   </section>
 
-  <div id="create-volume-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="create-volume-title" hidden>
+  <div id="create-volume-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="create-volume-title" data-step="type" hidden>
     <div class="modal">
       <div class="modal-header">
-        <h3 id="create-volume-title">新建加密盘</h3>
+        <h3 id="create-volume-title">新建容器</h3>
         <button id="create-volume-close" class="modal-close" type="button" aria-label="关闭建卷流程">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
         </button>
       </div>
       <div class="modal-body">
-        <p id="create-volume-description">请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。</p>
-        <div id="create-volume-workflow" class="workflow-preview" aria-label="建卷流程预览">
+        <p id="create-volume-description">容器是一个加密文件，挂载后显示为一个普通磁盘。请选择要创建的容器类型：</p>
+        <div id="create-type-step" class="type-picks" role="radiogroup" aria-label="容器类型">
+          <button class="type-pick" type="button" role="radio" aria-checked="true" data-create-kind="encrypted">
+            <span class="type-pick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg></span>
+            <span class="type-pick-title">标准容器</span>
+            <span class="type-pick-copy">一个标准结构的容器，含一个加密卷，使用日常密码进行解密与挂载。</span>
+          </button>
+          <button class="type-pick" type="button" role="radio" aria-checked="false" data-create-kind="hidden">
+            <span class="type-pick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l8.5 4.6L12 12.7 3.5 8.1 12 3.5z"></path><path d="M3.5 15.9L12 20.5l8.5-4.6"></path><path d="M3.5 12L12 16.6 20.5 12"></path></svg></span>
+            <span class="type-pick-title">含隐藏卷的容器</span>
+            <span class="type-pick-copy">一个双层结构的容器，含一个外层卷与一个隐藏卷，使用诱饵密码或日常密码进行解密与挂载。</span>
+          </button>
+        </div>
+        <div id="create-volume-workflow" class="workflow-preview" aria-label="建卷流程预览" hidden>
           <div class="workflow-step"><span class="step-number">1</span><span>确认容量并选择保存位置</span></div>
           <div class="workflow-step"><span class="step-number">2</span><span>完成管理员权限确认</span></div>
           <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载加密盘</span></div>
@@ -650,12 +685,12 @@
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
       </div>
       <div class="modal-footer">
-        <button id="create-volume-cancel" class="modal-button" type="button">返回</button>
-        <button id="create-volume-continue" class="modal-button primary" type="button">创建加密盘</button>
+        <button id="create-volume-cancel" class="modal-button" type="button">取消</button>
+        <button id="create-volume-continue" class="modal-button primary" type="button">下一步</button>
       </div>
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-17a-settings"></script>
+  <script src="card_session.js?v=p2-17c-create-flow"></script>
 </body>
 </html>

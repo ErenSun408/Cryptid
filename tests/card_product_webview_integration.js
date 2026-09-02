@@ -26,7 +26,7 @@ chrome.webview.postMessage("driver-loaded");
   const containersSection =
     document.getElementById("dashboard-section-containers");
   const containersCreate = containersSection.querySelector(
-    '[data-create-kind="encrypted"]');
+    "[data-create-container]");
   const containersList = containersSection.querySelector(
     "[data-container-list]");
   const settingsNavigation =
@@ -44,7 +44,10 @@ chrome.webview.postMessage("driver-loaded");
   const creationContinue = document.getElementById("create-volume-continue");
   const creationCapacity =
     document.getElementById("create-container-capacity");
-  const hiddenCreate = document.querySelector('[data-create-kind="hidden"]');
+  const standardPick = document.querySelector(
+    '[data-create-kind="encrypted"]');
+  const hiddenPick = document.querySelector('[data-create-kind="hidden"]');
+  const typeStep = document.getElementById("create-type-step");
   const hiddenCapacity =
     document.getElementById("create-container-b-capacity");
   const hiddenInnerCapacity =
@@ -214,9 +217,38 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-settings-navigation");
     return;
   }
+  // The single entry opens on the type step: both shapes are offered, the
+  // standard one is preselected, and nothing is asked for until 下一步.
   containersCreate.click();
-  if (creationDialog.hidden || creationTitle.textContent !== "新建加密盘" ||
+  if (creationDialog.hidden || typeStep.hidden ||
+      creationTitle.textContent !== "新建容器" ||
+      creationContinue.textContent !== "下一步" ||
+      creationCancel.textContent !== "取消" ||
+      standardPick.getAttribute("aria-checked") !== "true" ||
+      hiddenPick.getAttribute("aria-checked") !== "false" ||
+      creationContinue.disabled) {
+    request("fail-creation-type-step");
+    return;
+  }
+  creationContinue.click();
+  if (!typeStep.hidden || creationTitle.textContent !== "新建加密盘" ||
+      creationCancel.textContent !== "上一步" ||
       creationCapacity.value !== "64" || creationContinue.disabled) {
+    request("fail-creation-entry");
+    return;
+  }
+  // 上一步 returns to the picker and clears the parameters it collected.
+  creationCapacity.value = "128";
+  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  creationCancel.click();
+  if (typeStep.hidden || creationCapacity.value !== "64" ||
+      creationTitle.textContent !== "新建容器") {
+    request("fail-creation-back-step");
+    return;
+  }
+  creationContinue.click();
+  if (!typeStep.hidden || creationCapacity.value !== "64" ||
+      creationContinue.disabled) {
     request("fail-creation-entry");
     return;
   }
@@ -281,7 +313,14 @@ chrome.webview.postMessage("driver-loaded");
     input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
   };
-  hiddenCreate.click();
+  containersCreate.click();
+  hiddenPick.click();
+  if (hiddenPick.getAttribute("aria-checked") !== "true" ||
+      standardPick.getAttribute("aria-checked") !== "false") {
+    request("fail-hidden-creation");
+    return;
+  }
+  creationContinue.click();
   typeInto(hiddenCapacity, "128");
   typeInto(hiddenInnerCapacity, "96");
   typeInto(hiddenPassword, "p\u0000ä");

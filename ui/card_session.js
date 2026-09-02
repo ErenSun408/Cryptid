@@ -52,8 +52,11 @@
   const settingSwitches =
     Array.from(document.querySelectorAll("[data-setting]"));
   const creationButtons =
+    Array.from(document.querySelectorAll("[data-create-container]"));
+  const creationTypeButtons =
     Array.from(document.querySelectorAll("[data-create-kind]"));
   const creationDialog = document.getElementById("create-volume-dialog");
+  const creationTypeStep = document.getElementById("create-type-step");
   const creationTitle = document.getElementById("create-volume-title");
   const creationDescription =
     document.getElementById("create-volume-description");
@@ -91,6 +94,9 @@
   let busy = true;
   let externalRefreshPending = false;
   let creationKind = null;
+  // The dialog is one flow in two steps: "type" picks the container shape,
+  // "params" collects what that shape needs.
+  let creationStep = "type";
   let creationCompleted = false;
 
   const setVisible = (element, visible) => {
@@ -190,39 +196,91 @@
   const updateCreationAvailability = () => {
     const encrypted = creationKind === "encrypted";
     const hiddenVolume = creationKind === "hidden";
+    const choosing = creationStep === "type";
     const authenticated = currentState === nativeState.authenticated;
-    const ready = encrypted
-      ? containerCapacityMib() !== null
-      : hiddenVolume && containerBInputReady();
-    containerForm.hidden = !encrypted;
-    containerBForm.hidden = !hiddenVolume;
+    const ready = choosing
+      ? encrypted || hiddenVolume
+      : encrypted
+        ? containerCapacityMib() !== null
+        : hiddenVolume && containerBInputReady();
+    creationDialog.dataset.step = creationStep;
+    creationTypeStep.hidden = !choosing;
+    containerForm.hidden = choosing || !encrypted;
+    containerBForm.hidden = choosing || !hiddenVolume;
     // The step preview describes the standard flow, which picks a location.
     // The hidden container uses a fixed path, so it is not shown there.
-    creationWorkflow.hidden = hiddenVolume;
-    containerCapacity.disabled = busy || !authenticated || !encrypted ||
-      creationCompleted;
+    creationWorkflow.hidden = choosing || hiddenVolume;
+    // 8.7.2: both shapes are offered on every visit, in the same order and
+    // with the same weight. Neither entry is ever withheld.
+    for (const button of creationTypeButtons) {
+      button.setAttribute(
+          "aria-checked",
+          button.dataset.createKind === creationKind ? "true" : "false");
+      button.disabled = busy || !authenticated || !choosing;
+    }
+    containerCapacity.disabled = busy || !authenticated || choosing ||
+      !encrypted || creationCompleted;
     for (const input of containerBInputs) {
-      input.disabled = busy || !authenticated || !hiddenVolume ||
+      input.disabled = busy || !authenticated || choosing || !hiddenVolume ||
         creationCompleted;
     }
     creationCloseButton.disabled = busy;
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
-    creationContinueButton.textContent = hiddenVolume
-      ? "创建隐藏盘"
-      : "创建加密盘";
-    creationCancelButton.textContent = creationCompleted ? "完成" : "返回";
+    creationContinueButton.textContent = choosing
+      ? "下一步"
+      : hiddenVolume ? "创建隐藏盘" : "创建加密盘";
+    creationCancelButton.textContent = creationCompleted
+      ? "完成"
+      : choosing ? "取消" : "上一步";
+  };
+
+  const kCreationTypeLead =
+    "容器是一个加密文件，挂载后显示为一个普通磁盘。" +
+    "请选择要创建的容器类型：";
+
+  const applyCreationStepCopy = () => {
+    if (creationStep === "type") {
+      creationTitle.textContent = "新建容器";
+      creationDescription.textContent = kCreationTypeLead;
+      return;
+    }
+    const hiddenVolume = creationKind === "hidden";
+    creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
+    creationDescription.textContent = hiddenVolume
+      ? "隐藏盘在同一个文件里有内外两层，各用一个密码打开。创建过程将请求管理员权限。"
+      : "请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。";
+  };
+
+  // Leaving a parameter step discards what was typed on it: a decoy password
+  // must not outlive the step that asked for it.
+  const resetCreationInputs = () => {
+    containerCapacity.value = "64";
+    containerBCapacity.value = "128";
+    containerBHiddenCapacity.value = "96";
+    containerBPassword.value = "";
+    containerBSecond.value = "";
+    containerBSecondConfirmation.value = "";
+  };
+
+  const focusCreationType = () => {
+    const selected = creationTypeButtons.find(
+      (button) => button.dataset.createKind === creationKind);
+    if (selected) selected.focus();
   };
 
   const closeCreationFlow = (force = false) => {
     if (busy && !force) return;
+    resetCreationInputs();
     creationDialog.hidden = true;
     creationKind = null;
+    creationStep = "type";
+    creationDialog.dataset.step = "type";
     creationCompleted = false;
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
-    creationCancelButton.textContent = "返回";
+    creationCancelButton.textContent = "取消";
   };
 
   const showDashboardSection = (sectionName) => {
@@ -241,34 +299,47 @@
     }
   };
 
-  const openCreationFlow = (kind) => {
+  const openCreationFlow = () => {
     if (busy || currentState !== nativeState.authenticated) {
       return;
     }
-    const hiddenVolume = kind === "hidden";
-    creationKind = hiddenVolume ? "hidden" : "encrypted";
+    // The flow always opens on the same step with the same preselection, so
+    // opening it says nothing about which password is logged in.
+    creationKind = "encrypted";
+    creationStep = "type";
     creationCompleted = false;
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
-    containerCapacity.value = "64";
-    containerBCapacity.value = "128";
-    containerBHiddenCapacity.value = "96";
-    containerBPassword.value = "";
-    containerBSecond.value = "";
-    containerBSecondConfirmation.value = "";
-    creationTitle.textContent = hiddenVolume ? "新建隐藏盘" : "新建加密盘";
-    creationDescription.textContent = hiddenVolume
-      ? "隐藏盘在同一个文件里有内外两层，各用一个密码打开。创建过程将请求管理员权限。"
-      : "请选择加密盘容量。接着会让你选择保存位置，创建过程将请求管理员权限。";
+    resetCreationInputs();
+    applyCreationStepCopy();
     creationDialog.hidden = false;
     updateCreationAvailability();
-    if (hiddenVolume) {
+    focusCreationType();
+  };
+
+  const enterCreationParameters = () => {
+    creationStep = "params";
+    creationStatus.textContent = "";
+    creationStatus.dataset.tone = "";
+    applyCreationStepCopy();
+    updateCreationAvailability();
+    if (creationKind === "hidden") {
       containerBCapacity.focus();
       containerBCapacity.select();
     } else {
       containerCapacity.focus();
       containerCapacity.select();
     }
+  };
+
+  const returnToCreationTypes = () => {
+    resetCreationInputs();
+    creationStep = "type";
+    creationStatus.textContent = "";
+    creationStatus.dataset.tone = "";
+    applyCreationStepCopy();
+    updateCreationAvailability();
+    focusCreationType();
   };
 
   const kSvgNamespace = "http://www.w3.org/2000/svg";
@@ -949,13 +1020,32 @@
   }
   for (const button of creationButtons) {
     button.addEventListener("click", () => {
-      openCreationFlow(button.dataset.createKind);
+      openCreationFlow();
+    });
+  }
+  for (const button of creationTypeButtons) {
+    button.addEventListener("click", () => {
+      if (busy || creationStep !== "type") return;
+      creationKind =
+        button.dataset.createKind === "hidden" ? "hidden" : "encrypted";
+      updateCreationAvailability();
     });
   }
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
-  creationCancelButton.addEventListener("click", () => closeCreationFlow());
+  creationCancelButton.addEventListener("click", () => {
+    if (busy) return;
+    if (creationStep === "params" && !creationCompleted) {
+      returnToCreationTypes();
+      return;
+    }
+    closeCreationFlow();
+  });
   creationContinueButton.addEventListener("click", async () => {
     if (busy) return;
+    if (creationStep === "type") {
+      enterCreationParameters();
+      return;
+    }
     if (creationKind === "encrypted") {
       await createContainer();
     } else if (creationKind === "hidden") {

@@ -61,14 +61,12 @@
               data-section="settings">系统设置</button>
     </nav>
     <section id="dashboard-section-dashboard" class="dashboard-section active">
-      <button type="button" data-create-kind="encrypted">新建</button>
-      <button type="button" data-create-kind="hidden">新建</button>
+      <button type="button" data-create-container>新建容器</button>
       <button type="button" data-mount-existing>导入</button>
       <div class="container-list" data-container-list></div>
     </section>
     <section id="dashboard-section-containers" class="dashboard-section">
-      <button type="button" data-create-kind="encrypted">新建加密盘</button>
-      <button type="button" data-create-kind="hidden">新建隐藏盘</button>
+      <button type="button" data-create-container>新建容器</button>
       <button type="button" data-mount-existing>导入容器</button>
       <div class="container-list" data-container-list></div>
     </section>
@@ -81,10 +79,16 @@
             >拔出安全卡时立即卸载全部卷</span>
     </section>
   </section>
-  <div id="create-volume-dialog" role="dialog" hidden>
-    <h3 id="create-volume-title">新建加密盘</h3>
+  <div id="create-volume-dialog" role="dialog" data-step="type" hidden>
+    <h3 id="create-volume-title">新建容器</h3>
     <p id="create-volume-description"></p>
     <button id="create-volume-close" type="button">关闭</button>
+    <div id="create-type-step" role="radiogroup">
+      <button type="button" role="radio" aria-checked="true"
+              data-create-kind="encrypted">标准容器</button>
+      <button type="button" role="radio" aria-checked="false"
+              data-create-kind="hidden">含隐藏卷的容器</button>
+    </div>
     <div id="create-container-form" hidden>
       <label for="create-container-capacity">加密盘容量</label>
       <input id="create-container-capacity" type="number" min="20"
@@ -101,10 +105,10 @@
       <input id="create-container-b-second-confirmation" type="password">
     </div>
     <output id="create-volume-status"></output>
-    <button id="create-volume-cancel" type="button">返回</button>
-    <button id="create-volume-continue" type="button">创建加密盘</button>
+    <button id="create-volume-cancel" type="button">取消</button>
+    <button id="create-volume-continue" type="button">下一步</button>
   </div>
-  <script src="card_session.js?v=p2-17a-settings"></script>
-  <script src="card_product_webview_integration.js?v=p2-17a-settings"></script>
+  <script src="card_session.js?v=p2-17c-create-flow"></script>
+  <script src="card_product_webview_integration.js?v=p2-17c-create-flow"></script>
 </body>
 </html>
