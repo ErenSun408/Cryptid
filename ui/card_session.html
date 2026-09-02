@@ -111,10 +111,27 @@
     #password-strength[data-level="acceptable"] .password-strength-segment:nth-child(-n+2) { background: var(--warn); }
     #password-strength[data-level="strong"] .password-strength-segment { background: var(--ok); }
     #card-session-action {
+      display: flex; align-items: center; justify-content: center; gap: .5rem;
       width: 100%; height: 2.7rem; margin-top: 1.1rem; border-radius: .6rem;
       color: #14160f; font-weight: 600; cursor: pointer;
       background: linear-gradient(145deg, var(--gold-2), var(--gold));
       box-shadow: 0 .4rem 1.1rem -.5rem rgba(200, 169, 106, .6);
+      transition: background-color 160ms ease, color 160ms ease;
+    }
+    /* Unsealing the card runs an Argon2id pass and card I/O, which is seconds
+       of silence. An indeterminate spinner is the only honest indicator: the
+       page has no progress to report, and a moving bar would be invented. */
+    .spinner {
+      flex: 0 0 auto; width: .85rem; height: .85rem; border-radius: 50%;
+      border: 1.6px solid rgba(20, 22, 15, .3); border-top-color: #14160f;
+      animation: session-spin .8s linear infinite;
+    }
+    #card-session-action:disabled .spinner {
+      border-color: rgba(255, 255, 255, .16); border-top-color: var(--gold);
+    }
+    @keyframes session-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation-duration: 2.4s; }
     }
     #card-session-action:hover:not(:disabled) { background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     #card-session-action:disabled {
@@ -136,7 +153,7 @@
       min-height: 3.25rem; padding: 0 1.25rem;
       border-bottom: 1px solid var(--line); background: var(--ink-850);
     }
-    .topbar-left, .topbar-brand, .card-badge, .topbar-actions { display: flex; align-items: center; }
+    .topbar-left, .topbar-brand, .topbar-actions { display: flex; align-items: center; }
     .topbar-left { gap: .9rem; }
     .topbar-brand { gap: .55rem; }
     .topbar-glyph {
@@ -149,12 +166,6 @@
       font-size: .7rem; font-weight: 600; letter-spacing: .22em;
       text-transform: uppercase; color: var(--text-2);
     }
-    .card-badge {
-      gap: .4rem; padding: .2rem .6rem; border-radius: 99px;
-      border: 1px solid rgba(104, 190, 149, .24); background: rgba(104, 190, 149, .09);
-      color: var(--ok); font-size: .7rem; font-weight: 600;
-    }
-    .status-dot { width: .35rem; height: .35rem; border-radius: 50%; background: var(--ok); }
     .topbar-actions { gap: .5rem; }
     .dashboard-status { font-size: .74rem; color: var(--text-3); }
     .dashboard-status[data-tone="error"] { color: var(--danger); }
@@ -216,7 +227,7 @@
     .section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
     .section-header h2 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em; }
     .section-header p { margin: .25rem 0 0; font-size: .78rem; color: var(--text-3); }
-    .stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
+    .stats-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
     .stat-card {
       display: flex; align-items: center; gap: .75rem; padding: .9rem 1rem;
       border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850);
@@ -226,7 +237,6 @@
       border-radius: .55rem; color: var(--gold); background: rgba(200, 169, 106, .12);
     }
     .stat-icon svg { width: 1rem; height: 1rem; }
-    .stat-icon.success { color: var(--ok); background: rgba(104, 190, 149, .1); }
     .stat-icon.neutral { color: var(--text-2); background: rgba(255, 255, 255, .05); }
     .stat-label { font-size: .63rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); }
     .stat-value { margin-top: .15rem; font-size: 1.05rem; font-weight: 600; }
@@ -531,7 +541,10 @@
         </output>
       </div>
     </section>
-    <button id="card-session-action" type="button" disabled hidden>正在初始化</button>
+    <button id="card-session-action" type="button" disabled hidden>
+      <span id="card-session-spinner" class="spinner" aria-hidden="true" hidden></span>
+      <span id="card-session-action-label">正在初始化</span>
+    </button>
     <output id="card-session-status" aria-live="polite">正在连接安全组件</output>
     <output id="card-session-error" aria-live="polite" hidden></output>
   </main>
@@ -545,7 +558,6 @@
           </span>
           <span>USB Vault</span>
         </div>
-        <div class="card-badge"><span class="status-dot"></span><span>安全卡已认证</span></div>
       </div>
       <div class="topbar-actions">
         <output id="dashboard-status" class="dashboard-status" aria-live="polite" data-tone=""></output>
@@ -594,10 +606,6 @@
             <div><h2 id="dashboard-title">仪表盘</h2><p>安全卡会话与加密卷概览</p></div>
           </div>
           <div class="stats-row">
-            <article class="stat-card">
-              <div class="stat-icon success"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z"></path><path d="M9 12l2 2 4-4"></path></svg></div>
-              <div><div class="stat-label">安全卡状态</div><div class="stat-value">已认证</div></div>
-            </article>
             <article class="stat-card">
               <div class="stat-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2"></rect><path d="M8 14h.01M12 14h4"></path></svg></div>
               <div><div class="stat-label">活动卷状态</div><div id="dashboard-volume-state" class="stat-value">未挂载</div></div>
@@ -798,6 +806,6 @@
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-17e-operation-history"></script>
+  <script src="card_session.js?v=p2-17f-login-progress"></script>
 </body>
 </html>

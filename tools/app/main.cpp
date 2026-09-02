@@ -36,8 +36,7 @@ using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
-constexpr wchar_t kWindowTitle[] =
-    L"USB Vault - P2 ViKey 联网开发模式";
+constexpr wchar_t kWindowTitle[] = L"USB Vault - ViKey 开发模式";
 constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";

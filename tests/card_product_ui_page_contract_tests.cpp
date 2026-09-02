@@ -86,7 +86,7 @@ void test_page_has_route_specific_password_surfaces() {
           "product password inputs must not use browser form submission");
   require(page.find(
               "<script "
-              "src=\"card_session.js?v=p2-17e-operation-history\"></script>") !=
+              "src=\"card_session.js?v=p2-17f-login-progress\"></script>") !=
                   std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");

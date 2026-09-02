@@ -13,6 +13,8 @@ chrome.webview.postMessage("driver-loaded");
   const confirmationField = document.getElementById("confirmation-field");
   const strength = document.getElementById("password-strength");
   const action = document.getElementById("card-session-action");
+  const actionLabel = document.getElementById("card-session-action-label");
+  const actionSpinner = document.getElementById("card-session-spinner");
   const status = document.getElementById("card-session-status");
   const error = document.getElementById("card-session-error");
   const dashboard = document.getElementById("authenticated-dashboard");
@@ -487,7 +489,7 @@ chrome.webview.postMessage("driver-loaded");
 
   request("request-residual-mount");
   if (!await waitForState("unavailable") || action.hidden ||
-      action.textContent !== "尝试安全卸载" || surface.hidden ||
+      actionLabel.textContent !== "尝试安全卸载" || surface.hidden ||
       !dashboard.hidden) {
     request("fail-unavailable");
     return;

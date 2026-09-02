@@ -31,6 +31,8 @@
   const strengthDescription =
     document.getElementById("password-strength-description");
   const actionButton = document.getElementById("card-session-action");
+  const actionLabel = document.getElementById("card-session-action-label");
+  const actionSpinner = document.getElementById("card-session-spinner");
   const statusOutput = document.getElementById("card-session-status");
   const errorOutput = document.getElementById("card-session-error");
   const dashboard = document.getElementById("authenticated-dashboard");
@@ -699,26 +701,38 @@
       case nativeState.initializationRequired:
         stateTitle.textContent = "初始化安全卡";
         passwordLabel.textContent = "设置日常密码";
-        actionButton.textContent = "初始化安全卡";
+        actionLabel.textContent = "初始化安全卡";
         break;
       case nativeState.loginRequired:
         stateTitle.textContent = "打开安全会话";
         passwordLabel.textContent = "密码";
-        actionButton.textContent = "打开安全会话";
+        actionLabel.textContent = "打开安全会话";
         break;
       case nativeState.authenticated:
         stateTitle.textContent = activeVolumes
           ? "安全会话已打开"
           : "安全卡已认证";
-        actionButton.textContent = "安全卸载";
+        actionLabel.textContent = "安全卸载";
         break;
       case nativeState.unavailable:
         stateTitle.textContent = "安全组件当前不可用";
-        actionButton.textContent = "尝试安全卸载";
+        actionLabel.textContent = "尝试安全卸载";
         break;
       default:
         stateTitle.textContent = "正在连接安全组件";
         break;
+    }
+    // The card work behind this button takes seconds. Without a moving
+    // indicator and a label that says what is running, the page reads as
+    // frozen and the user retries or pulls the card.
+    const working = busy && !actionButton.hidden;
+    actionSpinner.hidden = !working;
+    if (working) {
+      actionLabel.textContent = acceptsInitialization()
+        ? "正在初始化安全卡"
+        : acceptsLogin()
+          ? "正在验证安全卡"
+          : "正在安全卸载";
     }
     statusOutput.textContent = message;
     errorOutput.textContent = error;
