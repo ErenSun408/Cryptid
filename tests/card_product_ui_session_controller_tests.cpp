@@ -102,13 +102,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container_b(
       const std::uint64_t outer_size_bytes,
       const std::uint64_t hidden_size_bytes,
-      const SecureBuffer& login_password_utf8,
       const SecureBuffer& decoy_password_utf8) override {
     ++create_b_calls;
     created_outer_bytes = outer_size_bytes;
     created_hidden_bytes = hidden_size_bytes;
-    b_login_password.assign(login_password_utf8.bytes().begin(),
-                            login_password_utf8.bytes().end());
     b_decoy_password.assign(decoy_password_utf8.bytes().begin(),
                             decoy_password_utf8.bytes().end());
     if (reject_create_b) throw std::runtime_error("container B failed");
@@ -259,8 +256,18 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool reject_mount{};
   std::uint64_t created_outer_bytes{};
   std::uint64_t created_hidden_bytes{};
-  std::vector<std::byte> b_login_password;
+  SecureBuffer copy_session_password() override {
+    ++session_password_calls;
+    SecureBuffer copy(session_password.size());
+    for (std::size_t index = 0; index < session_password.size(); ++index) {
+      copy.bytes()[index] = session_password[index];
+    }
+    return copy;
+  }
+
   std::vector<std::byte> b_decoy_password;
+  std::vector<std::byte> session_password{bytes("login-password")};
+  int session_password_calls{};
   int create_b_calls{};
   int create_calls{};
   int mount_calls{};
@@ -689,45 +696,62 @@ void test_adopted_container_remounts_without_reselecting_its_file() {
 void test_container_b_commits_the_card_before_the_volume() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  auto login = bytes("login-password");
   auto second = bytes("second-password-value");
   auto confirmation = bytes("second-password-value");
 
-  fixture.controller.create_container_b(64, 16, login, second, confirmation);
+  fixture.controller.create_container_b(64, 16, second, confirmation);
 
   require(fixture.entry.second_password_calls == 1 &&
               fixture.volume.create_b_calls == 1,
           "container B did not run both halves exactly once");
-  require(fixture.entry.existing_password_bytes == bytes("login-password") &&
+  // The password that rewraps the card record comes from the session, not
+  // from the page: the page never sent one.
+  require(fixture.volume.session_password_calls == 1 &&
+              fixture.entry.existing_password_bytes ==
+                  bytes("login-password") &&
               fixture.entry.second_password_bytes ==
                   bytes("second-password-value"),
           "the card record received the wrong passwords");
-  require(fixture.volume.b_login_password == bytes("login-password") &&
-              fixture.volume.b_decoy_password ==
-                  bytes("second-password-value"),
-          "the volume transaction received the wrong passwords");
+  require(fixture.volume.b_decoy_password ==
+              bytes("second-password-value"),
+          "the volume transaction received the wrong password");
   require(fixture.volume.created_outer_bytes == 64ULL * 1024ULL * 1024ULL &&
               fixture.volume.created_hidden_bytes ==
                   16ULL * 1024ULL * 1024ULL,
           "container B was created with the wrong sizes");
-  for (const std::vector<std::byte>& input : {login, second, confirmation}) {
+  for (const std::vector<std::byte>& input : {second, confirmation}) {
     for (const std::byte value : input) {
       require(value == std::byte{}, "a container B input survived the call");
     }
   }
+
+  // A session that no longer holds its login input stops before the card is
+  // touched at all.
+  Fixture released;
+  released.authentication.establish(root_secret());
+  released.volume.session_password.clear();
+  auto released_second = bytes("second-password-value");
+  auto released_confirmation = bytes("second-password-value");
+  require_throws<std::system_error>(
+      [&] {
+        released.controller.create_container_b(64, 16, released_second,
+                                               released_confirmation);
+      },
+      "a session without its login input still created container B");
+  require(released.entry.second_password_calls == 0 &&
+              released.volume.create_b_calls == 0,
+          "a released session still reached the card or the volume");
 
   // A failed card record must stop before the volume exists, because a
   // container nobody can open with the second password blocks every retry.
   Fixture blocked;
   blocked.authentication.establish(root_secret());
   blocked.entry.reject_second_password = true;
-  auto blocked_login = bytes("login-password");
   auto blocked_second = bytes("second-password-value");
   auto blocked_confirmation = bytes("second-password-value");
   require_throws<std::runtime_error>(
       [&] {
-        blocked.controller.create_container_b(64, 16, blocked_login,
-                                              blocked_second,
+        blocked.controller.create_container_b(64, 16, blocked_second,
                                               blocked_confirmation);
       },
       "a failed card record update was not reported");
@@ -738,30 +762,29 @@ void test_container_b_commits_the_card_before_the_volume() {
 void test_container_b_rejects_unusable_requests() {
   Fixture fixture;
   fixture.entry.route = CardEntryRoute::login_required;
-  auto login = bytes("login-password");
   auto second = bytes("second-password-value");
   auto confirmation = bytes("second-password-value");
   require_throws<std::system_error>(
       [&] {
-        fixture.controller.create_container_b(64, 16, login, second,
-                                              confirmation);
+        fixture.controller.create_container_b(64, 16, second, confirmation);
       },
       "an unauthenticated route created container B");
 
   fixture.authentication.establish(root_secret());
+  // 48 of 64 MiB is the largest inner volume the three-quarter rule allows,
+  // so 49 is the first one the boundary has to refuse.
   for (const auto [outer, hidden] : {
            std::pair<std::uint32_t, std::uint32_t>{19, 8},
            std::pair<std::uint32_t, std::uint32_t>{
                kContainerCreationMaximumMib + 1, 8},
            std::pair<std::uint32_t, std::uint32_t>{64, 0},
+           std::pair<std::uint32_t, std::uint32_t>{64, 49},
            std::pair<std::uint32_t, std::uint32_t>{64, 64}}) {
-    auto sized_login = bytes("login-password");
     auto sized_second = bytes("second-password-value");
     auto sized_confirmation = bytes("second-password-value");
     require_throws<std::invalid_argument>(
         [&] {
-          fixture.controller.create_container_b(outer, hidden, sized_login,
-                                                sized_second,
+          fixture.controller.create_container_b(outer, hidden, sized_second,
                                                 sized_confirmation);
         },
         "container B accepted an unusable size pair");
@@ -769,23 +792,29 @@ void test_container_b_rejects_unusable_requests() {
 
   auto mismatched = bytes("second-password-value");
   auto other = bytes("different-password-val");
-  auto reused = bytes("login-password");
   require_throws<usb_vault::security::PasswordConfirmationRejected>(
       [&] {
-        fixture.controller.create_container_b(64, 16, reused, mismatched,
-                                              other);
+        fixture.controller.create_container_b(64, 16, mismatched, other);
       },
       "container B accepted two different second passwords");
   require(fixture.entry.second_password_calls == 0 &&
               fixture.volume.create_b_calls == 0,
           "a rejected container B request still reached the card or volume");
 
-  auto shared = bytes("login-password");
+  auto shared = bytes("second-password-value");
   require_throws<std::invalid_argument>(
       [&] {
-        fixture.controller.create_container_b(64, 16, shared, shared, shared);
+        fixture.controller.create_container_b(64, 16, shared, shared);
       },
       "container B accepted overlapping input buffers");
+
+  // The largest inner volume the rule does allow still goes through.
+  auto allowed_second = bytes("second-password-value");
+  auto allowed_confirmation = bytes("second-password-value");
+  fixture.controller.create_container_b(64, 48, allowed_second,
+                                        allowed_confirmation);
+  require(fixture.volume.created_hidden_bytes == 48ULL * 1024ULL * 1024ULL,
+          "the three-quarter boundary refused the size it must allow");
 }
 
 void test_inconsistent_container_status_fails_closed() {

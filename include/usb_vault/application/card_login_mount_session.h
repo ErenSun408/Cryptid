@@ -91,13 +91,21 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
 
   // Creates the single outer+hidden container at the fixed layout path and
   // mounts its hidden volume. The outer volume opens with the decoy password
-  // and the hidden volume with the password the caller is logged in under, so
-  // both inputs are required in clear text and are consumed here. Only one
-  // such container exists, which keeps the card record out of this operation.
+  // supplied here; the hidden volume opens with the password this session was
+  // opened under, which the session still holds and the caller no longer has
+  // to produce. Only one such container exists, which keeps the card record
+  // out of this operation.
   virtual std::uint32_t create_container_b(
       std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
-      const security::SecureBuffer& login_password_utf8,
       const security::SecureBuffer& decoy_password_utf8) = 0;
+
+  // Returns a copy of the password this session was opened under. It exists
+  // for the single operation that needs the password itself rather than
+  // something derived from it: rewriting the card record so a second password
+  // opens it too. The session neither knows nor records which of the two
+  // passwords this is, so the copy is symmetric under both logins. An
+  // unauthenticated session returns an empty buffer.
+  [[nodiscard]] virtual security::SecureBuffer copy_session_password() = 0;
 
   // Adopts and mounts an existing standard container at the caller-selected
   // path. The session refuses a path it has already adopted.
@@ -129,8 +137,10 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
 
 // P2 Card Record login success handler. It establishes volatile card
 // authentication before attempting any post-authentication volume work, never
-// reads the card again, and retains only the root plus unified active-volume
-// state. The original login input exists only for the synchronous mount call.
+// reads the card again, and retains the root, the login input, and unified
+// active-volume state. The login input is retained because rewriting the card
+// record needs the password itself as wrapping material; it is released on the
+// card-removal path together with every other session secret.
 class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
  public:
   CardLoginMountSession(CardAuthenticationSession& authentication,
@@ -153,8 +163,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
                                  std::uint64_t size_bytes) override;
   std::uint32_t create_container_b(
       std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
-      const security::SecureBuffer& login_password_utf8,
       const security::SecureBuffer& decoy_password_utf8) override;
+  [[nodiscard]] security::SecureBuffer copy_session_password() override;
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;

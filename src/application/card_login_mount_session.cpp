@@ -228,11 +228,13 @@ std::uint32_t CardLoginMountSession::create_container(
 std::uint32_t CardLoginMountSession::create_container_b(
     const std::uint64_t outer_size_bytes,
     const std::uint64_t hidden_size_bytes,
-    const security::SecureBuffer& login_password_utf8,
     const security::SecureBuffer& decoy_password_utf8) {
   return impl_->core.create_container_b(outer_size_bytes, hidden_size_bytes,
-                                        login_password_utf8,
                                         decoy_password_utf8);
+}
+
+security::SecureBuffer CardLoginMountSession::copy_session_password() {
+  return impl_->core.copy_session_password();
 }
 
 std::uint32_t CardLoginMountSession::mount_container(
@@ -270,6 +272,17 @@ bool CardLoginMountSession::mounted() const noexcept {
 
 namespace detail {
 namespace {
+
+// SecureBuffer is deliberately not copyable, so every retained secret is
+// duplicated explicitly and cleared on its own path.
+[[nodiscard]] security::SecureBuffer duplicate_secret(
+    const security::SecureBuffer& source) {
+  security::SecureBuffer result(source.size());
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    result.bytes()[index] = source.bytes()[index];
+  }
+  return result;
+}
 
 [[nodiscard]] security::SecureBuffer container_a_password_input() {
   security::SecureBuffer input(kContainerAPasswordInput.size());
@@ -388,6 +401,10 @@ void CardLoginMountSessionCore::consume_authenticated_login(
   try {
     authentication_.establish(std::move(root_secret));
     state_.container_b_password = security::SecureBuffer();
+    // Retained for the card-record rewrite alone. It is the password itself
+    // rather than a derivative because rewrapping an envelope needs the
+    // password as key material, and the record has no third slot to spare.
+    state_.login_password = duplicate_secret(login_password_utf8);
     if (runtime_.container_exists(layout_.container_b.path)) {
       // Derived here because this is the only moment the login input exists.
       state_.container_b_password = runtime_.derive_container_password(
@@ -516,11 +533,14 @@ std::uint32_t CardLoginMountSessionCore::create_container(
 std::uint32_t CardLoginMountSessionCore::create_container_b(
     const std::uint64_t outer_size_bytes,
     const std::uint64_t hidden_size_bytes,
-    const security::SecureBuffer& login_password_utf8,
     const security::SecureBuffer& decoy_password_utf8) {
   if (!authentication_.authenticated()) {
     throw std::logic_error(
         "container creation requires an authenticated card session");
+  }
+  if (state_.login_password.empty()) {
+    throw std::logic_error(
+        "this session no longer holds the input it was opened with");
   }
   if (outer_size_bytes == 0 || outer_size_bytes % 512ULL != 0 ||
       hidden_size_bytes % 512ULL != 0 ||
@@ -529,9 +549,9 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
         "outer and hidden sizes must be aligned and leave room for the outer "
         "volume");
   }
-  if (login_password_utf8.size() == 0 || decoy_password_utf8.size() == 0) {
+  if (decoy_password_utf8.size() == 0) {
     throw std::invalid_argument(
-        "both volume passwords are required in clear text");
+        "the decoy volume password is required in clear text");
   }
 
   const std::wstring_view path = layout_.container_b.path;
@@ -552,7 +572,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
       decoy_password_utf8, authentication_.root_secret_,
       layout_.container_b.salt);
   security::SecureBuffer hidden_password = runtime_.derive_container_password(
-      login_password_utf8, authentication_.root_secret_,
+      state_.login_password, authentication_.root_secret_,
       layout_.container_b.salt);
   bool staging_owned = false;
   bool published = false;
@@ -574,6 +594,10 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
          .notify_shell = false}));
     const std::uint32_t id =
         adopt(state_, path, drive_letter, true, true).id;
+    // The same value the login path derives when the container already
+    // exists. Retaining it here is what lets this container be unmounted and
+    // mounted again in the session that created it.
+    state_.container_b_password = duplicate_secret(hidden_password);
     outer_password.clear();
     hidden_password.clear();
     runtime_.notify_mounted(drive_letter);
@@ -587,6 +611,11 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     }
     throw;
   }
+}
+
+security::SecureBuffer CardLoginMountSessionCore::copy_session_password() {
+  if (!authentication_.authenticated()) return security::SecureBuffer();
+  return duplicate_secret(state_.login_password);
 }
 
 void CardLoginMountSessionCore::mount_adopted_container(
@@ -754,10 +783,11 @@ void CardLoginMountSessionCore::unmount_active() {
 }
 
 bool CardLoginMountSessionCore::force_unmount_active() {
-  // Forced release is the card-removal path, so the retained volume password
-  // goes with it. A deliberate unmount keeps it, which is what lets the user
+  // Forced release is the card-removal path, so every retained secret goes
+  // with it. A deliberate unmount keeps them, which is what lets the user
   // mount the container again in the same session.
   state_.container_b_password = security::SecureBuffer();
+  state_.login_password = security::SecureBuffer();
   bool forced = false;
   for (const bool release_first : {true, false}) {
     for (SessionContainer& container : state_.containers) {

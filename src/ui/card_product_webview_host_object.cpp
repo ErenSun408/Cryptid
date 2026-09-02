@@ -343,52 +343,50 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
-  // Five arguments: outer capacity, hidden capacity, the password the caller
-  // is logged in under, and the new second password twice. COM delivers them
-  // in reverse order, and every supplied array is wiped on every path.
+  // Four arguments: outer capacity, hidden capacity, and the new second
+  // password twice. The password the session was opened under is no longer
+  // one of them: the session still holds it, so it never returns to the page.
+  // COM delivers them in reverse order, and every supplied array is wiped on
+  // every path.
   HRESULT invoke_create_container_b(
       DISPPARAMS* const parameters, UINT* const argument_error) noexcept {
-    if (parameters == nullptr || parameters->cArgs != 5 ||
+    if (parameters == nullptr || parameters->cArgs != 4 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
-      wipe_available_arguments(parameters, 5);
+      wipe_available_arguments(parameters, 4);
       return DISP_E_BADPARAMCOUNT;
     }
     std::uint32_t outer_size_mib = 0;
     std::uint32_t hidden_size_mib = 0;
-    if (!exact_uint32(parameters->rgvarg[4], outer_size_mib) ||
-        !exact_uint32(parameters->rgvarg[3], hidden_size_mib)) {
-      wipe_available_arguments(parameters, 5);
+    if (!exact_uint32(parameters->rgvarg[3], outer_size_mib) ||
+        !exact_uint32(parameters->rgvarg[2], hidden_size_mib)) {
+      wipe_available_arguments(parameters, 4);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
 
-    VARIANT& login_argument = parameters->rgvarg[2];
     VARIANT& second_argument = parameters->rgvarg[1];
     VARIANT& confirmation_argument = parameters->rgvarg[0];
-    security::SecureBuffer login;
     security::SecureBuffer second;
     security::SecureBuffer confirmation;
     try {
-      login = consume_webview_password_array(login_argument);
       second = consume_webview_password_array(second_argument);
       confirmation = consume_webview_password_array(confirmation_argument);
     } catch (const std::invalid_argument&) {
-      wipe_available_arguments(parameters, 5);
+      wipe_available_arguments(parameters, 4);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
-      wipe_available_arguments(parameters, 5);
+      wipe_available_arguments(parameters, 4);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
-      wipe_available_arguments(parameters, 5);
+      wipe_available_arguments(parameters, 4);
       return E_FAIL;
     }
 
     try {
       controller_.create_container_b(outer_size_mib, hidden_size_mib,
-                                     login.bytes(), second.bytes(),
-                                     confirmation.bytes());
+                                     second.bytes(), confirmation.bytes());
       return S_OK;
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;

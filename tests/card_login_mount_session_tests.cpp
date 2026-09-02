@@ -819,11 +819,14 @@ void test_container_b_creation_derives_both_volume_passwords() {
   CardAuthenticationSession authentication;
   CardLoginMountSessionCore session(authentication, runtime, layout(),
                                     LoginMountPolicy::manual);
-  authentication.establish(root_secret());
+  // The hidden volume password is derived from the input the session was
+  // opened with, so the caller no longer supplies it.
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.events.clear();
 
   const std::uint32_t id = session.create_container_b(
       64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-      bytes("login-password"), bytes("decoy-password"));
+      bytes("decoy-password"));
 
   require(id != 0, "container B creation returned no identifier");
   require(runtime.outer_size == 64ULL * 1024ULL * 1024ULL &&
@@ -839,6 +842,15 @@ void test_container_b_creation_derives_both_volume_passwords() {
               statuses[0].mounted && statuses[0].name == L"b.hc",
           "container B was not adopted as a mounted container");
   require(session.mounted(), "container B creation left no active volume");
+
+  // Creation keeps the derived volume password the login path would have
+  // produced, so the container it just created can be released and opened
+  // again without the user producing anything.
+  runtime.events.clear();
+  session.unmount_container(id);
+  session.mount_adopted_container(id);
+  require(session.container_statuses()[0].mounted,
+          "a container created in this session could not be mounted again");
 }
 
 void test_container_b_creation_rejects_unusable_input() {
@@ -850,11 +862,30 @@ void test_container_b_creation_rejects_unusable_input() {
       [&] {
         static_cast<void>(session.create_container_b(
             64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-            bytes("login-password"), bytes("decoy-password")));
+            bytes("decoy-password")));
       },
       "unauthenticated container B creation was accepted");
 
-  authentication.establish(root_secret());
+  // Authentication alone is not enough: the derivation needs the input the
+  // session was opened with, and a session that never captured one refuses
+  // instead of inventing a substitute.
+  CardAuthenticationSession bare_authentication;
+  FakeRuntime bare_runtime;
+  CardLoginMountSessionCore bare(bare_authentication, bare_runtime, layout(),
+                                 LoginMountPolicy::manual);
+  bare_authentication.establish(root_secret());
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(bare.create_container_b(
+            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+            bytes("decoy-password")));
+      },
+      "container B was created without the input the session captured");
+  require(bare_runtime.events.empty(),
+          "a session without a captured login still reached the runtime");
+
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.events.clear();
   for (const auto [outer, hidden] : {
            std::pair<std::uint64_t, std::uint64_t>{0, 0},
            std::pair<std::uint64_t, std::uint64_t>{513, 0},
@@ -863,17 +894,16 @@ void test_container_b_creation_rejects_unusable_input() {
     require_throws<std::invalid_argument>(
         [&] {
           static_cast<void>(session.create_container_b(
-              outer, hidden, bytes("login-password"),
-              bytes("decoy-password")));
+              outer, hidden, bytes("decoy-password")));
         },
         "container B accepted an unusable size pair");
   }
   require_throws<std::invalid_argument>(
       [&] {
-        static_cast<void>(session.create_container_b(
-            1024, 512, SecureBuffer(), bytes("decoy-password")));
+        static_cast<void>(session.create_container_b(1024, 512,
+                                                     SecureBuffer()));
       },
-      "container B accepted an empty login password");
+      "container B accepted an empty decoy password");
   require(runtime.events.empty(),
           "a rejected container B request still reached the runtime");
 }
@@ -884,13 +914,14 @@ void test_container_b_creation_cleans_a_failed_format() {
   CardAuthenticationSession authentication;
   CardLoginMountSessionCore session(authentication, runtime, layout(),
                                     LoginMountPolicy::manual);
-  authentication.establish(root_secret());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.events.clear();
 
   require_throws<std::runtime_error>(
       [&] {
         static_cast<void>(session.create_container_b(
             64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-            bytes("login-password"), bytes("decoy-password")));
+            bytes("decoy-password")));
       },
       "a failed container B format was not reported");
   require(session.container_statuses().empty() && !session.mounted(),

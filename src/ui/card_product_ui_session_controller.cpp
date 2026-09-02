@@ -86,6 +86,16 @@ class SecureBufferGuard final {
       card::make_error_code(card::CardError::invalid_operation), operation);
 }
 
+// The outer volume has to hold enough handover content to be credible, so
+// the inner volume is capped at three quarters of the total. The page shows
+// the same rule; this is the boundary that enforces it.
+[[nodiscard]] bool hidden_fits_outer(
+    const std::uint32_t outer_size_mib,
+    const std::uint32_t hidden_size_mib) noexcept {
+  return static_cast<std::uint64_t>(hidden_size_mib) * 4ULL <=
+         static_cast<std::uint64_t>(outer_size_mib) * 3ULL;
+}
+
 [[nodiscard]] bool inputs_overlap(
     const std::span<const std::byte> first,
     const std::span<const std::byte> second) noexcept {
@@ -168,17 +178,11 @@ bool CardProductUiSessionController::create_container(
 
 void CardProductUiSessionController::create_container_b(
     const std::uint32_t outer_size_mib, const std::uint32_t hidden_size_mib,
-    const std::span<std::byte> mutable_login_password_utf8,
     const std::span<std::byte> mutable_second_password_utf8,
     const std::span<std::byte> mutable_second_confirmation_utf8) {
-  MutableInputWiper login_wiper(mutable_login_password_utf8);
   MutableInputWiper second_wiper(mutable_second_password_utf8,
                                  mutable_second_confirmation_utf8);
-  if (inputs_overlap(mutable_login_password_utf8,
-                     mutable_second_password_utf8) ||
-      inputs_overlap(mutable_login_password_utf8,
-                     mutable_second_confirmation_utf8) ||
-      inputs_overlap(mutable_second_password_utf8,
+  if (inputs_overlap(mutable_second_password_utf8,
                      mutable_second_confirmation_utf8)) {
     throw std::invalid_argument(
         "container B inputs must be independent buffers");
@@ -189,13 +193,20 @@ void CardProductUiSessionController::create_container_b(
   }
   if (outer_size_mib < kContainerCreationMinimumMib ||
       outer_size_mib > kContainerCreationMaximumMib ||
-      hidden_size_mib == 0 || hidden_size_mib >= outer_size_mib) {
+      hidden_size_mib == 0 || hidden_size_mib >= outer_size_mib ||
+      !hidden_fits_outer(outer_size_mib, hidden_size_mib)) {
     throw std::invalid_argument("container B sizes are outside the UI range");
   }
 
-  security::SecureBuffer login =
-      consume_password_utf8(mutable_login_password_utf8);
+  // The page no longer asks for the password the session was opened under:
+  // the session still holds it, and which of the two it is stays unknown here
+  // exactly as it is there.
+  security::SecureBuffer login = volume_session_.copy_session_password();
   SecureBufferGuard login_guard(login);
+  if (login.empty()) {
+    throw_wrong_route(
+        "container creation requires the session that captured the login");
+  }
   security::SecureBuffer second =
       std::move(security::confirm_password(
                     password_policy_,
@@ -210,8 +221,7 @@ void CardProductUiSessionController::create_container_b(
   entry_.set_second_card_password(duplicate(login), duplicate(second));
   static_cast<void>(volume_session_.create_container_b(
       static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib,
-      static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, login,
-      second));
+      static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second));
 }
 
 bool CardProductUiSessionController::mount_container() {

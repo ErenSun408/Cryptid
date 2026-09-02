@@ -85,6 +85,12 @@ struct CardLoginMountSessionState final {
   // the retained value opens nothing else: not the card record, not a
   // standard container, and it cannot be typed at the password prompt.
   security::SecureBuffer container_b_password;
+  // The password this session was opened under. Unlike the derived value
+  // above it is the password itself, kept for the one operation that cannot
+  // use a derivative: rewriting the card record so a second password opens it
+  // too. Which of the two passwords this is, the session never asks and never
+  // records, so retaining it stays symmetric under both logins.
+  security::SecureBuffer login_password;
 
   [[nodiscard]] bool mounted() const noexcept {
     for (const SessionContainer& container : containers) {
@@ -113,8 +119,8 @@ class CardLoginMountSessionCore final {
   void mount_adopted_container(std::uint32_t id);
   std::uint32_t create_container_b(
       std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
-      const security::SecureBuffer& login_password_utf8,
       const security::SecureBuffer& decoy_password_utf8);
+  [[nodiscard]] security::SecureBuffer copy_session_password();
   std::uint32_t mount_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>

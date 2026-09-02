@@ -56,8 +56,11 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   }
   std::uint32_t create_container_b(
       std::uint64_t, std::uint64_t,
-      const usb_vault::security::SecureBuffer&,
       const usb_vault::security::SecureBuffer&) override {
+    throw std::logic_error("container B is outside the close contract");
+  }
+
+  usb_vault::security::SecureBuffer copy_session_password() override {
     throw std::logic_error("container B is outside the close contract");
   }
 

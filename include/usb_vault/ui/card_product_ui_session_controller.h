@@ -63,14 +63,14 @@ class CardProductUiSessionController final {
   bool create_container(std::uint32_t size_mib);
 
   // Creates the single hidden-volume container and commits the second card
-  // password that opens its outer volume. The caller supplies the password it
-  // is currently logged in under plus the new password twice; all three
+  // password that opens its outer volume. The caller supplies only the new
+  // password twice; the password the session was opened under comes from the
+  // session itself, so it is never retyped and never crosses the page. Both
   // buffers are wiped on every path. The card record is updated first so a
   // failed volume creation leaves a retryable state instead of a container
   // nobody can open.
   void create_container_b(
       std::uint32_t outer_size_mib, std::uint32_t hidden_size_mib,
-      std::span<std::byte> mutable_login_password_utf8,
       std::span<std::byte> mutable_second_password_utf8,
       std::span<std::byte> mutable_second_confirmation_utf8);
 

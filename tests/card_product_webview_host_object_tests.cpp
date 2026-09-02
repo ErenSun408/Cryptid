@@ -91,11 +91,20 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container_b(
       const std::uint64_t outer_size_bytes,
       const std::uint64_t hidden_size_bytes,
-      const SecureBuffer&, const SecureBuffer&) override {
+      const SecureBuffer&) override {
     ++create_b_calls;
     created_outer_bytes = outer_size_bytes;
     created_hidden_bytes = hidden_size_bytes;
     return adopt(L"C:/vault/b.hc", outer_size_bytes);
+  }
+
+  SecureBuffer copy_session_password() override {
+    const std::vector<std::byte> retained = bytes("login-password");
+    SecureBuffer copy(retained.size());
+    for (std::size_t index = 0; index < retained.size(); ++index) {
+      copy.bytes()[index] = retained[index];
+    }
+    return copy;
   }
 
   std::uint64_t created_outer_bytes{};
@@ -907,21 +916,21 @@ void test_adopted_container_mount_and_unmount_route_through_identifiers() {
           "host unmounted an identifier the session never adopted");
 }
 
-void test_container_b_creation_consumes_five_reversed_arguments() {
+void test_container_b_creation_consumes_four_reversed_arguments() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   ComPtr<IDispatch> host = make_host(fixture.controller);
   const auto login = bytes("login-password");
   const auto second = bytes("second-password-value");
 
-  std::array<VARIANTARG, 5> values{};
-  // COM delivers positional arguments in reverse order.
+  std::array<VARIANTARG, 4> values{};
+  // COM delivers positional arguments in reverse order. The password the
+  // session was opened under is no longer among them.
   initialize_byte_array(values[0], second);
   initialize_byte_array(values[1], second);
-  initialize_byte_array(values[2], login);
-  values[3] = number_argument(16);
-  values[4] = number_argument(64);
-  DISPPARAMS parameters{values.data(), nullptr, 5, 0};
+  values[2] = number_argument(16);
+  values[3] = number_argument(64);
+  DISPPARAMS parameters{values.data(), nullptr, 4, 0};
 
   const HRESULT result =
       host->Invoke(member_id(*host.Get(), L"createContainerBMib"), IID_NULL,
@@ -937,9 +946,8 @@ void test_container_b_creation_consumes_five_reversed_arguments() {
               fixture.volume.created_hidden_bytes ==
                   16ULL * 1024ULL * 1024ULL,
           "the volume transaction received the wrong sizes");
-  for (std::size_t index = 0; index < 3; ++index) {
-    require_array_wiped(values[index],
-                        index == 2 ? login.size() : second.size(),
+  for (std::size_t index = 0; index < 2; ++index) {
+    require_array_wiped(values[index], second.size(),
                         "a container B password array survived the call");
   }
   for (VARIANTARG& value : values) {
@@ -993,7 +1001,7 @@ int main() {
     test_container_collection_is_exposed_by_position_and_route_gated();
     test_container_calls_reject_wrong_shapes_and_report_cancellation();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
-    test_container_b_creation_consumes_five_reversed_arguments();
+    test_container_b_creation_consumes_four_reversed_arguments();
     test_container_query_failure_does_not_invent_facts();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;

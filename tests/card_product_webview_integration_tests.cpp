@@ -99,20 +99,30 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container_b(
       const std::uint64_t outer_size_bytes,
       const std::uint64_t hidden_size_bytes,
-      const SecureBuffer& login_password_utf8,
       const SecureBuffer& decoy_password_utf8) override {
     ++create_b_calls;
     created_b_outer_bytes = outer_size_bytes;
     created_b_hidden_bytes = hidden_size_bytes;
-    b_login_matched = equals(login_password_utf8.bytes(), kLoginPassword);
     b_decoy_matched = equals(decoy_password_utf8.bytes(), kSecondPassword);
     return adopt(L"C:/vault/hidden.hc", outer_size_bytes);
   }
 
+  // The page no longer sends the login input back, so the card record has to
+  // get it from here. Handing out exactly what the login consumed is what
+  // makes the entry fake's check meaningful.
+  SecureBuffer copy_session_password() override {
+    ++session_password_calls;
+    SecureBuffer copy(std::size(kLoginPassword));
+    for (std::size_t index = 0; index < std::size(kLoginPassword); ++index) {
+      copy.bytes()[index] = kLoginPassword[index];
+    }
+    return copy;
+  }
+
   std::uint64_t created_b_outer_bytes{};
   std::uint64_t created_b_hidden_bytes{};
-  bool b_login_matched{};
   bool b_decoy_matched{};
+  int session_password_calls{};
   int create_b_calls{};
 
   std::uint32_t mount_container(const std::wstring_view path) override {
@@ -380,8 +390,8 @@ void fail_and_close(const HWND window) noexcept {
          g_entry.second_password_calls == 1 &&
          g_entry.second_password_existing_matched &&
          g_entry.second_password_new_matched &&
-         g_volume.create_b_calls == 1 && g_volume.b_login_matched &&
-         g_volume.b_decoy_matched &&
+         g_volume.create_b_calls == 1 &&
+         g_volume.session_password_calls == 1 && g_volume.b_decoy_matched &&
          g_volume.created_b_outer_bytes == 128ULL * 1024ULL * 1024ULL &&
          g_volume.created_b_hidden_bytes == 96ULL * 1024ULL * 1024ULL &&
          g_volume.create_calls == 2 && g_file_chooser.new_calls == 3 &&
@@ -410,9 +420,12 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-creation-entry",
       L"fail-creation-back-step",
       L"fail-creation-validation",
+      L"fail-creation-unit",
       L"fail-creation-failure-feedback",
       L"fail-creation-cancelled",
       L"fail-hidden-creation",
+      L"fail-hidden-capacity-rule",
+      L"fail-hidden-acknowledgement",
       L"fail-creation-submit",
       L"fail-creation-close",
       L"fail-login-route",
