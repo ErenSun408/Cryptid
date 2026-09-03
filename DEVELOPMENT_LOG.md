@@ -4707,7 +4707,7 @@
 - 另在 `out/` 下新增 `p2_run_dev_app.ps1`（按 .gitignore 不入库），照 `p1_7_step2_dev_app.ps1` 的
   形式固化 P2 开发应用启动前置：六个产物存在性、helper／厂商 DLL／补丁 `VeraCryptFormat.dll`
   三个 SHA-256 校验，以及部署页面是否比 `ui/` 源文件旧。
-- 提交：`022fcc4 [ui]adopt graphite design baseline`。
+- 提交：`cbf3f01 [ui]adopt graphite design baseline`。
 
 ### 小切片 16h：多个加密盘容器接入 UI
 
@@ -4775,7 +4775,7 @@
   4. 四个 A 专用 COM 方法与控制器的 `create_container_a` / `container_a_status` 现已无页面调用，
      属可清理的死面，留待单独一刀切除。
   5. 建卷与挂载仍同步占用 UI 线程（16c 已记录）；同名不同目录的容器在列表中显示相同名称。
-- 提交：`5ce593e [ui]add the multi-container page and bridge`。
+- 提交：`a8aa281 [ui]add the multi-container page and bridge`。
 
 ### 小切片 16i：切除单容器 A 专用界面面
 
@@ -4806,7 +4806,7 @@
 - 安全复核：本切片只减不增，自动化边界的方法数从 19 降到 15，没有新增入参、出参或状态。
 - ⚠️ P2 开发应用 exe 本次**未能重新链接**（`LNK1168`，用户正在运行该程序）。源码与页面已是最新，
   下次构建即可覆盖。
-- 提交：`4a388ff [ui]drop the single-container bridge`。
+- 提交：`7495836 [ui]drop the single-container bridge`。
 
 ### 小切片 16j：移除 P1 应用链
 
@@ -4843,7 +4843,7 @@
   `vikey_helper_blob_backend`、helper 的 blob IPC 操作、`p1_7` 夹具与诊断、P1 卡重置工具、
   blob 往返探针，以及依附其上的 `vikey_card_store_tests` 与 `vikey_helper_process_tests`。
   这条链会动到 helper 协议，须单独评审后再切。
-- 提交：`77a5ac5 [cleanup]remove the P1 application chain`。
+- 提交：`880960c [cleanup]remove the P1 application chain`。
 
 ### 小切片 16k：隐藏盘容器 B 的会话层建卷
 
@@ -4888,13 +4888,13 @@
 - 完整 CTest **44/45**（唯一失败仍是实体卡不在位的 `vikey_helper_process_tests`）。
 - 安全复核：口令明文只在本次调用内存在，派生完即清零；跨边界仍只有 id／文件名／容量／盘符，
   没有引入档位、卷类型或"这是 B"的持久化标记。本切片没有触碰卡记录，也没有真实建卷。
-- 提交：`4e27b72 [P2.16]create the hidden volume container`。
+- 提交：`187ac1c [P2.16]create the hidden volume container`。
 
 ### 小切片 16l：卡记录的第二口令
 
 #### 需求审计与实现
 
-- 16k 已提交为 `4e27b72`。本切片补齐 B 流程的第二块：让卡记录能同时被"当前登录口令"与
+- 16k 已提交为 `187ac1c`。本切片补齐 B 流程的第二块：让卡记录能同时被"当前登录口令"与
   "新设的第二口令"打开，否则用第二口令根本登录不进来，B 的外层卷也就永远挂不出来。
 - 底座 `rewrap_card_record_v1`（P2.1）已存在，但**上层没有任何通路**：`CardRecordService`
   只有初始化与认证，`ICardLoginTarget` 明确注释「intentionally exposes no ICardStore write
@@ -4931,13 +4931,13 @@
 - 安全复核：口令只在调用内存在，显式副本与原件同时被消费；卡层不落任何"哪个是诱饵"的标记；
   写卡仍绑定原始硬件 ID，且每次操作重新加载凭据。⚠️ 未做实体卡验证 —— 本切片全部为假存储测试。
 - 🟡 已知代价：改写失败时插入被退役，用户需重新插卡重试；这是"卡状态不可知就不继续"的取舍。
-- 提交：`9c2854f [P2.16]commit a second card record password`。
+- 提交：`00b6746 [P2.16]commit a second card record password`。
 
 ### 小切片 16m：隐藏盘建卷的 UI 全链
 
 #### 需求审计与实现
 
-- 16k／16l 已分别提交为 `4e27b72`、`9c2854f`。本切片把两半接到页面上，构成 B 的完整建卷路径。
+- 16k／16l 已分别提交为 `187ac1c`、`00b6746`。本切片把两半接到页面上，构成 B 的完整建卷路径。
 - 🔴 **提交顺序与 16k 记录的取舍相反，此处更正**：16k 写的是"先建容器、再改写卡记录"，
   实现时重新推演了失败面后改为**先改写卡记录、再建容器**。理由是可重试性：
   - 容器先建而卡改写失败 → B 已存在但外层口令不在卡上，重试会因目标已存在而**直接死锁**；
@@ -4972,13 +4972,13 @@
   显式复制与原件同时清除；跨边界仍无路径、无卷类型、无"哪个是诱饵"的标记。
 - ⚠️ 已知取舍与遗留：诱饵输入框**没有显隐切换**（最少流程未做），12 位以上口令要盲打两遍；
   当前口令输错会导致卡记录改写失败并退役插入，需要重新插卡；实体卡与真实建卷仍未验证。
-- 提交：`5a522ef [P2.16]create the hidden container from the page`。
+- 提交：`f87a12a [P2.16]create the hidden container from the page`。
 
 ### 小切片 16n：隐藏盘并入统一容器集合
 
 #### 需求审计与实现
 
-- 16m 已提交为 `5a522ef`。B 的最后一块：此前 B 的挂载状态由 `CardLoginMountSessionState`
+- 16m 已提交为 `f87a12a`。B 的最后一块：此前 B 的挂载状态由 `CardLoginMountSessionState`
   里一个**独立布尔量** `container_b_mounted` 记账，根本不进 `containers`，因此登录挂出的 B
   在容器列表里**完全看不见**，只有 16k 建卷当场那一次会被接管。
 - 改为一套集合：`SessionContainer` 增加内部标志 `release_first`（仅决定卸载顺序，不跨应用边界），
@@ -5005,13 +5005,13 @@
   1. 打开"登录后自动挂载"（把 P2 应用切到 `mount_on_login`，代价见 8.7.5 的五秒预算）；
   2. 新增一个"挂载该容器"时再输一次口令的动作（又一刀 UI）。
   16k 建卷当场挂出的 B 在本次会话内可正常使用与卸载，不受此限制。
-- 提交：`151bfed [P2.16]adopt the hidden container into the collection`。
+- 提交：`2c1c925 [P2.16]adopt the hidden container into the collection`。
 
 ### 小切片 16o：登录后免输入挂载任意已有容器
 
 #### 需求审计与决策
 
-- 16n 已提交为 `151bfed`。用户提出的目标状态：**登录后不自动挂载，但用户可以自由地免输入挂载
+- 16n 已提交为 `2c1c925`。用户提出的目标状态：**登录后不自动挂载，但用户可以自由地免输入挂载
   任何已有的 B 类容器，挂出外层还是隐藏卷由登录时用的口令决定。**
 - 审计派生链后确认这可以做到，且不必保留用户口令：卷密码是
   `Argon2id(password=P, salt=容器salt, secret=S)`（`kdf_v1.h`、`argon2id_runtime.cpp`），
@@ -5056,13 +5056,13 @@
   已在上文明确记为达成目标状态的代价。
 - 🟡 遗留：只有布局里固定的两个容器能在登录后被列出，用户自选路径的容器仍不持久化
   （8.7.4 的加密分层清单未做）；实体卡与真实建卷仍未验证。
-- 提交：`5413de9 [P2.16]mount adopted containers without retyping`。
+- 提交：`a23ef1d [P2.16]mount adopted containers without retyping`。
 
 ### 小切片 17a：开放系统设置页
 
 #### 需求审计与决策
 
-- 16o 已提交为 `5413de9`。侧栏「系统设置」此前是禁用占位项。设计稿
+- 16o 已提交为 `a23ef1d`。侧栏「系统设置」此前是禁用占位项。设计稿
   （`usb-vault_ui-design.html:1155`）给这一页定了 3 个开关 + 关于块 + 2 条说明，
   且自带一条原则：「设置项刻意保持极少。每多一个开关，就多一处可能泄露使用方式的本地记录」。
   因此本切片的做法是**从设计稿的既定条目里落地**，而不是新增设置项。
@@ -5150,13 +5150,13 @@
   容器形态信息；三个开关的存在与默认值在档二与档三下完全相同，不构成 8.4 意义上的痕迹。
 - 🟡 遗留：登录后自动挂载与记住容器位置**只有 UI，没有后端**，状态不持久；
   `0.2.0` 为占位版本号。
-- 提交：`9aaf264 [P2.17]open the settings page`。
+- 提交：`5cdec95 [P2.17]open the settings page`。
 
 ### 小切片 17b：容器视图统一，不再按卷类型分栏
 
 #### 需求审计与决策
 
-- 17a 已提交为 `9aaf264`。用户提出：隐藏盘既然能建了，「隐藏盘概览」不该还挂着
+- 17a 已提交为 `5cdec95`。用户提出：隐藏盘既然能建了，「隐藏盘概览」不该还挂着
   「建卷能力接入后……」的过时文案；并要求把「打开已有」改称「导入」。
 - 🔴 **审计后发现真正过时的不是文案，而是分栏本身。** 16n 已把 B 并入统一的
   `containers` 集合，而页面上每个 `[data-container-list]` 渲染的都是同一份
@@ -5213,13 +5213,13 @@
   两个建卷入口仍各 2 处。
 - WebView2 假后端夹具的结构副本与驱动同步改名，导航、建卷、挂载、卸载全流程原样通过，退出 0。
 - 完整 CTest 与三套构建结果见下条提交记录。
-- 提交：待定（`[ui]unify the container view`）。
+- 提交：`ef02638 [ui]unify the container view`。
 
 ### 小切片 17c：新建容器改为单一入口＋容器类型选择
 
 #### 需求审计与决策
 
-- 17b 已提交为 `a7f5868`。用户要求把新建容器流程也做成设计稿的样子：
+- 17b 已提交为 `ef02638`。用户要求把新建容器流程也做成设计稿的样子：
   **一个「新建容器」按钮，点击后先弹出容器类型选择**，并给出该屏的四处文案改写。
 - 审计 8.7.2「入口恒显」后确认：**入口由两个按钮收敛为一个按钮＋一屏两张卡片，
   并不削弱恒显要求**，反而更贴合设计稿注记「两个入口恒显、视觉权重完全对等」——
@@ -5272,13 +5272,13 @@
 - ⚠️ 遗留不一致：第二步仍沿用「新建加密盘／新建隐藏盘」旧称谓，与第一步卡片的
   「标准容器／含隐藏卷的容器」不齐。设计稿对应屏为「新建标准容器／新建含隐藏卷的容器」，
   用户未点名要改，本切片未动，留作后续文案统一。
-- 提交：待定（`[ui]create containers from one entry`）。
+- 提交：`26d305a [ui]create containers from one entry`。
 
 ### 小切片 17d：参数步迁到「容器」口径，日常密码不再重输
 
 #### 需求审计与决策
 
-- 17c 已提交为 `bc1f148`。用户要求把参数步也做成设计稿的样子，并给出七条具体改动。
+- 17c 已提交为 `26d305a`。用户要求把参数步也做成设计稿的样子，并给出七条具体改动。
 - 🔴 **第 5 条（去掉「当前密码」输入框）不是 UI 改动。** `create_container_b` 有两处要日常密码明文：
   一是派生隐藏卷密码，二是 `set_second_card_password → rewrap_card_record_v1` 重封卡记录。
   后者把密码当作**封装材料**而非解锁材料，且卡记录按设计不带槽位标签，无法只替换其中一个信封。
@@ -5403,14 +5403,14 @@
   - 未新增 `innerHTML`，新控件文案全为静态标记。
 - ⚠️ 未做（不在七条之内，需原生支持）：设计稿参数屏还有「名称」与「保存位置」两个字段，
   当前标准容器仍由原生选择器选路径、隐藏容器仍用固定路径。
-- 提交：待定（原生一笔 + 页面一笔）。
+- 提交：`bb625b5` 与 `5006513` 两笔，见下节补记。
 
 #### 17d 提交状态补记
 
 - 原生会话保留登录输入、四参数隐藏容器桥及本会话隐藏容器重挂载修复已提交为
-  `420c13c [P2.17]create the hidden container without retyping the login`。
+  `bb625b5 [P2.17]create the hidden container without retyping the login`。
 - 参数步容器口径、容量单位与校验、提权提示和卡记录重写确认 UI 已提交为
-  `b4d9a38 [ui]migrate the parameter step to container wording`。两笔均未推送。
+  `5006513 [ui]migrate the parameter step to container wording`。两笔均未推送。
 
 ### 小切片 17e：当前认证会话操作日志
 
@@ -5462,13 +5462,13 @@
   下使用同一事件名和字段，B 的形态不会跨边界。失败详情被压缩成单一结果，记录失败不会反向改变卷操作。
 - 🟡 遗留：当前没有跨进程／最近 30 天历史，应用退出后日志消失；如果以后持久化，必须先设计与 8.7.4
   加密分层清单兼容的载体，并重新做档二／档三本地产物逐字节不可区分验收。
-- 提交：待定（建议一笔 `[P2.17]add current-session operation history`，未推送）。
+- 提交：`6988595 [P2.17]add current-session operation history`，未推送。
 
 ### 小切片 17f：去掉重复的卡状态指示，登录给出进行中反馈
 
 #### 需求审计与决策
 
-- 17e 已提交为 `1311712`。用户提出三条界面改动：去掉主页绿色的「安全卡已认证」、
+- 17e 已提交为 `6988595`。用户提出三条界面改动：去掉主页绿色的「安全卡已认证」、
   开发窗口标题改名、登录输密码后要有加载动画（原话「不然用户会以为卡死」）。
 - 审计发现「安全卡已认证」在页面上出现**两次**：顶栏的绿色胶囊
   （`card_session.html` 的 `.card-badge` ＋ `.status-dot`）与仪表盘第一张统计卡
@@ -5508,13 +5508,13 @@
 - 页面契约测试 PASS；WebView2 集成测试退出 0（已核对部署的 `card_session.js` 时间戳新于源文件）。
 - 全量 CTest 见提交记录。
 - ⚠️ 构建期一次 `LNK1168`：开发 EXE 正在运行导致无法写入，关闭后重建通过，与改动无关。
-- 提交：待定（`[ui]drop the duplicate card badge and show login progress`）。
+- 提交：`a2008f2 [ui]drop the duplicate card badge and show login progress`。
 
 ### 小切片 17g：设置页重新初始化安全卡
 
 #### 需求审计与决策
 
-- 17f 已提交为 `4f22a4f`。用户要求在设置页增加把一张 `initialized_v1` 卡破坏性退回
+- 17f 已提交为 `a2008f2`。用户要求在设置页增加把一张 `initialized_v1` 卡破坏性退回
   provisioning 状态的正式入口，并给出了另一位 agent 的流程方案（设置页执行、成功后自动关闭
   应用、下次启动由现有入口路由进初始化页）。
 - **实现前逐条核实该方案的三个前提，均成立**：
@@ -5572,13 +5572,13 @@
   由现有 `CardDeviceLifecycleController` 到达路径重新定路由，可省掉 `IUiCloseRequestSink`
   这一整层。已向用户说明，用户维持关闭应用的方案。
 - ⚠️ 构建期两次 `LNK1168`：开发 EXE 正在运行导致无法写入，与改动无关。
-- 提交：待定（`[P2.17]reset the security card from settings`）。
+- 提交：`ca59fdc [P2.17]reset the security card from settings`。
 
 ### 小切片 17h：保持一次性插卡上下文并恢复重置可达性
 
 #### 提交后审计与修正决策
 
-- 17g 已提交为 `5bbcf04`。提交后的真实组合审计发现：P2.14c 在初始化或登录成功前会按设计撤销
+- 17g 已提交为 `ca59fdc`。提交后的真实组合审计发现：P2.14c 在初始化或登录成功前会按设计撤销
   一次性插卡上下文，因此已认证页面虽然显示重置入口，原实现仍要求 `login_required` route 与旧
   context，生产组合中会得到 `invalid_operation`。同一问题也使初始化后立即设置第二密码不可达。
 - 一份未提交的候选改动尝试在初始化和登录成功后重新绑定 context。该方案未采用：它会破坏
@@ -5605,7 +5605,7 @@
 - 安全复核：未保存或复活旧插卡上下文；新探测只在用户确认写动作时发生并在动作末尾销毁；
   update target 仍绑定探测所得的非零硬件 ID；未新增密码、S、硬件标识或记录原文的 UI 暴露／日志；
   P2.14c 的“成功交接前撤销上下文”及 R-03 / 8.6 均保持不变。
-- 提交：用户已批准；本节随 `[P2.17]reinspect the card before record writes` 提交，未推送。
+- 提交：用户已批准；本节随 `5aed730 [P2.17]reinspect the card before record writes` 提交，未推送。
 
 ### 小切片 18a：ViKey 开发凭据配置程序
 
@@ -5647,13 +5647,13 @@
 - ⚠️ 未执行真实三项写入验收，以免覆盖开发机现有可用凭据；用户可在审阅后用真实值执行一次，
   再启动既有 P2 开发程序完成闭环。当前生成的是 Debug EXE，仍依赖 Debug VC 运行库；给其他机器
   下载的 Release／自包含打包属于下一独立切片。
-- 提交：待用户审阅决定（建议 `[P2.18]add the ViKey credential configurator`）。
+- 提交：`10ce729 [P2.18]add the ViKey credential configurator`。
 
 ### 小切片 18b：P2 内部开发测试包
 
 #### 范围与交付边界审计
 
-- 18a 已按用户批准提交为 `fd6078d`。用户随后要求制作可供其他人下载测试的包。本切片先交付
+- 18a 已按用户批准提交为 `10ce729`。用户随后要求制作可供其他人下载测试的包。本切片先交付
   **Windows 11 x64 内部开发测试包**，不是公开发布或生产安装程序：主程序仍是联网开发模式，
   没有代码签名，VeraCrypt 驱动与 WebView2 Runtime 仍是机器前置条件。
 - ViKey SDK 根目录及 DLL 示例目录没有发现明确的再分发许可证；patched VeraCrypt FormatDLL 的
@@ -5719,7 +5719,34 @@
 - 风险仍为：USB Vault 自身的 CMD/HTML/EXE 均尚未签名，摘要不能建立整包发布者身份；附带上游
   安装程序扩大了下载体积与版本过期面，且 VeraCrypt 聚合分发／source-offer 和 ViKey DLL 再分发
   授权仍待正式法律复核。因此只允许受控内部测试，不能发布为客户正式安装包。
-- ⚠️ 当前 preview5 的 `BUILD-IDENTITY.txt` 诚实记录为 `fd6078d + dirty working tree`，因为打包链
+- ⚠️ 当前 preview5 的 `BUILD-IDENTITY.txt` 诚实记录为 `fd6078d + dirty working tree`（该哈希已随提交信息重写失效，现对应 `10ce729`），因为打包链
   本身尚未提交。若用户批准该切片，应在提交后从 clean tree 重新生成最终预览名与摘要，再交付下载；
   现阶段不把 preview5 描述为最终客户包。
-- 提交：待用户审阅决定（建议 `[P2.18]add the internal development package`，未推送）。
+- 提交：`4c49834 [P2.18]add the internal development test package`，未推送。
+
+### 小切片 18c：提交信息格式统一
+
+#### 需求与范围审计
+
+- 用户发现 `ce7390ba` 正文里的 `\n\n` 是字面量而非换行（PowerShell 下 `git commit -m` 不转义），
+  并以 `fab54a4` 为范本定下提交信息规范：正文每段一个物理长行、段落之间真空行、
+  50–80 个英文单词、固定两段（一段说改了什么，一段说验证结果）。
+- 审计 `022fcc4..HEAD` 共 20 笔：2 笔已完全合规、1 笔仅字面量 `\n` 需修、
+  10 笔正文不足 50 词需扩写（`022fcc4` 完全没有正文）、6 笔超 80 词需压缩，
+  另 1 笔为本轮新提交的 18b。
+
+#### 实现与核对
+
+- 先提交 18b 打包切片（`4c49834`，80 词），再用 `git filter-branch --msg-filter` 一次改写 20 笔。
+- 扩写素材全部取自本文件各切片记录，不从 diff 反推；压缩时保留有安全含义的事实
+  （不泄露登录身份、写后回读、挂载时拒绝重置、先写卡再建容器的顺序理由），
+  砍掉的是设计论证与逐条测试清单。
+- 改写后逐笔核对：20 笔的树哈希与作者／提交时间戳与改写前完全一致，
+  正文词数落在 62–80，零字面量 `\n`，无手动折行段落。
+- 本文件 24 行共 25 处失效短哈希按 old→new 映射重写，9 处 `待定`／`待用户审阅决定`
+  占位按规则 6 补齐为 `- 提交：`<hash> <subject>``。
+- ⚠️ preview5 的 `BUILD-IDENTITY.txt` 仍写着改写前的 `fd6078d`，该对象已不可达；
+  已在 18b 记录中注明现对应 `10ce729`，从 clean tree 重新出包时自然消除。
+- 改写前已打备份 ref `backup-before-msg-rewrite`（指向改写前的 `fd6078d`），确认无误后可删除。
+- 改写范围全部未推送（`origin/main` 停在 `7956356`，本地领先 131 笔），无需 force-push。
+- 提交：待定（`[docs]unify the commit message format`）。
