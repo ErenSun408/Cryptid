@@ -1,0 +1,38 @@
+@echo off
+setlocal
+set "ROOT=%~dp0"
+
+if not exist "%ROOT%usb_vault_vikey_p2_development_app.exe" goto missing
+if not exist "%ROOT%usb_vault_vikey_helper.exe" goto missing
+if not exist "%ROOT%usb_vault_volume_creator.exe" goto missing
+if not exist "%ROOT%VeraCryptFormat.dll" goto missing
+if not exist "%ROOT%card_session.html" goto missing
+if not exist "%ROOT%card_session.js" goto missing
+if not exist "%ROOT%vendor\ViKey.dll" goto missing
+
+call :checkhash "%ROOT%usb_vault_vikey_helper.exe" "@HELPER_SHA256@"
+if errorlevel 1 goto corrupt
+call :checkhash "%ROOT%VeraCryptFormat.dll" "@FORMAT_SHA256@"
+if errorlevel 1 goto corrupt
+call :checkhash "%ROOT%vendor\ViKey.dll" "@VENDOR_SHA256@"
+if errorlevel 1 goto corrupt
+
+start "" "%ROOT%usb_vault_vikey_p2_development_app.exe" "--i-understand-vikey-development-mode-is-network-enabled" "%ROOT%usb_vault_vikey_helper.exe" "@HELPER_SHA256@" "%ROOT%vendor" "@VENDOR_SHA256@"
+exit /b 0
+
+:missing
+echo USB Vault test package is incomplete. Extract the complete ZIP and retry.
+pause
+exit /b 1
+
+:corrupt
+echo USB Vault test package failed its SHA-256 check. Extract a fresh copy and retry.
+pause
+exit /b 1
+
+:checkhash
+set "ACTUAL_HASH="
+for /f "skip=1 tokens=* delims=" %%H in ('certutil -hashfile "%~1" SHA256 2^>nul') do if not defined ACTUAL_HASH set "ACTUAL_HASH=%%H"
+set "ACTUAL_HASH=%ACTUAL_HASH: =%"
+if /i not "%ACTUAL_HASH%"=="%~2" exit /b 1
+exit /b 0

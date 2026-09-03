@@ -1,0 +1,36 @@
+USB Vault P2 development-test third-party notices
+=================================================
+
+This internal evaluation package is not a legal conclusion or a production
+redistribution approval.
+
+Argon2
+------
+The application includes the unmodified 20190702 reference implementation
+from the Password Hashing Competition Argon2 project, selected under the
+Apache License 2.0. The license text is included under licenses\argon2.
+
+VeraCrypt 1.26.29 installer and patched FormatDLL
+-------------------------------------------------
+The package includes the unmodified upstream VeraCrypt Setup 1.26.29.exe so
+controlled internal testers can install the required Windows kernel driver.
+Its SHA-256 and Authenticode signature are checked by the packaging script.
+
+VeraCryptFormat.dll is built from VeraCrypt 1.26.29 commit
+b48e31f5b47da7d41025e3f0e02751675e15005a with the narrow USB Vault patch
+included under licenses\veracrypt. The upstream license and NOTICE are also
+included there. Final distribution and source-offer obligations remain subject
+to the planned legal review.
+
+ViKey vendor runtime
+--------------------
+vendor\ViKey.dll is the original x64 runtime from the locally supplied ViKey
+SDK. No explicit redistribution license was found in that SDK package during
+this engineering review. Keep this package to controlled internal evaluation
+until the supplier provides written redistribution permission.
+
+Microsoft Edge WebView2 Runtime
+-------------------------------
+This system runtime remains a prerequisite and is not included in this package.
+Obtain it from Microsoft if the target Windows installation does not already
+provide it.

@@ -5648,3 +5648,78 @@
   再启动既有 P2 开发程序完成闭环。当前生成的是 Debug EXE，仍依赖 Debug VC 运行库；给其他机器
   下载的 Release／自包含打包属于下一独立切片。
 - 提交：待用户审阅决定（建议 `[P2.18]add the ViKey credential configurator`）。
+
+### 小切片 18b：P2 内部开发测试包
+
+#### 范围与交付边界审计
+
+- 18a 已按用户批准提交为 `fd6078d`。用户随后要求制作可供其他人下载测试的包。本切片先交付
+  **Windows 11 x64 内部开发测试包**，不是公开发布或生产安装程序：主程序仍是联网开发模式，
+  没有代码签名，VeraCrypt 驱动与 WebView2 Runtime 仍是机器前置条件。
+- ViKey SDK 根目录及 DLL 示例目录没有发现明确的再分发许可证；patched VeraCrypt FormatDLL 的
+  工程记录也一直要求最终法律复核与 source-offer 处理。因此预览包可以用于受控内部评估，但在
+  供应商书面授权和 VeraCrypt 分发复核完成前，不能称为允许公开发布的客户下载包。
+- 挂载实现直接访问已加载的 VeraCrypt `0x126` 驱动，不自行注册或启动内核驱动。应用户要求，
+  本包改为附带上游原版 VeraCrypt 1.26.29 安装程序供测试者显式安装；WebView2 使用静态 Loader，
+  但实际 Runtime 仍不随包复制，Windows 11 通常已有。
+
+#### 构建与打包实现
+
+- `package-release` CMake preset 固定 Release、`BUILD_TESTING=OFF` 与静态 MSVC Runtime
+  (`MultiThreaded`)；新增显式聚合目标，只构建 P2 主程序、凭据配置器、ViKey helper、建卷 helper
+  及它们的正式依赖，不把测试、PDB、LIB、ILK 或任意扫描到的 DLL 混入包。
+- 新增 `package-p2-development.ps1`：只接受普通非 reparse 文件／目录；强制 package-release
+  cache 形态；固定拒绝非白名单 ViKey x64 DLL 与非审计 FormatDLL；要求部署 HTML/JS 与源码摘要
+  一致，并验证 VeraCrypt 源码基线为 `b48e31f5...` 后复制上游 License/NOTICE、项目补丁和说明。
+  后续纳入的 VeraCrypt 安装程序同时固定 SHA-256、产品版本／原文件名及 IDRIX Authenticode 签名
+  证书指纹，暂存时统一命名为 `prerequisites\VeraCrypt Setup 1.26.29.exe`，不会自动执行。
+- 输出目录名只接受窄 ASCII 集并显式拒绝 `.`／`..`，规范化后再次验证父目录；既有输出一律拒绝，
+  不删除或覆盖。暂存只复制固定七个构建产物及一个供应商 DLL，生成源码／第三方／helper 身份记录、
+  全文件 `SHA256SUMS.txt`，再压缩为 ZIP。
+- 双击入口 `Start USB Vault.cmd` 以 `%~dp0` 生成可移动的绝对路径；启动前用 Windows `certutil`
+  复核 helper、VeraCryptFormat.dll 与 ViKey.dll 的固定 SHA-256，再把 helper／vendor 摘要作为既有
+  P2 开发身份参数传给主程序。命令行仍不包含 UserSN、API Key、PIN、S 或卷密码。
+- 包含简体中文使用说明、根目录短版 `测试须知.txt` 与第三方 notice。短版便条列出卡／
+  开发凭据等条件、安装顺序、VeraCrypt 摘要与签名验证、`sc.exe query veracrypt` 驱动状态验证，
+  以及 WebView2 注册表版本检查和微软官方下载入口。流程是同一 Windows 用户先安装并核验驱动，
+  再运行凭据配置器，插卡后双击启动脚本；建卷时只有 `usb_vault_volume_creator.exe` 触发 UAC。
+
+#### 验证、安全复核与预览产物
+
+- 全新 `package-release` 配置与 80 个编译／链接步骤通过。四个 EXE 的导入表都没有
+  `MSVCP140`／`VCRUNTIME140`／UCRT 调试 DLL，因而测试机无需另装 VC++ Redistributable；主程序
+  仍只依赖 Windows 系统库，未静态导入 ViKey.dll。
+- 嵌入 manifest 复核：主程序、凭据配置器、ViKey helper 均为 `asInvoker`；仅建卷 helper 为
+  `requireAdministrator`。Debug build、错误的 x86 ViKey.dll、输出碰撞和 `..` 包名均按预期在
+  创建包前／覆盖前失败。
+- 首次含中文便条的 `preview3` 在解压校验时暴露了清单编码缺陷：文件本身存在，但 ASCII
+  `SHA256SUMS.txt` 把文件名写成 `?????.txt`，逐项验证按预期失败。构建身份与全文件清单均改用
+  UTF-8 后生成 `preview4`；新目录解压后的 19 个清单项全部复核通过，中文便条路径保持完整，且未
+  发现 PDB/ILK/LIB/EXP/OBJ。部署 HTML/JS 与 `ui/` 源文件逐字一致；失败的 `preview3` 目录、ZIP
+  和验证展开目录随后均已删除，避免误交付。
+- 用户随后把根目录短版便条定名为 `测试须知.txt` 并给出完整正文；消息显示所需的 Markdown 转义
+  在纯文本文件中还原为真实文件名／命令字符，同时修正注册表路径中 PowerShell 变量前不可缺少的
+  `\` 分隔符。`preview5` 解压后确认新文件存在、旧名不存在、正文与源文件逐字一致，19 项摘要再次
+  全部通过；已移除被替代的 `preview4` 目录、ZIP 和验证展开目录。
+- 从全新解压目录分别隐藏启动 Release 凭据配置器与真实 P2 主程序：两者均稳定进入消息循环；测试
+  随后只关闭其新建进程，未录入凭据、登录、写卡或建卷。启动脚本另在临时副本中用无写入配置器
+  代替主程序，实际通过三项 `certutil` 校验和相对路径启动；产生的唯一进程已按核对后的路径关闭。
+- 本机 `spike/_setup/VeraCrypt_Setup_1.26.29.exe` 与安装目录留存副本均为 40,832,408 字节，产品版本
+  1.26.29，SHA-256 `DCA9DDEC...ECD3964B` 与上游发布清单吻合；签名状态 `Valid`，签名者
+  IDRIX SARL，证书指纹 `86E1D426...B29B5F`。打包使用前者作为只读输入，包内复核结果相同。
+- 当前预览产物：`out/packages/usb-vault-p2-development-test-0.2.0-preview5.zip`，大小
+  30,600,268 字节，ZIP SHA-256 为
+  `712F666D04B67343FE21DDE8CE9D89C76AEF15707E5B58979BA23F44F629908B`。
+- 安全复核：包内没有凭据或卡／容器材料，启动参数只有路径与摘要；供应商 DLL 固定为已验证 x64
+  摘要，FormatDLL 固定为实体建卷验收过的补丁摘要；上游安装程序须同时通过固定摘要、版本元数据
+  与签名者指纹才会暂存，且只由测试者明确选择后通过 UAC 运行。打包脚本不递归收集产物且不覆盖
+  既有目录。错误安装程序在创建输出前被拒绝且未遗留目录。全量 Debug CTest 45/45，其中 43 项
+  实际通过、2 项实体卡环境限制跳过；package-release 聚合目标复建通过；PowerShell 语法解析及
+  `git diff --check` 通过。
+- 风险仍为：USB Vault 自身的 CMD/HTML/EXE 均尚未签名，摘要不能建立整包发布者身份；附带上游
+  安装程序扩大了下载体积与版本过期面，且 VeraCrypt 聚合分发／source-offer 和 ViKey DLL 再分发
+  授权仍待正式法律复核。因此只允许受控内部测试，不能发布为客户正式安装包。
+- ⚠️ 当前 preview5 的 `BUILD-IDENTITY.txt` 诚实记录为 `fd6078d + dirty working tree`，因为打包链
+  本身尚未提交。若用户批准该切片，应在提交后从 clean tree 重新生成最终预览名与摘要，再交付下载；
+  现阶段不把 preview5 描述为最终客户包。
+- 提交：待用户审阅决定（建议 `[P2.18]add the internal development package`，未推送）。

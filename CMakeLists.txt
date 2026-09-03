@@ -655,6 +655,15 @@ if(USB_VAULT_BUILD_UI)
     "${CMAKE_SOURCE_DIR}/ui/card_session.html"
     "${CMAKE_SOURCE_DIR}/ui/card_session.js"
   )
+
+  # Explicit aggregation point for the internal P2 development package. The
+  # staging script copies only these reviewed runtime outputs and never walks a
+  # build directory for arbitrary DLLs or debug artifacts.
+  add_custom_target(usb_vault_p2_development_package_binaries)
+  add_dependencies(usb_vault_p2_development_package_binaries
+    usb_vault_vikey_p2_development_app
+    usb_vault_vikey_development_credentials_config
+  )
 endif()
 
 if(USB_VAULT_FORMAT_DLL)
