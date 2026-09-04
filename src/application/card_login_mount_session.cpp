@@ -83,6 +83,14 @@ class ProductionCardLoginMountSessionRuntime final
     return size.QuadPart;
   }
 
+  [[nodiscard]] std::optional<std::uint64_t> mounted_volume_size(
+      const wchar_t drive_letter) override {
+    for (const volume::MountedVolume& mounted : provider_.mounted_volumes()) {
+      if (mounted.drive_letter == drive_letter) return mounted.disk_length;
+    }
+    return std::nullopt;
+  }
+
   [[nodiscard]] security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -908,13 +916,10 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
   std::vector<ContainerStatus> result;
   result.reserve(state_.containers.size());
   for (const SessionContainer& container : state_.containers) {
-    const std::optional<std::uint64_t> size =
-        runtime_.container_size_if_present(container.path);
-    if (!size.has_value()) {
-      if (container.mounted) {
-        throw std::runtime_error(
-            "mounted container backing file is unavailable");
-      }
+    if (!container.mounted) {
+      // An unmounted container has no capacity to report. The backing file
+      // size is not a volume size, and for a container holding two volumes
+      // which of them would appear is not decided until it is mounted.
       result.push_back({.id = container.id,
                         .name = container.name,
                         .mounted = false,
@@ -922,13 +927,20 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                         .drive_letter = wchar_t{}});
       continue;
     }
+    // The driver is the only authority on an attached volume: it alone knows
+    // whether the hidden or the outer volume of a two-volume container is the
+    // one currently on that drive.
+    const std::optional<std::uint64_t> size =
+        runtime_.mounted_volume_size(container.drive_letter);
+    if (!size.has_value() || *size == 0) {
+      throw std::runtime_error(
+          "mounted container has no volume on its drive letter");
+    }
     result.push_back({.id = container.id,
                       .name = container.name,
-                      .mounted = container.mounted,
+                      .mounted = true,
                       .size_bytes = *size,
-                      .drive_letter = container.mounted
-                                          ? container.drive_letter
-                                          : wchar_t{}});
+                      .drive_letter = container.drive_letter});
   }
   return result;
 }

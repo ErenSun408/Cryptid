@@ -31,6 +31,12 @@ class CardLoginMountSessionRuntime {
   [[nodiscard]] virtual bool container_exists(std::wstring_view path) = 0;
   [[nodiscard]] virtual std::optional<std::uint64_t>
   container_size_if_present(std::wstring_view path) = 0;
+  // Capacity of the volume the driver currently reports on one drive letter.
+  // The backing file cannot answer this question: a hidden volume is smaller
+  // than the container hosting it, and even a standard volume is smaller than
+  // its file by the header group. No value means the driver has nothing there.
+  [[nodiscard]] virtual std::optional<std::uint64_t> mounted_volume_size(
+      wchar_t drive_letter) = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,

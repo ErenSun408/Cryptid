@@ -43,15 +43,17 @@ class MutableInputWiper final {
 
 constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
 
-// Converts a backing-file size the page can display. Anything that is not an
-// exact MiB multiple inside the creation range is reported as unavailable
-// instead of rounded, so the page never shows an invented capacity.
+// Converts a live volume capacity the page can display. A volume is never an
+// exact MiB multiple - the header group costs bytes, and a hidden volume sits
+// wherever the host filesystem left room - so the nearest MiB is the honest
+// reading here, where refusing every inexact value would empty the field.
+// Anything past the creation range is still reported as unavailable.
 [[nodiscard]] std::uint32_t displayable_size_mib(
     const std::uint64_t size_bytes) noexcept {
-  if (size_bytes % kBytesPerMib != 0) return 0;
-  const std::uint64_t quotient = size_bytes / kBytesPerMib;
-  return quotient <= kContainerCreationMaximumMib
-             ? static_cast<std::uint32_t>(quotient)
+  const std::uint64_t rounded =
+      (size_bytes + kBytesPerMib / 2ULL) / kBytesPerMib;
+  return rounded <= kContainerCreationMaximumMib
+             ? static_cast<std::uint32_t>(rounded)
              : 0;
 }
 
@@ -300,10 +302,14 @@ CardProductUiSessionController::container_statuses() {
   std::vector<ContainerUiStatus> result;
   result.reserve(statuses.size());
   for (const application::ContainerStatus& status : statuses) {
+    // Capacity and drive letter now share one rule: both describe an attached
+    // volume, so both are present exactly when the container is mounted.
     if (status.id == 0 || status.name.empty() ||
         (status.mounted &&
-         (status.drive_letter < L'A' || status.drive_letter > L'Z')) ||
-        (!status.mounted && status.drive_letter != wchar_t{})) {
+         (status.drive_letter < L'A' || status.drive_letter > L'Z' ||
+          status.size_bytes == 0)) ||
+        (!status.mounted &&
+         (status.drive_letter != wchar_t{} || status.size_bytes != 0))) {
       throw std::runtime_error("container status is inconsistent");
     }
     result.push_back({.id = status.id,

@@ -7,6 +7,7 @@
 #include <concepts>
 #include <exception>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -135,13 +136,20 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (fail_mount) throw std::runtime_error("mount failed");
 
     MountSessionResult result;
-    if (mount_a) result.container_a.emplace();
-    if (mount_b) result.container_b.emplace();
+    if (mount_a) {
+      result.container_a.emplace();
+      attached_volume_sizes[L'X'] = container_a_size_bytes;
+    }
+    if (mount_b) {
+      result.container_b.emplace();
+      attached_volume_sizes[L'Y'] = other_size_bytes;
+    }
     return result;
   }
 
   [[nodiscard]] usb_vault::volume::UnmountResult unmount(
       const wchar_t drive_letter) override {
+    attached_volume_sizes.erase(drive_letter);
     if (drive_letter == L'Y') {
       events.emplace_back("unmount:B");
       if (fail_unmount_b) throw std::runtime_error("unmount B failed");
@@ -158,6 +166,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
 
   [[nodiscard]] usb_vault::volume::UnmountEscalationResult unmount_forced(
       const wchar_t drive_letter) override {
+    attached_volume_sizes.erase(drive_letter);
     if (drive_letter == L'Y') {
       events.emplace_back("force:B");
       return {.result = {}, .forced = force_required_b};
@@ -205,6 +214,17 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       }
     }
     return std::nullopt;
+  }
+
+  // The driver's own view: what capacity is attached to a drive letter right
+  // now. It is deliberately not the file size - for a container with a hidden
+  // volume the two differ, which is the whole reason the session asks here.
+  [[nodiscard]] std::optional<std::uint64_t> mounted_volume_size(
+      const wchar_t drive_letter) override {
+    events.emplace_back("volume-size");
+    const auto entry = attached_volume_sizes.find(drive_letter);
+    if (entry == attached_volume_sizes.end()) return std::nullopt;
+    return entry->second;
   }
 
   [[nodiscard]] SecureBuffer derive_container_password(
@@ -275,6 +295,9 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "hidden creation received the wrong derived passwords");
     outer_size = outer_size_bytes;
     hidden_size = hidden_size_bytes;
+    std::wstring published(target_path);
+    published.resize(published.size() - std::wstring_view(L".preparing").size());
+    hidden_volume_sizes[published] = hidden_size_bytes;
     hidden_outer_password.assign(outer_password.bytes().begin(),
                                  outer_password.bytes().end());
     hidden_inner_password.assign(hidden_password.bytes().begin(),
@@ -328,6 +351,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "created mount received the wrong fixed options");
     last_mount_password.assign(volume_password.bytes().begin(),
                                volume_password.bytes().end());
+    attached_volume_sizes[options.drive_letter] = volume_size_of(path);
     if (!login_derived_path.empty() && path == login_derived_path &&
         (nothing_opens_it || !derived_from_login(volume_password))) {
       // Exactly what the driver reports for a header that no candidate
@@ -364,9 +388,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   // `nothing_opens_it` alongside it for a file that is not one of ours.
   std::wstring login_derived_path;
   bool nothing_opens_it{};
+  std::map<wchar_t, std::uint64_t> attached_volume_sizes;
+  std::map<std::wstring, std::uint64_t> hidden_volume_sizes;
   std::vector<std::wstring> hidden_target_paths;
 
  private:
+  [[nodiscard]] std::uint64_t volume_size_of(
+      const std::wstring_view path) const {
+    if (path == L"C:\\vault\\a.hc") return container_a_size_bytes;
+    const auto hidden = hidden_volume_sizes.find(std::wstring(path));
+    if (hidden != hidden_volume_sizes.end()) return hidden->second;
+    return other_size_bytes;
+  }
+
   [[nodiscard]] static bool derived_from_login(
       const SecureBuffer& volume_password) noexcept {
     constexpr std::string_view prefix = "derived-b-";
@@ -1079,6 +1113,44 @@ void test_hidden_containers_are_unlimited_and_share_one_derivation() {
       "the same path was accepted twice");
 }
 
+void test_capacity_reports_the_attached_volume_not_the_file() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  // A container holding a hidden volume is larger than the volume the user
+  // actually gets, so the file size would misreport it by 32 MiB here.
+  const std::uint32_t hidden = session.create_container_b(
+      L"D:\\two-layer.hc", 128ULL * 1024ULL * 1024ULL,
+      96ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
+  static_cast<void>(session.create_container(L"D:\\plain.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+
+  std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2 &&
+              statuses[0].size_bytes == 96ULL * 1024ULL * 1024ULL &&
+              statuses[1].size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "capacity did not follow the volume the driver attached");
+
+  session.unmount_container(hidden);
+  const wchar_t standard_drive = statuses[1].drive_letter;
+  statuses = session.container_statuses();
+  require(statuses.size() == 2 && !statuses[0].mounted &&
+              statuses[0].size_bytes == 0 &&
+              statuses[0].drive_letter == wchar_t{} &&
+              statuses[1].size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "an unmounted container still reported a capacity");
+
+  // A container this session believes is mounted, on a drive the driver has
+  // nothing on, is an inconsistency rather than a container without a size.
+  runtime.attached_volume_sizes.erase(standard_drive);
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(session.container_statuses()); },
+      "a mounted container without a volume was reported as usable");
+}
+
 void test_container_a_status_projects_live_file_and_mount_facts() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -1234,10 +1306,12 @@ void test_unmounted_container_can_be_mounted_again() {
   session.unmount_container(id);
   require(!session.mounted(), "unmounting one container left the session active");
   std::vector<ContainerStatus> statuses = session.container_statuses();
+  // Capacity describes the attached volume, so an unmounted container reports
+  // none of it - exactly as it reports no drive letter.
   require(statuses.size() == 1 && !statuses[0].mounted &&
               statuses[0].drive_letter == wchar_t{} &&
-              statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL,
-          "an unmounted container was not retained as present");
+              statuses[0].size_bytes == 0,
+          "an unmounted container was not retained without a capacity");
 
   const std::uint32_t again = session.mount_container(L"C:\\vault\\second.hc");
   require(again == id, "remounting did not reuse the adopted identifier");
@@ -1492,6 +1566,7 @@ int main() {
     test_container_b_creation_rejects_unusable_input();
     test_container_b_creation_cleans_a_failed_format();
     test_hidden_containers_are_unlimited_and_share_one_derivation();
+    test_capacity_reports_the_attached_volume_not_the_file();
     test_container_a_status_projects_live_file_and_mount_facts();
     test_manual_policy_authenticates_without_mounting();
     test_manual_policy_still_serializes_and_allows_creation();

@@ -163,7 +163,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
           {.id = entry.id,
            .name = entry.name,
            .mounted = entry.mounted,
-           .size_bytes = entry.size_bytes,
+           .size_bytes = entry.mounted ? entry.size_bytes : 0,
            .drive_letter = entry.mounted ? entry.drive_letter
                                          : inconsistent_unmounted_drive});
     }
@@ -659,8 +659,8 @@ void test_container_collection_is_projected_only_when_authenticated() {
   statuses = fixture.controller.container_statuses();
   require(statuses.size() == 1 && !statuses[0].mounted &&
               statuses[0].drive_letter == wchar_t{} &&
-              statuses[0].size_mib == 64,
-          "an unmounted container was dropped or kept a drive letter");
+              statuses[0].size_mib == 0,
+          "an unmounted container kept a drive letter or a capacity");
 }
 
 void test_container_creation_is_bounded_and_cancellable() {
@@ -896,6 +896,28 @@ void test_container_b_rejects_unusable_requests() {
           "the second hidden-volume container was not adopted separately");
 }
 
+void test_capacity_rounds_the_attached_volume_to_whole_mib() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  require(fixture.controller.create_container(64), "creation was refused");
+
+  // A real volume is never an exact MiB multiple: the header group alone costs
+  // 128 KiB. The page shows the nearest MiB rather than refusing the value and
+  // leaving the field empty.
+  fixture.volume.containers[0].size_bytes =
+      64ULL * 1024ULL * 1024ULL - 131072ULL;
+  require(fixture.controller.container_statuses()[0].size_mib == 64,
+          "an inexact volume capacity was not rounded for display");
+
+  // Past the creation range it is still reported as unavailable.
+  fixture.volume.containers[0].size_bytes =
+      (static_cast<std::uint64_t>(kContainerCreationMaximumMib) + 2ULL) *
+      1024ULL * 1024ULL;
+  require(fixture.controller.container_statuses()[0].size_mib == 0,
+          "a capacity outside the creation range was displayed anyway");
+}
+
 void test_card_reset_releases_the_session_and_refuses_while_mounted() {
   Fixture unauthenticated;
   require(!unauthenticated.controller.can_reset_card_record(),
@@ -1070,6 +1092,7 @@ int main() {
     test_adopted_container_remounts_without_reselecting_its_file();
     test_container_b_commits_the_card_before_the_volume();
     test_container_b_rejects_unusable_requests();
+    test_capacity_rounds_the_attached_volume_to_whole_mib();
     test_card_reset_releases_the_session_and_refuses_while_mounted();
     test_inconsistent_container_status_fails_closed();
     test_operation_history_is_authenticated_sanitized_and_clearable();

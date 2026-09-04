@@ -586,11 +586,15 @@
     const facts = document.createElement("div");
     facts.className = "container-facts";
     facts.append(
+      // Capacity is the attached volume's, not the container file's: a
+      // container holding a hidden volume is larger than the volume the user
+      // actually gets. An unmounted container has no volume, so it reads the
+      // same as its drive letter does.
       containerFact(
         "容量",
-        container.sizeMib > 0
+        container.mounted && container.sizeMib > 0
           ? `${container.sizeMib.toLocaleString("zh-CN")} MiB`
-          : "不可用"),
+          : "—"),
       containerFact("盘符", container.mounted ? container.drive : "—"));
 
     const actions = document.createElement("div");

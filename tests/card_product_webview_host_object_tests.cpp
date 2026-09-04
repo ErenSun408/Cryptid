@@ -160,7 +160,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
       result.push_back({.id = entry.id,
                         .name = entry.name,
                         .mounted = entry.mounted,
-                        .size_bytes = entry.size_bytes,
+                        .size_bytes = entry.mounted ? entry.size_bytes : 0,
                         .drive_letter =
                             entry.mounted ? entry.drive_letter : wchar_t{}});
     }
