@@ -102,16 +102,18 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   std::uint32_t create_container_b(
+      const std::wstring_view path,
       const std::uint64_t outer_size_bytes,
       const std::uint64_t hidden_size_bytes,
       const SecureBuffer& decoy_password_utf8) override {
     ++create_b_calls;
+    created_b_path.assign(path);
     created_outer_bytes = outer_size_bytes;
     created_hidden_bytes = hidden_size_bytes;
     b_decoy_password.assign(decoy_password_utf8.bytes().begin(),
                             decoy_password_utf8.bytes().end());
     if (reject_create_b) throw std::runtime_error("container B failed");
-    return adopt(L"C:/vault/b.hc", outer_size_bytes);
+    return adopt(path, outer_size_bytes);
   }
 
   std::uint32_t mount_container(const std::wstring_view path) override {
@@ -271,6 +273,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool reject_create{};
   bool reject_create_b{};
   bool reject_mount{};
+  std::wstring created_b_path;
   std::uint64_t created_outer_bytes{};
   std::uint64_t created_hidden_bytes{};
   SecureBuffer copy_session_password() override {
@@ -730,14 +733,21 @@ void test_adopted_container_remounts_without_reselecting_its_file() {
 void test_container_b_commits_the_card_before_the_volume() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:\\Vault\\handover.hc";
   auto second = bytes("second-password-value");
   auto confirmation = bytes("second-password-value");
 
-  fixture.controller.create_container_b(64, 16, second, confirmation);
+  require(fixture.controller.create_container_b(64, 16, second, confirmation),
+          "container B creation was refused");
 
   require(fixture.entry.second_password_calls == 1 &&
               fixture.volume.create_b_calls == 1,
           "container B did not run both halves exactly once");
+  // The location comes from the same native chooser a standard container
+  // uses, so the page supplies no path here either.
+  require(fixture.chooser.new_calls == 1 &&
+              fixture.volume.created_b_path == L"D:\\Vault\\handover.hc",
+          "container B was not created at the chosen location");
   // The password that rewraps the card record comes from the session, not
   // from the page: the page never sent one.
   require(fixture.volume.session_password_calls == 1 &&
@@ -768,25 +778,41 @@ void test_container_b_commits_the_card_before_the_volume() {
   auto released_confirmation = bytes("second-password-value");
   require_throws<std::system_error>(
       [&] {
-        released.controller.create_container_b(64, 16, released_second,
-                                               released_confirmation);
+        static_cast<void>(released.controller.create_container_b(
+            64, 16, released_second, released_confirmation));
       },
       "a session without its login input still created container B");
   require(released.entry.second_password_calls == 0 &&
-              released.volume.create_b_calls == 0,
-          "a released session still reached the card or the volume");
+              released.volume.create_b_calls == 0 &&
+              released.chooser.new_calls == 0,
+          "a released session still reached the chooser, card or volume");
+
+  // Cancelling the chooser leaves the card untouched: the record is rewritten
+  // only once the location is settled.
+  Fixture cancelled;
+  cancelled.authentication.establish(root_secret());
+  auto cancelled_second = bytes("second-password-value");
+  auto cancelled_confirmation = bytes("second-password-value");
+  require(!cancelled.controller.create_container_b(64, 16, cancelled_second,
+                                                   cancelled_confirmation),
+          "a cancelled selection was reported as a creation");
+  require(cancelled.chooser.new_calls == 1 &&
+              cancelled.entry.second_password_calls == 0 &&
+              cancelled.volume.create_b_calls == 0,
+          "a cancelled selection still rewrote the card or created a volume");
 
   // A failed card record must stop before the volume exists, because a
   // container nobody can open with the second password blocks every retry.
   Fixture blocked;
   blocked.authentication.establish(root_secret());
+  blocked.chooser.new_path = L"D:\\Vault\\handover.hc";
   blocked.entry.reject_second_password = true;
   auto blocked_second = bytes("second-password-value");
   auto blocked_confirmation = bytes("second-password-value");
   require_throws<std::runtime_error>(
       [&] {
-        blocked.controller.create_container_b(64, 16, blocked_second,
-                                              blocked_confirmation);
+        static_cast<void>(blocked.controller.create_container_b(
+            64, 16, blocked_second, blocked_confirmation));
       },
       "a failed card record update was not reported");
   require(blocked.volume.create_b_calls == 0,
@@ -800,7 +826,8 @@ void test_container_b_rejects_unusable_requests() {
   auto confirmation = bytes("second-password-value");
   require_throws<std::system_error>(
       [&] {
-        fixture.controller.create_container_b(64, 16, second, confirmation);
+        static_cast<void>(fixture.controller.create_container_b(
+            64, 16, second, confirmation));
       },
       "an unauthenticated route created container B");
 
@@ -818,8 +845,8 @@ void test_container_b_rejects_unusable_requests() {
     auto sized_confirmation = bytes("second-password-value");
     require_throws<std::invalid_argument>(
         [&] {
-          fixture.controller.create_container_b(outer, hidden, sized_second,
-                                                sized_confirmation);
+          static_cast<void>(fixture.controller.create_container_b(
+              outer, hidden, sized_second, sized_confirmation));
         },
         "container B accepted an unusable size pair");
   }
@@ -828,27 +855,45 @@ void test_container_b_rejects_unusable_requests() {
   auto other = bytes("different-password-val");
   require_throws<usb_vault::security::PasswordConfirmationRejected>(
       [&] {
-        fixture.controller.create_container_b(64, 16, mismatched, other);
+        static_cast<void>(fixture.controller.create_container_b(
+            64, 16, mismatched, other));
       },
       "container B accepted two different second passwords");
   require(fixture.entry.second_password_calls == 0 &&
-              fixture.volume.create_b_calls == 0,
+              fixture.volume.create_b_calls == 0 &&
+              fixture.chooser.new_calls == 0,
           "a rejected container B request still reached the card or volume");
 
   auto shared = bytes("second-password-value");
   require_throws<std::invalid_argument>(
       [&] {
-        fixture.controller.create_container_b(64, 16, shared, shared);
+        static_cast<void>(fixture.controller.create_container_b(
+            64, 16, shared, shared));
       },
       "container B accepted overlapping input buffers");
 
   // The largest inner volume the rule does allow still goes through.
+  fixture.chooser.new_path = L"D:\\Vault\\handover.hc";
   auto allowed_second = bytes("second-password-value");
   auto allowed_confirmation = bytes("second-password-value");
-  fixture.controller.create_container_b(64, 48, allowed_second,
-                                        allowed_confirmation);
+  require(fixture.controller.create_container_b(64, 48, allowed_second,
+                                                allowed_confirmation),
+          "the three-quarter boundary refused the shape it must allow");
   require(fixture.volume.created_hidden_bytes == 48ULL * 1024ULL * 1024ULL,
           "the three-quarter boundary refused the size it must allow");
+
+  // Nothing caps how many of them exist: a second location goes through the
+  // same unconditional flow.
+  fixture.chooser.new_path = L"E:\\Vault\\spare.hc";
+  auto again_second = bytes("second-password-value");
+  auto again_confirmation = bytes("second-password-value");
+  require(fixture.controller.create_container_b(40, 20, again_second,
+                                                again_confirmation),
+          "a second hidden-volume container was refused");
+  require(fixture.volume.create_b_calls == 2 &&
+              fixture.volume.created_b_path == L"E:\\Vault\\spare.hc" &&
+              fixture.controller.container_statuses().size() == 2,
+          "the second hidden-volume container was not adopted separately");
 }
 
 void test_card_reset_releases_the_session_and_refuses_while_mounted() {

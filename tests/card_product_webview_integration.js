@@ -356,8 +356,9 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
 
-  // The hidden container commits the card record and the volume through one
-  // five-argument bridge call; the fakes verify every position.
+  // The hidden container picks its own location, commits the card record and
+  // creates the volume through one four-argument bridge call; the fakes
+  // verify every position and the chosen path.
   const typeInto = (input, value) => {
     input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -419,8 +420,8 @@ chrome.webview.postMessage("driver-loaded");
   historyNavigation.click();
   const recordedRows = historyRows();
   const expectedOperations = [
-    ["挂载容器", "hidden.hc → E:", "成功"],
-    ["创建容器", "hidden.hc", "成功"],
+    ["挂载容器", "handover.hc → E:", "成功"],
+    ["创建容器", "handover.hc", "成功"],
     ["挂载容器", "integration.hc → D:", "成功"],
     ["创建容器", "integration.hc", "成功"],
     ["创建容器", "integration.hc", "失败"],

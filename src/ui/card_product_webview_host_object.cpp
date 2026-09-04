@@ -297,7 +297,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCreateContainerMibId:
         return invoke_create_container(parameters, result, argument_error);
       case kCreateContainerBMibId:
-        return invoke_create_container_b(parameters, argument_error);
+        return invoke_create_container_b(parameters, result, argument_error);
       case kMountContainerId:
         return invoke_mount_container(parameters, result);
       case kMountAdoptedContainerId:
@@ -436,11 +436,13 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   // Four arguments: outer capacity, hidden capacity, and the new second
   // password twice. The password the session was opened under is no longer
-  // one of them: the session still holds it, so it never returns to the page.
-  // COM delivers them in reverse order, and every supplied array is wiped on
-  // every path.
+  // one of them: the session still holds it, so it never returns to the page,
+  // and neither is the location: the native chooser owns it exactly as it does
+  // for a standard container. COM delivers the arguments in reverse order, and
+  // every supplied array is wiped on every path.
   HRESULT invoke_create_container_b(
-      DISPPARAMS* const parameters, UINT* const argument_error) noexcept {
+      DISPPARAMS* const parameters, VARIANT* const result,
+      UINT* const argument_error) noexcept {
     if (parameters == nullptr || parameters->cArgs != 4 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       wipe_available_arguments(parameters, 4);
@@ -476,9 +478,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     try {
-      controller_.create_container_b(outer_size_mib, hidden_size_mib,
-                                     second.bytes(), confirmation.bytes());
-      return S_OK;
+      return complete_selection(
+          controller_.create_container_b(outer_size_mib, hidden_size_mib,
+                                         second.bytes(), confirmation.bytes()),
+          result);
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;

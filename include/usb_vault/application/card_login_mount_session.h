@@ -119,14 +119,18 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual std::uint32_t create_container(std::wstring_view path,
                                          std::uint64_t size_bytes) = 0;
 
-  // Creates the single outer+hidden container at the fixed layout path and
-  // mounts its hidden volume. The outer volume opens with the decoy password
-  // supplied here; the hidden volume opens with the password this session was
-  // opened under, which the session still holds and the caller no longer has
-  // to produce. Only one such container exists, which keeps the card record
-  // out of this operation.
+  // Creates an independent outer+hidden container at the caller-selected
+  // path, publishes it without replacement, and mounts its hidden volume on a
+  // freshly allocated drive letter. The outer volume opens with the decoy
+  // password supplied here; the hidden volume opens with the password this
+  // session was opened under, which the session still holds and the caller no
+  // longer has to produce. Any number of them may exist, and every one of them
+  // shares that single pair of passwords: the card record carries exactly two
+  // envelopes, so a decoy password per container would leak how many there
+  // are.
   virtual std::uint32_t create_container_b(
-      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      std::wstring_view path, std::uint64_t outer_size_bytes,
+      std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8) = 0;
 
   // Returns a copy of the password this session was opened under. It exists
@@ -137,15 +141,18 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // unauthenticated session returns an empty buffer.
   [[nodiscard]] virtual security::SecureBuffer copy_session_password() = 0;
 
-  // Adopts and mounts an existing standard container at the caller-selected
-  // path. The session refuses a path it has already adopted.
+  // Adopts and mounts an existing container at the caller-selected path. The
+  // standard derivation is attempted first and the login-input derivation
+  // second, so both container classes are reached through one entry point and
+  // the caller never states which class it picked. The session refuses a path
+  // it already has mounted.
   virtual std::uint32_t mount_container(std::wstring_view path) = 0;
 
   // Mounts a container this session already adopted, without asking the user
-  // for anything. Standard containers derive from the card alone; the
-  // hidden-volume container uses the volume password derived once from the
-  // login input, so which of its two volumes appears still follows the
-  // password the session was opened with.
+  // for anything. Standard containers derive from the card alone;
+  // hidden-volume containers all share the one volume password derived from
+  // the login input, so which of a container's two volumes appears still
+  // follows the password the session was opened with.
   virtual void mount_adopted_container(std::uint32_t id) = 0;
 
   // Unmounts one adopted container. The container stays adopted and unmounted
@@ -203,7 +210,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes) override;
   std::uint32_t create_container_b(
-      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      std::wstring_view path, std::uint64_t outer_size_bytes,
+      std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8) override;
   [[nodiscard]] security::SecureBuffer copy_session_password() override;
   std::uint32_t mount_container(std::wstring_view path) override;

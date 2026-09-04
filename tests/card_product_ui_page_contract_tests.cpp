@@ -456,10 +456,21 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
               script.find("containerBAcknowledge.checked") !=
                   std::string::npos,
           "the card record rewrite is committed without an acknowledgement");
-  require(script.find("await bridge.createContainerBMib(sizes.outer, "
-                      "sizes.hidden,\n                                         "
-                      "secondBytes, confirmationBytes);") != std::string::npos,
+  // Four arguments and no more: the two capacities and the new password
+  // twice. The login input is not among them, and neither is a path.
+  require(script.find("created = await bridge.createContainerBMib("
+                      "sizes.outer, sizes.hidden,") != std::string::npos &&
+              count_occurrences(script, "bridge.createContainerBMib(") ==
+                  1 &&
+              script.find("secondBytes,") != std::string::npos &&
+              script.find("confirmationBytes);") != std::string::npos,
           "the page does not create the hidden container through the bridge");
+  // The location is chosen natively here exactly as it is for a standard
+  // container, so a cancelled dialog is an ordinary outcome on this flow too
+  // and the page still holds no path of its own.
+  require(script.find("if (created === false) {") != std::string::npos &&
+              script.find("重试前需要重新输入诱饵密码") != std::string::npos,
+          "the hidden container flow does not report a cancelled selection");
   // 8.7.3: entering it twice is the only permitted check. The page must not
   // claim the second password is right or wrong.
   require(script.find("containerBSecond.value === "

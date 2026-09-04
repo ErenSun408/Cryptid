@@ -112,14 +112,16 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   std::uint32_t create_container_b(
+      const std::wstring_view path,
       const std::uint64_t outer_size_bytes,
       const std::uint64_t hidden_size_bytes,
       const SecureBuffer& decoy_password_utf8) override {
     ++create_b_calls;
+    created_b_path.assign(path);
     created_b_outer_bytes = outer_size_bytes;
     created_b_hidden_bytes = hidden_size_bytes;
     b_decoy_matched = equals(decoy_password_utf8.bytes(), kSecondPassword);
-    const std::uint32_t id = adopt(L"C:/vault/hidden.hc", outer_size_bytes);
+    const std::uint32_t id = adopt(path, outer_size_bytes);
     const Adopted& entry = containers.back();
     record(OperationKind::container_created,
            OperationOutcome::succeeded,
@@ -143,6 +145,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return copy;
   }
 
+  std::wstring created_b_path;
   std::uint64_t created_b_outer_bytes{};
   std::uint64_t created_b_hidden_bytes{};
   bool b_decoy_matched{};
@@ -403,10 +406,13 @@ class FakeEntry final : public ICardEntryActions {
 class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
  public:
   // The second selection is cancelled so the page has to prove it treats a
-  // cancelled dialog as an ordinary outcome rather than a failure.
+  // cancelled dialog as an ordinary outcome rather than a failure. The fourth
+  // is the hidden-volume container, which picks its own location exactly as a
+  // standard one does.
   [[nodiscard]] std::wstring choose_new_container() override {
     ++new_calls;
-    return new_calls == 2 ? std::wstring{} : new_path;
+    if (new_calls == 2) return {};
+    return new_calls >= 4 ? hidden_path : new_path;
   }
 
   [[nodiscard]] std::wstring choose_existing_container() override {
@@ -415,6 +421,7 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
   }
 
   std::wstring new_path{L"D:/Vault/integration.hc"};
+  std::wstring hidden_path{L"E:/Vault/handover.hc"};
   std::wstring existing_path;
   int new_calls{};
   int existing_calls{};
@@ -479,7 +486,8 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.session_password_calls == 1 && g_volume.b_decoy_matched &&
          g_volume.created_b_outer_bytes == 128ULL * 1024ULL * 1024ULL &&
          g_volume.created_b_hidden_bytes == 96ULL * 1024ULL * 1024ULL &&
-         g_volume.create_calls == 2 && g_file_chooser.new_calls == 3 &&
+         g_volume.created_b_path == L"E:/Vault/handover.hc" &&
+         g_volume.create_calls == 2 && g_file_chooser.new_calls == 4 &&
          g_volume.containers.size() == 2 &&
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&

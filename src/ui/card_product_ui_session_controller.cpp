@@ -176,7 +176,7 @@ bool CardProductUiSessionController::create_container(
   return true;
 }
 
-void CardProductUiSessionController::create_container_b(
+bool CardProductUiSessionController::create_container_b(
     const std::uint32_t outer_size_mib, const std::uint32_t hidden_size_mib,
     const std::span<std::byte> mutable_second_password_utf8,
     const std::span<std::byte> mutable_second_confirmation_utf8) {
@@ -215,13 +215,20 @@ void CardProductUiSessionController::create_container_b(
           .take();
   SecureBufferGuard second_guard(second);
 
-  // The card record is committed first. A volume that exists but cannot be
+  // Both inputs are settled before the chooser opens, so a cancelled
+  // selection leaves the card untouched and nothing typed here outlives the
+  // call.
+  const std::wstring path = file_chooser_.choose_new_container();
+  if (path.empty()) return false;
+
+  // The card record is committed next. A volume that exists but cannot be
   // opened with the second password would block every retry, while a second
   // password that opens nothing yet is harmless and can be set again.
   entry_.set_second_card_password(duplicate(login), duplicate(second));
   static_cast<void>(volume_session_.create_container_b(
-      static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib,
+      path, static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib,
       static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second));
+  return true;
 }
 
 bool CardProductUiSessionController::mount_container() {

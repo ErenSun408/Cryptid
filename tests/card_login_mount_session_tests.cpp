@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -263,8 +264,9 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       const SecureBuffer& outer_password,
       const SecureBuffer& hidden_password) override {
     events.emplace_back("create:hidden");
-    require(target_path == L"C:\\vault\\b.hc.preparing",
-            "hidden creation did not use the container B staging path");
+    require(target_path.ends_with(L".preparing"),
+            "hidden creation did not use a staging path");
+    hidden_target_paths.emplace_back(target_path);
     require(outer_size_bytes != 0 && outer_size_bytes % 512ULL == 0 &&
                 hidden_size_bytes % 512ULL == 0 &&
                 hidden_size_bytes < outer_size_bytes,
@@ -326,6 +328,16 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "created mount received the wrong fixed options");
     last_mount_password.assign(volume_password.bytes().begin(),
                                volume_password.bytes().end());
+    if (!login_derived_path.empty() && path == login_derived_path &&
+        (nothing_opens_it || !derived_from_login(volume_password))) {
+      // Exactly what the driver reports for a header that no candidate
+      // password unlocks, which is the only signal the session gets before it
+      // tries the other derivation.
+      throw std::system_error(
+          usb_vault::volume::make_error_code(
+              usb_vault::volume::DriverError::authentication_failed),
+          "wrong password");
+    }
     if (fail_created_mount) throw std::runtime_error("mount created failed");
     return {};
   }
@@ -347,6 +359,26 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   }
 
   wchar_t allocated_drive_letter{L'X'};
+  // A container whose volumes were built from the login input. Only the B
+  // derivation opens it, exactly as on a real hidden-volume container. Set
+  // `nothing_opens_it` alongside it for a file that is not one of ours.
+  std::wstring login_derived_path;
+  bool nothing_opens_it{};
+  std::vector<std::wstring> hidden_target_paths;
+
+ private:
+  [[nodiscard]] static bool derived_from_login(
+      const SecureBuffer& volume_password) noexcept {
+    constexpr std::string_view prefix = "derived-b-";
+    if (volume_password.size() < prefix.size()) return false;
+    for (std::size_t index = 0; index < prefix.size(); ++index) {
+      if (volume_password.bytes()[index] !=
+          static_cast<std::byte>(prefix[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
 };
 
 template <typename Exception, typename Action>
@@ -685,7 +717,7 @@ void test_container_a_notify_failure_retains_mount_state() {
   return runtime;
 }
 
-void test_manual_login_captures_the_hidden_volume_password_only() {
+void test_manual_login_adopts_without_deriving_anything() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime = runtime_with_both_containers();
   CardLoginMountSessionCore session(authentication, runtime, layout(),
@@ -694,9 +726,10 @@ void test_manual_login_captures_the_hidden_volume_password_only() {
   session.consume_authenticated_login(root_secret(),
                                       bytes("login-password"));
 
-  // One derivation, for the container whose password cannot be recovered
-  // later; the standard container needs no login input at all.
-  require_events(runtime, {"exists:final-other", "derive:B", "exists:final"});
+  // Containers with a hidden volume live wherever the user put them, so login
+  // cannot tell whether one exists and must not pay for a derivation that may
+  // open nothing. Both derivations wait for the mount that needs them.
+  require_events(runtime, {"exists:final-other", "exists:final"});
   require(!session.mounted(), "manual login mounted a container");
   const std::vector<ContainerStatus> statuses = session.container_statuses();
   require(statuses.size() == 2 && statuses[0].name == L"b.hc" &&
@@ -721,7 +754,7 @@ void test_adopted_containers_mount_without_further_input() {
   require(runtime.last_mount_password ==
               bytes_vector("derived-b-login-password...."),
           "the hidden container was not opened with the captured password");
-  require_events(runtime, {"exists:final-other", "allocate",
+  require_events(runtime, {"exists:final-other", "derive:B", "allocate",
                            "mount-created:other", "notify:A"});
 
   runtime.events.clear();
@@ -822,20 +855,66 @@ void test_login_adopts_every_mounted_container() {
   require(!session.mounted(), "unmount left an active volume behind");
 }
 
-void test_standard_mount_refuses_the_hidden_container_path() {
+void test_import_falls_back_to_the_login_derivation() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  runtime.other_existing.emplace_back(L"D:\\kept.hc");
+  runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  runtime.login_derived_path = L"D:\\kept.hc";
   CardLoginMountSessionCore session(authentication, runtime, layout(),
                                     LoginMountPolicy::manual);
-  authentication.establish(root_secret());
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+  runtime.events.clear();
 
-  require_throws<std::invalid_argument>(
+  // The user picks a file, never a container class, and the page offers no
+  // such choice either. The standard derivation goes first and the login
+  // derivation second, so both classes are reached through one entry point.
+  const std::uint32_t id = session.mount_container(L"D:\\kept.hc");
+  require_events(runtime,
+                 {"exists:final-other", "derive:A", "allocate",
+                  "mount-created:other", "derive:B", "mount-created:other",
+                  "notify:A"});
+  require(runtime.last_mount_password ==
+              bytes_vector("derived-b-login-password...."),
+          "the imported container was opened with the wrong derivation");
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].id == id && statuses[0].mounted &&
+              statuses[0].name == L"kept.hc",
+          "the imported container was not adopted as mounted");
+
+  // Adoption recorded which derivation opened it, so a later mount in this
+  // session no longer probes the standard one.
+  runtime.events.clear();
+  session.unmount_container(id);
+  session.mount_adopted_container(id);
+  require_events(runtime, {"unmount:other", "exists:final-other", "allocate",
+                           "mount-created:other", "notify:A"});
+}
+
+void test_import_reports_a_file_no_derivation_opens() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.other_existing.emplace_back(L"D:\\foreign.hc");
+  runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  // Neither derivation opens it, so the second failure is the one reported.
+  runtime.login_derived_path = L"D:\\foreign.hc";
+  runtime.nothing_opens_it = true;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(),
+                                      bytes("login-password"));
+  runtime.events.clear();
+
+  require_throws<std::system_error>(
       [&] {
-        static_cast<void>(session.mount_container(L"C:\\vault\\b.hc"));
+        static_cast<void>(session.mount_container(L"D:\\foreign.hc"));
       },
-      "the standard derivation was tried against the hidden container");
-  require(runtime.events.empty(),
-          "a refused mount still reached the runtime");
+      "a file no derivation opens was reported as mounted");
+  require(session.container_statuses().empty(),
+          "a failed import still adopted the file");
 }
 
 void test_container_b_creation_derives_both_volume_passwords() {
@@ -849,8 +928,8 @@ void test_container_b_creation_derives_both_volume_passwords() {
   runtime.events.clear();
 
   const std::uint32_t id = session.create_container_b(
-      64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-      bytes("decoy-password"));
+      L"C:\\vault\\b.hc", 64ULL * 1024ULL * 1024ULL,
+      16ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
 
   require(id != 0, "container B creation returned no identifier");
   require(runtime.outer_size == 64ULL * 1024ULL * 1024ULL &&
@@ -885,8 +964,8 @@ void test_container_b_creation_rejects_unusable_input() {
   require_throws<std::logic_error>(
       [&] {
         static_cast<void>(session.create_container_b(
-            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-            bytes("decoy-password")));
+            L"C:\\vault\\b.hc", 64ULL * 1024ULL * 1024ULL,
+            16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
       },
       "unauthenticated container B creation was accepted");
 
@@ -901,8 +980,8 @@ void test_container_b_creation_rejects_unusable_input() {
   require_throws<std::logic_error>(
       [&] {
         static_cast<void>(bare->create_container_b(
-            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-            bytes("decoy-password")));
+            L"C:\\vault\\b.hc", 64ULL * 1024ULL * 1024ULL,
+            16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
       },
       "container B was created without the input the session captured");
   require(bare_runtime.events.empty(),
@@ -918,13 +997,15 @@ void test_container_b_creation_rejects_unusable_input() {
     require_throws<std::invalid_argument>(
         [&] {
           static_cast<void>(session.create_container_b(
-              outer, hidden, bytes("decoy-password")));
+              L"C:\\vault\\b.hc", outer, hidden,
+              bytes("decoy-password")));
         },
         "container B accepted an unusable size pair");
   }
   require_throws<std::invalid_argument>(
       [&] {
-        static_cast<void>(session.create_container_b(1024, 512,
+        static_cast<void>(session.create_container_b(L"C:\\vault\\b.hc",
+                                                     1024, 512,
                                                      SecureBuffer()));
       },
       "container B accepted an empty decoy password");
@@ -944,12 +1025,58 @@ void test_container_b_creation_cleans_a_failed_format() {
   require_throws<std::runtime_error>(
       [&] {
         static_cast<void>(session.create_container_b(
-            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
-            bytes("decoy-password")));
+            L"C:\\vault\\b.hc", 64ULL * 1024ULL * 1024ULL,
+            16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
       },
       "a failed container B format was not reported");
   require(session.container_statuses().empty() && !session.mounted(),
           "a failed container B creation left session state behind");
+}
+
+void test_hidden_containers_are_unlimited_and_share_one_derivation() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  const std::uint32_t first = session.create_container_b(
+      L"D:\\one.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  runtime.events.clear();
+  const std::uint32_t second = session.create_container_b(
+      L"E:\\two.hc", 128ULL * 1024ULL * 1024ULL, 32ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+
+  require(first != 0 && second != 0 && first != second,
+          "the two containers did not get distinct identifiers");
+  // Every container of this kind shares one pair of passwords, so the second
+  // creation derives only the decoy side: the login side is still held.
+  require_events(runtime,
+                 {"exists:final-other", "exists:stage-other", "derive:B",
+                  "create:hidden", "publish:other", "allocate",
+                  "mount-created:other", "notify:A"});
+  require(runtime.hidden_target_paths.size() == 2 &&
+              runtime.hidden_target_paths[0] == L"D:\\one.hc.preparing" &&
+              runtime.hidden_target_paths[1] == L"E:\\two.hc.preparing",
+          "the containers were not created at the caller's own paths");
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2 && statuses[0].name == L"one.hc" &&
+              statuses[1].name == L"two.hc" && statuses[0].mounted &&
+              statuses[1].mounted &&
+              statuses[0].drive_letter != statuses[1].drive_letter,
+          "the session did not adopt both containers on distinct drives");
+
+  // A path already adopted is still refused, which is the only count-like
+  // limit left.
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(session.create_container_b(
+            L"D:\\one.hc", 64ULL * 1024ULL * 1024ULL,
+            16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
+      },
+      "the same path was accepted twice");
 }
 
 void test_container_a_status_projects_live_file_and_mount_facts() {
@@ -1354,15 +1481,17 @@ int main() {
     test_container_a_creation_reports_cleanup_failure();
     test_container_a_mount_failure_keeps_published_container();
     test_container_a_notify_failure_retains_mount_state();
-    test_manual_login_captures_the_hidden_volume_password_only();
+    test_manual_login_adopts_without_deriving_anything();
     test_adopted_containers_mount_without_further_input();
     test_forced_release_drops_the_captured_volume_password();
     test_deliberate_release_keeps_the_captured_volume_password();
     test_login_adopts_every_mounted_container();
-    test_standard_mount_refuses_the_hidden_container_path();
+    test_import_falls_back_to_the_login_derivation();
+    test_import_reports_a_file_no_derivation_opens();
     test_container_b_creation_derives_both_volume_passwords();
     test_container_b_creation_rejects_unusable_input();
     test_container_b_creation_cleans_a_failed_format();
+    test_hidden_containers_are_unlimited_and_share_one_derivation();
     test_container_a_status_projects_live_file_and_mount_facts();
     test_manual_policy_authenticates_without_mounting();
     test_manual_policy_still_serializes_and_allows_creation();

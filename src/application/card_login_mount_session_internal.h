@@ -67,21 +67,21 @@ struct SessionContainer final {
   std::wstring name;
   wchar_t drive_letter{};
   bool mounted{};
-  // The container with a hidden volume is released before the standard ones,
-  // which is the only reason the session distinguishes it. Nothing about this
-  // flag crosses the application boundary.
+  // Containers with a hidden volume are released before the standard ones,
+  // which is the only reason the session distinguishes them. Nothing about
+  // this flag crosses the application boundary.
   bool release_first{};
 };
 
 struct CardLoginMountSessionState final {
   std::vector<SessionContainer> containers;
   std::uint32_t next_container_id{1};
-  // Volume password for the hidden-volume container, derived once from the
-  // login input while it still existed. Keeping this instead of the login
-  // password lets the user mount that container later without retyping, while
-  // the retained value opens nothing else: not the card record, not a
-  // standard container, and it cannot be typed at the password prompt.
-  security::SecureBuffer container_b_password;
+  // Volume password shared by every hidden-volume container, derived on first
+  // use from the login input. One derivation opens all of them because they
+  // all share a single salt and a single pair of passwords, and the retained
+  // value opens nothing else: not the card record, not a standard container,
+  // and it cannot be typed at the password prompt.
+  security::SecureBuffer hidden_container_password;
   std::array<OperationEvent, ::usb_vault::application::kOperationHistoryCapacity>
       operation_events;
   std::size_t operation_start{};
@@ -120,7 +120,8 @@ class CardLoginMountSessionCore final {
                                  std::uint64_t size_bytes);
   void mount_adopted_container(std::uint32_t id);
   std::uint32_t create_container_b(
-      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      std::wstring_view path, std::uint64_t outer_size_bytes,
+      std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8);
   [[nodiscard]] security::SecureBuffer copy_session_password();
   std::uint32_t mount_container(std::wstring_view path);
@@ -138,6 +139,11 @@ class CardLoginMountSessionCore final {
 
  private:
   [[nodiscard]] security::SecureBuffer derive_standard_password();
+  // Derives the shared hidden-volume password on first use and keeps it for
+  // the rest of the session. Containers with a hidden volume may live at any
+  // path, so login cannot know whether one exists and must not pay for a
+  // derivation nothing may need.
+  [[nodiscard]] const security::SecureBuffer& hidden_container_password();
   [[nodiscard]] wchar_t reserve_drive_letter();
   void record_operation(::usb_vault::application::OperationKind kind,
                         ::usb_vault::application::OperationOutcome outcome,

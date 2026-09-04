@@ -398,7 +398,7 @@
       ? "新建含隐藏卷的容器"
       : "新建标准容器";
     creationDescription.textContent = hiddenVolume
-      ? "请设置总容量与内层容量，并为这个容器设置一个诱饵密码。"
+      ? "请设置总容量与内层容量，并为这个容器设置一个诱饵密码。接着会让你选择保存位置。"
       : "请设置容器容量。接着会让你选择保存位置。";
   };
 
@@ -1228,7 +1228,8 @@
     let secondBytes = null;
     let confirmationBytes = null;
     busy = true;
-    creationStatus.textContent = "正在写入安全卡并创建容器。";
+    creationStatus.textContent =
+      "请选择保存位置，随后写入安全卡并确认管理员权限。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     try {
@@ -1247,19 +1248,32 @@
         encodedSecond = null;
         encodedConfirmation = null;
       }
+      let created = false;
       try {
-        // The password this session was opened under stays native: the page
-        // never received it back and never sends it anywhere.
-        await bridge.createContainerBMib(sizes.outer, sizes.hidden,
-                                         secondBytes, confirmationBytes);
+        // Neither the password this session was opened under nor the location
+        // reaches the page: the session holds the first and the native chooser
+        // owns the second, exactly as it does for a standard container.
+        created = await bridge.createContainerBMib(sizes.outer, sizes.hidden,
+                                                   secondBytes,
+                                                   confirmationBytes);
       } finally {
         wipe(secondBytes);
         wipe(confirmationBytes);
       }
       await refreshNativeState();
       busy = false;
-      creationCompleted = true;
       render(messageForCurrentState());
+      if (created === false) {
+        // The decoy password was wiped with the rest of the step, so a
+        // cancelled selection returns to an empty form rather than to a
+        // retained secret.
+        creationStatus.textContent =
+          "已取消创建。重试前需要重新输入诱饵密码。";
+        creationStatus.dataset.tone = "";
+        updateCreationAvailability();
+        return;
+      }
+      creationCompleted = true;
       creationDescription.textContent = "容器已经创建并挂载。";
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";

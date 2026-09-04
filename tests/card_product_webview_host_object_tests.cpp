@@ -89,13 +89,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   std::uint32_t create_container_b(
+      const std::wstring_view path,
       const std::uint64_t outer_size_bytes,
       const std::uint64_t hidden_size_bytes,
       const SecureBuffer&) override {
     ++create_b_calls;
+    created_b_path.assign(path);
     created_outer_bytes = outer_size_bytes;
     created_hidden_bytes = hidden_size_bytes;
-    return adopt(L"C:/vault/b.hc", outer_size_bytes);
+    return adopt(path, outer_size_bytes);
   }
 
   SecureBuffer copy_session_password() override {
@@ -107,6 +109,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return copy;
   }
 
+  std::wstring created_b_path;
   std::uint64_t created_outer_bytes{};
   std::uint64_t created_hidden_bytes{};
   int create_b_calls{};
@@ -1002,6 +1005,7 @@ void test_adopted_container_mount_and_unmount_route_through_identifiers() {
 void test_container_b_creation_consumes_four_reversed_arguments() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
+  fixture.chooser.new_path = L"D:/Vault/handover.hc";
   ComPtr<IDispatch> host = make_host(fixture.controller);
   const auto login = bytes("login-password");
   const auto second = bytes("second-password-value");
@@ -1015,11 +1019,19 @@ void test_container_b_creation_consumes_four_reversed_arguments() {
   values[3] = number_argument(64);
   DISPPARAMS parameters{values.data(), nullptr, 4, 0};
 
+  VARIANT created{};
+  ::VariantInit(&created);
   const HRESULT result =
       host->Invoke(member_id(*host.Get(), L"createContainerBMib"), IID_NULL,
-                   LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
+                   LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, &created,
                    nullptr, nullptr);
-  require(result == S_OK, "container B creation was refused");
+  require(result == S_OK && created.vt == VT_BOOL &&
+              created.boolVal == VARIANT_TRUE,
+          "container B creation was refused");
+  static_cast<void>(::VariantClear(&created));
+  require(fixture.chooser.new_calls == 1 &&
+              fixture.volume.created_b_path == L"D:/Vault/handover.hc",
+          "container B was not created at the chosen location");
   require(fixture.entry.second_password_calls == 1 &&
               fixture.entry.existing_password_bytes == login &&
               fixture.entry.second_password_bytes == second,
@@ -1050,6 +1062,39 @@ void test_container_b_creation_consumes_four_reversed_arguments() {
   require(short_call.entry.second_password_calls == 0 &&
               short_call.volume.create_b_calls == 0,
           "a malformed container B call still reached the product");
+
+  // A cancelled chooser is an ordinary outcome and reaches the page as false,
+  // exactly as it does for a standard container.
+  Fixture cancelled;
+  cancelled.authentication.establish(root_secret());
+  ComPtr<IDispatch> cancelled_host = make_host(cancelled.controller);
+  std::array<VARIANTARG, 4> cancelled_values{};
+  initialize_byte_array(cancelled_values[0], second);
+  initialize_byte_array(cancelled_values[1], second);
+  cancelled_values[2] = number_argument(16);
+  cancelled_values[3] = number_argument(64);
+  DISPPARAMS cancelled_parameters{cancelled_values.data(), nullptr, 4, 0};
+  VARIANT cancelled_result{};
+  ::VariantInit(&cancelled_result);
+  require(cancelled_host->Invoke(
+              member_id(*cancelled_host.Get(), L"createContainerBMib"),
+              IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+              &cancelled_parameters, &cancelled_result, nullptr,
+              nullptr) == S_OK &&
+              cancelled_result.vt == VT_BOOL &&
+              cancelled_result.boolVal == VARIANT_FALSE,
+          "a cancelled selection was not reported to the page");
+  static_cast<void>(::VariantClear(&cancelled_result));
+  require(cancelled.entry.second_password_calls == 0 &&
+              cancelled.volume.create_b_calls == 0,
+          "a cancelled selection still rewrote the card or created a volume");
+  for (std::size_t index = 0; index < 2; ++index) {
+    require_array_wiped(cancelled_values[index], second.size(),
+                        "a cancelled container B password array survived");
+  }
+  for (VARIANTARG& value : cancelled_values) {
+    static_cast<void>(::VariantClear(&value));
+  }
 }
 
 void test_container_query_failure_does_not_invent_facts() {
