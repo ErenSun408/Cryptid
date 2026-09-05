@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace usb_vault::ui {
@@ -80,23 +81,35 @@ class CardProductUiSessionController final {
   void submit_initialization(
       std::span<std::byte> mutable_password_utf8,
       std::span<std::byte> mutable_confirmation_utf8);
-  // Creates one standard container of the requested size at a location the
-  // user picks in the native chooser. Returns false when the user cancels;
-  // an out-of-range size or a wrong route throws.
-  bool create_container(std::uint32_t size_mib);
 
-  // Creates one hidden-volume container at a location the user picks in the
-  // native chooser and commits the second card password that opens its outer
-  // volume. Returns false when the user cancels; an out-of-range shape or a
-  // wrong route throws. Any number of these containers may exist and they all
-  // share one password pair, so the prompt is unconditional and asks for it
-  // again every time. The caller supplies only the new password twice; the
-  // password the session was opened under comes from the session itself, so it
-  // is never retyped and never crosses the page. Both buffers are wiped on
-  // every path. The card record is updated after the location is settled and
-  // before the volume is created, so a failed creation leaves a retryable
-  // state instead of a container nobody can open.
-  bool create_container_b(
+  // Opens the native folder picker behind the form's browse button and returns
+  // the directory the user chose, or an empty string when they cancel. It only
+  // fills a field: what comes back is checked on the way in again, exactly as
+  // a typed directory is, so nothing here is trusted for having been picked.
+  [[nodiscard]] std::wstring browse_for_container_directory();
+
+  // Creates one standard container of the requested size, named `name`, inside
+  // `directory`. The two are joined and checked by
+  // `resolve_container_target_path`; a rejected name or location, a directory
+  // that does not exist, an out-of-range size, or a wrong route all throw
+  // `std::invalid_argument`. There is no cancel outcome any more: the user
+  // settles every field before the create button commits.
+  void create_container(std::wstring_view name, std::wstring_view directory,
+                        std::uint32_t size_mib);
+
+  // Creates one hidden-volume container at the same kind of caller-named
+  // location and commits the second card password that opens its outer volume.
+  // An out-of-range shape, a rejected location, or a wrong route throws. Any
+  // number of these containers may exist and they all share one password pair,
+  // so the prompt is unconditional and asks for it again every time. The
+  // caller supplies only the new password twice; the password the session was
+  // opened under comes from the session itself, so it is never retyped and
+  // never crosses the page. Both buffers are wiped on every path. The location
+  // is resolved and checked before either password is consumed, and the card
+  // record is updated after that and before the volume is created, so a failed
+  // creation leaves a retryable state instead of a container nobody can open.
+  void create_container_b(
+      std::wstring_view name, std::wstring_view directory,
       std::uint32_t outer_size_mib, std::uint32_t hidden_size_mib,
       std::span<std::byte> mutable_second_password_utf8,
       std::span<std::byte> mutable_second_confirmation_utf8);

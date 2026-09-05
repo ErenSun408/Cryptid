@@ -79,14 +79,17 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("id=\"confirmation-field\" class=\"field\" hidden") !=
               std::string::npos,
           "confirmation must start hidden outside initialization");
-  require(count_occurrences(page, "autocomplete=\"off\"") == 4 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 4,
-          "every product password control must disable browser assistance");
+  // The two password controls, the two the creation forms add, and the four
+  // name/save-location fields. A remembered container path is exactly what
+  // section 8.4 forbids, so browser assistance is off on those too.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 8 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 8,
+          "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
   require(page.find(
               "<script "
-              "src=\"card_session.js?v=p2-17g-card-reset\"></script>") !=
+              "src=\"card_session.js?v=p2-20-create-form\"></script>") !=
                   std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
@@ -298,9 +301,13 @@ void test_bridge_calls_are_narrow_and_route_specific() {
           "initialization page does not use the independent P2 inputs");
   require(script.find("await bridge.unmount();") != std::string::npos,
           "product page lacks unified cleanup");
-  require(script.find("await bridge.createContainerMib(sizeMib);") !=
+  require(script.find(
+              "await bridge.createContainerMib(name, directory, sizeMib);") !=
               std::string::npos,
-          "authenticated creation does not use the capacity-only bridge");
+          "authenticated creation does not name the container and location");
+  require(script.find("await bridge.chooseContainerDirectory();") !=
+              std::string::npos,
+          "the save-location field has no browse button behind it");
   require(script.find("await bridge.getContainerCount();") !=
                   std::string::npos &&
               script.find("await bridge.getContainerId(index);") !=
@@ -456,21 +463,38 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
               script.find("containerBAcknowledge.checked") !=
                   std::string::npos,
           "the card record rewrite is committed without an acknowledgement");
-  // Four arguments and no more: the two capacities and the new password
-  // twice. The login input is not among them, and neither is a path.
-  require(script.find("created = await bridge.createContainerBMib("
-                      "sizes.outer, sizes.hidden,") != std::string::npos &&
+  // Six arguments and no more: the name, the location, the two capacities and
+  // the new password twice. The login input is still not among them.
+  require(script.find("await bridge.createContainerBMib(name, directory, "
+                      "sizes.outer,") != std::string::npos &&
               count_occurrences(script, "bridge.createContainerBMib(") ==
                   1 &&
               script.find("secondBytes,") != std::string::npos &&
               script.find("confirmationBytes);") != std::string::npos,
           "the page does not create the hidden container through the bridge");
-  // The location is chosen natively here exactly as it is for a standard
-  // container, so a cancelled dialog is an ordinary outcome on this flow too
-  // and the page still holds no path of its own.
-  require(script.find("if (created === false) {") != std::string::npos &&
-              script.find("重试前需要重新输入诱饵密码") != std::string::npos,
-          "the hidden container flow does not report a cancelled selection");
+  // 8.7.2: the location is named on this form exactly as it is on the
+  // standard one, so both carry the same two fields with the same wording.
+  require(count_occurrences(page, "<label for=\"create-container-name\">"
+                                  "名称</label>") == 1 &&
+              count_occurrences(page, "<label for=\"create-container-b-name\">"
+                                      "名称</label>") == 1 &&
+              count_occurrences(page, "路径</label>") == 2 &&
+              count_occurrences(page, "class=\"creation-text\"") == 2 &&
+              count_occurrences(page, "class=\"creation-text mono\"") == 2,
+          "the two creation forms do not ask for the location identically");
+  // Neither parameter step carries a description. The one they used to share
+  // ended on a dialog that no longer opens, and a sentence kept on one shape
+  // only would be exactly the visible difference 8.7.2 forbids.
+  require(script.find("接着会让你选择保存位置") == std::string::npos &&
+              count_occurrences(script, "setCreationDescription(\"\")") == 1,
+          "a creation parameter step still describes a location dialog");
+  // Nothing about a location survives the call that carried it, on either
+  // flow, so a failure asks for the fields again rather than keeping them.
+  require(count_occurrences(script, "containerName.value = \"\";") >= 1 &&
+              count_occurrences(script, "containerBName.value = \"\";") >= 1 &&
+              script.find("重试前需要重新填写名称、路径与诱饵密码") !=
+                  std::string::npos,
+          "the hidden container flow keeps its location after a failure");
   // 8.7.3: entering it twice is the only permitted check. The page must not
   // claim the second password is right or wrong.
   require(script.find("containerBSecond.value === "
@@ -540,14 +564,17 @@ void test_container_creation_form_is_bounded() {
               script.find("creationKind !== \"hidden\"") !=
                   std::string::npos,
           "creation routing does not bind each capacity to its own flow");
-  require(script.find("请选择保存位置，随后确认管理员权限") !=
-              std::string::npos &&
+  // Cancellation is no longer one of the outcomes: the form settles every
+  // field before the create button commits, so the only ways out are success
+  // and failure, and failure says which fields have to be filled in again.
+  require(script.find("正在创建，请确认管理员权限。") != std::string::npos &&
               script.find("创建成功，可以开始使用。") !=
                   std::string::npos &&
-              script.find("已取消创建。") != std::string::npos &&
+              script.find("重试前需要重新填写名称与路径") !=
+                  std::string::npos &&
               script.find("若容器已完成但未挂载，请重新插卡后重试") !=
                   std::string::npos,
-          "creation lacks busy, success, cancellation, or recovery feedback");
+          "creation lacks busy, success, or recovery feedback");
 }
 
 void test_all_password_copies_have_fallback_wipes() {

@@ -2,11 +2,13 @@
 
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/security/confirmed_password.h"
+#include "usb_vault/ui/container_target_path.h"
 #include "usb_vault/ui/password_ingress.h"
 
 #include <Windows.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -98,6 +100,26 @@ class SecureBufferGuard final {
          static_cast<std::uint64_t>(outer_size_mib) * 3ULL;
 }
 
+// The one place a page-supplied string becomes a file system path. The syntax
+// rules live in `resolve_container_target_path`; the one fact that cannot be
+// decided from the string alone is added here, because a save location that
+// does not exist has to be reported as a rejected field and not as the opaque
+// creation failure the volume layer would raise several steps later.
+//
+// The directory is only probed, never created. Creating it would leave exactly
+// the kind of local artifact section 8.4 forbids, on a path the user may have
+// mistyped.
+[[nodiscard]] std::wstring resolve_target_path(
+    const std::wstring_view directory, const std::wstring_view name) {
+  std::wstring path = resolve_container_target_path(directory, name);
+  std::error_code probe;
+  if (!std::filesystem::is_directory(std::filesystem::path(directory),
+                                     probe)) {
+    throw std::invalid_argument("save location is not an existing directory");
+  }
+  return path;
+}
+
 [[nodiscard]] bool inputs_overlap(
     const std::span<const std::byte> first,
     const std::span<const std::byte> second) noexcept {
@@ -160,7 +182,16 @@ void CardProductUiSessionController::submit_initialization(
   entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
 }
 
-bool CardProductUiSessionController::create_container(
+std::wstring CardProductUiSessionController::browse_for_container_directory() {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "container creation is not available in the current UI state");
+  }
+  return file_chooser_.choose_container_directory();
+}
+
+void CardProductUiSessionController::create_container(
+    const std::wstring_view name, const std::wstring_view directory,
     const std::uint32_t size_mib) {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route(
@@ -171,14 +202,13 @@ bool CardProductUiSessionController::create_container(
     throw std::invalid_argument("container size is outside the UI range");
   }
 
-  const std::wstring path = file_chooser_.choose_new_container();
-  if (path.empty()) return false;
+  const std::wstring path = resolve_target_path(directory, name);
   static_cast<void>(volume_session_.create_container(
       path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib));
-  return true;
 }
 
-bool CardProductUiSessionController::create_container_b(
+void CardProductUiSessionController::create_container_b(
+    const std::wstring_view name, const std::wstring_view directory,
     const std::uint32_t outer_size_mib, const std::uint32_t hidden_size_mib,
     const std::span<std::byte> mutable_second_password_utf8,
     const std::span<std::byte> mutable_second_confirmation_utf8) {
@@ -200,6 +230,10 @@ bool CardProductUiSessionController::create_container_b(
     throw std::invalid_argument("container B sizes are outside the UI range");
   }
 
+  // The location is settled before anything is derived or committed, so a
+  // rejected name leaves the card and the second password untouched.
+  const std::wstring path = resolve_target_path(directory, name);
+
   // The page no longer asks for the password the session was opened under:
   // the session still holds it, and which of the two it is stays unknown here
   // exactly as it is there.
@@ -217,12 +251,6 @@ bool CardProductUiSessionController::create_container_b(
           .take();
   SecureBufferGuard second_guard(second);
 
-  // Both inputs are settled before the chooser opens, so a cancelled
-  // selection leaves the card untouched and nothing typed here outlives the
-  // call.
-  const std::wstring path = file_chooser_.choose_new_container();
-  if (path.empty()) return false;
-
   // The card record is committed next. A volume that exists but cannot be
   // opened with the second password would block every retry, while a second
   // password that opens nothing yet is harmless and can be set again.
@@ -230,7 +258,6 @@ bool CardProductUiSessionController::create_container_b(
   static_cast<void>(volume_session_.create_container_b(
       path, static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib,
       static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second));
-  return true;
 }
 
 bool CardProductUiSessionController::mount_container() {

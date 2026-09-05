@@ -105,6 +105,13 @@
               data-create-kind="hidden">含隐藏卷的容器</button>
     </div>
     <div id="create-container-form" hidden>
+      <label for="create-container-name">名称</label>
+      <input id="create-container-name" type="text" maxlength="96">
+      <p id="create-container-name-error" hidden></p>
+      <label for="create-container-directory">路径</label>
+      <input id="create-container-directory" type="text">
+      <button id="create-container-browse" type="button">浏览</button>
+      <p id="create-container-directory-error" hidden></p>
       <label for="create-container-capacity">容量</label>
       <input id="create-container-capacity" type="number" min="20"
              max="1048576" step="1" value="64">
@@ -124,8 +131,14 @@
       </div>
       <p id="create-container-error" hidden></p>
     </div>
-    <div id="create-volume-workflow" hidden></div>
     <div id="create-container-b-form" hidden>
+      <label for="create-container-b-name">名称</label>
+      <input id="create-container-b-name" type="text" maxlength="96">
+      <p id="create-container-b-name-error" hidden></p>
+      <label for="create-container-b-directory">路径</label>
+      <input id="create-container-b-directory" type="text">
+      <button id="create-container-b-browse" type="button">浏览</button>
+      <p id="create-container-b-directory-error" hidden></p>
       <input id="create-container-b-capacity" type="number" min="20"
              max="1048576" step="1" value="128">
       <div>

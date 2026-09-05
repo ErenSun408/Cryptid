@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cwchar>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -91,6 +92,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container(const std::wstring_view path,
                                  const std::uint64_t size_bytes) override {
     ++create_calls;
+    created_path.assign(path);
     created_size_bytes = size_bytes;
     if (fail_next_create) {
       fail_next_create = false;
@@ -145,6 +147,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return copy;
   }
 
+  std::wstring created_path;
   std::wstring created_b_path;
   std::uint64_t created_b_outer_bytes{};
   std::uint64_t created_b_hidden_bytes{};
@@ -400,19 +403,48 @@ class FakeEntry final : public ICardEntryActions {
   int credential_rejections{};
 };
 
-// The fixture drives the page, never a real dialog: the chooser hands back
-// whatever path the current scenario expects, or an empty string to stand for
-// a user who cancelled.
+// Creation names its own location now, so the only dialog left on that flow is
+// the browse button behind the save-location field. The boundary checks that
+// the directory exists, so this hands back a real one the run owns and cleans
+// up; the page types the container name itself.
+class ScopedDirectory final {
+ public:
+  ScopedDirectory()
+      : path_(std::filesystem::temp_directory_path() /
+              L"usb-vault-webview-integration") {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+    std::filesystem::create_directories(path_);
+  }
+
+  ~ScopedDirectory() noexcept {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  ScopedDirectory(const ScopedDirectory&) = delete;
+  ScopedDirectory& operator=(const ScopedDirectory&) = delete;
+
+  [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
+
+  [[nodiscard]] std::wstring target(const std::wstring_view name) const {
+    return wide() + L"\\" + std::wstring(name) + L".hc";
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+ScopedDirectory g_directory;
+
+// The fixture drives the page, never a real dialog: browsing hands back the
+// run's own directory, and adoption hands back whatever path the current
+// scenario expects or an empty string for a user who cancelled.
 class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
  public:
-  // The second selection is cancelled so the page has to prove it treats a
-  // cancelled dialog as an ordinary outcome rather than a failure. The fourth
-  // is the hidden-volume container, which picks its own location exactly as a
-  // standard one does.
-  [[nodiscard]] std::wstring choose_new_container() override {
-    ++new_calls;
-    if (new_calls == 2) return {};
-    return new_calls >= 4 ? hidden_path : new_path;
+  [[nodiscard]] std::wstring choose_container_directory() override {
+    ++directory_calls;
+    return g_directory.wide();
   }
 
   [[nodiscard]] std::wstring choose_existing_container() override {
@@ -420,10 +452,8 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
-  std::wstring new_path{L"D:/Vault/integration.hc"};
-  std::wstring hidden_path{L"E:/Vault/handover.hc"};
   std::wstring existing_path;
-  int new_calls{};
+  int directory_calls{};
   int existing_calls{};
 };
 
@@ -486,8 +516,12 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.session_password_calls == 1 && g_volume.b_decoy_matched &&
          g_volume.created_b_outer_bytes == 128ULL * 1024ULL * 1024ULL &&
          g_volume.created_b_hidden_bytes == 96ULL * 1024ULL * 1024ULL &&
-         g_volume.created_b_path == L"E:/Vault/handover.hc" &&
-         g_volume.create_calls == 2 && g_file_chooser.new_calls == 4 &&
+         g_volume.created_b_path == g_directory.target(L"handover") &&
+         g_volume.created_path == g_directory.target(L"integration") &&
+         g_volume.create_calls == 2 &&
+         // Three browses: the standard form fills the field once, again after
+         // the injected failure clears it, and the hidden form once.
+         g_file_chooser.directory_calls == 3 &&
          g_volume.containers.size() == 2 &&
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
@@ -517,9 +551,10 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-creation-entry",
       L"fail-creation-back-step",
       L"fail-creation-validation",
+      L"fail-creation-location",
+      L"fail-creation-browse",
       L"fail-creation-unit",
       L"fail-creation-failure-feedback",
-      L"fail-creation-cancelled",
       L"fail-hidden-creation",
       L"fail-hidden-capacity-rule",
       L"fail-hidden-acknowledgement",

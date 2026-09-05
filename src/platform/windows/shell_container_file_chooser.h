@@ -20,7 +20,7 @@ class ShellContainerFileChooser final : public ui::IContainerFileChooser {
  public:
   explicit ShellContainerFileChooser(HWND owner) noexcept;
 
-  [[nodiscard]] std::wstring choose_new_container() override;
+  [[nodiscard]] std::wstring choose_container_directory() override;
   [[nodiscard]] std::wstring choose_existing_container() override;
 
  private:

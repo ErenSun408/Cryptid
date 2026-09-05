@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -83,6 +84,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t create_container(const std::wstring_view path,
                                  const std::uint64_t size_bytes) override {
     ++create_calls;
+    created_path.assign(path);
     created_size_bytes = size_bytes;
     if (reject_create) throw std::runtime_error("creation failed");
     return adopt(path, size_bytes);
@@ -109,6 +111,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return copy;
   }
 
+  std::wstring created_path;
   std::wstring created_b_path;
   std::uint64_t created_outer_bytes{};
   std::uint64_t created_hidden_bytes{};
@@ -332,13 +335,14 @@ class FakeEntry final : public ICardEntryActions {
   int login_calls{};
 };
 
-// Selection stays native: the page can only ask, so the fixture decides which
-// path comes back and an empty string stands for a cancelled dialog.
+// Adoption stays native, and so does the browse button behind the form's
+// save-location field: the page can only ask, so the fixture decides what
+// comes back and an empty string stands for a cancelled dialog.
 class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
  public:
-  [[nodiscard]] std::wstring choose_new_container() override {
-    ++new_calls;
-    return new_path;
+  [[nodiscard]] std::wstring choose_container_directory() override {
+    ++directory_calls;
+    return directory_path;
   }
 
   [[nodiscard]] std::wstring choose_existing_container() override {
@@ -346,18 +350,52 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
-  std::wstring new_path;
+  std::wstring directory_path;
   std::wstring existing_path;
-  int new_calls{};
+  int directory_calls{};
   int existing_calls{};
 };
 
+// The form names a location instead of picking one, and the boundary checks
+// that the location exists, so the fixture needs a real directory.
+class ScopedDirectory final {
+ public:
+  explicit ScopedDirectory(const wchar_t* const leaf)
+      : path_(std::filesystem::temp_directory_path() /
+              L"usb-vault-host-tests" / leaf) {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+    std::filesystem::create_directories(path_);
+  }
+
+  ~ScopedDirectory() noexcept {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  ScopedDirectory(const ScopedDirectory&) = delete;
+  ScopedDirectory& operator=(const ScopedDirectory&) = delete;
+
+  [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
+
+  [[nodiscard]] std::wstring target(const std::wstring_view name) const {
+    return wide() + L"\\" + std::wstring(name) + L".hc";
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+std::uint32_t g_fixture_serial = 0;
+
 struct Fixture final {
   Fixture()
-      : volume(authentication),
+      : directory(std::to_wstring(++g_fixture_serial).c_str()),
+        volume(authentication),
         controller(entry, authentication, volume, policy, chooser) {}
 
   FakeEntry entry;
+  ScopedDirectory directory;
   CardAuthenticationSession authentication;
   FakeVolumeSession volume;
   OfflineCardPasswordPolicy policy;
@@ -575,6 +613,52 @@ RecordingCloseSink g_close_sink;
   return host.Invoke(member_id(host, name), IID_NULL, LOCALE_INVARIANT,
                      DISPATCH_METHOD, &parameters, result, nullptr,
                      argument_error);
+}
+
+// A BSTR argument. The caller owns it and clears it with the rest of the list.
+[[nodiscard]] VARIANTARG text_argument(const std::wstring& value) {
+  VARIANTARG argument{};
+  ::VariantInit(&argument);
+  argument.vt = VT_BSTR;
+  argument.bstrVal = ::SysAllocStringLen(value.c_str(),
+                                         static_cast<UINT>(value.size()));
+  require(argument.bstrVal != nullptr, "test BSTR allocation failed");
+  return argument;
+}
+
+// `createContainerMib(name, directory, sizeMib)` with COM's reverse order.
+[[nodiscard]] HRESULT invoke_create_container(
+    IDispatch& host, const std::wstring& name, const std::wstring& directory,
+    const std::uint32_t size_mib, VARIANT* const result,
+    UINT* const argument_error) {
+  std::array<VARIANTARG, 3> values{};
+  values[2] = text_argument(name);
+  values[1] = text_argument(directory);
+  values[0] = number_argument(size_mib);
+  DISPPARAMS parameters{values.data(), nullptr, 3, 0};
+  const HRESULT status =
+      host.Invoke(member_id(host, L"createContainerMib"), IID_NULL,
+                  LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, result,
+                  nullptr, argument_error);
+  for (VARIANTARG& value : values) {
+    static_cast<void>(::VariantClear(&value));
+  }
+  return status;
+}
+
+[[nodiscard]] bool create_container_succeeds(IDispatch& host,
+                                             const std::wstring& name,
+                                             const std::wstring& directory,
+                                             const std::uint32_t size_mib) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_create_container(host, name, directory, size_mib,
+                                            &result, nullptr)),
+          "container creation call failed");
+  require(result.vt == VT_BOOL, "creation returned the wrong type");
+  const bool created = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return created;
 }
 
 [[nodiscard]] ULONG invoke_container_count(IDispatch& host) {
@@ -892,12 +976,14 @@ void test_container_collection_is_exposed_by_position_and_route_gated() {
           "unauthenticated host exposed adopted containers");
 
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:/Vault/work.hc";
-  require(invoke_selection(*host.Get(), L"createContainerMib", 64) &&
-              fixture.chooser.new_calls == 1 &&
+  require(create_container_succeeds(*host.Get(), L"work",
+                                    fixture.directory.wide(), 64) &&
+              fixture.chooser.directory_calls == 0 &&
               fixture.volume.create_calls == 1 &&
+              fixture.volume.created_path ==
+                  fixture.directory.target(L"work") &&
               fixture.volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL,
-          "creation did not run the native chooser and the session once");
+          "creation did not carry the named location to the session once");
 
   require(invoke_container_count(*host.Get()) == 1UL &&
               invoke_container_number(*host.Get(), L"getContainerId", 0) ==
@@ -922,59 +1008,129 @@ void test_container_collection_is_exposed_by_position_and_route_gated() {
 void test_container_calls_reject_wrong_shapes_and_report_cancellation() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
+  const std::wstring directory = fixture.directory.wide();
   ComPtr<IDispatch> host = make_host(fixture.controller);
 
   UINT argument_error = 99;
-  VARIANTARG text{};
-  ::VariantInit(&text);
-  text.vt = VT_BSTR;
-  text.bstrVal = ::SysAllocString(L"D:/Vault/injected.hc");
-  require(text.bstrVal != nullptr, "test BSTR allocation failed");
-  DISPPARAMS text_parameters{&text, nullptr, 1, 0};
-  require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
-                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
-                       &text_parameters, nullptr, nullptr, &argument_error) ==
-                  DISP_E_TYPEMISMATCH &&
-              argument_error == 0,
-          "host accepted a string where only a capacity is allowed");
-  static_cast<void>(::VariantClear(&text));
-
   DISPPARAMS empty{};
   require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
                        IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &empty,
                        nullptr, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
-          "host accepted a creation call without a capacity");
-  require(invoke_with_number(*host.Get(), L"createContainerMib", 19, nullptr,
-                             &argument_error) == DISP_E_TYPEMISMATCH,
+          "host accepted a creation call without any arguments");
+  require(invoke_with_number(*host.Get(), L"createContainerMib", 64, nullptr,
+                             &argument_error) == DISP_E_BADPARAMCOUNT,
+          "host accepted a creation call carrying only a capacity");
+
+  // The two new arguments are strings and nothing else. A number where a name
+  // belongs is not coerced into one.
+  std::array<VARIANTARG, 3> numeric{};
+  numeric[2] = number_argument(7);
+  numeric[1] = number_argument(8);
+  numeric[0] = number_argument(64);
+  DISPPARAMS numeric_parameters{numeric.data(), nullptr, 3, 0};
+  require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &numeric_parameters, nullptr, nullptr,
+                       &argument_error) == DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "host accepted a number where only a name is allowed");
+  for (VARIANTARG& value : numeric) {
+    static_cast<void>(::VariantClear(&value));
+  }
+
+  require(invoke_create_container(*host.Get(), L"work", directory, 19, nullptr,
+                                  &argument_error) == DISP_E_TYPEMISMATCH,
           "host accepted a capacity below the shared minimum");
-  VARIANTARG fractional{};
-  ::VariantInit(&fractional);
-  fractional.vt = VT_R8;
-  fractional.dblVal = 64.5;
-  DISPPARAMS fractional_parameters{&fractional, nullptr, 1, 0};
+
+  // The page owns the location now, so the shapes it must not be able to
+  // express are refused here rather than reaching the session.
+  for (const std::pair<std::wstring, std::wstring> rejected : {
+           std::pair<std::wstring, std::wstring>{L"", directory},
+           std::pair<std::wstring, std::wstring>{L"..\\escape", directory},
+           std::pair<std::wstring, std::wstring>{L"work", L"Vault"},
+           std::pair<std::wstring, std::wstring>{L"work",
+                                                 L"\\\\server\\share"},
+           std::pair<std::wstring, std::wstring>{L"work",
+                                                 directory + L"\\missing"}}) {
+    require(invoke_create_container(*host.Get(), rejected.first,
+                                    rejected.second, 64, nullptr,
+                                    &argument_error) == DISP_E_TYPEMISMATCH,
+            "host accepted a location the page must not be able to name");
+  }
+
+  std::array<VARIANTARG, 3> fractional{};
+  fractional[2] = text_argument(L"work");
+  fractional[1] = text_argument(directory);
+  ::VariantInit(&fractional[0]);
+  fractional[0].vt = VT_R8;
+  fractional[0].dblVal = 64.5;
+  DISPPARAMS fractional_parameters{fractional.data(), nullptr, 3, 0};
   require(host->Invoke(member_id(*host.Get(), L"createContainerMib"),
                        IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
                        &fractional_parameters, nullptr, nullptr,
                        &argument_error) == DISP_E_TYPEMISMATCH,
           "host accepted a capacity that is not a whole number");
-  require(fixture.chooser.new_calls == 0 && fixture.volume.create_calls == 0,
-          "a rejected creation still opened the chooser or the session");
+  for (VARIANTARG& value : fractional) {
+    static_cast<void>(::VariantClear(&value));
+  }
 
-  require(!invoke_selection(*host.Get(), L"createContainerMib", 64) &&
-              fixture.chooser.new_calls == 1 &&
+  require(fixture.chooser.directory_calls == 0 &&
               fixture.volume.create_calls == 0,
-          "a cancelled chooser was not reported as a cancellation");
+          "a rejected creation still opened a dialog or the session");
+
   require(!invoke_mount_container(*host.Get()) &&
               fixture.chooser.existing_calls == 1,
           "a cancelled adoption was not reported as a cancellation");
+}
+
+// The browse button. It reports the choice as a string and creates nothing.
+void test_directory_browse_reports_the_choice_as_a_string() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  fixture.chooser.directory_path = L"D:\\Vault";
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(host->Invoke(member_id(*host.Get(), L"chooseContainerDirectory"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &parameters, &result, nullptr, nullptr) == S_OK &&
+              result.vt == VT_BSTR && result.bstrVal != nullptr &&
+              std::wstring(result.bstrVal, ::SysStringLen(result.bstrVal)) ==
+                  L"D:\\Vault",
+          "the chosen directory did not reach the page");
+  static_cast<void>(::VariantClear(&result));
+
+  fixture.chooser.directory_path.clear();
+  ::VariantInit(&result);
+  require(host->Invoke(member_id(*host.Get(), L"chooseContainerDirectory"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &parameters, &result, nullptr, nullptr) == S_OK &&
+              result.vt == VT_BSTR &&
+              ::SysStringLen(result.bstrVal) == 0,
+          "a cancelled picker was not reported as an empty string");
+  static_cast<void>(::VariantClear(&result));
+
+  VARIANTARG stray = number_argument(1);
+  DISPPARAMS stray_parameters{&stray, nullptr, 1, 0};
+  require(host->Invoke(member_id(*host.Get(), L"chooseContainerDirectory"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &stray_parameters, nullptr, nullptr, nullptr) ==
+              DISP_E_BADPARAMCOUNT,
+          "the picker accepted an argument it does not take");
+  static_cast<void>(::VariantClear(&stray));
+  require(fixture.chooser.directory_calls == 2 &&
+              fixture.volume.create_calls == 0,
+          "browsing created something or ran the wrong number of times");
 }
 
 void test_adopted_container_mount_and_unmount_route_through_identifiers() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   ComPtr<IDispatch> host = make_host(fixture.controller);
-  fixture.chooser.new_path = L"D:/Vault/work.hc";
-  require(invoke_selection(*host.Get(), L"createContainerMib", 64),
+  require(create_container_succeeds(*host.Get(), L"work",
+                                    fixture.directory.wide(), 64),
           "creation was refused");
   const ULONG id = invoke_container_number(*host.Get(), L"getContainerId", 0);
 
@@ -1002,22 +1158,32 @@ void test_adopted_container_mount_and_unmount_route_through_identifiers() {
           "host unmounted an identifier the session never adopted");
 }
 
-void test_container_b_creation_consumes_four_reversed_arguments() {
-  Fixture fixture;
-  fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:/Vault/handover.hc";
-  ComPtr<IDispatch> host = make_host(fixture.controller);
-  const auto login = bytes("login-password");
-  const auto second = bytes("second-password-value");
-
-  std::array<VARIANTARG, 4> values{};
-  // COM delivers positional arguments in reverse order. The password the
-  // session was opened under is no longer among them.
+// Builds `createContainerBMib(name, directory, outer, hidden, second,
+// confirmation)` in COM's reverse order. The two password arrays stay with the
+// caller so it can prove they were wiped.
+void fill_container_b_arguments(std::array<VARIANTARG, 6>& values,
+                                const std::wstring& name,
+                                const std::wstring& directory,
+                                const std::span<const std::byte> second) {
   initialize_byte_array(values[0], second);
   initialize_byte_array(values[1], second);
   values[2] = number_argument(16);
   values[3] = number_argument(64);
-  DISPPARAMS parameters{values.data(), nullptr, 4, 0};
+  values[4] = text_argument(directory);
+  values[5] = text_argument(name);
+}
+
+void test_container_b_creation_consumes_six_reversed_arguments() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  const auto login = bytes("login-password");
+  const auto second = bytes("second-password-value");
+
+  std::array<VARIANTARG, 6> values{};
+  fill_container_b_arguments(values, L"handover", fixture.directory.wide(),
+                             second);
+  DISPPARAMS parameters{values.data(), nullptr, 6, 0};
 
   VARIANT created{};
   ::VariantInit(&created);
@@ -1029,9 +1195,10 @@ void test_container_b_creation_consumes_four_reversed_arguments() {
               created.boolVal == VARIANT_TRUE,
           "container B creation was refused");
   static_cast<void>(::VariantClear(&created));
-  require(fixture.chooser.new_calls == 1 &&
-              fixture.volume.created_b_path == L"D:/Vault/handover.hc",
-          "container B was not created at the chosen location");
+  require(fixture.chooser.directory_calls == 0 &&
+              fixture.volume.created_b_path ==
+                  fixture.directory.target(L"handover"),
+          "container B was not created at the named location");
   require(fixture.entry.second_password_calls == 1 &&
               fixture.entry.existing_password_bytes == login &&
               fixture.entry.second_password_bytes == second,
@@ -1044,6 +1211,17 @@ void test_container_b_creation_consumes_four_reversed_arguments() {
   for (std::size_t index = 0; index < 2; ++index) {
     require_array_wiped(values[index], second.size(),
                         "a container B password array survived the call");
+  }
+  // The location is not a password, but a container path is exactly what
+  // section 8.4 keeps off this machine, so the marshalled copy does not
+  // outlive the call either.
+  for (std::size_t index = 4; index < 6; ++index) {
+    const UINT length = ::SysStringLen(values[index].bstrVal);
+    require(length != 0, "a container B location argument lost its length");
+    for (UINT position = 0; position < length; ++position) {
+      require(values[index].bstrVal[position] == L'\0',
+              "a container B location argument survived the call");
+    }
   }
   for (VARIANTARG& value : values) {
     static_cast<void>(::VariantClear(&value));
@@ -1063,36 +1241,30 @@ void test_container_b_creation_consumes_four_reversed_arguments() {
               short_call.volume.create_b_calls == 0,
           "a malformed container B call still reached the product");
 
-  // A cancelled chooser is an ordinary outcome and reaches the page as false,
-  // exactly as it does for a standard container.
-  Fixture cancelled;
-  cancelled.authentication.establish(root_secret());
-  ComPtr<IDispatch> cancelled_host = make_host(cancelled.controller);
-  std::array<VARIANTARG, 4> cancelled_values{};
-  initialize_byte_array(cancelled_values[0], second);
-  initialize_byte_array(cancelled_values[1], second);
-  cancelled_values[2] = number_argument(16);
-  cancelled_values[3] = number_argument(64);
-  DISPPARAMS cancelled_parameters{cancelled_values.data(), nullptr, 4, 0};
-  VARIANT cancelled_result{};
-  ::VariantInit(&cancelled_result);
-  require(cancelled_host->Invoke(
-              member_id(*cancelled_host.Get(), L"createContainerBMib"),
+  // 8.7.2: a rejected location stops this shape exactly where it stops a
+  // standard one, before the card record is touched, and the passwords that
+  // came with it are still wiped.
+  Fixture rejected;
+  rejected.authentication.establish(root_secret());
+  ComPtr<IDispatch> rejected_host = make_host(rejected.controller);
+  std::array<VARIANTARG, 6> rejected_values{};
+  fill_container_b_arguments(rejected_values, L"handover", L"Vault", second);
+  DISPPARAMS rejected_parameters{rejected_values.data(), nullptr, 6, 0};
+  UINT argument_error = 99;
+  require(rejected_host->Invoke(
+              member_id(*rejected_host.Get(), L"createContainerBMib"),
               IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
-              &cancelled_parameters, &cancelled_result, nullptr,
-              nullptr) == S_OK &&
-              cancelled_result.vt == VT_BOOL &&
-              cancelled_result.boolVal == VARIANT_FALSE,
-          "a cancelled selection was not reported to the page");
-  static_cast<void>(::VariantClear(&cancelled_result));
-  require(cancelled.entry.second_password_calls == 0 &&
-              cancelled.volume.create_b_calls == 0,
-          "a cancelled selection still rewrote the card or created a volume");
+              &rejected_parameters, nullptr, nullptr, &argument_error) ==
+              DISP_E_TYPEMISMATCH,
+          "container B accepted a save location the page must not name");
+  require(rejected.entry.second_password_calls == 0 &&
+              rejected.volume.create_b_calls == 0,
+          "a rejected location still rewrote the card or created a volume");
   for (std::size_t index = 0; index < 2; ++index) {
-    require_array_wiped(cancelled_values[index], second.size(),
-                        "a cancelled container B password array survived");
+    require_array_wiped(rejected_values[index], second.size(),
+                        "a rejected container B password array survived");
   }
-  for (VARIANTARG& value : cancelled_values) {
+  for (VARIANTARG& value : rejected_values) {
     static_cast<void>(::VariantClear(&value));
   }
 }
@@ -1196,8 +1368,9 @@ int main() {
     test_unmount_and_property_rejection();
     test_container_collection_is_exposed_by_position_and_route_gated();
     test_container_calls_reject_wrong_shapes_and_report_cancellation();
+    test_directory_browse_reports_the_choice_as_a_string();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
-    test_container_b_creation_consumes_four_reversed_arguments();
+    test_container_b_creation_consumes_six_reversed_arguments();
     test_container_query_failure_does_not_invent_facts();
     test_operation_history_is_read_only_typed_and_clearable();
     test_operation_history_query_failures_do_not_invent_facts();

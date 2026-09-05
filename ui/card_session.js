@@ -82,13 +82,29 @@
   const creationContinueButton =
     document.getElementById("create-volume-continue");
   const containerForm = document.getElementById("create-container-form");
+  const containerName = document.getElementById("create-container-name");
+  const containerNameError =
+    document.getElementById("create-container-name-error");
+  const containerDirectory =
+    document.getElementById("create-container-directory");
+  const containerDirectoryError =
+    document.getElementById("create-container-directory-error");
+  const containerBrowse = document.getElementById("create-container-browse");
   const containerCapacity =
     document.getElementById("create-container-capacity");
   const containerError = document.getElementById("create-container-error");
   const creationStatus = document.getElementById("create-volume-status");
-  const creationWorkflow = document.getElementById("create-volume-workflow");
   const creationTypeNote = document.getElementById("create-type-note");
   const containerBForm = document.getElementById("create-container-b-form");
+  const containerBName = document.getElementById("create-container-b-name");
+  const containerBNameError =
+    document.getElementById("create-container-b-name-error");
+  const containerBDirectory =
+    document.getElementById("create-container-b-directory");
+  const containerBDirectoryError =
+    document.getElementById("create-container-b-directory-error");
+  const containerBBrowse =
+    document.getElementById("create-container-b-browse");
   const containerBCapacity =
     document.getElementById("create-container-b-capacity");
   const containerBHiddenCapacity =
@@ -102,7 +118,8 @@
   const containerBError =
     document.getElementById("create-container-b-error");
   const containerBInputs = [
-    containerBCapacity, containerBHiddenCapacity, containerBSecond,
+    containerBName, containerBDirectory, containerBCapacity,
+    containerBHiddenCapacity, containerBSecond,
     containerBSecondConfirmation, containerBAcknowledge,
   ];
 
@@ -283,6 +300,80 @@
       ? capacityMib(containerCapacity, containerUnit)
       : null;
 
+  // The page restates the rules `resolve_container_target_path` enforces, so a
+  // mistyped field is named under the field instead of returning as an opaque
+  // creation failure. The native check is still the only one that decides: it
+  // runs again on whatever is submitted, including a directory this page got
+  // back from the browse button.
+  const kForbiddenNameCharacters = /[<>:"/\\|?*\u0000-\u001f\u007f]/;
+  const kForbiddenPathCharacters = /[<>"|?*\u0000-\u001f\u007f]/;
+  const kReservedDeviceNames = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+  const kMaximumNameLength = 96;
+  const kMaximumPathLength = 259;
+  const kContainerExtension = ".hc";
+
+  const containerNameProblem = (input) => {
+    const value = input.value;
+    if (value === "") return "请填写名称。";
+    if (value.length > kMaximumNameLength) return "名称过长。";
+    if (value.startsWith(" ")) return "名称不能以空格开头。";
+    if (value.endsWith(" ") || value.endsWith(".")) {
+      return "名称不能以空格或点号结尾。";
+    }
+    if (kForbiddenNameCharacters.test(value)) {
+      return "名称不能包含 \\ / : * ? \" < > | 或控制字符。";
+    }
+    if (kReservedDeviceNames.test(value)) return "名称是系统保留名，请换一个。";
+    return "";
+  };
+
+  const containerDirectoryProblem = (directoryInput, nameInput) => {
+    const value = directoryInput.value;
+    if (value === "") return "请填写路径。";
+    if (!/^[A-Za-z]:[\\/]/.test(value)) {
+      return "需要本机盘符路径，例如 D:\\Vault。";
+    }
+    if (kForbiddenPathCharacters.test(value)) {
+      return "路径不能包含 * ? \" < > | 或控制字符。";
+    }
+    if (value.slice(2).includes(":")) return "路径只能有一个冒号。";
+    const segments = value.slice(3).split(/[\\/]/);
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+      if (segment === "") {
+        // Only one trailing separator is allowed to produce an empty segment.
+        if (index !== segments.length - 1) return "路径有空的目录层级。";
+        continue;
+      }
+      if (segment === "." || segment === "..") {
+        return "路径不能包含 . 或 .. 层级。";
+      }
+      if (segment.startsWith(" ")) return "路径中的目录名不能以空格开头。";
+      if (segment.endsWith(" ") || segment.endsWith(".")) {
+        return "路径中的目录名不能以空格或点号结尾。";
+      }
+      if (kReservedDeviceNames.test(segment)) {
+        return "路径含系统保留名。";
+      }
+    }
+    // The joint limit lands on this field because the directory is the half a
+    // user can shorten without renaming the container.
+    const name = nameInput.value;
+    const extension =
+      name.toLowerCase().endsWith(kContainerExtension) ? 0
+        : kContainerExtension.length;
+    const separator = /[\\/]$/.test(value) ? 0 : 1;
+    if (value.length + separator + name.length + extension >
+        kMaximumPathLength) {
+      return "路径与名称合计过长。";
+    }
+    return "";
+  };
+
+  const containerLocationReady = (nameInput, directoryInput) =>
+    containerNameProblem(nameInput) === "" &&
+    containerDirectoryProblem(directoryInput, nameInput) === "";
+
   const containerBProblem = () => {
     const outer = capacityMib(containerBCapacity, containerBUnit);
     const hidden = capacityMib(containerBHiddenCapacity, containerBUnit);
@@ -319,7 +410,9 @@
 
   const containerBInputReady = () => {
     const second = normalizedLength(containerBSecond.value);
-    return containerBSizes() !== null && second !== null &&
+    return containerBSizes() !== null &&
+      containerLocationReady(containerBName, containerBDirectory) &&
+      second !== null &&
       second >= 12 && second <= 128 &&
       containerBSecond.value === containerBSecondConfirmation.value &&
       containerBAcknowledge.checked;
@@ -333,15 +426,13 @@
     const ready = choosing
       ? encrypted || hiddenVolume
       : encrypted
-        ? containerCapacityMib() !== null
+        ? containerCapacityMib() !== null &&
+          containerLocationReady(containerName, containerDirectory)
         : hiddenVolume && containerBInputReady();
     creationDialog.dataset.step = creationStep;
     creationTypeStep.hidden = !choosing;
     containerForm.hidden = choosing || !encrypted;
     containerBForm.hidden = choosing || !hiddenVolume;
-    // The step preview describes the standard flow, which picks a location.
-    // The hidden container uses a fixed path, so it is not shown there.
-    creationWorkflow.hidden = choosing || hiddenVolume;
     // 8.7.2: both shapes are offered on every visit, in the same order and
     // with the same weight. Neither entry is ever withheld.
     for (const button of creationTypeButtons) {
@@ -353,25 +444,41 @@
     creationTypeNote.hidden = !choosing;
     containerCapacity.disabled = busy || !authenticated || choosing ||
       !encrypted || creationCompleted;
+    containerName.disabled = containerCapacity.disabled;
+    containerDirectory.disabled = containerCapacity.disabled;
+    containerBrowse.disabled = containerCapacity.disabled;
     containerUnit.button.disabled = containerCapacity.disabled;
     for (const input of containerBInputs) {
       input.disabled = busy || !authenticated || choosing || !hiddenVolume ||
         creationCompleted;
     }
+    containerBBrowse.disabled = containerBCapacity.disabled;
     containerBUnit.button.disabled = containerBCapacity.disabled;
     if (containerUnit.button.disabled && containerBUnit.button.disabled) {
       closeUnitLists();
     }
+    const standardQuiet = choosing || !encrypted || creationCompleted;
+    const hiddenQuiet = choosing || !hiddenVolume || creationCompleted;
     showFieldProblem(
-      containerError,
-      choosing || !encrypted || creationCompleted
-        ? ""
-        : containerCapacityProblem());
+      containerNameError,
+      standardQuiet ? "" : containerNameProblem(containerName));
     showFieldProblem(
-      containerBError,
-      choosing || !hiddenVolume || creationCompleted
+      containerDirectoryError,
+      standardQuiet
         ? ""
-        : containerBProblem());
+        : containerDirectoryProblem(containerDirectory, containerName));
+    showFieldProblem(
+      containerError, standardQuiet ? "" : containerCapacityProblem());
+    showFieldProblem(
+      containerBNameError,
+      hiddenQuiet ? "" : containerNameProblem(containerBName));
+    showFieldProblem(
+      containerBDirectoryError,
+      hiddenQuiet
+        ? ""
+        : containerDirectoryProblem(containerBDirectory, containerBName));
+    showFieldProblem(
+      containerBError, hiddenQuiet ? "" : containerBProblem());
     creationCloseButton.disabled = busy;
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
@@ -387,19 +494,23 @@
     "容器是一个加密文件，挂载后显示为一个普通磁盘。" +
     "请选择要创建的容器类型：";
 
+  // An empty description is hidden rather than left as a blank paragraph, so
+  // the fields sit directly under the title on the parameter step.
+  const setCreationDescription = (text) => {
+    creationDescription.textContent = text;
+    creationDescription.hidden = text === "";
+  };
+
   const applyCreationStepCopy = () => {
     if (creationStep === "type") {
       creationTitle.textContent = "新建容器";
-      creationDescription.textContent = kCreationTypeLead;
+      setCreationDescription(kCreationTypeLead);
       return;
     }
-    const hiddenVolume = creationKind === "hidden";
-    creationTitle.textContent = hiddenVolume
+    creationTitle.textContent = creationKind === "hidden"
       ? "新建含隐藏卷的容器"
       : "新建标准容器";
-    creationDescription.textContent = hiddenVolume
-      ? "请设置总容量与内层容量，并为这个容器设置一个诱饵密码。接着会让你选择保存位置。"
-      : "请设置容器容量。接着会让你选择保存位置。";
+    setCreationDescription("");
   };
 
   // Leaving a parameter step discards what was typed on it: a decoy password
@@ -408,6 +519,10 @@
     applyCapacityUnit(containerUnit, "mib");
     applyCapacityUnit(containerBUnit, "mib");
     closeUnitLists();
+    containerName.value = "";
+    containerDirectory.value = "";
+    containerBName.value = "";
+    containerBDirectory.value = "";
     containerCapacity.value = "64";
     containerBCapacity.value = "128";
     containerBHiddenCapacity.value = "96";
@@ -505,11 +620,9 @@
     applyCreationStepCopy();
     updateCreationAvailability();
     if (creationKind === "hidden") {
-      containerBCapacity.focus();
-      containerBCapacity.select();
+      containerBName.focus();
     } else {
-      containerCapacity.focus();
-      containerCapacity.select();
+      containerName.focus();
     }
   };
 
@@ -1233,9 +1346,15 @@
     let confirmationBytes = null;
     busy = true;
     creationStatus.textContent =
-      "请选择保存位置，随后写入安全卡并确认管理员权限。";
+      "正在创建，随后写入安全卡并确认管理员权限。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
+    // Cleared with the passwords below for the same reason: nothing about a
+    // container location outlives the call that carried it.
+    const name = containerBName.value;
+    const directory = containerBDirectory.value;
+    containerBName.value = "";
+    containerBDirectory.value = "";
     try {
       try {
         const encoder = new TextEncoder();
@@ -1252,14 +1371,14 @@
         encodedSecond = null;
         encodedConfirmation = null;
       }
-      let created = false;
       try {
-        // Neither the password this session was opened under nor the location
-        // reaches the page: the session holds the first and the native chooser
-        // owns the second, exactly as it does for a standard container.
-        created = await bridge.createContainerBMib(sizes.outer, sizes.hidden,
-                                                   secondBytes,
-                                                   confirmationBytes);
+        // The password this session was opened under still does not reach the
+        // page: the session holds it. The location does, and it is passed in
+        // exactly the same shape as a standard container's, so the two calls
+        // stay word-for-word parallel (8.7.2).
+        await bridge.createContainerBMib(name, directory, sizes.outer,
+                                         sizes.hidden, secondBytes,
+                                         confirmationBytes);
       } finally {
         wipe(secondBytes);
         wipe(confirmationBytes);
@@ -1267,18 +1386,8 @@
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
-      if (created === false) {
-        // The decoy password was wiped with the rest of the step, so a
-        // cancelled selection returns to an empty form rather than to a
-        // retained secret.
-        creationStatus.textContent =
-          "已取消创建。重试前需要重新输入诱饵密码。";
-        creationStatus.dataset.tone = "";
-        updateCreationAvailability();
-        return;
-      }
       creationCompleted = true;
-      creationDescription.textContent = "容器已经创建并挂载。";
+      setCreationDescription("容器已经创建并挂载。");
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
@@ -1294,7 +1403,7 @@
       if (!creationDialog.hidden &&
           currentState === nativeState.authenticated) {
         creationStatus.textContent =
-          "创建失败。请稍后重试。";
+          "创建失败。重试前需要重新填写名称、路径与诱饵密码。";
         creationStatus.dataset.tone = "error";
         updateCreationAvailability();
       }
@@ -1318,22 +1427,23 @@
     }
 
     busy = true;
-    creationStatus.textContent = "请选择保存位置，随后确认管理员权限。";
+    creationStatus.textContent = "正在创建，请确认管理员权限。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     try {
-      const created = await bridge.createContainerMib(sizeMib);
+      // The name and the location are ordinary strings, but a container path
+      // is what section 8.4 keeps off this machine, so the fields are cleared
+      // as soon as the values are handed over rather than left in the DOM.
+      const name = containerName.value;
+      const directory = containerDirectory.value;
+      containerName.value = "";
+      containerDirectory.value = "";
+      await bridge.createContainerMib(name, directory, sizeMib);
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
-      if (created === false) {
-        creationStatus.textContent = "已取消创建。";
-        creationStatus.dataset.tone = "";
-        updateCreationAvailability();
-        return;
-      }
       creationCompleted = true;
-      creationDescription.textContent = "容器已经创建并挂载。";
+      setCreationDescription("容器已经创建并挂载。");
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
@@ -1349,7 +1459,8 @@
       if (!creationDialog.hidden &&
           currentState === nativeState.authenticated) {
         creationStatus.textContent =
-          "创建失败。若容器已完成但未挂载，请重新插卡后重试。";
+          "创建失败。重试前需要重新填写名称与路径；" +
+          "若容器已完成但未挂载，请重新插卡后重试。";
         creationStatus.dataset.tone = "error";
         updateCreationAvailability();
       }
@@ -1423,6 +1534,34 @@
     }
     closeCreationFlow();
   });
+  const browseForDirectory = async (input) => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    busy = true;
+    creationStatus.textContent = "";
+    creationStatus.dataset.tone = "";
+    updateCreationAvailability();
+    try {
+      const directory = await bridge.chooseContainerDirectory();
+      // An empty string is a cancelled picker, which must leave whatever the
+      // user had already typed alone.
+      if (typeof directory === "string" && directory !== "") {
+        input.value = directory;
+      }
+    } catch (_) {
+      creationStatus.textContent = "无法打开选择框，请直接填写路径。";
+      creationStatus.dataset.tone = "error";
+    } finally {
+      busy = false;
+      render(messageForCurrentState());
+      updateCreationAvailability();
+      input.focus();
+    }
+  };
+
+  containerBrowse.addEventListener(
+    "click", () => void browseForDirectory(containerDirectory));
+  containerBBrowse.addEventListener(
+    "click", () => void browseForDirectory(containerBDirectory));
   creationContinueButton.addEventListener("click", async () => {
     if (busy) return;
     if (creationStep === "type") {
@@ -1460,7 +1599,8 @@
       }
     });
   }
-  for (const input of [containerCapacity, ...containerBInputs]) {
+  for (const input of [containerName, containerDirectory, containerCapacity,
+                       ...containerBInputs]) {
     for (const name of ["input", "change"]) {
       input.addEventListener(name, () => {
         creationStatus.textContent = "";

@@ -11,7 +11,7 @@ namespace usb_vault::platform::windows {
 namespace {
 
 constexpr wchar_t kContainerExtension[] = L"hc";
-constexpr wchar_t kNewContainerTitle[] = L"选择加密盘的保存位置";
+constexpr wchar_t kContainerDirectoryTitle[] = L"选择加密盘的保存位置";
 constexpr wchar_t kExistingContainerTitle[] = L"选择要打开的加密盘文件";
 constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
     {L"加密盘文件", L"*.hc"},
@@ -79,9 +79,12 @@ class CoTaskPath final {
                           message);
 }
 
+// `filter_files` is false for the folder picker, where a file type filter and
+// a default extension are meaningless and rejected.
 [[nodiscard]] std::wstring run_dialog(const HWND owner, const CLSID& dialog_class,
                                       const FILEOPENDIALOGOPTIONS options,
-                                      const wchar_t* const title) {
+                                      const wchar_t* const title,
+                                      const bool filter_files) {
   ComPtr<IFileDialog> dialog;
   HRESULT result = ::CoCreateInstance(dialog_class, nullptr,
                                       CLSCTX_INPROC_SERVER,
@@ -97,11 +100,11 @@ class CoTaskPath final {
   }
   result = dialog->SetOptions(defaults | kSharedOptions | options);
   if (SUCCEEDED(result)) result = dialog->SetTitle(title);
-  if (SUCCEEDED(result)) {
+  if (SUCCEEDED(result) && filter_files) {
     result = dialog->SetFileTypes(
         static_cast<UINT>(std::size(kContainerFilter)), kContainerFilter);
   }
-  if (SUCCEEDED(result)) {
+  if (SUCCEEDED(result) && filter_files) {
     result = dialog->SetDefaultExtension(kContainerExtension);
   }
   if (FAILED(result)) {
@@ -135,15 +138,17 @@ ShellContainerFileChooser::ShellContainerFileChooser(
     const HWND owner) noexcept
     : owner_(owner) {}
 
-std::wstring ShellContainerFileChooser::choose_new_container() {
-  return run_dialog(owner_, CLSID_FileSaveDialog,
-                    FOS_OVERWRITEPROMPT | FOS_NOREADONLYRETURN,
-                    kNewContainerTitle);
+// The browse button behind the form's save-location field. It picks a folder
+// and nothing else: the file name comes from the name the user typed, so a
+// save dialog here would ask for it twice and let the two disagree.
+std::wstring ShellContainerFileChooser::choose_container_directory() {
+  return run_dialog(owner_, CLSID_FileOpenDialog, FOS_PICKFOLDERS,
+                    kContainerDirectoryTitle, false);
 }
 
 std::wstring ShellContainerFileChooser::choose_existing_container() {
   return run_dialog(owner_, CLSID_FileOpenDialog, FOS_FILEMUSTEXIST,
-                    kExistingContainerTitle);
+                    kExistingContainerTitle, true);
 }
 
 }  // namespace usb_vault::platform::windows

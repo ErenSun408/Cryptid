@@ -402,18 +402,6 @@
     .type-pick[aria-checked="true"] .type-pick-icon { color: var(--gold); background: rgba(200, 169, 106, .14); }
     .type-pick-title { display: block; margin-bottom: .35rem; font-size: .82rem; font-weight: 600; }
     .type-pick-copy { display: block; font-size: .74rem; line-height: 1.65; color: var(--text-3); }
-    .workflow-preview { display: grid; gap: .15rem; }
-    .workflow-step {
-      display: flex; align-items: center; gap: .7rem; padding: .6rem .7rem;
-      border-radius: .5rem; font-size: .78rem; color: var(--text-3);
-    }
-    .workflow-step:first-child { color: var(--text-2); }
-    .step-number {
-      display: grid; place-items: center; flex: 0 0 auto; width: 1.4rem; height: 1.4rem;
-      border: 1px solid var(--line-2); border-radius: 50%;
-      font-family: var(--mono); font-size: .68rem; color: var(--text-2);
-    }
-    .workflow-step:first-child .step-number { color: var(--gold); border-color: rgba(200, 169, 106, .45); }
     .creation-form { margin-top: 1.1rem; }
     .creation-form label { display: block; margin-bottom: .4rem; font-size: .78rem; font-weight: 500; color: var(--text-2); }
     .capacity-field { display: flex; align-items: center; gap: .5rem; }
@@ -464,6 +452,20 @@
     .creation-check input { flex: 0 0 auto; width: .9rem; height: .9rem; margin: .2rem 0 0; accent-color: var(--gold); }
     .creation-hint { font-size: .75rem; color: var(--text-3); }
     .creation-hint { margin: .45rem 0 0; line-height: 1.65; }
+    .creation-text {
+      width: 100%; height: 2.4rem; padding: 0 .7rem;
+      border: 1px solid var(--line-2); border-radius: .5rem;
+      background: var(--ink-850); color: var(--text);
+    }
+    .creation-text.mono { font-family: var(--mono); }
+    .creation-text:focus {
+      outline: none; border-color: rgba(200, 169, 106, .55);
+      box-shadow: 0 0 0 3px rgba(200, 169, 106, .1);
+    }
+    .creation-text:disabled { cursor: not-allowed; opacity: .45; }
+    .location-field { display: flex; align-items: center; gap: .5rem; }
+    .location-field .creation-text { flex: 1 1 auto; min-width: 0; }
+    .location-field .modal-button { flex: 0 0 auto; height: 2.4rem; }
     .creation-password {
       width: 100%; height: 2.4rem; padding: 0 .7rem;
       border: 1px solid var(--line-2); border-radius: .5rem;
@@ -789,13 +791,21 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
           <span>创建过程需要管理员权限，系统稍后会弹出确认窗口。</span>
         </div>
-        <div id="create-volume-workflow" class="workflow-preview" aria-label="建卷流程预览" hidden>
-          <div class="workflow-step"><span class="step-number">1</span><span>确认容量并选择保存位置</span></div>
-          <div class="workflow-step"><span class="step-number">2</span><span>完成管理员权限确认</span></div>
-          <div class="workflow-step"><span class="step-number">3</span><span>创建并挂载容器</span></div>
-        </div>
         <div id="create-container-form" class="creation-form" hidden>
-          <label for="create-container-capacity">容量</label>
+          <label for="create-container-name">名称</label>
+          <input id="create-container-name" class="creation-text" type="text"
+                 autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="96">
+          <p id="create-container-name-error" class="creation-error" hidden></p>
+          <label for="create-container-directory" style="margin-top:.9rem">路径</label>
+          <div class="location-field">
+            <input id="create-container-directory" class="creation-text mono" type="text"
+                   autocomplete="off" autocapitalize="off" spellcheck="false">
+            <button id="create-container-browse" class="modal-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h5.5l2 2.5h9.5v8.5h-17V6.5z"></path></svg>浏览
+            </button>
+          </div>
+          <p id="create-container-directory-error" class="creation-error" hidden></p>
+          <label for="create-container-capacity" style="margin-top:.9rem">容量</label>
           <div class="capacity-field">
             <input id="create-container-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="64">
       <div class="unit-picker">
@@ -815,7 +825,20 @@
           <p id="create-container-error" class="creation-error" hidden></p>
         </div>
         <div id="create-container-b-form" class="creation-form" hidden>
-          <label for="create-container-b-capacity">总容量</label>
+          <label for="create-container-b-name">名称</label>
+          <input id="create-container-b-name" class="creation-text" type="text"
+                 autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="96">
+          <p id="create-container-b-name-error" class="creation-error" hidden></p>
+          <label for="create-container-b-directory" style="margin-top:.9rem">路径</label>
+          <div class="location-field">
+            <input id="create-container-b-directory" class="creation-text mono" type="text"
+                   autocomplete="off" autocapitalize="off" spellcheck="false">
+            <button id="create-container-b-browse" class="modal-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h5.5l2 2.5h9.5v8.5h-17V6.5z"></path></svg>浏览
+            </button>
+          </div>
+          <p id="create-container-b-directory-error" class="creation-error" hidden></p>
+          <label for="create-container-b-capacity" style="margin-top:.9rem">总容量</label>
           <div class="capacity-field">
             <input id="create-container-b-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="128">
       <div class="unit-picker">
@@ -864,6 +887,6 @@
     </div>
   </div>
 
-  <script src="card_session.js?v=p2-17g-card-reset"></script>
+  <script src="card_session.js?v=p2-20-create-form"></script>
 </body>
 </html>

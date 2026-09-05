@@ -229,6 +229,19 @@ usb_vault_configure_target(card_login_mount_session_tests)
 add_test(NAME card_login_mount_session_tests
   COMMAND card_login_mount_session_tests)
 
+add_executable(container_target_path_tests
+  container_target_path_tests.cpp
+)
+
+target_link_libraries(container_target_path_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(container_target_path_tests)
+
+add_test(NAME container_target_path_tests
+  COMMAND container_target_path_tests)
+
 add_executable(card_product_ui_session_controller_tests
   card_product_ui_session_controller_tests.cpp
 )

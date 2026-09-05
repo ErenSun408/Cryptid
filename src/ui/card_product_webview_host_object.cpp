@@ -11,6 +11,8 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace usb_vault::ui {
@@ -70,6 +72,59 @@ constexpr DISPID kResetCardRecordId = 28;
 constexpr wchar_t kResetCardRecordName[] = L"resetCardRecord";
 constexpr DISPID kCanResetCardRecordId = 29;
 constexpr wchar_t kCanResetCardRecordName[] = L"canResetCardRecord";
+constexpr DISPID kChooseContainerDirectoryId = 30;
+constexpr wchar_t kChooseContainerDirectoryName[] =
+    L"chooseContainerDirectory";
+
+// A container name and a save location are not secrets the way a password is,
+// but a container path is precisely what section 8.4 keeps off this machine,
+// so the marshalled copy does not outlive the call that carried it. The BSTR
+// stays valid and keeps its length; only its characters go. The page's own
+// copies are cleared on the page side, where the DOM holds them.
+class LocationStringWiper final {
+ public:
+  explicit LocationStringWiper(std::wstring& value) noexcept
+      : value_(value) {}
+  ~LocationStringWiper() noexcept {
+    if (!value_.empty()) {
+      static_cast<void>(
+          ::SecureZeroMemory(value_.data(), value_.size() * sizeof(wchar_t)));
+    }
+  }
+
+  LocationStringWiper(const LocationStringWiper&) = delete;
+  LocationStringWiper& operator=(const LocationStringWiper&) = delete;
+
+ private:
+  std::wstring& value_;
+};
+
+class LocationArgumentsWiper final {
+ public:
+  LocationArgumentsWiper(VARIANT& first, VARIANT& second) noexcept
+      : first_(first), second_(second) {}
+  ~LocationArgumentsWiper() noexcept {
+    wipe(first_);
+    wipe(second_);
+  }
+
+  LocationArgumentsWiper(const LocationArgumentsWiper&) = delete;
+  LocationArgumentsWiper& operator=(const LocationArgumentsWiper&) = delete;
+
+ private:
+  // Anything that is not a string was never interpreted as one, so it is left
+  // exactly as it arrived.
+  static void wipe(VARIANT& value) noexcept {
+    if (value.vt != VT_BSTR || value.bstrVal == nullptr) return;
+    const UINT length = ::SysStringLen(value.bstrVal);
+    if (length == 0) return;
+    static_cast<void>(
+        ::SecureZeroMemory(value.bstrVal, length * sizeof(wchar_t)));
+  }
+
+  VARIANT& first_;
+  VARIANT& second_;
+};
 
 class PasswordArgumentsWiper final {
  public:
@@ -196,6 +251,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kCreateContainerMibId;
       return S_OK;
     }
+    if (matches(names[0], kChooseContainerDirectoryName)) {
+      ids[0] = kChooseContainerDirectoryId;
+      return S_OK;
+    }
     if (matches(names[0], kMountContainerName)) {
       ids[0] = kMountContainerId;
       return S_OK;
@@ -294,6 +353,8 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_login(parameters, argument_error);
       case kSubmitInitializationPasswordBytesId:
         return invoke_initialization(parameters, argument_error);
+      case kChooseContainerDirectoryId:
+        return invoke_choose_container_directory(parameters, result);
       case kCreateContainerMibId:
         return invoke_create_container(parameters, result, argument_error);
       case kCreateContainerBMibId:
@@ -411,21 +472,65 @@ class CardProductWebViewHostObject final : public IDispatch {
     return false;
   }
 
+  // The browse button. Returns the directory the user picked, or an empty
+  // string when they cancelled, and decides nothing: the value goes back into
+  // the form field and is checked again when the form is submitted.
+  HRESULT invoke_choose_container_directory(
+      DISPPARAMS* const parameters, VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (result == nullptr) return S_OK;
+    std::wstring directory;
+    try {
+      directory = controller_.browse_for_container_directory();
+    } catch (...) {
+      return E_FAIL;
+    }
+    LocationStringWiper wiper(directory);
+    ::VariantInit(result);
+    return complete_string(directory.c_str(),
+                           static_cast<UINT>(directory.size()), result);
+  }
+
+  // Three arguments: the container name, the save location, and the capacity.
+  // The first two are the page-supplied strings this boundary did not carry
+  // before 2026-09-05; they are wiped in the caller's own buffers on every
+  // path, and the controller decides whether they name a location at all.
+  // COM delivers the arguments in reverse order.
+  // A page-supplied string. An absent or empty BSTR reads as an empty view,
+  // which every caller rejects downstream rather than treating as a default.
+  [[nodiscard]] static bool exact_wstring(
+      const VARIANTARG& argument, std::wstring_view& result) noexcept {
+    if (argument.vt != VT_BSTR) return false;
+    if (argument.bstrVal == nullptr) {
+      result = {};
+      return true;
+    }
+    result = std::wstring_view(argument.bstrVal,
+                               ::SysStringLen(argument.bstrVal));
+    return true;
+  }
+
   HRESULT invoke_create_container(DISPPARAMS* const parameters,
                                   VARIANT* const result,
                                   UINT* const argument_error) noexcept {
-    if (parameters == nullptr || parameters->cArgs != 1 ||
+    if (parameters == nullptr || parameters->cArgs != 3 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       return DISP_E_BADPARAMCOUNT;
     }
+    LocationArgumentsWiper location_wiper(parameters->rgvarg[2],
+                                          parameters->rgvarg[1]);
+    std::wstring_view name;
+    std::wstring_view directory;
     std::uint32_t size_mib = 0;
-    if (!exact_uint32(parameters->rgvarg[0], size_mib)) {
+    if (!exact_wstring(parameters->rgvarg[2], name) ||
+        !exact_wstring(parameters->rgvarg[1], directory) ||
+        !exact_uint32(parameters->rgvarg[0], size_mib)) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
     try {
-      return complete_selection(controller_.create_container(size_mib),
-                                result);
+      controller_.create_container(name, directory, size_mib);
+      return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
@@ -434,25 +539,33 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
-  // Four arguments: outer capacity, hidden capacity, and the new second
-  // password twice. The password the session was opened under is no longer
-  // one of them: the session still holds it, so it never returns to the page,
-  // and neither is the location: the native chooser owns it exactly as it does
-  // for a standard container. COM delivers the arguments in reverse order, and
-  // every supplied array is wiped on every path.
+  // Six arguments: the container name, the save location, outer capacity,
+  // hidden capacity, and the new second password twice. The password the
+  // session was opened under is still not one of them: the session holds it,
+  // so it never returns to the page. The location is now among them, and the
+  // argument list stays word-for-word parallel to the standard container's for
+  // the same reason the two dialogs do (8.7.2). COM delivers the arguments in
+  // reverse order; every supplied array and both strings are wiped on every
+  // path.
   HRESULT invoke_create_container_b(
       DISPPARAMS* const parameters, VARIANT* const result,
       UINT* const argument_error) noexcept {
-    if (parameters == nullptr || parameters->cArgs != 4 ||
+    if (parameters == nullptr || parameters->cArgs != 6 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
-      wipe_available_arguments(parameters, 4);
+      wipe_available_arguments(parameters, 6);
       return DISP_E_BADPARAMCOUNT;
     }
+    LocationArgumentsWiper location_wiper(parameters->rgvarg[5],
+                                          parameters->rgvarg[4]);
+    std::wstring_view name;
+    std::wstring_view directory;
     std::uint32_t outer_size_mib = 0;
     std::uint32_t hidden_size_mib = 0;
-    if (!exact_uint32(parameters->rgvarg[3], outer_size_mib) ||
+    if (!exact_wstring(parameters->rgvarg[5], name) ||
+        !exact_wstring(parameters->rgvarg[4], directory) ||
+        !exact_uint32(parameters->rgvarg[3], outer_size_mib) ||
         !exact_uint32(parameters->rgvarg[2], hidden_size_mib)) {
-      wipe_available_arguments(parameters, 4);
+      wipe_available_arguments(parameters, 6);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
@@ -465,23 +578,23 @@ class CardProductWebViewHostObject final : public IDispatch {
       second = consume_webview_password_array(second_argument);
       confirmation = consume_webview_password_array(confirmation_argument);
     } catch (const std::invalid_argument&) {
-      wipe_available_arguments(parameters, 4);
+      wipe_available_arguments(parameters, 6);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
-      wipe_available_arguments(parameters, 4);
+      wipe_available_arguments(parameters, 6);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
-      wipe_available_arguments(parameters, 4);
+      wipe_available_arguments(parameters, 6);
       return E_FAIL;
     }
 
     try {
-      return complete_selection(
-          controller_.create_container_b(outer_size_mib, hidden_size_mib,
-                                         second.bytes(), confirmation.bytes()),
-          result);
+      controller_.create_container_b(name, directory, outer_size_mib,
+                                     hidden_size_mib, second.bytes(),
+                                     confirmation.bytes());
+      return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;

@@ -55,6 +55,14 @@ chrome.webview.postMessage("driver-loaded");
   const creationCancelLabel =
     document.getElementById("create-volume-cancel-label");
   const creationContinue = document.getElementById("create-volume-continue");
+  const creationName = document.getElementById("create-container-name");
+  const creationNameError =
+    document.getElementById("create-container-name-error");
+  const creationDirectory =
+    document.getElementById("create-container-directory");
+  const creationDirectoryError =
+    document.getElementById("create-container-directory-error");
+  const creationBrowse = document.getElementById("create-container-browse");
   const creationCapacity =
     document.getElementById("create-container-capacity");
   const standardPick = document.querySelector(
@@ -63,6 +71,10 @@ chrome.webview.postMessage("driver-loaded");
   const typeStep = document.getElementById("create-type-step");
   const hiddenCapacity =
     document.getElementById("create-container-b-capacity");
+  const hiddenName = document.getElementById("create-container-b-name");
+  const hiddenDirectory =
+    document.getElementById("create-container-b-directory");
+  const hiddenBrowse = document.getElementById("create-container-b-browse");
   const hiddenInnerCapacity =
     document.getElementById("create-container-b-hidden-capacity");
   const hiddenSecond = document.getElementById("create-container-b-second");
@@ -250,32 +262,72 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-creation-type-step");
     return;
   }
+  const typeInto = (input, value) => {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
   creationContinue.click();
+  // The form opens empty and stays uncommittable until it is named and placed:
+  // there is no dialog left to supply either.
   if (!typeStep.hidden || creationTitle.textContent !== "新建标准容器" ||
       creationCancelLabel.textContent !== "上一步" ||
       creationContinue.textContent !== "创建容器" ||
+      creationName.value !== "" || creationDirectory.value !== "" ||
       creationCapacity.value !== "64" || capacityUnit.dataset.unit !== "mib" ||
-      creationContinue.disabled) {
+      !creationContinue.disabled || creationNameError.hidden ||
+      creationNameError.textContent !== "请填写名称。") {
     request("fail-creation-entry");
     return;
   }
-  // 上一步 returns to the picker and clears the parameters it collected.
-  creationCapacity.value = "128";
-  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  // 上一步 returns to the picker and clears everything it collected, the
+  // location included.
+  typeInto(creationName, "scratch");
+  typeInto(creationCapacity, "128");
   creationCancel.click();
-  if (typeStep.hidden || creationCapacity.value !== "64" ||
+  if (typeStep.hidden || creationName.value !== "" ||
+      creationDirectory.value !== "" || creationCapacity.value !== "64" ||
       creationTitle.textContent !== "新建容器") {
     request("fail-creation-back-step");
     return;
   }
   creationContinue.click();
   if (!typeStep.hidden || creationCapacity.value !== "64" ||
-      creationContinue.disabled) {
+      !creationContinue.disabled) {
     request("fail-creation-entry");
     return;
   }
-  creationCapacity.value = "19";
-  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  // A name a file name cannot carry is named under its own field and never
+  // reaches the bridge.
+  typeInto(creationName, "sub\\integration");
+  if (!creationContinue.disabled || creationNameError.hidden ||
+      creationNameError.textContent !==
+        "名称不能包含 \\ / : * ? \" < > | 或控制字符。") {
+    request("fail-creation-location");
+    return;
+  }
+  typeInto(creationName, "integration");
+  if (!creationNameError.hidden) {
+    request("fail-creation-location");
+    return;
+  }
+  // So is a save location that is not a drive-absolute path.
+  typeInto(creationDirectory, "Vault");
+  if (!creationContinue.disabled || creationDirectoryError.hidden ||
+      creationDirectoryError.textContent !==
+        "需要本机盘符路径，例如 D:\\Vault。") {
+    request("fail-creation-location");
+    return;
+  }
+  // 浏览 only fills the field. The value it returns is checked exactly like a
+  // typed one, and the run owns the directory it names.
+  creationBrowse.click();
+  if (!await waitFor(() => surface.dataset.busy === "false" &&
+      /^[A-Za-z]:\\/.test(creationDirectory.value) &&
+      creationDirectoryError.hidden && !creationContinue.disabled)) {
+    request("fail-creation-browse");
+    return;
+  }
+  typeInto(creationCapacity, "19");
   if (!creationContinue.disabled || capacityError.hidden ||
       capacityError.textContent !== "容量低于最小值。") {
     request("fail-creation-validation");
@@ -306,24 +358,24 @@ chrome.webview.postMessage("driver-loaded");
   }
   capacityUnit.click();
   capacityUnitOption("mib").click();
-  creationCapacity.value = "64";
-  creationCapacity.dispatchEvent(new Event("input", { bubbles: true }));
+  typeInto(creationCapacity, "64");
   creationContinue.click();
+  // A failed creation clears the two location fields with everything else, so
+  // the form is ready for another try but has to be filled in again.
   if (!await waitFor(() => surface.dataset.busy === "false" &&
       dashboardVolumeState.textContent === "未挂载" &&
       creationStatus.dataset.tone === "error" &&
-      !creationCapacity.disabled && !creationContinue.disabled)) {
+      creationName.value === "" && creationDirectory.value === "" &&
+      !creationName.disabled && !creationCapacity.disabled &&
+      creationContinue.disabled && containerRows().length === 0)) {
     request("fail-creation-failure-feedback");
     return;
   }
-  // The second selection is cancelled by the native chooser: the page must
-  // report it as an ordinary cancellation and stay ready for another try.
-  creationContinue.click();
+  typeInto(creationName, "integration");
+  creationBrowse.click();
   if (!await waitFor(() => surface.dataset.busy === "false" &&
-      creationStatus.textContent === "已取消创建。" &&
-      creationStatus.dataset.tone === "" && !creationContinue.disabled &&
-      containerRows().length === 0)) {
-    request("fail-creation-cancelled");
+      !creationContinue.disabled)) {
+    request("fail-creation-browse");
     return;
   }
   creationContinue.click();
@@ -356,13 +408,9 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
 
-  // The hidden container picks its own location, commits the card record and
-  // creates the volume through one four-argument bridge call; the fakes
-  // verify every position and the chosen path.
-  const typeInto = (input, value) => {
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  };
+  // 8.7.2: the hidden container is named and placed on exactly the same two
+  // fields, then commits the card record and creates the volume through one
+  // six-argument bridge call; the fakes verify every position and the path.
   containersCreate.click();
   hiddenPick.click();
   if (hiddenPick.getAttribute("aria-checked") !== "true" ||
@@ -371,6 +419,17 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
   creationContinue.click();
+  if (hiddenName.value !== "" || hiddenDirectory.value !== "") {
+    request("fail-hidden-creation");
+    return;
+  }
+  typeInto(hiddenName, "handover");
+  hiddenBrowse.click();
+  if (!await waitFor(() => surface.dataset.busy === "false" &&
+      /^[A-Za-z]:\\/.test(hiddenDirectory.value))) {
+    request("fail-creation-browse");
+    return;
+  }
   typeInto(hiddenCapacity, "128");
   typeInto(hiddenInnerCapacity, "97");
   typeInto(hiddenSecond, "second-password-value");
@@ -406,7 +465,8 @@ chrome.webview.postMessage("driver-loaded");
   if (!await waitFor(() => surface.dataset.busy === "false" &&
       dashboardContainerCount.textContent === "2" &&
       containerRows().length === 2 && hiddenSecond.value === "" &&
-      hiddenSecondConfirmation.value === "" &&
+      hiddenSecondConfirmation.value === "" && hiddenName.value === "" &&
+      hiddenDirectory.value === "" &&
       creationStatus.dataset.tone === "success")) {
     request("fail-hidden-creation");
     return;

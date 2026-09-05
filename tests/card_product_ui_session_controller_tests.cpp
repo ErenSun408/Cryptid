@@ -7,6 +7,7 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <cstdint>
@@ -389,13 +390,14 @@ class FakeEntry final : public ICardEntryActions {
   int login_calls{};
 };
 
-// The page never supplies a path, so every selection in these tests comes
-// from the chooser and the counters prove when it was consulted.
+// Creation no longer selects anything: the caller names the container and the
+// directory. Only the browse button and the adoption dialog reach the chooser,
+// and the counters prove when each was consulted.
 class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
  public:
-  [[nodiscard]] std::wstring choose_new_container() override {
-    ++new_calls;
-    return new_path;
+  [[nodiscard]] std::wstring choose_container_directory() override {
+    ++directory_calls;
+    return directory_path;
   }
 
   [[nodiscard]] std::wstring choose_existing_container() override {
@@ -403,18 +405,53 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
-  std::wstring new_path;
+  std::wstring directory_path;
   std::wstring existing_path;
-  int new_calls{};
+  int directory_calls{};
   int existing_calls{};
 };
 
+// A save location has to exist now, so the tests need a real directory rather
+// than a plausible-looking string.
+class ScopedDirectory final {
+ public:
+  explicit ScopedDirectory(const wchar_t* const leaf)
+      : path_(std::filesystem::temp_directory_path() /
+              L"usb-vault-ui-tests" / leaf) {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+    std::filesystem::create_directories(path_);
+  }
+
+  ~ScopedDirectory() noexcept {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  ScopedDirectory(const ScopedDirectory&) = delete;
+  ScopedDirectory& operator=(const ScopedDirectory&) = delete;
+
+  [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
+
+  // The path the controller must produce for a container named `name`.
+  [[nodiscard]] std::wstring target(const std::wstring_view name) const {
+    return wide() + L"\\" + std::wstring(name) + L".hc";
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+std::uint32_t g_fixture_serial = 0;
+
 struct Fixture final {
   Fixture()
-      : volume(authentication),
+      : directory(std::to_wstring(++g_fixture_serial).c_str()),
+        volume(authentication),
         controller(entry, authentication, volume, policy, chooser) {}
 
   FakeEntry entry;
+  ScopedDirectory directory;
   CardAuthenticationSession authentication;
   FakeVolumeSession volume;
   OfflineCardPasswordPolicy policy;
@@ -641,9 +678,7 @@ void test_container_collection_is_projected_only_when_authenticated() {
           "unauthenticated UI queried or exposed the container collection");
 
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
-  require(fixture.controller.create_container(64),
-          "creation reported a cancellation the chooser did not make");
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
 
   std::vector<ContainerUiStatus> statuses =
       fixture.controller.container_statuses();
@@ -651,9 +686,13 @@ void test_container_collection_is_projected_only_when_authenticated() {
               statuses[0].name == L"work.hc" && statuses[0].mounted &&
               statuses[0].size_mib == 64 && statuses[0].drive_letter == L'D',
           "container projection lost identity, name, capacity, or drive");
-  require(fixture.volume.created_path == L"D:\\Vault\\work.hc" &&
+  // The name is the file name: the extension belongs to this boundary, not to
+  // the page, and the directory is joined here rather than on the page.
+  require(fixture.volume.created_path == fixture.directory.target(L"work") &&
               fixture.volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL,
-          "the chosen path or capacity did not reach the session");
+          "the named path or capacity did not reach the session");
+  require(fixture.chooser.directory_calls == 0,
+          "creating a container opened a dialog the form had replaced");
 
   fixture.controller.unmount_container(statuses[0].id);
   statuses = fixture.controller.container_statuses();
@@ -663,11 +702,12 @@ void test_container_collection_is_projected_only_when_authenticated() {
           "an unmounted container kept a drive letter or a capacity");
 }
 
-void test_container_creation_is_bounded_and_cancellable() {
+void test_container_creation_is_bounded_and_validated() {
   Fixture fixture;
+  const std::wstring directory = fixture.directory.wide();
   fixture.entry.route = CardEntryRoute::login_required;
   require_throws<std::system_error>(
-      [&] { static_cast<void>(fixture.controller.create_container(64)); },
+      [&] { fixture.controller.create_container(L"work", directory, 64); },
       "unauthenticated route created a container");
 
   fixture.authentication.establish(root_secret());
@@ -675,36 +715,96 @@ void test_container_creation_is_bounded_and_cancellable() {
                                       kContainerCreationMaximumMib + 1}) {
     require_throws<std::invalid_argument>(
         [&] {
-          static_cast<void>(fixture.controller.create_container(invalid));
+          fixture.controller.create_container(L"work", directory, invalid);
         },
         "UI accepted a container size outside the shared range");
   }
-  require(fixture.chooser.new_calls == 0 && fixture.volume.create_calls == 0,
-          "an out-of-range size still opened the chooser or the session");
 
-  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
+  // The page owns these two strings now, so every shape it must not be able to
+  // express has to be refused here rather than somewhere downstream. The
+  // syntax rules are covered exhaustively by the path unit's own tests; what
+  // matters here is that this boundary applies them at all, before the session
+  // is touched.
+  for (const std::wstring_view rejected_name :
+       {std::wstring_view(L""), std::wstring_view(L"..\\escape"),
+        std::wstring_view(L"work.hc:stream"), std::wstring_view(L"NUL"),
+        std::wstring_view(L"trailing ")}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          fixture.controller.create_container(rejected_name, directory, 64);
+        },
+        "UI accepted a container name a file name cannot carry");
+  }
+  for (const std::wstring_view rejected_directory :
+       {std::wstring_view(L""), std::wstring_view(L"Vault"),
+        std::wstring_view(L"\\\\server\\share"),
+        std::wstring_view(L"\\\\?\\D:\\Vault"),
+        std::wstring_view(L"D:\\Vault\\..\\Windows")}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          fixture.controller.create_container(L"work", rejected_directory, 64);
+        },
+        "UI accepted a save location the form must not be able to name");
+  }
+  // A well-formed location that is absent is a rejected field too: the
+  // directory is never created on the user's behalf.
+  require_throws<std::invalid_argument>(
+      [&] {
+        fixture.controller.create_container(
+            L"work", directory + L"\\missing", 64);
+      },
+      "UI accepted a save location that does not exist");
+  require(fixture.volume.create_calls == 0,
+          "a rejected request still reached the session");
+
   fixture.volume.reject_create = true;
   require_throws<std::runtime_error>(
-      [&] { static_cast<void>(fixture.controller.create_container(64)); },
+      [&] { fixture.controller.create_container(L"work", directory, 64); },
       "a failed creation was not reported");
   require(fixture.controller.state() == CardProductUiState::authenticated,
           "a failed creation dropped the authenticated route");
+  require(fixture.controller.container_statuses().empty(),
+          "a failed creation left an adopted container behind");
   fixture.volume.reject_create = false;
 
-  fixture.chooser.new_path.clear();
-  require(!fixture.controller.create_container(64) &&
-              fixture.chooser.new_calls == 2 &&
-              fixture.volume.create_calls == 1,
-          "a cancelled chooser still created a container");
-  require(fixture.controller.container_statuses().empty(),
-          "a cancelled creation left an adopted container behind");
+  fixture.controller.create_container(L"work", directory, 64);
+  require(fixture.volume.create_calls == 2 &&
+              fixture.controller.container_statuses().size() == 1,
+          "a valid request after a rejected one did not go through");
+}
+
+// The browse button is the only place creation still opens a dialog, and what
+// it returns is a value for a field rather than a decision.
+void test_browsing_for_a_directory_only_reports_the_choice() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  require_throws<std::system_error>(
+      [&] {
+        static_cast<void>(fixture.controller.browse_for_container_directory());
+      },
+      "an unauthenticated route opened the directory picker");
+  require(fixture.chooser.directory_calls == 0,
+          "an unauthenticated route still reached the chooser");
+
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.directory_path = L"D:\\Vault";
+  require(fixture.controller.browse_for_container_directory() ==
+                  L"D:\\Vault" &&
+              fixture.chooser.directory_calls == 1,
+          "the chosen directory did not reach the caller");
+
+  fixture.chooser.directory_path.clear();
+  require(fixture.controller.browse_for_container_directory().empty() &&
+              fixture.chooser.directory_calls == 2,
+          "a cancelled picker was not reported as an empty choice");
+  require(fixture.volume.create_calls == 0,
+          "browsing created something on its own");
 }
 
 void test_adopted_container_remounts_without_reselecting_its_file() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
-  require(fixture.controller.create_container(64), "creation was refused");
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
   const std::uint32_t id = fixture.controller.container_statuses()[0].id;
 
   fixture.controller.unmount_container(id);
@@ -733,21 +833,22 @@ void test_adopted_container_remounts_without_reselecting_its_file() {
 void test_container_b_commits_the_card_before_the_volume() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:\\Vault\\handover.hc";
   auto second = bytes("second-password-value");
   auto confirmation = bytes("second-password-value");
 
-  require(fixture.controller.create_container_b(64, 16, second, confirmation),
-          "container B creation was refused");
+  fixture.controller.create_container_b(
+      L"handover", fixture.directory.wide(), 64, 16, second, confirmation);
 
   require(fixture.entry.second_password_calls == 1 &&
               fixture.volume.create_b_calls == 1,
           "container B did not run both halves exactly once");
-  // The location comes from the same native chooser a standard container
-  // uses, so the page supplies no path here either.
-  require(fixture.chooser.new_calls == 1 &&
-              fixture.volume.created_b_path == L"D:\\Vault\\handover.hc",
-          "container B was not created at the chosen location");
+  // The location is named on the form exactly as a standard container's is,
+  // and it is resolved by the same rules. 8.7.2: neither shape asks for
+  // anything the other does not.
+  require(fixture.chooser.directory_calls == 0 &&
+              fixture.volume.created_b_path ==
+                  fixture.directory.target(L"handover"),
+          "container B was not created at the named location");
   // The password that rewraps the card record comes from the session, not
   // from the page: the page never sent one.
   require(fixture.volume.session_password_calls == 1 &&
@@ -778,41 +879,51 @@ void test_container_b_commits_the_card_before_the_volume() {
   auto released_confirmation = bytes("second-password-value");
   require_throws<std::system_error>(
       [&] {
-        static_cast<void>(released.controller.create_container_b(
-            64, 16, released_second, released_confirmation));
+        released.controller.create_container_b(
+            L"handover", released.directory.wide(), 64, 16, released_second,
+            released_confirmation);
       },
       "a session without its login input still created container B");
   require(released.entry.second_password_calls == 0 &&
-              released.volume.create_b_calls == 0 &&
-              released.chooser.new_calls == 0,
-          "a released session still reached the chooser, card or volume");
+              released.volume.create_b_calls == 0,
+          "a released session still reached the card or volume");
 
-  // Cancelling the chooser leaves the card untouched: the record is rewritten
-  // only once the location is settled.
-  Fixture cancelled;
-  cancelled.authentication.establish(root_secret());
-  auto cancelled_second = bytes("second-password-value");
-  auto cancelled_confirmation = bytes("second-password-value");
-  require(!cancelled.controller.create_container_b(64, 16, cancelled_second,
-                                                   cancelled_confirmation),
-          "a cancelled selection was reported as a creation");
-  require(cancelled.chooser.new_calls == 1 &&
-              cancelled.entry.second_password_calls == 0 &&
-              cancelled.volume.create_b_calls == 0,
-          "a cancelled selection still rewrote the card or created a volume");
+  // A rejected location leaves the card untouched: the record is rewritten
+  // only once the location has been resolved.
+  Fixture rejected;
+  rejected.authentication.establish(root_secret());
+  auto rejected_second = bytes("second-password-value");
+  auto rejected_confirmation = bytes("second-password-value");
+  require_throws<std::invalid_argument>(
+      [&] {
+        rejected.controller.create_container_b(
+            L"handover", L"Vault", 64, 16, rejected_second,
+            rejected_confirmation);
+      },
+      "a rejected save location was reported as a creation");
+  require(rejected.entry.second_password_calls == 0 &&
+              rejected.volume.create_b_calls == 0,
+          "a rejected location still rewrote the card or created a volume");
+  for (const std::vector<std::byte>& input :
+       {rejected_second, rejected_confirmation}) {
+    for (const std::byte value : input) {
+      require(value == std::byte{},
+              "a rejected container B request kept its inputs");
+    }
+  }
 
   // A failed card record must stop before the volume exists, because a
   // container nobody can open with the second password blocks every retry.
   Fixture blocked;
   blocked.authentication.establish(root_secret());
-  blocked.chooser.new_path = L"D:\\Vault\\handover.hc";
   blocked.entry.reject_second_password = true;
   auto blocked_second = bytes("second-password-value");
   auto blocked_confirmation = bytes("second-password-value");
   require_throws<std::runtime_error>(
       [&] {
-        static_cast<void>(blocked.controller.create_container_b(
-            64, 16, blocked_second, blocked_confirmation));
+        blocked.controller.create_container_b(
+            L"handover", blocked.directory.wide(), 64, 16, blocked_second,
+            blocked_confirmation);
       },
       "a failed card record update was not reported");
   require(blocked.volume.create_b_calls == 0,
@@ -824,10 +935,11 @@ void test_container_b_rejects_unusable_requests() {
   fixture.entry.route = CardEntryRoute::login_required;
   auto second = bytes("second-password-value");
   auto confirmation = bytes("second-password-value");
+  const std::wstring directory = fixture.directory.wide();
   require_throws<std::system_error>(
       [&] {
-        static_cast<void>(fixture.controller.create_container_b(
-            64, 16, second, confirmation));
+        fixture.controller.create_container_b(L"handover", directory, 64, 16,
+                                              second, confirmation);
       },
       "an unauthenticated route created container B");
 
@@ -845,53 +957,76 @@ void test_container_b_rejects_unusable_requests() {
     auto sized_confirmation = bytes("second-password-value");
     require_throws<std::invalid_argument>(
         [&] {
-          static_cast<void>(fixture.controller.create_container_b(
-              outer, hidden, sized_second, sized_confirmation));
+          fixture.controller.create_container_b(L"handover", directory, outer,
+                                                hidden, sized_second,
+                                                sized_confirmation);
         },
         "container B accepted an unusable size pair");
   }
+
+  // 8.7.2: the location is checked by the same rules on this shape as on the
+  // standard one, and a rejection here reaches neither the card nor a volume.
+  for (const std::wstring_view rejected_directory :
+       {std::wstring_view(L""), std::wstring_view(L"Vault"),
+        std::wstring_view(L"\\\\server\\share")}) {
+    auto placed_second = bytes("second-password-value");
+    auto placed_confirmation = bytes("second-password-value");
+    require_throws<std::invalid_argument>(
+        [&] {
+          fixture.controller.create_container_b(
+              L"handover", rejected_directory, 64, 16, placed_second,
+              placed_confirmation);
+        },
+        "container B accepted a save location the form must not name");
+  }
+  require_throws<std::invalid_argument>(
+      [&] {
+        auto named_second = bytes("second-password-value");
+        auto named_confirmation = bytes("second-password-value");
+        fixture.controller.create_container_b(L"NUL", directory, 64, 16,
+                                              named_second,
+                                              named_confirmation);
+      },
+      "container B accepted a reserved device name");
 
   auto mismatched = bytes("second-password-value");
   auto other = bytes("different-password-val");
   require_throws<usb_vault::security::PasswordConfirmationRejected>(
       [&] {
-        static_cast<void>(fixture.controller.create_container_b(
-            64, 16, mismatched, other));
+        fixture.controller.create_container_b(L"handover", directory, 64, 16,
+                                              mismatched, other);
       },
       "container B accepted two different second passwords");
   require(fixture.entry.second_password_calls == 0 &&
               fixture.volume.create_b_calls == 0 &&
-              fixture.chooser.new_calls == 0,
+              fixture.chooser.directory_calls == 0,
           "a rejected container B request still reached the card or volume");
 
   auto shared = bytes("second-password-value");
   require_throws<std::invalid_argument>(
       [&] {
-        static_cast<void>(fixture.controller.create_container_b(
-            64, 16, shared, shared));
+        fixture.controller.create_container_b(L"handover", directory, 64, 16,
+                                              shared, shared);
       },
       "container B accepted overlapping input buffers");
 
   // The largest inner volume the rule does allow still goes through.
-  fixture.chooser.new_path = L"D:\\Vault\\handover.hc";
   auto allowed_second = bytes("second-password-value");
   auto allowed_confirmation = bytes("second-password-value");
-  require(fixture.controller.create_container_b(64, 48, allowed_second,
-                                                allowed_confirmation),
-          "the three-quarter boundary refused the shape it must allow");
+  fixture.controller.create_container_b(L"handover", directory, 64, 48,
+                                        allowed_second, allowed_confirmation);
   require(fixture.volume.created_hidden_bytes == 48ULL * 1024ULL * 1024ULL,
           "the three-quarter boundary refused the size it must allow");
 
-  // Nothing caps how many of them exist: a second location goes through the
-  // same unconditional flow.
-  fixture.chooser.new_path = L"E:\\Vault\\spare.hc";
+  // Nothing caps how many of them exist: a second name in the same directory
+  // goes through the same unconditional flow.
   auto again_second = bytes("second-password-value");
   auto again_confirmation = bytes("second-password-value");
-  require(fixture.controller.create_container_b(40, 20, again_second,
-                                                again_confirmation),
-          "a second hidden-volume container was refused");
+  fixture.controller.create_container_b(L"spare", directory, 40, 20,
+                                        again_second, again_confirmation);
   require(fixture.volume.create_b_calls == 2 &&
-              fixture.volume.created_b_path == L"E:\\Vault\\spare.hc" &&
+              fixture.volume.created_b_path ==
+                  fixture.directory.target(L"spare") &&
               fixture.controller.container_statuses().size() == 2,
           "the second hidden-volume container was not adopted separately");
 }
@@ -899,8 +1034,7 @@ void test_container_b_rejects_unusable_requests() {
 void test_capacity_rounds_the_attached_volume_to_whole_mib() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
-  require(fixture.controller.create_container(64), "creation was refused");
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
 
   // A real volume is never an exact MiB multiple: the header group alone costs
   // 128 KiB. The page shows the nearest MiB rather than refusing the value and
@@ -930,8 +1064,7 @@ void test_card_reset_releases_the_session_and_refuses_while_mounted() {
 
   Fixture mounted;
   mounted.authentication.establish(root_secret());
-  mounted.chooser.new_path = L"D:\\Vault\\work.hc";
-  require(mounted.controller.create_container(64), "creation was refused");
+  mounted.controller.create_container(L"work", mounted.directory.wide(), 64);
   mounted.volume.reject_unmount = true;
 
   // A mount that outlives its key material would hold a drive letter nothing
@@ -944,8 +1077,7 @@ void test_card_reset_releases_the_session_and_refuses_while_mounted() {
 
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
-  require(fixture.controller.create_container(64), "creation was refused");
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
   require(fixture.controller.can_reset_card_record(),
           "an authenticated session did not offer the reset");
 
@@ -971,8 +1103,7 @@ void test_card_reset_releases_the_session_and_refuses_while_mounted() {
 void test_inconsistent_container_status_fails_closed() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  fixture.chooser.new_path = L"D:\\Vault\\work.hc";
-  require(fixture.controller.create_container(64), "creation was refused");
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
   const std::uint32_t id = fixture.controller.container_statuses()[0].id;
   fixture.controller.unmount_container(id);
 
@@ -1088,7 +1219,8 @@ int main() {
     test_residual_mount_blocks_new_card_actions_until_cleanup();
     test_unmount_forwards_only_unified_active_state();
     test_container_collection_is_projected_only_when_authenticated();
-    test_container_creation_is_bounded_and_cancellable();
+    test_container_creation_is_bounded_and_validated();
+    test_browsing_for_a_directory_only_reports_the_choice();
     test_adopted_container_remounts_without_reselecting_its_file();
     test_container_b_commits_the_card_before_the_volume();
     test_container_b_rejects_unusable_requests();

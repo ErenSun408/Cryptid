@@ -112,10 +112,12 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   int unmount_calls{};
 };
 
-// Closing never selects a container file, so the chooser only has to exist.
+// Closing never locates a container file, so the chooser only has to exist.
 class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
  public:
-  [[nodiscard]] std::wstring choose_new_container() override { return {}; }
+  [[nodiscard]] std::wstring choose_container_directory() override {
+    return {};
+  }
   [[nodiscard]] std::wstring choose_existing_container() override {
     return {};
   }
