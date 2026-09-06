@@ -1025,6 +1025,7 @@ void test_container_b_creation_rejects_unusable_input() {
   runtime.events.clear();
   for (const auto [outer, hidden] : {
            std::pair<std::uint64_t, std::uint64_t>{0, 0},
+           std::pair<std::uint64_t, std::uint64_t>{1024, 0},
            std::pair<std::uint64_t, std::uint64_t>{513, 0},
            std::pair<std::uint64_t, std::uint64_t>{1024, 513},
            std::pair<std::uint64_t, std::uint64_t>{1024, 1024}}) {

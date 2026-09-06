@@ -666,12 +666,16 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     throw std::logic_error(
         "this session no longer holds the input it was opened with");
   }
-  if (outer_size_bytes == 0 || outer_size_bytes % 512ULL != 0 ||
+  // A zero-length hidden volume is refused here and not only in the UI layer
+  // that already refuses it: this entry point is the application contract, and
+  // every other size invariant of the pair is stated in this same condition.
+  if (outer_size_bytes == 0 || hidden_size_bytes == 0 ||
+      outer_size_bytes % 512ULL != 0 ||
       hidden_size_bytes % 512ULL != 0 ||
       hidden_size_bytes >= outer_size_bytes) {
     throw std::invalid_argument(
-        "outer and hidden sizes must be aligned and leave room for the outer "
-        "volume");
+        "outer and hidden sizes must be non-zero, aligned, and leave room for "
+        "the outer volume");
   }
   if (decoy_password_utf8.size() == 0) {
     throw std::invalid_argument(
