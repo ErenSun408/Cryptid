@@ -290,6 +290,15 @@ void CardProductUiSessionController::unmount_container(
   volume_session_.unmount_container(id);
 }
 
+void CardProductUiSessionController::forget_container(
+    const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "dropping a container is not available in the current UI state");
+  }
+  volume_session_.forget_container(id);
+}
+
 void CardProductUiSessionController::unmount() {
   volume_session_.unmount_active();
 }

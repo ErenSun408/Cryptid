@@ -847,6 +847,48 @@ void test_adopted_container_remounts_without_reselecting_its_file() {
           "a cancelled chooser still adopted a container");
 }
 
+void test_dropping_a_container_takes_the_record_and_not_the_file() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
+  fixture.chooser.existing_path = L"E:\\Media\\photos.hc";
+  require(fixture.controller.mount_container(),
+          "adopting a second container failed");
+  fixture.chooser.existing_path.clear();
+
+  const std::vector<ContainerUiStatus> before =
+      fixture.controller.container_statuses();
+  require(before.size() == 2, "the fixture did not produce two containers");
+  const std::uint32_t dropped = before[1].id;
+
+  // The session refuses a mounted one, and the page must not paper over that.
+  require_throws<std::logic_error>(
+      [&] { fixture.controller.forget_container(dropped); },
+      "a mounted container was dropped from the list");
+
+  fixture.controller.unmount_container(dropped);
+  fixture.controller.forget_container(dropped);
+  require(fixture.volume.forget_container_calls == 2,
+          "the drop did not reach the session both times");
+
+  const std::vector<ContainerUiStatus> after =
+      fixture.controller.container_statuses();
+  require(after.size() == 1 && after[0].id == before[0].id,
+          "dropping one container did not leave exactly the other");
+  require_throws<std::invalid_argument>(
+      [&] { fixture.controller.forget_container(dropped); },
+      "a container already off the list could be dropped again");
+}
+
+void test_dropping_a_container_is_refused_off_the_authenticated_route() {
+  Fixture fixture;
+  require_throws<std::system_error>(
+      [&] { fixture.controller.forget_container(1); },
+      "a container was dropped without an authenticated session");
+  require(fixture.volume.forget_container_calls == 0,
+          "a wrong-route drop still reached the session");
+}
+
 void test_container_b_commits_the_card_before_the_volume() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -1246,6 +1288,8 @@ int main() {
     test_inconsistent_container_status_fails_closed();
     test_operation_history_is_authenticated_sanitized_and_clearable();
     test_operation_history_rejects_paths_and_impossible_shapes();
+    test_dropping_a_container_takes_the_record_and_not_the_file();
+    test_dropping_a_container_is_refused_off_the_authenticated_route();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

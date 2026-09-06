@@ -51,6 +51,7 @@ constexpr wchar_t kCreateContainerMibName[] = L"createContainerMib";
 constexpr wchar_t kMountContainerName[] = L"mountContainer";
 constexpr wchar_t kMountAdoptedContainerName[] = L"mountAdoptedContainer";
 constexpr wchar_t kUnmountContainerName[] = L"unmountContainer";
+constexpr wchar_t kForgetContainerName[] = L"forgetContainer";
 constexpr wchar_t kGetContainerCountName[] = L"getContainerCount";
 constexpr wchar_t kGetContainerIdName[] = L"getContainerId";
 constexpr wchar_t kGetContainerNameName[] = L"getContainerName";
@@ -73,6 +74,7 @@ constexpr wchar_t kResetCardRecordName[] = L"resetCardRecord";
 constexpr DISPID kCanResetCardRecordId = 29;
 constexpr wchar_t kCanResetCardRecordName[] = L"canResetCardRecord";
 constexpr DISPID kChooseContainerDirectoryId = 30;
+constexpr DISPID kForgetContainerId = 31;
 constexpr wchar_t kChooseContainerDirectoryName[] =
     L"chooseContainerDirectory";
 
@@ -267,6 +269,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kUnmountContainerId;
       return S_OK;
     }
+    if (matches(names[0], kForgetContainerName)) {
+      ids[0] = kForgetContainerId;
+      return S_OK;
+    }
     if (matches(names[0], kGetContainerCountName)) {
       ids[0] = kGetContainerCountId;
       return S_OK;
@@ -366,6 +372,8 @@ class CardProductWebViewHostObject final : public IDispatch {
                                               argument_error);
       case kUnmountContainerId:
         return invoke_unmount_container(parameters, argument_error);
+      case kForgetContainerId:
+        return invoke_forget_container(parameters, argument_error);
       case kGetContainerCountId:
         return invoke_container_count(parameters, result);
       case kGetContainerIdId:
@@ -649,6 +657,28 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
     try {
       controller_.unmount_container(identifier);
+      return S_OK;
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_forget_container(DISPPARAMS* const parameters,
+                                  UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t identifier = 0;
+    if (!exact_uint32(parameters->rgvarg[0], identifier)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.forget_container(identifier);
       return S_OK;
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;

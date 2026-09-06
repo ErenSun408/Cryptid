@@ -1172,6 +1172,22 @@ void test_adopted_container_mount_and_unmount_route_through_identifiers() {
   require(invoke_with_number(*host.Get(), L"unmountContainer", id + 7, nullptr,
                              &argument_error) == DISP_E_TYPEMISMATCH,
           "host unmounted an identifier the session never adopted");
+
+  // Dropping a container off the list is the same shape of call, and the same
+  // refusal for an identifier nobody adopted.
+  require(invoke_with_number(*host.Get(), L"forgetContainer", id + 7, nullptr,
+                             &argument_error) == DISP_E_TYPEMISMATCH,
+          "host dropped an identifier the session never adopted");
+  require(invoke_with_number(*host.Get(), L"unmountContainer", id, nullptr,
+                             nullptr) == S_OK,
+          "unmounting before the drop failed");
+  require(invoke_with_number(*host.Get(), L"forgetContainer", id, nullptr,
+                             nullptr) == S_OK &&
+              // The refused attempt above reached the session too, so this is
+              // the second call and the first one that changed anything.
+              fixture.volume.forget_container_calls == 2 &&
+              invoke_container_count(*host.Get()) == 0,
+          "dropping by identifier did not take the container off the list");
 }
 
 // Builds `createContainerBMib(name, directory, outer, hidden, second,

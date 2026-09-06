@@ -123,6 +123,13 @@ class CardProductUiSessionController final {
   void mount_container(std::uint32_t id);
 
   void unmount_container(std::uint32_t id);
+
+  // Takes a container off the list and forgets where it was left. The file
+  // stays exactly where it is: this drops the record, never the container, and
+  // the same file can be brought back later through the import button. The
+  // session refuses a mounted one.
+  void forget_container(std::uint32_t id);
+
   void unmount();
 
   [[nodiscard]] CardProductUiState state() const noexcept;
