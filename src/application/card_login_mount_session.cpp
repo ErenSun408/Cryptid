@@ -382,11 +382,14 @@ namespace {
 SessionContainer& adopt(CardLoginMountSessionState& state,
                         const std::wstring_view path,
                         const wchar_t drive_letter, const bool mounted,
-                        const bool release_first = false) {
+                        const bool release_first = false,
+                        const bool derivation_known = true) {
   if (SessionContainer* const existing = find_by_path(state, path)) {
     existing->drive_letter = drive_letter;
     existing->mounted = mounted;
     existing->release_first = existing->release_first || release_first;
+    existing->derivation_known =
+        existing->derivation_known || derivation_known;
     return *existing;
   }
   state.containers.push_back({.id = state.next_container_id,
@@ -394,7 +397,8 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
                               .name = file_name_of(path),
                               .drive_letter = drive_letter,
                               .mounted = mounted,
-                              .release_first = release_first});
+                              .release_first = release_first,
+                              .derivation_known = derivation_known});
   ++state.next_container_id;
   return state.containers.back();
 }
@@ -521,6 +525,7 @@ void CardLoginMountSessionCore::consume_authenticated_login(
       static_cast<void>(adopt(state_, layout_.container_a.path, wchar_t{},
                               false));
     }
+    adopt_remembered_containers();
     if (login_mount_policy_ == LoginMountPolicy::manual) {
       // The login input only ever existed for the synchronous mount call, so
       // the manual policy releases it as soon as authentication is volatile.
@@ -624,6 +629,64 @@ void CardLoginMountSessionCore::forget_container_path(
     }
   } catch (...) {
   }
+}
+
+void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
+  try {
+    security::SecureBuffer key = container_index_key();
+    const std::vector<std::byte> file = runtime_.read_container_index();
+    const std::vector<std::wstring> paths =
+        list_container_index_paths_v1(key.bytes(), file);
+    key.clear();
+    for (const std::wstring& path : paths) {
+      // A remembered path whose file is not here is passed over and left in
+      // the index. A container on a drive that is not plugged in is absent in
+      // exactly the way a deleted one is, and clearing a slot on that evidence
+      // would throw the record away for good.
+      if (!runtime_.container_exists(path)) continue;
+      static_cast<void>(adopt(state_, path, wchar_t{}, false, false, false));
+    }
+  } catch (...) {
+  }
+}
+
+CardLoginMountSessionCore::ProbedMount
+CardLoginMountSessionCore::mount_with_either_derivation(
+    const std::wstring_view path) {
+  security::SecureBuffer standard_password;
+  wchar_t drive_letter{};
+  volume::MountOptions options{};
+  try {
+    standard_password = derive_standard_password();
+    drive_letter = reserve_drive_letter();
+    options = {.drive_letter = drive_letter,
+               .prf = volume::Pkcs5Prf::sha512,
+               .pim = 0,
+               .read_only = false,
+               .notify_shell = false};
+    static_cast<void>(
+        runtime_.mount_created(path, standard_password, options));
+    standard_password.clear();
+    return {.drive_letter = drive_letter, .hidden_volume = false};
+  } catch (const std::system_error& error) {
+    standard_password.clear();
+    // The user selects a file, never a container class, and the page must not
+    // offer that choice either. A file the standard derivation cannot open is
+    // either built from the login input or not a container of ours at all, and
+    // the two stay indistinguishable until the second derivation has been
+    // tried.
+    if (error.code() != volume::make_error_code(
+                            volume::DriverError::authentication_failed) ||
+        state_.login_password.empty()) {
+      throw;
+    }
+  } catch (...) {
+    standard_password.clear();
+    throw;
+  }
+  static_cast<void>(
+      runtime_.mount_created(path, hidden_container_password(), options));
+  return {.drive_letter = drive_letter, .hidden_volume = true};
 }
 
 wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
@@ -849,22 +912,33 @@ void CardLoginMountSessionCore::mount_adopted_container(
           "adopted container file is no longer present");
     }
 
-    const bool hidden_volume = entry->release_first;
-    if (hidden_volume && state_.login_password.empty()) {
-      throw std::logic_error(
-          "this container can only be opened by the login that captured it");
+    // A container read back from the index has never said which of its
+    // volumes answers, so it is opened the way an import is: standard
+    // derivation first, login derivation second. What answers is recorded, and
+    // the next mount in this session no longer probes.
+    wchar_t drive_letter{};
+    bool hidden_volume = entry->release_first;
+    if (!entry->derivation_known) {
+      const ProbedMount probed = mount_with_either_derivation(entry->path);
+      drive_letter = probed.drive_letter;
+      hidden_volume = probed.hidden_volume;
+    } else {
+      if (hidden_volume && state_.login_password.empty()) {
+        throw std::logic_error(
+            "this container can only be opened by the login that captured it");
+      }
+      if (!hidden_volume) standard_password = derive_standard_password();
+      const security::SecureBuffer& volume_password =
+          hidden_volume ? hidden_container_password() : standard_password;
+      drive_letter = reserve_drive_letter();
+      static_cast<void>(runtime_.mount_created(entry->path,
+                                               volume_password,
+                                               {.drive_letter = drive_letter,
+                                                .prf = volume::Pkcs5Prf::sha512,
+                                                .pim = 0,
+                                                .read_only = false,
+                                                .notify_shell = false}));
     }
-    if (!hidden_volume) standard_password = derive_standard_password();
-    const security::SecureBuffer& volume_password =
-        hidden_volume ? hidden_container_password() : standard_password;
-    const wchar_t drive_letter = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_created(entry->path,
-                                             volume_password,
-                                             {.drive_letter = drive_letter,
-                                              .prf = volume::Pkcs5Prf::sha512,
-                                              .pim = 0,
-                                              .read_only = false,
-                                              .notify_shell = false}));
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -873,6 +947,8 @@ void CardLoginMountSessionCore::mount_adopted_container(
     standard_password.clear();
     entry->drive_letter = drive_letter;
     entry->mounted = true;
+    entry->release_first = hidden_volume;
+    entry->derivation_known = true;
     runtime_.notify_mounted(drive_letter);
   } catch (...) {
     standard_password.clear();
@@ -896,54 +972,26 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
       adopted != nullptr && adopted->mounted) {
     throw std::logic_error("container is already mounted");
   }
-  security::SecureBuffer volume_password;
   bool mounted = false;
-  bool hidden_volume = false;
   try {
     if (!runtime_.container_exists(path)) {
       throw std::system_error(
           std::make_error_code(std::errc::no_such_file_or_directory),
           "container file is unavailable");
     }
-    volume_password = derive_standard_password();
-    const wchar_t drive_letter = reserve_drive_letter();
-    const volume::MountOptions options{.drive_letter = drive_letter,
-                                       .prf = volume::Pkcs5Prf::sha512,
-                                       .pim = 0,
-                                       .read_only = false,
-                                       .notify_shell = false};
-    try {
-      static_cast<void>(runtime_.mount_created(path, volume_password,
-                                               options));
-    } catch (const std::system_error& error) {
-      // The user selects a file, never a container class, and the page must
-      // not offer that choice either. A file the standard derivation cannot
-      // open is either built from the login input or not a container of ours
-      // at all, and the two stay indistinguishable until the second
-      // derivation has been tried.
-      if (error.code() != volume::make_error_code(
-                              volume::DriverError::authentication_failed) ||
-          state_.login_password.empty()) {
-        throw;
-      }
-      volume_password.clear();
-      static_cast<void>(runtime_.mount_created(
-          path, hidden_container_password(), options));
-      hidden_volume = true;
-    }
+    const ProbedMount probed = mount_with_either_derivation(path);
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
                      container_name,
-                     drive_letter);
-    const std::uint32_t id =
-        adopt(state_, path, drive_letter, true, hidden_volume).id;
-    volume_password.clear();
+                     probed.drive_letter);
+    const std::uint32_t id = adopt(state_, path, probed.drive_letter, true,
+                                   probed.hidden_volume)
+                                 .id;
     remember_container_path(path);
-    runtime_.notify_mounted(drive_letter);
+    runtime_.notify_mounted(probed.drive_letter);
     return id;
   } catch (...) {
-    volume_password.clear();
     if (!mounted) {
       record_operation(OperationKind::container_mounted,
                        OperationOutcome::failed,

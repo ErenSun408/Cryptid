@@ -1726,6 +1726,111 @@ void test_an_index_that_cannot_be_reached_costs_only_the_memory() {
           "an unreachable index blocked a container from being dropped");
 }
 
+void test_a_login_gets_back_the_containers_whose_files_are_there() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V'};
+  {
+    CardAuthenticationSession first_login;
+    CardLoginMountSessionCore first(first_login, runtime, layout(),
+                                    LoginMountPolicy::manual);
+    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+    static_cast<void>(first.create_container(L"D:\\vault\\here.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+    static_cast<void>(first.create_container(L"E:\\removable\\away.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  }
+
+  // Only one of the two files answers at the next login. The other one is on a
+  // drive nobody plugged in.
+  std::erase(runtime.other_existing, L"E:\\removable\\away.hc");
+  runtime.other_size_bytes = 64ULL * 1024ULL * 1024ULL;
+
+  CardAuthenticationSession second_login;
+  CardLoginMountSessionCore second(second_login, runtime, layout(),
+                                   LoginMountPolicy::manual);
+  second.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  const std::vector<ContainerStatus> statuses = second.container_statuses();
+  require(statuses.size() == 1 && statuses[0].name == L"here.hc" &&
+              !statuses[0].mounted,
+          "the login did not get back exactly the container that is there");
+
+  // The absent one keeps its slot. An unplugged drive is absent in exactly the
+  // way a deleted file is, and clearing the record on that evidence would lose
+  // it the moment the drive comes back.
+  require(remembers(runtime, L"E:\\removable\\away.hc"),
+          "a container that was merely unplugged lost its record");
+  require(remembered(runtime).size() == 2,
+          "the index no longer holds both containers");
+}
+
+void test_a_remembered_container_is_opened_by_whichever_derivation_answers() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V'};
+  {
+    CardAuthenticationSession first_login;
+    CardLoginMountSessionCore first(first_login, runtime, layout(),
+                                    LoginMountPolicy::manual);
+    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+    static_cast<void>(first.create_container_b(
+        L"D:\\vault\\remembered-b.hc", 64ULL * 1024ULL * 1024ULL,
+        16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
+  }
+  // Publishing already left the file where the fake can find it; from here on
+  // only the login derivation opens it, as on a real hidden-volume container.
+  runtime.other_size_bytes = 64ULL * 1024ULL * 1024ULL;
+  runtime.login_derived_path = L"D:\\vault\\remembered-b.hc";
+
+  CardAuthenticationSession second_login;
+  CardLoginMountSessionCore second(second_login, runtime, layout(),
+                                   LoginMountPolicy::manual);
+  second.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::vector<ContainerStatus> statuses = second.container_statuses();
+  require(statuses.size() == 1 && !statuses[0].mounted,
+          "the remembered container did not come back unmounted");
+
+  // A slot holds a path and never which password opens it: that would be the
+  // tier fact this whole design refuses to write down. So a container read
+  // back from the index finds out the way an import does.
+  runtime.events.clear();
+  second.mount_adopted_container(statuses[0].id);
+  require_events(runtime, {"exists:final-other", "derive:A", "allocate",
+                           "mount-created:other", "derive:B",
+                           "mount-created:other", "notify:A"});
+  require(second.container_statuses()[0].mounted,
+          "a remembered hidden-volume container could not be mounted");
+
+  // Having found out, it does not go looking again.
+  runtime.events.clear();
+  second.unmount_container(statuses[0].id);
+  second.mount_adopted_container(statuses[0].id);
+  require_events(runtime, {"unmount:other", "exists:final-other", "allocate",
+                           "mount-created:other", "notify:A"});
+}
+
+void test_a_login_that_cannot_read_the_index_still_opens() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  {
+    CardAuthenticationSession first_login;
+    CardLoginMountSessionCore first(first_login, runtime, layout(),
+                                    LoginMountPolicy::manual);
+    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+    static_cast<void>(first.create_container(L"D:\\vault\\here.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  }
+  runtime.fail_index_read = true;
+
+  CardAuthenticationSession second_login;
+  CardLoginMountSessionCore second(second_login, runtime, layout(),
+                                   LoginMountPolicy::manual);
+  second.consume_authenticated_login(root_secret(), bytes("login-password"));
+  require(second.container_statuses().empty(),
+          "an index that cannot be read invented containers");
+  require(second.mounted() == false,
+          "a login that could not read the index left something mounted");
+}
+
 }  // namespace
 
 int main() {
@@ -1770,6 +1875,9 @@ int main() {
     test_a_container_already_written_down_is_not_written_again();
     test_forgetting_takes_the_record_and_leaves_the_container();
     test_an_index_that_cannot_be_reached_costs_only_the_memory();
+    test_a_login_gets_back_the_containers_whose_files_are_there();
+    test_a_remembered_container_is_opened_by_whichever_derivation_answers();
+    test_a_login_that_cannot_read_the_index_still_opens();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

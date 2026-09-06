@@ -85,6 +85,11 @@ struct SessionContainer final {
   // which is the only reason the session distinguishes them. Nothing about
   // this flag crosses the application boundary.
   bool release_first{};
+  // Whether the flag above is a fact or a default. A container this session
+  // created or opened has said which of its volumes answers; one read back
+  // from the index has said nothing, and mounting it has to try both
+  // derivations exactly as an import does.
+  bool derivation_known{};
 };
 
 struct CardLoginMountSessionState final {
@@ -167,6 +172,18 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] security::SecureBuffer container_index_key();
   void remember_container_path(std::wstring_view path) noexcept;
   void forget_container_path(std::wstring_view path) noexcept;
+  // Adopts every remembered path whose file is where it was left. Reading is
+  // as best-effort as writing: a login that cannot reach the index simply
+  // starts with nothing remembered.
+  void adopt_remembered_containers() noexcept;
+  struct ProbedMount final {
+    wchar_t drive_letter{};
+    bool hidden_volume{};
+  };
+  // Mounts a container whose class is not known, standard derivation first,
+  // and reports which one opened it along with the letter it took.
+  [[nodiscard]] ProbedMount mount_with_either_derivation(
+      std::wstring_view path);
   void record_operation(::usb_vault::application::OperationKind kind,
                         ::usb_vault::application::OperationOutcome outcome,
                         std::wstring_view container_name = {},
