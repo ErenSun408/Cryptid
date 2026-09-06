@@ -229,6 +229,20 @@ usb_vault_configure_target(card_login_mount_session_tests)
 add_test(NAME card_login_mount_session_tests
   COMMAND card_login_mount_session_tests)
 
+add_executable(container_index_v1_tests
+  container_index_v1_tests.cpp
+)
+
+target_link_libraries(container_index_v1_tests PRIVATE
+  usb_vault_core
+  Bcrypt
+)
+
+usb_vault_configure_target(container_index_v1_tests)
+
+add_test(NAME container_index_v1_tests
+  COMMAND container_index_v1_tests)
+
 add_executable(container_target_path_tests
   container_target_path_tests.cpp
 )

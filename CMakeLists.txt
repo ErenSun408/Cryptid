@@ -137,6 +137,7 @@ add_library(usb_vault_core STATIC
   src/application/card_entry_context_controller.cpp
   src/application/card_entry_router.cpp
   src/application/card_presence_controller.cpp
+  src/application/container_index_v1.cpp
   src/application/mount_orchestrator.cpp
   src/card/card_error.cpp
   src/card/card_initialization_service.cpp
