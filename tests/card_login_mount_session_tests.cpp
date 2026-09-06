@@ -1,6 +1,8 @@
 #include "application/card_login_mount_session_internal.h"
 
 #include "usb_vault/application/card_login_mount_session.h"
+#include "usb_vault/application/container_index_v1.h"
+#include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/card/card_record_v1.h"
 
 #include <cstddef>
@@ -9,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -32,6 +35,12 @@ using usb_vault::application::OperationKind;
 using usb_vault::application::OperationOutcome;
 using usb_vault::application::detail::CardLoginMountSessionCore;
 using usb_vault::application::detail::CardLoginMountSessionRuntime;
+using usb_vault::application::container_index_v1_mutable_slot;
+using usb_vault::application::derive_shared_container_index_key_v1;
+using usb_vault::application::fill_container_index_slot_v1;
+using usb_vault::application::kContainerIndexV1FileSize;
+using usb_vault::application::kContainerIndexV1SlotCount;
+using usb_vault::application::list_container_index_paths_v1;
 using usb_vault::security::SecureBuffer;
 
 static_assert(std::derived_from<
@@ -381,6 +390,34 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     free_drive_letters.erase(free_drive_letters.begin());
     return allocated_drive_letter;
   }
+
+  // The index file, held in memory. It starts as a real one does: every slot
+  // filler, so nothing opens and nothing is remembered yet.
+  [[nodiscard]] std::vector<std::byte> read_container_index() override {
+    ++index_reads;
+    if (fail_index_read) throw std::runtime_error("the index cannot be read");
+    if (container_index.empty()) {
+      container_index.resize(kContainerIndexV1FileSize);
+      for (std::size_t slot = 0; slot < kContainerIndexV1SlotCount; ++slot) {
+        fill_container_index_slot_v1(
+            container_index_v1_mutable_slot(container_index, slot));
+      }
+    }
+    return container_index;
+  }
+
+  void write_container_index(
+      const std::span<const std::byte> contents) override {
+    ++index_writes;
+    if (fail_index_write) throw std::runtime_error("the index cannot be written");
+    container_index.assign(contents.begin(), contents.end());
+  }
+
+  std::vector<std::byte> container_index;
+  int index_reads{};
+  int index_writes{};
+  bool fail_index_read{};
+  bool fail_index_write{};
 
   wchar_t allocated_drive_letter{L'X'};
   // A container whose volumes were built from the login input. Only the B
@@ -1540,6 +1577,155 @@ void test_operation_history_discards_only_the_oldest_events_at_capacity() {
           "operation history did not retain the newest events in order");
 }
 
+// What the index the fake is holding would show at the next login. Deriving
+// the key here the same way the session does is the point: a test that read
+// the paths back through the session could not tell a working index from a
+// session that simply remembered them in memory.
+[[nodiscard]] std::vector<std::wstring> remembered(const FakeRuntime& runtime) {
+  if (runtime.container_index.empty()) return {};
+  const SecureBuffer key =
+      derive_shared_container_index_key_v1(root_secret().bytes());
+  return list_container_index_paths_v1(key.bytes(), runtime.container_index);
+}
+
+[[nodiscard]] bool remembers(const FakeRuntime& runtime,
+                             const std::wstring_view path) {
+  for (const std::wstring& entry : remembered(runtime)) {
+    if (entry == path) return true;
+  }
+  return false;
+}
+
+void test_every_way_a_container_arrives_writes_it_down() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U'};
+  runtime.other_existing.emplace_back(L"D:\\vault\\imported.hc");
+  runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  static_cast<void>(session.create_container(L"D:\\vault\\standard.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  static_cast<void>(session.create_container_b(
+      L"D:\\vault\\hidden.hc", 64ULL * 1024ULL * 1024ULL,
+      16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
+  static_cast<void>(session.mount_container(L"D:\\vault\\imported.hc"));
+
+  require(remembers(runtime, L"D:\\vault\\standard.hc"),
+          "a standard container was not written into the index");
+  require(remembers(runtime, L"D:\\vault\\hidden.hc"),
+          "a hidden-volume container was not written into the index");
+  require(remembers(runtime, L"D:\\vault\\imported.hc"),
+          "an imported container was not written into the index");
+  require(remembered(runtime).size() == 3,
+          "the index holds something nobody asked it to hold");
+}
+
+void test_a_container_already_written_down_is_not_written_again() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  {
+    CardAuthenticationSession first_login;
+    CardLoginMountSessionCore first(first_login, runtime, layout(),
+                                    LoginMountPolicy::manual);
+    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+    static_cast<void>(first.create_container(L"D:\\vault\\once.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  }
+  runtime.other_existing.emplace_back(L"D:\\vault\\once.hc");
+  runtime.other_size_bytes = 64ULL * 1024ULL * 1024ULL;
+
+  // A second login imports the same file. The index already knows it, so it
+  // must be left exactly as it is: a rewrite that changed nothing would still
+  // change the file, and the file is what an observer compares.
+  const int writes_before = runtime.index_writes;
+  CardAuthenticationSession second_login;
+  CardLoginMountSessionCore second(second_login, runtime, layout(),
+                                   LoginMountPolicy::manual);
+  second.consume_authenticated_login(root_secret(), bytes("login-password"));
+  static_cast<void>(second.mount_container(L"D:\\vault\\once.hc"));
+
+  require(runtime.index_writes == writes_before,
+          "importing a container already in the index rewrote the file");
+  require(remembered(runtime).size() == 1,
+          "one container ended up in the index twice");
+}
+
+void test_forgetting_takes_the_record_and_leaves_the_container() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t kept = session.create_container(
+      L"D:\\vault\\kept.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t dropped = session.create_container(
+      L"D:\\vault\\dropped.hc", 64ULL * 1024ULL * 1024ULL);
+
+  require_throws<std::logic_error>(
+      [&] { session.forget_container(dropped); },
+      "a mounted container was dropped from the session");
+  require(remembers(runtime, L"D:\\vault\\dropped.hc"),
+          "a refused drop still took the record");
+
+  session.unmount_container(dropped);
+  runtime.events.clear();
+  session.forget_container(dropped);
+
+  for (const std::string& event : runtime.events) {
+    require(!event.starts_with("cleanup"),
+            "dropping a record went after the container file");
+  }
+  require(!remembers(runtime, L"D:\\vault\\dropped.hc"),
+          "the dropped container is still in the index");
+  require(remembers(runtime, L"D:\\vault\\kept.hc"),
+          "dropping one record took another with it");
+
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].id == kept,
+          "the dropped container is still adopted");
+  require_throws<std::invalid_argument>(
+      [&] { session.forget_container(dropped); },
+      "a container that is no longer adopted could be dropped again");
+}
+
+void test_an_index_that_cannot_be_reached_costs_only_the_memory() {
+  // Remembering is a convenience. A container that exists and is mounted has
+  // been created whether or not its path could be written down, so an index
+  // that refuses to answer must not turn a finished creation into a failure.
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  runtime.fail_index_read = true;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  const std::uint32_t id = session.create_container(
+      L"D:\\vault\\unrecorded.hc", 64ULL * 1024ULL * 1024ULL);
+  require(id != 0 && session.container_statuses().size() == 1 &&
+              session.container_statuses()[0].mounted,
+          "an unreachable index cost a container that was already created");
+
+  runtime.fail_index_read = false;
+  runtime.fail_index_write = true;
+  const std::uint32_t second = session.create_container(
+      L"D:\\vault\\also-unrecorded.hc", 64ULL * 1024ULL * 1024ULL);
+  require(second != 0 && session.container_statuses().size() == 2,
+          "an index that cannot be written cost a created container");
+  require(remembered(runtime).empty(),
+          "a write that was supposed to fail left something behind");
+
+  // And dropping a record is no different: it reports nothing either.
+  session.unmount_container(second);
+  session.forget_container(second);
+  require(session.container_statuses().size() == 1,
+          "an unreachable index blocked a container from being dropped");
+}
+
 }  // namespace
 
 int main() {
@@ -1580,6 +1766,10 @@ int main() {
     test_operation_history_distinguishes_publish_from_mount_failure();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();
+    test_every_way_a_container_arrives_writes_it_down();
+    test_a_container_already_written_down_is_not_written_again();
+    test_forgetting_takes_the_record_and_leaves_the_container();
+    test_an_index_that_cannot_be_reached_costs_only_the_memory();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

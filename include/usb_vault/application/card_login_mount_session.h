@@ -159,6 +159,12 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // so it can be mounted again without reselecting its file.
   virtual void unmount_container(std::uint32_t id) = 0;
 
+  // Drops one adopted container from the session and forgets where it is. The
+  // file is left exactly where it was: this removes the record, never the
+  // container. A mounted container is refused, because a drive letter it left
+  // behind would belong to nothing the session can still name.
+  virtual void forget_container(std::uint32_t id) = 0;
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -217,6 +223,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
+  void forget_container(std::uint32_t id) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;

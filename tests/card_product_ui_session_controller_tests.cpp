@@ -154,6 +154,22 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
+  void forget_container(const std::uint32_t id) override {
+    ++forget_container_calls;
+    for (auto entry = containers.begin(); entry != containers.end(); ++entry) {
+      if (entry->id != id) continue;
+      if (entry->mounted) {
+        throw std::logic_error(
+            "a mounted container cannot be dropped from the session");
+      }
+      containers.erase(entry);
+      mounted_state = any_mounted();
+      return;
+    }
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     ++container_statuses_calls;
@@ -293,6 +309,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int create_calls{};
   int mount_calls{};
   int unmount_container_calls{};
+  int forget_container_calls{};
   int mount_adopted_calls{};
   int container_statuses_calls{};
   int operation_history_calls{};

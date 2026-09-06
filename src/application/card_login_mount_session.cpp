@@ -2,6 +2,8 @@
 
 #include "application/card_login_mount_session_internal.h"
 #include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/application/container_index_store_v1.h"
+#include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/application/container_layout_v1.h"
 #include "usb_vault/security/kdf_v1.h"
 #include "usb_vault/volume/unmount_retry.h"
@@ -15,10 +17,12 @@
 #include <filesystem>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace usb_vault::application {
 namespace {
@@ -165,6 +169,17 @@ class ProductionCardLoginMountSessionRuntime final
     provider_.notify_mounted(drive_letter);
   }
 
+  [[nodiscard]] std::vector<std::byte> read_container_index() override {
+    const std::wstring path = container_index_v1_default_path();
+    static_cast<void>(ensure_container_index_v1_file(path));
+    return read_container_index_v1_file(path);
+  }
+
+  void write_container_index(
+      const std::span<const std::byte> contents) override {
+    write_container_index_v1_file(container_index_v1_default_path(), contents);
+  }
+
  private:
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
@@ -259,6 +274,10 @@ void CardLoginMountSession::mount_adopted_container(const std::uint32_t id) {
 
 void CardLoginMountSession::unmount_container(const std::uint32_t id) {
   impl_->core.unmount_container(id);
+}
+
+void CardLoginMountSession::forget_container(const std::uint32_t id) {
+  impl_->core.forget_container(id);
 }
 
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
@@ -567,6 +586,46 @@ CardLoginMountSessionCore::hidden_container_password() {
   return state_.hidden_container_password;
 }
 
+security::SecureBuffer CardLoginMountSessionCore::container_index_key() {
+  return derive_shared_container_index_key_v1(
+      authentication_.root_secret_.bytes());
+}
+
+void CardLoginMountSessionCore::remember_container_path(
+    const std::wstring_view path) noexcept {
+  // Every failure here is swallowed on purpose. The container exists and is
+  // mounted; refusing the whole operation because its path could not be
+  // written down would destroy something real to protect a convenience. The
+  // cost of the silence is that the path is simply not remembered, which the
+  // session shows anyway for as long as it lasts.
+  try {
+    security::SecureBuffer key = container_index_key();
+    std::vector<std::byte> file = runtime_.read_container_index();
+    const ContainerIndexWriteV1 written =
+        add_container_index_path_v1(key.bytes(), file, path);
+    key.clear();
+    if (written == ContainerIndexWriteV1::added) {
+      runtime_.write_container_index(file);
+    }
+  } catch (...) {
+  }
+}
+
+void CardLoginMountSessionCore::forget_container_path(
+    const std::wstring_view path) noexcept {
+  try {
+    security::SecureBuffer key = container_index_key();
+    std::vector<std::byte> file = runtime_.read_container_index();
+    const bool removed =
+        remove_container_index_path_v1(key.bytes(), file, path);
+    key.clear();
+    if (removed) {
+      runtime_.write_container_index(file);
+    }
+  } catch (...) {
+  }
+}
+
 wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
   const wchar_t letter = runtime_.allocate_drive_letter();
   if (letter < L'A' || letter > L'Z') {
@@ -632,6 +691,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                      drive_letter);
     const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
     volume_password.clear();
+    remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
@@ -735,6 +795,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                      drive_letter);
     const std::uint32_t id = adopt(state_, path, drive_letter, true, true).id;
     outer_password.clear();
+    remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
@@ -878,6 +939,7 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
     const std::uint32_t id =
         adopt(state_, path, drive_letter, true, hidden_volume).id;
     volume_password.clear();
+    remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
@@ -912,6 +974,24 @@ void CardLoginMountSessionCore::unmount_container(const std::uint32_t id) {
                        drive_letter);
       throw;
     }
+  }
+  throw std::invalid_argument("no container is adopted under that identifier");
+}
+
+void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
+  for (auto entry = state_.containers.begin();
+       entry != state_.containers.end(); ++entry) {
+    if (entry->id != id) continue;
+    if (entry->mounted) {
+      throw std::logic_error(
+          "a mounted container cannot be dropped from the session");
+    }
+    // The path is copied out before the entry goes, because forgetting it is
+    // what the caller asked for and the entry is where it is written down.
+    const std::wstring path = entry->path;
+    state_.containers.erase(entry);
+    forget_container_path(path);
+    return;
   }
   throw std::invalid_argument("no container is adopted under that identifier");
 }

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,6 +63,13 @@ class CardLoginMountSessionRuntime {
   // Returns a drive letter that the operating system currently reports as
   // free. Letters already recorded by this session are rejected by the caller.
   [[nodiscard]] virtual wchar_t allocate_drive_letter() = 0;
+  // The container path index, whole. Reading creates the file at its full size
+  // if this machine has never had one, so a first run and a run whose owner
+  // has no containers reach the session as the same thing: a file full of
+  // slots none of which open.
+  [[nodiscard]] virtual std::vector<std::byte> read_container_index() = 0;
+  virtual void write_container_index(
+      std::span<const std::byte> contents) = 0;
 };
 
 // One container adopted by the session. Nothing here is persisted: a restart
@@ -132,6 +140,7 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] security::SecureBuffer copy_session_password();
   std::uint32_t mount_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);
+  void forget_container(std::uint32_t id);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();
@@ -151,6 +160,13 @@ class CardLoginMountSessionCore final {
   // derivation nothing may need.
   [[nodiscard]] const security::SecureBuffer& hidden_container_password();
   [[nodiscard]] wchar_t reserve_drive_letter();
+  // Writing a path down, and taking it back out, are conveniences rather than
+  // parts of the operations they follow. A container that exists and is
+  // mounted has been created whether or not the index could be reached, so
+  // neither of these reports a failure and neither can fail an operation.
+  [[nodiscard]] security::SecureBuffer container_index_key();
+  void remember_container_path(std::wstring_view path) noexcept;
+  void forget_container_path(std::wstring_view path) noexcept;
   void record_operation(::usb_vault::application::OperationKind kind,
                         ::usb_vault::application::OperationOutcome outcome,
                         std::wstring_view container_name = {},
