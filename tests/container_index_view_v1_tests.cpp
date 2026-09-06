@@ -1,0 +1,287 @@
+#include "usb_vault/application/container_index_view_v1.h"
+
+#include "usb_vault/application/container_index_v1.h"
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdlib>
+#include <iostream>
+#include <set>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using usb_vault::application::add_container_index_path_v1;
+using usb_vault::application::container_index_v1_mutable_slot;
+using usb_vault::application::container_index_v1_slot;
+using usb_vault::application::ContainerIndexWriteV1;
+using usb_vault::application::derive_shared_container_index_key_v1;
+using usb_vault::application::fill_container_index_slot_v1;
+using usb_vault::application::kContainerIndexV1FileSize;
+using usb_vault::application::kContainerIndexV1KeySize;
+using usb_vault::application::kContainerIndexV1SlotCount;
+using usb_vault::application::list_container_index_paths_v1;
+using usb_vault::application::remove_container_index_path_v1;
+using usb_vault::application::seal_container_index_entry_v1;
+using usb_vault::application::try_open_container_index_entry_v1;
+using usb_vault::security::SecureBuffer;
+
+[[noreturn]] void fail(const char *const message) {
+  std::cerr << "FAILED: " << message << '\n';
+  std::exit(EXIT_FAILURE);
+}
+
+void expect(const bool condition, const char *const message) {
+  if (!condition) {
+    fail(message);
+  }
+}
+
+template <typename Callable>
+void expect_invalid_argument(Callable &&callable, const char *const message) {
+  try {
+    std::forward<Callable>(callable)();
+  } catch (const std::invalid_argument &) {
+    return;
+  }
+  fail(message);
+}
+
+[[nodiscard]] std::vector<std::byte> test_root(const unsigned char seed) {
+  std::vector<std::byte> root(32);
+  for (std::size_t index = 0; index < root.size(); ++index) {
+    root[index] =
+        static_cast<std::byte>(static_cast<unsigned char>(seed + (index * 3U)));
+  }
+  return root;
+}
+
+[[nodiscard]] std::vector<std::byte> fresh_file() {
+  std::vector<std::byte> file(kContainerIndexV1FileSize);
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    fill_container_index_slot_v1(container_index_v1_mutable_slot(file, index));
+  }
+  return file;
+}
+
+[[nodiscard]] std::wstring numbered_path(const std::size_t number) {
+  return L"D:\\vaults\\container-" + std::to_wstring(number) + L".hc";
+}
+
+// Where the one entry in this file sits. Only the reader can say, which is the
+// point: nothing outside a sealed slot records its position.
+[[nodiscard]] std::size_t
+sole_occupied_slot(const SecureBuffer &key,
+                   const std::span<const std::byte> file) {
+  std::size_t found = kContainerIndexV1SlotCount;
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    if (try_open_container_index_entry_v1(
+            key.bytes(), container_index_v1_slot(file, index))
+            .has_value()) {
+      expect(found == kContainerIndexV1SlotCount,
+             "the file holds more than one entry");
+      found = index;
+    }
+  }
+  expect(found != kContainerIndexV1SlotCount, "the file holds no entry");
+  return found;
+}
+
+void test_the_shared_key_follows_the_root_and_nothing_else() {
+  const std::vector<std::byte> root = test_root(0x10);
+  const SecureBuffer first = derive_shared_container_index_key_v1(root);
+  const SecureBuffer second = derive_shared_container_index_key_v1(root);
+  expect(first.size() == kContainerIndexV1KeySize,
+         "the shared key is not the size a slot takes");
+  expect(std::ranges::equal(first.bytes(), second.bytes()),
+         "the same root gave two different shared keys");
+
+  const SecureBuffer other =
+      derive_shared_container_index_key_v1(test_root(0x11));
+  expect(!std::ranges::equal(first.bytes(), other.bytes()),
+         "two different roots gave the same shared key");
+
+  expect_invalid_argument(
+      [] {
+        const std::vector<std::byte> short_root(31);
+        static_cast<void>(derive_shared_container_index_key_v1(short_root));
+      },
+      "a root secret of the wrong size was accepted");
+}
+
+void test_a_path_that_was_added_can_be_listed() {
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x20));
+  std::vector<std::byte> file = fresh_file();
+
+  expect(list_container_index_paths_v1(key.bytes(), file).empty(),
+         "a file of pure filler listed something");
+
+  const std::wstring path = L"D:\\vaults\\holiday.hc";
+  expect(add_container_index_path_v1(key.bytes(), file, path) ==
+             ContainerIndexWriteV1::added,
+         "adding a path to an empty file did not report adding it");
+
+  const std::vector<std::wstring> listed =
+      list_container_index_paths_v1(key.bytes(), file);
+  expect(listed.size() == 1 && listed.front() == path,
+         "the path that was added did not come back");
+}
+
+void test_the_same_path_never_takes_two_slots() {
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x21));
+  std::vector<std::byte> file = fresh_file();
+  const std::wstring path = L"D:\\Vaults\\Holiday.hc";
+
+  expect(add_container_index_path_v1(key.bytes(), file, path) ==
+             ContainerIndexWriteV1::added,
+         "the first add did not report adding");
+  const std::vector<std::byte> after_first = file;
+
+  expect(add_container_index_path_v1(key.bytes(), file, path) ==
+             ContainerIndexWriteV1::already_present,
+         "adding the same path twice did not report it was already there");
+  // Windows names files without regard to case, so this is the same container
+  // reached through the same dialog, not a second one.
+  expect(add_container_index_path_v1(key.bytes(), file,
+                                     L"d:\\vaults\\holiday.HC") ==
+             ContainerIndexWriteV1::already_present,
+         "a spelling differing only in case was taken for a second container");
+
+  expect(std::ranges::equal(after_first, file),
+         "an add that changed nothing still rewrote the file");
+  expect(list_container_index_paths_v1(key.bytes(), file).size() == 1,
+         "one container ended up listed more than once");
+}
+
+void test_every_path_added_survives_the_ones_after_it() {
+  // Under one shared key every occupied slot is visible to the writer, so a
+  // new entry can never land on an existing one. This is what that buys.
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x22));
+  std::vector<std::byte> file = fresh_file();
+
+  constexpr std::size_t kCount = 50;
+  for (std::size_t index = 0; index < kCount; ++index) {
+    expect(add_container_index_path_v1(key.bytes(), file,
+                                       numbered_path(index)) ==
+               ContainerIndexWriteV1::added,
+           "one of a run of adds did not report adding");
+  }
+
+  const std::vector<std::wstring> listed =
+      list_container_index_paths_v1(key.bytes(), file);
+  const std::set<std::wstring> found(listed.begin(), listed.end());
+  expect(found.size() == kCount, "adding paths in a run lost one of them");
+  for (std::size_t index = 0; index < kCount; ++index) {
+    expect(found.contains(numbered_path(index)),
+           "a path added earlier went missing");
+  }
+}
+
+void test_placement_does_not_favour_a_corner_of_the_file() {
+  // Position must say nothing about an entry, so the slot a lone entry lands
+  // in has to move around. Thirty-two files cannot all fall in one half by
+  // chance.
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x23));
+  std::set<std::size_t> chosen;
+  bool below_middle = false;
+  bool above_middle = false;
+
+  constexpr std::size_t kTrials = 32;
+  for (std::size_t trial = 0; trial < kTrials; ++trial) {
+    std::vector<std::byte> file = fresh_file();
+    expect(add_container_index_path_v1(key.bytes(), file, numbered_path(trial)) ==
+               ContainerIndexWriteV1::added,
+           "a trial add did not report adding");
+    const std::size_t slot = sole_occupied_slot(key, file);
+    chosen.insert(slot);
+    below_middle = below_middle || slot < (kContainerIndexV1SlotCount / 2);
+    above_middle = above_middle || slot >= (kContainerIndexV1SlotCount / 2);
+  }
+
+  expect(chosen.size() >= 20, "the chosen slots repeated far too often");
+  expect(below_middle && above_middle,
+         "every entry landed in the same half of the file");
+}
+
+void test_a_removed_path_goes_and_the_rest_stay() {
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x24));
+  std::vector<std::byte> file = fresh_file();
+  for (std::size_t index = 0; index < 5; ++index) {
+    static_cast<void>(
+        add_container_index_path_v1(key.bytes(), file, numbered_path(index)));
+  }
+
+  expect(remove_container_index_path_v1(key.bytes(), file, numbered_path(2)),
+         "removing a path that was there reported nothing to remove");
+  const std::vector<std::wstring> listed =
+      list_container_index_paths_v1(key.bytes(), file);
+  const std::set<std::wstring> found(listed.begin(), listed.end());
+  expect(found.size() == 4, "removing one path took more than one with it");
+  expect(!found.contains(numbered_path(2)), "the removed path is still listed");
+
+  // The slot it left has to be filler again, not a hole anyone can see.
+  expect(!remove_container_index_path_v1(key.bytes(), file, numbered_path(2)),
+         "the removed path could be removed a second time");
+  expect(!remove_container_index_path_v1(key.bytes(), file,
+                                         L"D:\\vaults\\never-added.hc"),
+         "removing a path that was never there reported a removal");
+
+  // Case is matched the same way on the way out as on the way in.
+  expect(remove_container_index_path_v1(key.bytes(), file,
+                                        L"D:\\VAULTS\\CONTAINER-3.HC"),
+         "a removal did not match the way an add matches");
+}
+
+void test_a_full_file_is_refused_rather_than_made_room_in() {
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x25));
+  std::vector<std::byte> file = fresh_file();
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    const SecureBuffer sealed =
+        seal_container_index_entry_v1(key.bytes(), numbered_path(index));
+    std::ranges::copy(sealed.bytes(),
+                      container_index_v1_mutable_slot(file, index).begin());
+  }
+
+  const std::vector<std::byte> before = file;
+  expect(add_container_index_path_v1(key.bytes(), file,
+                                     L"D:\\vaults\\one-too-many.hc") ==
+             ContainerIndexWriteV1::full,
+         "a full file accepted one more entry");
+  expect(std::ranges::equal(before, file),
+         "a refused add still changed the file");
+  expect(list_container_index_paths_v1(key.bytes(), file).size() ==
+             kContainerIndexV1SlotCount,
+         "a refused add cost the file an entry");
+}
+
+void test_another_root_sees_an_empty_index() {
+  const SecureBuffer key = derive_shared_container_index_key_v1(test_root(0x26));
+  const SecureBuffer stranger =
+      derive_shared_container_index_key_v1(test_root(0x27));
+  std::vector<std::byte> file = fresh_file();
+  static_cast<void>(
+      add_container_index_path_v1(key.bytes(), file, L"D:\\vaults\\mine.hc"));
+
+  expect(list_container_index_paths_v1(stranger.bytes(), file).empty(),
+         "an index sealed under one root listed under another");
+}
+
+} // namespace
+
+int main() {
+  test_the_shared_key_follows_the_root_and_nothing_else();
+  test_a_path_that_was_added_can_be_listed();
+  test_the_same_path_never_takes_two_slots();
+  test_every_path_added_survives_the_ones_after_it();
+  test_placement_does_not_favour_a_corner_of_the_file();
+  test_a_removed_path_goes_and_the_rest_stay();
+  test_a_full_file_is_refused_rather_than_made_room_in();
+  test_another_root_sees_an_empty_index();
+  std::cout << "container_index_view_v1_tests: PASS\n";
+  return EXIT_SUCCESS;
+}

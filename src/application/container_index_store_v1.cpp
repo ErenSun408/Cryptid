@@ -220,13 +220,8 @@ void publish_replacement(const std::wstring &staging,
 
 void require_whole_file(const std::size_t size) {
   if (size != kContainerIndexV1FileSize) {
-    throw std::invalid_argument("the container index buffer is not a whole file");
-  }
-}
-
-void require_slot_index(const std::size_t index) {
-  if (index >= kContainerIndexV1SlotCount) {
-    throw std::invalid_argument("the container index slot is past the end");
+    throw std::invalid_argument(
+        "the container index buffer is not a whole file");
   }
 }
 
@@ -324,24 +319,6 @@ void write_container_index_v1_file(const std::wstring_view path,
   write_new_file(staging.path(), contents);
   publish_replacement(staging.path(), target);
   staging.release();
-}
-
-std::span<const std::byte>
-container_index_v1_slot(const std::span<const std::byte> file,
-                        const std::size_t index) {
-  require_whole_file(file.size());
-  require_slot_index(index);
-  return file.subspan(index * kContainerIndexV1SlotSize,
-                      kContainerIndexV1SlotSize);
-}
-
-std::span<std::byte>
-container_index_v1_mutable_slot(const std::span<std::byte> file,
-                                const std::size_t index) {
-  require_whole_file(file.size());
-  require_slot_index(index);
-  return file.subspan(index * kContainerIndexV1SlotSize,
-                      kContainerIndexV1SlotSize);
 }
 
 } // namespace usb_vault::application

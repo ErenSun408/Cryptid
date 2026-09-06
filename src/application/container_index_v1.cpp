@@ -211,6 +211,19 @@ void require_slot_size(const std::span<const std::byte> slot) {
   }
 }
 
+void require_whole_file(const std::size_t size) {
+  if (size != kContainerIndexV1FileSize) {
+    throw std::invalid_argument(
+        "the container index buffer is not a whole file");
+  }
+}
+
+void require_slot_index(const std::size_t index) {
+  if (index >= kContainerIndexV1SlotCount) {
+    throw std::invalid_argument("the container index slot is past the end");
+  }
+}
+
 } // namespace
 
 security::SecureBuffer
@@ -340,6 +353,24 @@ try_open_container_index_entry_v1(const std::span<const std::byte> key,
 void fill_container_index_slot_v1(const std::span<std::byte> slot) {
   require_slot_size(slot);
   fill_random(slot);
+}
+
+std::span<const std::byte>
+container_index_v1_slot(const std::span<const std::byte> file,
+                        const std::size_t index) {
+  require_whole_file(file.size());
+  require_slot_index(index);
+  return file.subspan(index * kContainerIndexV1SlotSize,
+                      kContainerIndexV1SlotSize);
+}
+
+std::span<std::byte>
+container_index_v1_mutable_slot(const std::span<std::byte> file,
+                                const std::size_t index) {
+  require_whole_file(file.size());
+  require_slot_index(index);
+  return file.subspan(index * kContainerIndexV1SlotSize,
+                      kContainerIndexV1SlotSize);
 }
 
 } // namespace usb_vault::application

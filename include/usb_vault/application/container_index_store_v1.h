@@ -53,13 +53,4 @@ read_container_index_v1_file(std::wstring_view path);
 void write_container_index_v1_file(std::wstring_view path,
                                    std::span<const std::byte> contents);
 
-// Views of one slot inside a whole-file buffer, so no caller repeats the
-// arithmetic. Both reject an index past the end and a buffer that is not a
-// whole file.
-[[nodiscard]] std::span<const std::byte>
-container_index_v1_slot(std::span<const std::byte> file, std::size_t index);
-
-[[nodiscard]] std::span<std::byte>
-container_index_v1_mutable_slot(std::span<std::byte> file, std::size_t index);
-
 }  // namespace usb_vault::application

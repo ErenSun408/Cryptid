@@ -61,4 +61,13 @@ inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
 // sealed entry. Every slot of a new file starts this way.
 void fill_container_index_slot_v1(std::span<std::byte> slot);
 
+// Views of one slot inside a whole-file buffer, so no caller repeats the
+// arithmetic. Both reject an index past the end and a buffer that is not a
+// whole file.
+[[nodiscard]] std::span<const std::byte>
+container_index_v1_slot(std::span<const std::byte> file, std::size_t index);
+
+[[nodiscard]] std::span<std::byte>
+container_index_v1_mutable_slot(std::span<std::byte> file, std::size_t index);
+
 }  // namespace usb_vault::application
