@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -141,14 +142,17 @@ void test_first_run_creates_a_full_size_random_file() {
 
   const std::vector<std::byte> contents = read_container_index_v1_file(path);
   // Every slot has to be filler drawn separately. A file of repeated bytes, or
-  // one padded with zeroes, would announce that it holds nothing.
-  for (std::size_t left = 0; left < kContainerIndexV1SlotCount; ++left) {
-    const auto first = container_index_v1_slot(contents, left);
-    for (std::size_t right = left + 1; right < kContainerIndexV1SlotCount;
-         ++right) {
-      if (std::ranges::equal(first, container_index_v1_slot(contents, right))) {
-        fail("two slots of a new file came out identical");
-      }
+  // one padded with zeroes, would announce that it holds nothing. Two slots
+  // drawn independently do not agree on their first sixteen bytes, so a set of
+  // those prefixes settles it without comparing every pair.
+  std::set<std::array<std::byte, 16>> prefixes;
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    std::array<std::byte, 16> prefix{};
+    std::ranges::copy(container_index_v1_slot(contents, index).first(
+                          prefix.size()),
+                      prefix.begin());
+    if (!prefixes.insert(prefix).second) {
+      fail("two slots of a new file came out identical");
     }
   }
 

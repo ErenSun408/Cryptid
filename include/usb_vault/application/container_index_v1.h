@@ -20,7 +20,7 @@ namespace usb_vault::application {
 // The whole file has to stay indistinguishable from the random bytes it is
 // first written with, so the format version lives inside each sealed slot.
 inline constexpr std::size_t kContainerIndexV1SlotSize = 768;
-inline constexpr std::size_t kContainerIndexV1SlotCount = 256;
+inline constexpr std::size_t kContainerIndexV1SlotCount = 1024;
 inline constexpr std::size_t kContainerIndexV1FileSize =
     kContainerIndexV1SlotSize * kContainerIndexV1SlotCount;
 

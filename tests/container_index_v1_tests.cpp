@@ -83,8 +83,8 @@ void test_format_constants_are_pinned() {
   // changes the size of the file, which is the one property of it an observer
   // can measure without a key, so they are pinned here deliberately.
   expect(kContainerIndexV1SlotSize == 768, "slot size drifted");
-  expect(kContainerIndexV1SlotCount == 256, "slot count drifted");
-  expect(kContainerIndexV1FileSize == 196608, "file size drifted");
+  expect(kContainerIndexV1SlotCount == 1024, "slot count drifted");
+  expect(kContainerIndexV1FileSize == 786432, "file size drifted");
   expect(kContainerIndexV1KeySize == 32, "key size drifted");
   expect(kContainerIndexV1PathMaximumLength == 259, "path limit drifted");
   expect(kContainerIndexEntryV1Version == 1, "entry version drifted");
