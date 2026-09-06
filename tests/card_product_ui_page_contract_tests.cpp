@@ -42,8 +42,15 @@ void require(const bool condition, const char* const message) {
 [[nodiscard]] std::string read_source(const char* const path) {
   std::ifstream input(path, std::ios::binary);
   require(input.is_open(), "could not open a packaged product UI source");
-  return {std::istreambuf_iterator<char>(input),
-          std::istreambuf_iterator<char>()};
+  std::string content{std::istreambuf_iterator<char>(input),
+                      std::istreambuf_iterator<char>()};
+  // Whether these files arrive with CRLF or LF is a checkout setting, not a
+  // fact about the page. Every contract below quotes source text, and some of
+  // those quotes span lines, so they would silently stop matching on a
+  // machine that checks out the other way. Normalizing here keeps the
+  // contracts about the page rather than about git configuration.
+  std::erase(content, '\r');
+  return content;
 }
 
 // Returns the markup of one dashboard section so a contract can be scoped to
@@ -509,6 +516,28 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
           "the deferred hidden-volume placeholder is still present");
 }
 
+void test_dropping_a_container_is_confirmed_and_says_what_it_keeps() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("id=\"forget-container-dialog\"") != std::string::npos &&
+              page.find("id=\"forget-container-confirm\"") !=
+                  std::string::npos &&
+              page.find("id=\"forget-container-cancel\"") != std::string::npos,
+          "dropping a container has no confirmation step");
+  // The one thing a user could fear here is losing the data. The dialog has to
+  // say plainly that it does not touch the file, or the action is unusable.
+  require(page.find("不会删除容器文件") != std::string::npos &&
+              page.find("重新加回来") != std::string::npos,
+          "the drop confirmation does not say the container file survives");
+  require(script.find("bridge.forgetContainer(id)") != std::string::npos,
+          "the page cannot drop a container off the list");
+  // The action is reached only through the dialog: a row button that called
+  // the bridge directly would be a one-click removal.
+  require(script.find("openForgetFlow(id") != std::string::npos &&
+              script.find("pendingForgetId") != std::string::npos,
+          "the drop button does not go through the confirmation");
+}
+
 void test_card_reset_is_gated_and_states_its_cost() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
@@ -717,6 +746,7 @@ int main() {
     test_five_states_are_complete_and_vendor_neutral();
     test_bridge_calls_are_narrow_and_route_specific();
     test_operation_history_is_bounded_session_only_and_inert();
+    test_dropping_a_container_is_confirmed_and_says_what_it_keeps();
     test_card_reset_is_gated_and_states_its_cost();
     test_container_creation_form_is_bounded();
     test_hidden_container_form_is_symmetric_and_never_validated();

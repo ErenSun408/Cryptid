@@ -62,6 +62,17 @@
   const creationTypeButtons =
     Array.from(document.querySelectorAll("[data-create-kind]"));
   const resetOpenButton = document.getElementById("reset-card-open");
+  const forgetDialog = document.getElementById("forget-container-dialog");
+  const forgetName = document.getElementById("forget-container-name");
+  const forgetStatus = document.getElementById("forget-container-status");
+  const forgetCloseButton = document.getElementById("forget-container-close");
+  const forgetCancelButton = document.getElementById("forget-container-cancel");
+  const forgetConfirmButton =
+    document.getElementById("forget-container-confirm");
+  // The container the open dialog is asking about. Zero means no question is
+  // pending, so a stale confirmation can never act on the wrong row.
+  let pendingForgetId = 0;
+
   const resetDialog = document.getElementById("reset-card-dialog");
   const resetCloseButton = document.getElementById("reset-card-close");
   const resetCancelButton = document.getElementById("reset-card-cancel");
@@ -556,6 +567,24 @@
       busy || !ready || !resetAcknowledge.checked;
   };
 
+  const openForgetFlow = (id, name) => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    pendingForgetId = id;
+    forgetName.textContent = name;
+    forgetStatus.textContent = "";
+    forgetStatus.dataset.tone = "";
+    forgetDialog.hidden = false;
+  };
+
+  const closeForgetFlow = (force = false) => {
+    if (busy && !force) return;
+    pendingForgetId = 0;
+    forgetDialog.hidden = true;
+    forgetName.textContent = "";
+    forgetStatus.textContent = "";
+    forgetStatus.dataset.tone = "";
+  };
+
   const closeResetFlow = (force = false) => {
     if (busy && !force) return;
     resetDialog.hidden = true;
@@ -721,6 +750,21 @@
     toggle.dataset.containerAction = container.mounted ? "unmount" : "mount";
     actions.appendChild(toggle);
 
+    // Offered only while the container is unmounted. The session refuses to
+    // drop one that still holds a drive letter, so the button is not there to
+    // be refused.
+    if (!container.mounted) {
+      const forget = document.createElement("button");
+      forget.type = "button";
+      forget.className = "shell-button ghost";
+      forget.textContent = "从列表移除";
+      forget.disabled = busy;
+      forget.dataset.containerId = String(container.id);
+      forget.dataset.containerName = container.name;
+      forget.dataset.containerAction = "forget";
+      actions.appendChild(forget);
+    }
+
     row.append(mark, identity, facts, actions);
     return row;
   };
@@ -828,6 +872,7 @@
     updateResetAvailability();
     if (!showDashboard) {
       closeResetFlow(true);
+      closeForgetFlow(true);
       closeCreationFlow(true);
       showDashboardSection("dashboard");
     }
@@ -1290,6 +1335,10 @@
     () => bridge.unmountContainer(id),
     "无法卸载该容器，请关闭占用文件后重试。");
 
+  const forgetAdoptedContainer = (id) => runContainerAction(
+    () => bridge.forgetContainer(id),
+    "无法从列表移除该容器，请稍后重试。");
+
   const resetCardRecord = async () => {
     if (busy || currentState !== nativeState.authenticated ||
         !resetAcknowledge.checked) {
@@ -1525,6 +1574,17 @@
   resetDialog.addEventListener("click", (event) => {
     if (event.target === resetDialog) closeResetFlow();
   });
+  forgetCloseButton.addEventListener("click", () => closeForgetFlow());
+  forgetCancelButton.addEventListener("click", () => closeForgetFlow());
+  forgetDialog.addEventListener("click", (event) => {
+    if (event.target === forgetDialog) closeForgetFlow();
+  });
+  forgetConfirmButton.addEventListener("click", async () => {
+    const id = pendingForgetId;
+    if (busy || id === 0) return;
+    closeForgetFlow();
+    await forgetAdoptedContainer(id);
+  });
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => {
     if (busy) return;
@@ -1592,7 +1652,9 @@
       }
       const id = Number(target.dataset.containerId);
       if (!Number.isInteger(id) || id <= 0) return;
-      if (target.dataset.containerAction === "unmount") {
+      if (target.dataset.containerAction === "forget") {
+        openForgetFlow(id, target.dataset.containerName ?? "");
+      } else if (target.dataset.containerAction === "unmount") {
         await unmountAdoptedContainer(id);
       } else {
         await mountAdoptedContainer(id);
@@ -1637,6 +1699,10 @@
     }
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !forgetDialog.hidden) {
+      closeForgetFlow();
+      return;
+    }
     if (event.key === "Escape" && !resetDialog.hidden) {
       closeResetFlow();
       return;
