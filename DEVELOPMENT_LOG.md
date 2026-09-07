@@ -5956,4 +5956,137 @@
 - 未触碰任何密钥派生、跨边界字段、落盘行为与卡记录路径；页面与控制器的既有下限一并未动。
 - 不引入按容器类型区分的可观察差异：本改动只收紧 B 类会话入口对非法参数的拒绝，
   A 类与 B 类的合法路径完全不变，8.7.2 的逐字对称不受影响。
-- 提交：待定（`[P2.21]refuse a zero-length hidden volume in the session layer`）。
+- 提交：`0b16dd8 [P2.21]refuse a zero-length hidden volume in the session layer`。
+
+### 小切片 27：路径记忆收尾 —— 记住容器位置开关、全套测试、主文档回写
+
+#### 需求审计
+
+- P2.27 在 `MILESTONES.md` 里的定义是收尾三件事：全套测试、实机、主文档回写四项
+  （8.7.4 改为逐条密封／8.7.6 选案／Q-04 澄清／新增「A 类容器之间无隔离」告知项）。
+- 审计发现回写之前还缺一件东西：**8.7.4 自己要求的「记住容器位置」开关没有后端**。
+  该开关是 P2.17a 留下的两个空开关之一（只有 UI、状态不持久，重开即回默认），
+  而 8.7.4 的原文写的是「用户可关闭并改为每次手动选择」。不补上就会把一段描述产品里
+  并不存在的行为写进主文档，故本片先补齐它再回写。
+- 另查出一处文档欠账：`DEVELOPMENT_LOG.md` **缺 P2.22～P2.26 五片的条目**
+  （AGENTS.md「开发记录」要求每个阶段都更新）。本片没有补写这五条 —— 补写要逐个复核
+  已提交的差异，属独立工作量，作为遗留项报出，由用户决定是否补。
+- 顺带修复 8.7.4 原文里被前一轮编辑吃掉的一行（「（部分带隐藏卷、部分是以真实密码建立的
+  普通卷），此时诱饵密码无法挂出后者；」整行丢失，且多出两个空行），已按原文恢复。
+- 🔴 **收尾跑到 `card_product_webview_integration_tests` 时查出一处 P2.26 的回归**，详见下方
+  「测试」。该目标 `EXCLUDE_FROM_ALL` 且没有 `add_test`，必须点名构建、点名运行，
+  于是 P2.22～P2.26 一路没跑到它。
+
+#### 实现
+
+**`include/usb_vault/application/product_settings_v1.h` / `src/application/product_settings_v1.cpp`（新增）**
+
+- 位置 `%LOCALAPPDATA%\usb-vault\settings.txt`，内容是单一布尔量
+  `remember-container-paths=0/1`，与容器索引分开存放 —— 索引必须与随机数不可区分，
+  设置则是一个对档位不敏感的普通配置，两者放一起会给索引文件加上明文头。
+- **缺文件答「开」，文件在却读不出答「关」**：前者是产品默认，第一次运行没有任何选择需要尊重；
+  后者是曾经做过选择而现在不可读，唯一安全的读法是不写任何东西。两者刻意不同，用
+  `GetFileAttributesW` 区分。超过 4 KiB 的文件按不可读处理 —— 不管它是什么，反正不是这个。
+- 写入是临时文件 + `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` 一步换上，
+  读者不会读到写了一半的选择（半个文件会被判成损坏，而损坏在这里意味着停止记录路径）。
+
+**会话层（`card_login_mount_session*`）**
+
+- `CardLoginMountSessionRuntime` 加 `remember_container_paths()` / `set_remember_container_paths()`，
+  生产实现接到上面那两个函数；`IAuthenticatedCardVolumeSession` 同步加公开的读写。
+- `remember_container_path` 与 `adopt_remembered_containers` 在函数开头即按开关返回：
+  关掉后**不写新路径、登录也不取回列表**。
+- `set_remembering_container_paths` **不动索引**。关掉是「停止记录」不是「遗忘」，
+  而且开关必须可逆 —— 一个悄悄销毁记录的开关，再打开也回不来。
+- `forget_container`（从列表移除）**不受开关约束**：那是针对某一个容器的明确指令，不是策略。
+  否则关掉开关的用户就再也清不掉开着时写下的记录。
+
+**UI 与桥**
+
+- `CardProductUiSessionController`：**读不挑路由**（设置页在登录前就要把开关显示在真实位置），
+  **写要求已认证**（改设置和其他会话操作同级）。
+- 桥新增 `getRememberContainerPaths`（DISPID 32，零参，返 `VT_BOOL`）与
+  `setRememberContainerPaths`（DISPID 33，单参，**必须是 `VT_BOOL`**），与既有成员同形。
+- 页面 `refreshRememberSwitch` 从原生读回位置并写 `aria-checked`；点击只发命令，随后**重读**，
+  失败时保持原位并给出错误提示 —— 开关显示的永远是原生侧真实持有的值，不是刚才点了什么。
+  另一个空开关「登录后自动挂载」保持页面本地，它要等 8.7.5 的卷数上限或重谈五秒预算。
+
+**集成夹具页与它的护栏**
+
+- `tests/card_product_webview_integration.html` 是集成测试自己的极简夹具页（176 行，只放
+  产品脚本要查的那些 id），**不是产品页的拷贝**。P2.26 往产品页加了「从列表移除」弹窗，
+  夹具页没跟着加，于是 `card_session.js` 启动时在 `forgetCloseButton.addEventListener` 上
+  对 null 取属性抛异常 —— 页面再也没报出过状态，驱动第一步 `waitForState("no-card")` 超时。
+  已按夹具页自己的极简风格补上那六个 id。
+- **新增 `card_product_ui_page_contract_tests` 的一条护栏**：把脚本里每一处
+  `document.getElementById("…")` 的 id 抽出来，逐个要求夹具页里有。它把一个「必须有人记得
+  手动跑」的 GUI 目标的一半价值搬进了 CTest —— 那种「加了元素忘了同步夹具」的漏，从此在
+  CTest 里就红。已反向验证：把夹具页里任一个 id 改掉，该用例立刻失败（退出码 1）。
+
+**「从列表移除」确认弹窗文案**（用户定稿）
+
+- 「文件仍在原处，随时可以用「导入」重新加回来」→「文件仍在原路径，可通过「导入」重新添加至
+  列表」。页面契约钉的是那句**承诺**而不是那句话，断言随之从「重新加回来」改钉
+  「重新添加至列表」；「不会删除容器文件」原样保留。
+
+#### 测试
+
+- **新建 `product_settings_v1_tests`**：默认为开、往返、关掉后重读仍是关、文件在却读不出答「关」、
+  超大文件按不可读处理。
+- **`card_login_mount_session_tests`**：关掉后新路径不写入、登录不取回列表、**已有记录不被擦除**、
+  再打开原样回来；「从列表移除」在开关关闭时照样清得掉记录。
+- **`card_product_ui_session_controller_tests`**：读在未认证下也答得出，写在未认证下抛
+  `wrong_route` 且**一次都没触达会话**。
+- **`card_product_webview_host_object_tests`（本片新增用例）**：布尔跨界往返、未认证下 `E_FAIL`
+  且不触达会话、传数字被 `DISP_E_TYPEMISMATCH` 拒、参数个数不对被 `DISP_E_BADPARAMCOUNT` 拒。
+  这一层此前只有假会话的桩，桥成员本身没有用例。
+- **`card_product_ui_page_contract_tests`**：原断言「所有开关都不得触达原生」已随本片失效，
+  改为逐个说清楚 —— 有 store 的那个必须过桥且从原生重读，没 store 的那个仍不得出现
+  `autoMount` 字样；**浏览器存储的禁令对每个开关都不变**。
+- **全套（本计划中唯一一次）**：Debug **50/50**、MSVC `/analyze` **50/50**（无项目诊断）、
+  ASan **48/50**。ASan 的两处失败是 `vikey_helper_process_tests` 与
+  `vikey_helper_hid_compatibility_tests` 下 helper 子进程 `0xC0000135`（DLL not found）的
+  既有环境问题，与本片无关，Debug 与 `/analyze` 下这两项都过。
+- 🔴 **`/analyze` 首次覆盖 P2.22～P2.26 的新测试文件，查出两处并已修** —— 这正是「每片只跑
+  最小目标、全套留到收尾」这条纪律要在收尾这一次付的账：
+  1. `container_index_v1_tests.cpp` 的格式常量对比触发 C6326（两个常量相比）。改为
+     `static_assert`：它们本来就是编译期常量，钉在编译期比钉在用例里更强，漂了就不该链出
+     一个能跑的用例。
+  2. `card_login_mount_session_tests.cpp` 的多登录用例触发 C6262（单帧 19452 字节）。
+     根因是一个会话核心把整份操作历史按值带在身上，两个并排就超了 `/analyze` 的 16 KiB。
+     引入 `in_one_login(runtime, work)` 把每次登录关进自己的栈帧，四个多登录用例全部改走它，
+     断言一条未改。
+- **`card_product_webview_integration_tests`（点名构建、点名运行）**：修好夹具页后实跑
+  **退出码 0**。驱动脚本新增覆盖「记住容器位置」：默认为开、点一下后**等**它变成关
+  （这个开关的位置来自原生侧，比另外两个晚一拍才落定）、再点回开；原生侧断言这一程恰好
+  两次写入且最终为开。
+  🔴 **修复前它在第一步就失败（退出码 10 `fail-no-card`）**，且经 `git stash` 后用 HEAD
+  重新构建复现，确认与本片改动无关，是 P2.26 留下的。定位过程：先把断言拆开确认不是
+  `action.hidden`，再探到 `surface.dataset.busy` 卡在 `true` —— 页面初始化就抛了。
+- `node --check ui/card_session.js`、`node --check tests/card_product_webview_integration.js`
+  通过；`git diff --check` 通过。
+- **未做：实机**。`usb_vault_vikey_p2_development_app` 已点名重建（`out\build\dev`，
+  与 UI 资产同批刷新），真卡走查待用户执行。
+
+#### 安全复核
+
+- **settings.txt 对档位不敏感**：内容只有一个布尔量，档二档三逐字节相同，不记录任何路径、
+  不记录容器是否存在、不记录哪个密码登录的。8.4 的逐字节比对不受影响。
+- **关掉开关后索引文件不再被读写**，因此一台从未打开过记忆的机器上该文件根本不存在。
+  这一可观察差异说的是「用户关了记忆」，而 settings.txt 本来就明说了这件事，**不携带档位**。
+- **关闭不删除记录**是安全决策而非偷懒：删除不可逆，一次误点即永久丢失，而这一层没有钥匙，
+  无从掂量正在丢的是什么（与 8.7.4「损坏即拒」同一条理由）。
+- 新桥成员不接受也不返回路径、口令或档位，只有一个布尔量；写路径要求已认证，
+  未认证调用在触达会话之前就被拒。
+- 页面未新增任何浏览器存储，也不缓存开关状态：每次都从原生重读，失败就保持原位，
+  不会出现「页面显示已保存、实际没保存」。
+- 夹具页只是测试夹具，不参与产品打包：补进去的六个 id 不影响产品页，也没有放宽页面契约
+  测试的任何一条既有断言（浏览器存储禁令、跨边界字段、行内按钮必须过确认流程均原样保留）。
+- 主文档回写未放宽任何约束：8.7.6 仍标注「待客户选择」，本片只补上论据材料；
+  Q-04 的边界写的是**导出路径与导出历史仍然一个字都不许写**，只澄清容器自身路径不在其列。
+- 提交：`0427d77 [tests]pin the container index format at compile time`、
+  `4c1c15c [P2.26]restore the elements the integration fixture page lost`、
+  `145b63b [P2.27]remember whether to remember where containers are`、
+  `2a9881c [ui]say where a dropped container file stays`；
+  文档回写另走 `[docs]write the container path memory decisions back`，
+  其哈希按惯例由下一切片补上。
