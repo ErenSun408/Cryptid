@@ -152,6 +152,18 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
+  [[nodiscard]] bool remembering_container_paths() override {
+    return remember_paths;
+  }
+
+  void set_remembering_container_paths(const bool remember) override {
+    remember_paths = remember;
+    ++remember_paths_writes;
+  }
+
+  bool remember_paths{true};
+  int remember_paths_writes{};
+
   void forget_container(const std::uint32_t id) override {
     ++forget_container_calls;
     for (auto entry = containers.begin(); entry != containers.end(); ++entry) {
@@ -629,6 +641,41 @@ RecordingCloseSink g_close_sink;
   return host.Invoke(member_id(host, name), IID_NULL, LOCALE_INVARIANT,
                      DISPATCH_METHOD, &parameters, result, nullptr,
                      argument_error);
+}
+
+[[nodiscard]] VARIANTARG boolean_argument(const bool value) noexcept {
+  VARIANTARG argument{};
+  ::VariantInit(&argument);
+  argument.vt = VT_BOOL;
+  argument.boolVal = value ? VARIANT_TRUE : VARIANT_FALSE;
+  return argument;
+}
+
+[[nodiscard]] bool invoke_remember(IDispatch& host) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, L"getRememberContainerPaths"),
+                                IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                                &parameters, &result, nullptr, nullptr)),
+          "remember-paths query failed");
+  require(result.vt == VT_BOOL,
+          "remember-paths query returned the wrong type");
+  const bool remember = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return remember;
+}
+
+[[nodiscard]] HRESULT invoke_set_remember(IDispatch& host, const bool value,
+                                          UINT* const argument_error) {
+  VARIANTARG argument = boolean_argument(value);
+  DISPPARAMS parameters{&argument, nullptr, 1, 0};
+  const HRESULT status =
+      host.Invoke(member_id(host, L"setRememberContainerPaths"), IID_NULL,
+                  LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
+                  nullptr, argument_error);
+  static_cast<void>(::VariantClear(&argument));
+  return status;
 }
 
 // A BSTR argument. The caller owns it and clears it with the rest of the list.
@@ -1141,6 +1188,51 @@ void test_directory_browse_reports_the_choice_as_a_string() {
           "browsing created something or ran the wrong number of times");
 }
 
+void test_the_remember_switch_crosses_the_bridge_as_a_boolean() {
+  Fixture fixture;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  // Reading needs no session: the settings page shows the switch in its real
+  // position before anyone logs in.
+  require(invoke_remember(*host.Get()), "the switch did not read its default");
+  require(invoke_set_remember(*host.Get(), false, nullptr) == E_FAIL &&
+              fixture.volume.remember_paths_writes == 0,
+          "the switch was changed off the authenticated route");
+
+  fixture.authentication.establish(root_secret());
+  require(invoke_set_remember(*host.Get(), false, nullptr) == S_OK &&
+              fixture.volume.remember_paths_writes == 1 &&
+              !invoke_remember(*host.Get()),
+          "turning the switch off did not reach the session");
+  require(invoke_set_remember(*host.Get(), true, nullptr) == S_OK &&
+              invoke_remember(*host.Get()),
+          "the switch could not be turned back on");
+
+  // A setting is a boolean and nothing else. A number that C++ would happily
+  // read as true must not cross as one.
+  UINT argument_error = 99;
+  require(invoke_with_number(*host.Get(), L"setRememberContainerPaths", 1,
+                             nullptr, &argument_error) ==
+                  DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "the switch accepted a number");
+  DISPPARAMS empty{};
+  require(host->Invoke(member_id(*host.Get(), L"setRememberContainerPaths"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &empty,
+                       nullptr, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "the switch accepted a call with nothing to set");
+  VARIANTARG stray = boolean_argument(true);
+  DISPPARAMS stray_parameters{&stray, nullptr, 1, 0};
+  require(host->Invoke(member_id(*host.Get(), L"getRememberContainerPaths"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &stray_parameters, nullptr, nullptr, nullptr) ==
+              DISP_E_BADPARAMCOUNT,
+          "reading the switch accepted an argument it does not take");
+  static_cast<void>(::VariantClear(&stray));
+  require(fixture.volume.remember_paths_writes == 2,
+          "a refused call still reached the session");
+}
+
 void test_adopted_container_mount_and_unmount_route_through_identifiers() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -1402,6 +1494,7 @@ int main() {
     test_container_calls_reject_wrong_shapes_and_report_cancellation();
     test_directory_browse_reports_the_choice_as_a_string();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
+    test_the_remember_switch_crosses_the_bridge_as_a_boolean();
     test_container_b_creation_consumes_six_reversed_arguments();
     test_container_query_failure_does_not_invent_facts();
     test_operation_history_is_read_only_typed_and_clearable();

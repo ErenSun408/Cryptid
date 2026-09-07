@@ -218,15 +218,18 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
   require(settings.find("<input") == std::string::npos,
           "settings page must not use form inputs");
 
-  // Neither remaining switch has a backing store yet: 8.7.5 needs the first
-  // local configuration artifact and 8.7.4 needs the encrypted, layered
-  // container list. Until those land the switches must stay page-local, so
-  // nothing here may reach the native bridge or any browser storage.
-  require(count_occurrences(script, "data-setting") == 1 &&
-              script.find("control.setAttribute(\"aria-checked\", "
-                          "enabled ? \"false\" : \"true\");") !=
-                  std::string::npos,
-          "a settings switch does more than flip its own state");
+  // 8.7.4 has landed, so remember-containers now has a store and reaches the
+  // bridge; what that must look like is pinned separately. Auto-mount does
+  // not: 8.7.5 first requires a cap on how many volumes an automatic mount may
+  // attach, or a renegotiated five-second budget. Until that lands it stays
+  // page-local, so nothing here may carry it to the native side.
+  require(script.find("control.setAttribute(\"aria-checked\", "
+                      "enabled ? \"false\" : \"true\");") != std::string::npos,
+          "a switch with no store behind it no longer flips its own state");
+  require(script.find("autoMount") == std::string::npos &&
+              script.find("AutoMount") == std::string::npos,
+          "the auto-mount switch reached the native side before 8.7.5 landed");
+  // Browser storage stays forbidden for every switch, store or no store.
   for (const std::string_view store : {"localStorage", "sessionStorage",
                                        "indexedDB", "document.cookie"}) {
     require(page.find(store) == std::string::npos &&
@@ -542,6 +545,25 @@ void test_dropping_a_container_is_confirmed_and_says_what_it_keeps() {
           "the drop button does not go through the confirmation");
 }
 
+void test_the_remember_switch_shows_what_the_native_side_holds() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("data-setting=\"remember-containers\"") !=
+              std::string::npos,
+          "the remember-containers switch is missing");
+  require(script.find("await bridge.getRememberContainerPaths();") !=
+              std::string::npos &&
+              script.find("await bridge.setRememberContainerPaths(!enabled);") !=
+                  std::string::npos,
+          "the switch does not reach the native store");
+  // The switch is a view of the stored setting, never of the click. A page
+  // that set it optimistically would show a choice that was never saved.
+  require(script.find("const refreshRememberSwitch") != std::string::npos &&
+              script.find("await refreshRememberSwitch();") !=
+                  std::string::npos,
+          "the switch position is not re-read from the native side");
+}
+
 void test_the_integration_fixture_page_carries_every_element_the_script_takes() {
   // The WebView2 integration fixture has its own stripped-down page, and the
   // product script runs against it unchanged. An element added to the product
@@ -782,6 +804,7 @@ int main() {
     test_bridge_calls_are_narrow_and_route_specific();
     test_operation_history_is_bounded_session_only_and_inert();
     test_dropping_a_container_is_confirmed_and_says_what_it_keeps();
+    test_the_remember_switch_shows_what_the_native_side_holds();
     test_the_integration_fixture_page_carries_every_element_the_script_takes();
     test_card_reset_is_gated_and_states_its_cost();
     test_container_creation_form_is_bounded();

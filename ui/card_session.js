@@ -1000,6 +1000,25 @@
     updateActionAvailability();
   };
 
+  // The switch is a view of what the native side holds. It is never set from
+  // what the user clicked, so a refused or failed write cannot leave the page
+  // showing a setting that was not saved.
+  const refreshRememberSwitch = async () => {
+    const control = settingSwitches.find(
+      (candidate) => candidate.dataset.setting === "remember-containers");
+    if (control === undefined) return;
+    try {
+      const remember = await bridge.getRememberContainerPaths();
+      if (remember !== true && remember !== false) {
+        throw new Error("invalid remember-container-paths setting");
+      }
+      control.setAttribute("aria-checked", remember ? "true" : "false");
+    } catch (_) {
+      // An unreadable setting is not a licence to invent one. The switch keeps
+      // the position it already had.
+    }
+  };
+
   const refreshNativeState = async () => {
     const nextState = await bridge.getSessionState();
     const nextActiveVolumes = await bridge.hasActiveSession();
@@ -1017,6 +1036,7 @@
         throw new Error("invalid card reset availability");
       }
       nextResetAvailable = resetAvailable;
+      await refreshRememberSwitch();
       const count = await bridge.getContainerCount();
       if (!Number.isInteger(count) || count < 0 || count > 4096) {
         throw new Error("invalid container count");
@@ -1535,13 +1555,28 @@
         "无法清空当前会话日志，请稍后重试。");
     }
   });
-  // Settings switches are page-local for now: nothing here reaches the native
-  // bridge and nothing is written to disk, so a reload restores the defaults.
-  // Each switch gets its store when its own slice lands.
+  // "记住容器位置" is the one switch with a store behind it. The rest are still
+  // page-local: nothing reaches the bridge and a reload restores their
+  // defaults, and each gets its store when its own slice lands.
   for (const control of settingSwitches) {
-    control.addEventListener("click", () => {
+    control.addEventListener("click", async () => {
+      if (control.getAttribute("aria-disabled") === "true") return;
       const enabled = control.getAttribute("aria-checked") === "true";
-      control.setAttribute("aria-checked", enabled ? "false" : "true");
+      if (control.dataset.setting !== "remember-containers") {
+        control.setAttribute("aria-checked", enabled ? "false" : "true");
+        return;
+      }
+      if (busy || currentState !== nativeState.authenticated) return;
+      // The switch shows what the native side holds, never what was clicked.
+      // A refused or failed write must leave it where it really is rather
+      // than where the click implied.
+      try {
+        await bridge.setRememberContainerPaths(!enabled);
+      } catch (_) {
+        setDashboardStatus(
+          "无法更改该设置，请稍后重试。", "error");
+      }
+      await refreshRememberSwitch();
     });
   }
   for (const button of creationButtons) {

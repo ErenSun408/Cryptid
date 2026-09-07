@@ -229,6 +229,19 @@ usb_vault_configure_target(card_login_mount_session_tests)
 add_test(NAME card_login_mount_session_tests
   COMMAND card_login_mount_session_tests)
 
+add_executable(product_settings_v1_tests
+  product_settings_v1_tests.cpp
+)
+
+target_link_libraries(product_settings_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(product_settings_v1_tests)
+
+add_test(NAME product_settings_v1_tests
+  COMMAND product_settings_v1_tests)
+
 add_executable(container_index_store_v1_tests
   container_index_store_v1_tests.cpp
 )

@@ -5,6 +5,7 @@
 #include "usb_vault/application/container_index_store_v1.h"
 #include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/application/container_layout_v1.h"
+#include "usb_vault/application/product_settings_v1.h"
 #include "usb_vault/security/kdf_v1.h"
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume_creation/volume_creator.h"
@@ -180,6 +181,15 @@ class ProductionCardLoginMountSessionRuntime final
     write_container_index_v1_file(container_index_v1_default_path(), contents);
   }
 
+  [[nodiscard]] bool remember_container_paths() override {
+    return remember_container_paths_v1(product_settings_v1_default_path());
+  }
+
+  void set_remember_container_paths(const bool remember) override {
+    set_remember_container_paths_v1(product_settings_v1_default_path(),
+                                    remember);
+  }
+
  private:
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
@@ -278,6 +288,15 @@ void CardLoginMountSession::unmount_container(const std::uint32_t id) {
 
 void CardLoginMountSession::forget_container(const std::uint32_t id) {
   impl_->core.forget_container(id);
+}
+
+bool CardLoginMountSession::remembering_container_paths() {
+  return impl_->core.remembering_container_paths();
+}
+
+void CardLoginMountSession::set_remembering_container_paths(
+    const bool remember) {
+  impl_->core.set_remembering_container_paths(remember);
 }
 
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
@@ -604,6 +623,7 @@ void CardLoginMountSessionCore::remember_container_path(
   // cost of the silence is that the path is simply not remembered, which the
   // session shows anyway for as long as it lasts.
   try {
+    if (!runtime_.remember_container_paths()) return;
     security::SecureBuffer key = container_index_key();
     std::vector<std::byte> file = runtime_.read_container_index();
     const ContainerIndexWriteV1 written =
@@ -631,8 +651,22 @@ void CardLoginMountSessionCore::forget_container_path(
   }
 }
 
+bool CardLoginMountSessionCore::remembering_container_paths() {
+  return runtime_.remember_container_paths();
+}
+
+void CardLoginMountSessionCore::set_remembering_container_paths(
+    const bool remember) {
+  // Turning it off stops new paths being written and stops the list coming
+  // back; it does not go through the index deleting what is already there. A
+  // switch that quietly destroyed records could not be undone by flipping it
+  // again, and the user asked to stop remembering, not to forget.
+  runtime_.set_remember_container_paths(remember);
+}
+
 void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
   try {
+    if (!runtime_.remember_container_paths()) return;
     security::SecureBuffer key = container_index_key();
     const std::vector<std::byte> file = runtime_.read_container_index();
     const std::vector<std::wstring> paths =

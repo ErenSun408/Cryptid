@@ -194,6 +194,18 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
+  [[nodiscard]] bool remembering_container_paths() override {
+    return remember_paths;
+  }
+
+  void set_remembering_container_paths(const bool remember) override {
+    remember_paths = remember;
+    ++remember_paths_writes;
+  }
+
+  bool remember_paths{true};
+  int remember_paths_writes{};
+
   void forget_container(const std::uint32_t id) override {
     ++forget_container_calls;
     for (auto entry = containers.begin(); entry != containers.end(); ++entry) {
@@ -542,6 +554,9 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
          g_volume.clear_operation_calls == 1 && g_volume.unmount_calls == 1 &&
+         // The remember switch went off and back on, and the page took its
+         // position from the session both times rather than from the click.
+         g_volume.remember_paths_writes == 2 && g_volume.remember_paths &&
          !g_volume.mounted();
 }
 
@@ -560,6 +575,7 @@ void fail_and_close(const HWND window) noexcept {
       L"fail-settings-navigation",
       L"fail-settings-defaults",
       L"fail-settings-switch",
+      L"fail-settings-remember",
       L"fail-operation-history",
       L"fail-operation-clear",
       L"fail-operation-reset",

@@ -154,6 +154,18 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
+  [[nodiscard]] bool remembering_container_paths() override {
+    return remember_paths;
+  }
+
+  void set_remembering_container_paths(const bool remember) override {
+    remember_paths = remember;
+    ++remember_paths_writes;
+  }
+
+  bool remember_paths{true};
+  int remember_paths_writes{};
+
   void forget_container(const std::uint32_t id) override {
     ++forget_container_calls;
     for (auto entry = containers.begin(); entry != containers.end(); ++entry) {
@@ -880,6 +892,28 @@ void test_dropping_a_container_takes_the_record_and_not_the_file() {
       "a container already off the list could be dropped again");
 }
 
+void test_the_remember_switch_reads_anywhere_and_changes_only_inside() {
+  Fixture fixture;
+  // The settings page shows the switch in its real position before anyone
+  // logs in, so reading it cannot depend on a session.
+  require(fixture.controller.remembering_container_paths(),
+          "the switch did not read its default outside a session");
+  require_throws<std::system_error>(
+      [&] { fixture.controller.set_remembering_container_paths(false); },
+      "the switch was changed without an authenticated session");
+  require(fixture.volume.remember_paths_writes == 0,
+          "a wrong-route change still reached the session");
+
+  fixture.authentication.establish(root_secret());
+  fixture.controller.set_remembering_container_paths(false);
+  require(fixture.volume.remember_paths_writes == 1 &&
+              !fixture.controller.remembering_container_paths(),
+          "the switch did not change inside an authenticated session");
+  fixture.controller.set_remembering_container_paths(true);
+  require(fixture.controller.remembering_container_paths(),
+          "the switch could not be turned back on");
+}
+
 void test_dropping_a_container_is_refused_off_the_authenticated_route() {
   Fixture fixture;
   require_throws<std::system_error>(
@@ -1290,6 +1324,7 @@ int main() {
     test_operation_history_rejects_paths_and_impossible_shapes();
     test_dropping_a_container_takes_the_record_and_not_the_file();
     test_dropping_a_container_is_refused_off_the_authenticated_route();
+    test_the_remember_switch_reads_anywhere_and_changes_only_inside();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

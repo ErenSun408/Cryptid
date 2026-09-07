@@ -165,6 +165,15 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // behind would belong to nothing the session can still name.
   virtual void forget_container(std::uint32_t id) = 0;
 
+  // Whether the product writes container paths down at all, and the switch
+  // that changes it. Turning it off stops new paths being recorded and stops
+  // the list coming back at the next login; it does not delete what is already
+  // recorded, so turning it back on returns the same list. Dropping a
+  // container from the list still clears its record either way: that is an
+  // explicit instruction rather than a policy.
+  [[nodiscard]] virtual bool remembering_container_paths() = 0;
+  virtual void set_remembering_container_paths(bool remember) = 0;
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -224,6 +233,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void mount_adopted_container(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
   void forget_container(std::uint32_t id) override;
+  [[nodiscard]] bool remembering_container_paths() override;
+  void set_remembering_container_paths(bool remember) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;

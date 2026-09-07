@@ -413,11 +413,22 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     container_index.assign(contents.begin(), contents.end());
   }
 
+  [[nodiscard]] bool remember_container_paths() override {
+    return remember_paths;
+  }
+
+  void set_remember_container_paths(const bool remember) override {
+    remember_paths = remember;
+    ++remember_paths_writes;
+  }
+
   std::vector<std::byte> container_index;
   int index_reads{};
   int index_writes{};
   bool fail_index_read{};
   bool fail_index_write{};
+  bool remember_paths{true};
+  int remember_paths_writes{};
 
   wchar_t allocated_drive_letter{L'X'};
   // A container whose volumes were built from the login input. Only the B
@@ -1596,6 +1607,20 @@ void test_operation_history_discards_only_the_oldest_events_at_capacity() {
   return false;
 }
 
+// Runs one login's worth of work and closes it again. Cases needing more than
+// one login run each of them through here rather than opening them side by
+// side: a session core carries the whole operation history by value, so two of
+// them in one frame cost more stack than /analyze allows, and no case here
+// needs an earlier login to still be open once the next one starts.
+template <typename Callable>
+void in_one_login(FakeRuntime& runtime, Callable&& work) {
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  std::forward<Callable>(work)(session);
+}
+
 void test_every_way_a_container_arrives_writes_it_down() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -1626,14 +1651,10 @@ void test_every_way_a_container_arrives_writes_it_down() {
 void test_a_container_already_written_down_is_not_written_again() {
   FakeRuntime runtime;
   runtime.free_drive_letters = {L'S', L'T'};
-  {
-    CardAuthenticationSession first_login;
-    CardLoginMountSessionCore first(first_login, runtime, layout(),
-                                    LoginMountPolicy::manual);
-    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+  in_one_login(runtime, [](CardLoginMountSessionCore& first) {
     static_cast<void>(first.create_container(L"D:\\vault\\once.hc",
                                              64ULL * 1024ULL * 1024ULL));
-  }
+  });
   runtime.other_existing.emplace_back(L"D:\\vault\\once.hc");
   runtime.other_size_bytes = 64ULL * 1024ULL * 1024ULL;
 
@@ -1729,16 +1750,12 @@ void test_an_index_that_cannot_be_reached_costs_only_the_memory() {
 void test_a_login_gets_back_the_containers_whose_files_are_there() {
   FakeRuntime runtime;
   runtime.free_drive_letters = {L'S', L'T', L'U', L'V'};
-  {
-    CardAuthenticationSession first_login;
-    CardLoginMountSessionCore first(first_login, runtime, layout(),
-                                    LoginMountPolicy::manual);
-    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+  in_one_login(runtime, [](CardLoginMountSessionCore& first) {
     static_cast<void>(first.create_container(L"D:\\vault\\here.hc",
                                              64ULL * 1024ULL * 1024ULL));
     static_cast<void>(first.create_container(L"E:\\removable\\away.hc",
                                              64ULL * 1024ULL * 1024ULL));
-  }
+  });
 
   // Only one of the two files answers at the next login. The other one is on a
   // drive nobody plugged in.
@@ -1767,15 +1784,11 @@ void test_a_login_gets_back_the_containers_whose_files_are_there() {
 void test_a_remembered_container_is_opened_by_whichever_derivation_answers() {
   FakeRuntime runtime;
   runtime.free_drive_letters = {L'S', L'T', L'U', L'V'};
-  {
-    CardAuthenticationSession first_login;
-    CardLoginMountSessionCore first(first_login, runtime, layout(),
-                                    LoginMountPolicy::manual);
-    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+  in_one_login(runtime, [](CardLoginMountSessionCore& first) {
     static_cast<void>(first.create_container_b(
         L"D:\\vault\\remembered-b.hc", 64ULL * 1024ULL * 1024ULL,
         16ULL * 1024ULL * 1024ULL, bytes("decoy-password")));
-  }
+  });
   // Publishing already left the file where the fake can find it; from here on
   // only the login derivation opens it, as on a real hidden-volume container.
   runtime.other_size_bytes = 64ULL * 1024ULL * 1024ULL;
@@ -1811,14 +1824,10 @@ void test_a_remembered_container_is_opened_by_whichever_derivation_answers() {
 void test_a_login_that_cannot_read_the_index_still_opens() {
   FakeRuntime runtime;
   runtime.free_drive_letters = {L'S', L'T'};
-  {
-    CardAuthenticationSession first_login;
-    CardLoginMountSessionCore first(first_login, runtime, layout(),
-                                    LoginMountPolicy::manual);
-    first.consume_authenticated_login(root_secret(), bytes("login-password"));
+  in_one_login(runtime, [](CardLoginMountSessionCore& first) {
     static_cast<void>(first.create_container(L"D:\\vault\\here.hc",
                                              64ULL * 1024ULL * 1024ULL));
-  }
+  });
   runtime.fail_index_read = true;
 
   CardAuthenticationSession second_login;
@@ -1829,6 +1838,66 @@ void test_a_login_that_cannot_read_the_index_still_opens() {
           "an index that cannot be read invented containers");
   require(second.mounted() == false,
           "a login that could not read the index left something mounted");
+}
+
+void test_turning_remembering_off_stops_writing_without_erasing() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V'};
+  in_one_login(runtime, [](CardLoginMountSessionCore& first) {
+    require(first.remembering_container_paths(),
+            "the product default is not to remember");
+    static_cast<void>(first.create_container(L"D:\\vault\\kept.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+
+    first.set_remembering_container_paths(false);
+    static_cast<void>(first.create_container(L"D:\\vault\\unrecorded.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  });
+
+  // What was written before the switch was flipped stays written. Turning the
+  // setting off is an instruction to stop recording, not to forget: flipping
+  // it back has to return the same list, which a switch that erased could
+  // never do.
+  require(remembers(runtime, L"D:\\vault\\kept.hc"),
+          "turning remembering off erased what was already recorded");
+  require(!remembers(runtime, L"D:\\vault\\unrecorded.hc"),
+          "a path was recorded after remembering was turned off");
+
+  in_one_login(runtime, [](CardLoginMountSessionCore& second) {
+    require(second.container_statuses().empty(),
+            "a login brought the list back with remembering turned off");
+    second.set_remembering_container_paths(true);
+  });
+
+  CardAuthenticationSession third_login;
+  CardLoginMountSessionCore third(third_login, runtime, layout(),
+                                  LoginMountPolicy::manual);
+  third.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::vector<ContainerStatus> statuses = third.container_statuses();
+  require(statuses.size() == 1 && statuses[0].name == L"kept.hc",
+          "turning remembering back on did not return the same list");
+}
+
+void test_dropping_a_record_works_whether_or_not_remembering_is_on() {
+  // Dropping is an explicit instruction about one container, not a policy, so
+  // the switch does not gate it. Otherwise a user who turned remembering off
+  // could never clear what was written while it was on.
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"D:\\vault\\written.hc", 64ULL * 1024ULL * 1024ULL);
+  require(remembers(runtime, L"D:\\vault\\written.hc"),
+          "the container was not recorded to begin with");
+
+  session.set_remembering_container_paths(false);
+  session.unmount_container(id);
+  session.forget_container(id);
+  require(!remembers(runtime, L"D:\\vault\\written.hc"),
+          "a record could not be cleared once remembering was turned off");
 }
 
 }  // namespace
@@ -1878,6 +1947,8 @@ int main() {
     test_a_login_gets_back_the_containers_whose_files_are_there();
     test_a_remembered_container_is_opened_by_whichever_derivation_answers();
     test_a_login_that_cannot_read_the_index_still_opens();
+    test_turning_remembering_off_stops_writing_without_erasing();
+    test_dropping_a_record_works_whether_or_not_remembering_is_on();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

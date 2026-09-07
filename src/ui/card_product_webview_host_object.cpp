@@ -52,6 +52,10 @@ constexpr wchar_t kMountContainerName[] = L"mountContainer";
 constexpr wchar_t kMountAdoptedContainerName[] = L"mountAdoptedContainer";
 constexpr wchar_t kUnmountContainerName[] = L"unmountContainer";
 constexpr wchar_t kForgetContainerName[] = L"forgetContainer";
+constexpr wchar_t kGetRememberContainerPathsName[] =
+    L"getRememberContainerPaths";
+constexpr wchar_t kSetRememberContainerPathsName[] =
+    L"setRememberContainerPaths";
 constexpr wchar_t kGetContainerCountName[] = L"getContainerCount";
 constexpr wchar_t kGetContainerIdName[] = L"getContainerId";
 constexpr wchar_t kGetContainerNameName[] = L"getContainerName";
@@ -75,6 +79,8 @@ constexpr DISPID kCanResetCardRecordId = 29;
 constexpr wchar_t kCanResetCardRecordName[] = L"canResetCardRecord";
 constexpr DISPID kChooseContainerDirectoryId = 30;
 constexpr DISPID kForgetContainerId = 31;
+constexpr DISPID kGetRememberContainerPathsId = 32;
+constexpr DISPID kSetRememberContainerPathsId = 33;
 constexpr wchar_t kChooseContainerDirectoryName[] =
     L"chooseContainerDirectory";
 
@@ -273,6 +279,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kForgetContainerId;
       return S_OK;
     }
+    if (matches(names[0], kGetRememberContainerPathsName)) {
+      ids[0] = kGetRememberContainerPathsId;
+      return S_OK;
+    }
+    if (matches(names[0], kSetRememberContainerPathsName)) {
+      ids[0] = kSetRememberContainerPathsId;
+      return S_OK;
+    }
     if (matches(names[0], kGetContainerCountName)) {
       ids[0] = kGetContainerCountId;
       return S_OK;
@@ -374,6 +388,10 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_unmount_container(parameters, argument_error);
       case kForgetContainerId:
         return invoke_forget_container(parameters, argument_error);
+      case kGetRememberContainerPathsId:
+        return invoke_get_remember_container_paths(parameters, result);
+      case kSetRememberContainerPathsId:
+        return invoke_set_remember_container_paths(parameters, argument_error);
       case kGetContainerCountId:
         return invoke_container_count(parameters, result);
       case kGetContainerIdId:
@@ -661,6 +679,45 @@ class CardProductWebViewHostObject final : public IDispatch {
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_get_remember_container_paths(
+      DISPPARAMS* const parameters, VARIANT* const result) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 0 ||
+        parameters->cNamedArgs != 0) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    try {
+      const bool remember = controller_.remembering_container_paths();
+      if (result != nullptr) {
+        ::VariantInit(result);
+        result->vt = VT_BOOL;
+        result->boolVal = remember ? VARIANT_TRUE : VARIANT_FALSE;
+      }
+      return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_set_remember_container_paths(
+      DISPPARAMS* const parameters, UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const VARIANT& argument = parameters->rgvarg[0];
+    if (argument.vt != VT_BOOL) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.set_remembering_container_paths(argument.boolVal !=
+                                                  VARIANT_FALSE);
+      return S_OK;
     } catch (...) {
       return E_FAIL;
     }

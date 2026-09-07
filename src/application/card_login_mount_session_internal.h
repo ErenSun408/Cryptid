@@ -70,6 +70,9 @@ class CardLoginMountSessionRuntime {
   [[nodiscard]] virtual std::vector<std::byte> read_container_index() = 0;
   virtual void write_container_index(
       std::span<const std::byte> contents) = 0;
+  // Whether the user wants container paths written down at all.
+  [[nodiscard]] virtual bool remember_container_paths() = 0;
+  virtual void set_remember_container_paths(bool remember) = 0;
 };
 
 // One container adopted by the session. Nothing here is persisted: a restart
@@ -146,6 +149,8 @@ class CardLoginMountSessionCore final {
   std::uint32_t mount_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);
   void forget_container(std::uint32_t id);
+  [[nodiscard]] bool remembering_container_paths();
+  void set_remembering_container_paths(bool remember);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();

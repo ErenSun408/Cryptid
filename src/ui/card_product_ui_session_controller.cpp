@@ -299,6 +299,19 @@ void CardProductUiSessionController::forget_container(
   volume_session_.forget_container(id);
 }
 
+bool CardProductUiSessionController::remembering_container_paths() {
+  return volume_session_.remembering_container_paths();
+}
+
+void CardProductUiSessionController::set_remembering_container_paths(
+    const bool remember) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "changing this setting is not available in the current UI state");
+  }
+  volume_session_.set_remembering_container_paths(remember);
+}
+
 void CardProductUiSessionController::unmount() {
   volume_session_.unmount_active();
 }

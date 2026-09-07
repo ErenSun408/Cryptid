@@ -224,10 +224,14 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-settings-navigation");
     return;
   }
-  // Both switches flip in place; the locked one is not actuatable at all.
+  // The switch with no store behind it flips in place; the locked one is not
+  // actuatable at all; 记住容器位置 shows what the native side holds.
   const autoMount = settingsSection.querySelector('[data-setting="auto-mount"]');
+  const rememberContainers =
+    settingsSection.querySelector('[data-setting="remember-containers"]');
   const lockedUnmount = settingsSection.querySelector('[aria-disabled="true"]');
   if (autoMount.getAttribute("aria-checked") !== "false" ||
+      rememberContainers.getAttribute("aria-checked") !== "true" ||
       lockedUnmount.getAttribute("aria-checked") !== "true") {
     request("fail-settings-defaults");
     return;
@@ -242,6 +246,21 @@ chrome.webview.postMessage("driver-loaded");
   autoMount.click();
   if (autoMount.getAttribute("aria-checked") !== "false") {
     request("fail-settings-switch");
+    return;
+  }
+  // 记住容器位置 is the one switch with a store behind it. The click carries an
+  // instruction to the native side and the position comes back from there, so
+  // it settles a turn later rather than in place.
+  rememberContainers.click();
+  if (!await waitFor(
+      () => rememberContainers.getAttribute("aria-checked") === "false")) {
+    request("fail-settings-remember");
+    return;
+  }
+  rememberContainers.click();
+  if (!await waitFor(
+      () => rememberContainers.getAttribute("aria-checked") === "true")) {
+    request("fail-settings-remember");
     return;
   }
   containersNavigation.click();
