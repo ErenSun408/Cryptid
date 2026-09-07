@@ -29,6 +29,18 @@ using usb_vault::application::seal_container_index_entry_v1;
 using usb_vault::application::try_open_container_index_entry_v1;
 using usb_vault::security::SecureBuffer;
 
+// These numbers are the shape of the file on disk. Changing any of them
+// changes the size of the file, which is the one property of it an observer
+// can measure without a key, so they are pinned here deliberately. They are
+// pinned at compile time rather than in a case: they are constants either
+// way, and a build that drifts should not get as far as producing a runner.
+static_assert(kContainerIndexV1SlotSize == 768, "slot size drifted");
+static_assert(kContainerIndexV1SlotCount == 1024, "slot count drifted");
+static_assert(kContainerIndexV1FileSize == 786432, "file size drifted");
+static_assert(kContainerIndexV1KeySize == 32, "key size drifted");
+static_assert(kContainerIndexV1PathMaximumLength == 259, "path limit drifted");
+static_assert(kContainerIndexEntryV1Version == 1, "entry version drifted");
+
 [[noreturn]] void fail(const char *const message) {
   std::cerr << "FAILED: " << message << '\n';
   std::exit(EXIT_FAILURE);
@@ -76,18 +88,6 @@ void expect_invalid_argument(Callable &&callable, const char *const message) {
     return;
   }
   fail(message);
-}
-
-void test_format_constants_are_pinned() {
-  // These numbers are the shape of the file on disk. Changing any of them
-  // changes the size of the file, which is the one property of it an observer
-  // can measure without a key, so they are pinned here deliberately.
-  expect(kContainerIndexV1SlotSize == 768, "slot size drifted");
-  expect(kContainerIndexV1SlotCount == 1024, "slot count drifted");
-  expect(kContainerIndexV1FileSize == 786432, "file size drifted");
-  expect(kContainerIndexV1KeySize == 32, "key size drifted");
-  expect(kContainerIndexV1PathMaximumLength == 259, "path limit drifted");
-  expect(kContainerIndexEntryV1Version == 1, "entry version drifted");
 }
 
 void test_round_trip_returns_the_same_path() {
@@ -518,7 +518,6 @@ void test_the_reader_closes_on_a_version_or_length_it_cannot_trust() {
 } // namespace
 
 int main() {
-  test_format_constants_are_pinned();
   test_round_trip_returns_the_same_path();
   test_non_ascii_paths_survive_as_code_units();
   test_longest_and_shortest_paths_produce_the_same_shape();
