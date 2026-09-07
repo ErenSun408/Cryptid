@@ -73,6 +73,9 @@ class CardLoginMountSessionRuntime {
   // Whether the user wants container paths written down at all.
   [[nodiscard]] virtual bool remember_container_paths() = 0;
   virtual void set_remember_container_paths(bool remember) = 0;
+  // Whether the user wants an imported container mounted straight away.
+  [[nodiscard]] virtual bool mount_imported_containers() = 0;
+  virtual void set_mount_imported_containers(bool mount) = 0;
 };
 
 // One container adopted by the session. Nothing here is persisted: a restart
@@ -147,10 +150,13 @@ class CardLoginMountSessionCore final {
       const security::SecureBuffer& decoy_password_utf8);
   [[nodiscard]] security::SecureBuffer copy_session_password();
   std::uint32_t mount_container(std::wstring_view path);
+  std::uint32_t adopt_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);
   void forget_container(std::uint32_t id);
   [[nodiscard]] bool remembering_container_paths();
   void set_remembering_container_paths(bool remember);
+  [[nodiscard]] bool mounting_imported_containers();
+  void set_mounting_imported_containers(bool mount);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();

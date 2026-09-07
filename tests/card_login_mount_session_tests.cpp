@@ -427,8 +427,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   int index_writes{};
   bool fail_index_read{};
   bool fail_index_write{};
+  [[nodiscard]] bool mount_imported_containers() override {
+    return mount_imported;
+  }
+
+  void set_mount_imported_containers(const bool mount) override {
+    mount_imported = mount;
+    ++mount_imported_writes;
+  }
+
   bool remember_paths{true};
   int remember_paths_writes{};
+  bool mount_imported{};
+  int mount_imported_writes{};
 
   wchar_t allocated_drive_letter{L'X'};
   // A container whose volumes were built from the login input. Only the B
@@ -1648,6 +1659,60 @@ void test_every_way_a_container_arrives_writes_it_down() {
           "the index holds something nobody asked it to hold");
 }
 
+void test_adopting_a_container_lists_it_without_opening_anything() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T'};
+  runtime.other_existing.emplace_back(L"D:\\vault\\imported.hc");
+  runtime.other_size_bytes = 64ULL * 1024ULL * 1024ULL;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.events.clear();
+  const std::size_t operations_before = session.operation_history().size();
+
+  const std::uint32_t id = session.adopt_container(L"D:\\vault\\imported.hc");
+
+  // Only the existence check runs: no derivation, no drive letter, no mount.
+  require_events(runtime, {"exists:final-other"});
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].id == id &&
+              !statuses[0].mounted && statuses[0].drive_letter == wchar_t{},
+          "an adopted container did not arrive unmounted");
+  require(!session.mounted(), "adopting a container mounted something");
+  require(remembers(runtime, L"D:\\vault\\imported.hc"),
+          "an adopted container was not written into the index");
+  // Nothing is logged: no volume was touched, and the row is the whole event.
+  require(session.operation_history().size() == operations_before,
+          "adopting a container wrote an operation nobody performed");
+
+  // It knows no more about itself than a remembered path does, so the first
+  // mount probes both derivations exactly as an import used to.
+  runtime.events.clear();
+  session.mount_adopted_container(id);
+  require_events(runtime, {"exists:final-other", "derive:A", "allocate",
+                           "mount-created:other", "notify:A"});
+  require(session.container_statuses()[0].mounted,
+          "an adopted container could not be mounted afterwards");
+}
+
+void test_adopting_refuses_a_file_that_is_not_there() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S'};
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(session.adopt_container(L"D:\\gone.hc")); },
+      "a container file that is not there was taken into the list");
+  require(session.container_statuses().empty(),
+          "a refused adoption left a row behind");
+  require(remembered(runtime).empty(),
+          "a refused adoption wrote a path down");
+}
+
 void test_a_container_already_written_down_is_not_written_again() {
   FakeRuntime runtime;
   runtime.free_drive_letters = {L'S', L'T'};
@@ -1941,6 +2006,8 @@ int main() {
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();
     test_every_way_a_container_arrives_writes_it_down();
+    test_adopting_a_container_lists_it_without_opening_anything();
+    test_adopting_refuses_a_file_that_is_not_there();
     test_a_container_already_written_down_is_not_written_again();
     test_forgetting_takes_the_record_and_leaves_the_container();
     test_an_index_that_cannot_be_reached_costs_only_the_memory();

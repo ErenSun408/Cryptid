@@ -165,6 +165,19 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // behind would belong to nothing the session can still name.
   virtual void forget_container(std::uint32_t id) = 0;
 
+  // Takes a container into the session without mounting it: the file is
+  // checked for and its path written down, and it joins the list unmounted,
+  // knowing no more about which password opens it than a path read back from
+  // the index does. Importing arrives here unless the user asked for the
+  // mount, so nothing is opened on the strength of a file picker alone.
+  virtual std::uint32_t adopt_container(std::wstring_view path) = 0;
+
+  // Whether an imported container should be mounted at once, and the switch
+  // that changes it. Off is the product default, and it is the reason the
+  // call above exists.
+  [[nodiscard]] virtual bool mounting_imported_containers() = 0;
+  virtual void set_mounting_imported_containers(bool mount) = 0;
+
   // Whether the product writes container paths down at all, and the switch
   // that changes it. Turning it off stops new paths being recorded and stops
   // the list coming back at the next login; it does not delete what is already
@@ -233,6 +246,9 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void mount_adopted_container(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
   void forget_container(std::uint32_t id) override;
+  std::uint32_t adopt_container(std::wstring_view path) override;
+  [[nodiscard]] bool mounting_imported_containers() override;
+  void set_mounting_imported_containers(bool mount) override;
   [[nodiscard]] bool remembering_container_paths() override;
   void set_remembering_container_paths(bool remember) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;

@@ -18,11 +18,33 @@ namespace {
 constexpr std::wstring_view kProductDirectory = L"usb-vault";
 constexpr std::wstring_view kSettingsFileName = L"settings.txt";
 constexpr std::string_view kRememberKey = "remember-container-paths=";
-constexpr std::string_view kRememberOn =
-    "# usb-vault settings\r\nremember-container-paths=1\r\n";
-constexpr std::string_view kRememberOff =
-    "# usb-vault settings\r\nremember-container-paths=0\r\n";
+constexpr std::string_view kMountImportedKey = "mount-imported-containers=";
 constexpr std::size_t kMaximumSettingsSize = 4096;
+
+// Reads one key. A key that is not there, or has nothing after it, is not a
+// choice, so it answers the same as no file at all.
+[[nodiscard]] bool value_of(const std::string &content,
+                            const std::string_view key) {
+  const std::size_t at = content.find(key);
+  if (at == std::string::npos) return false;
+  const std::size_t value = at + key.size();
+  if (value >= content.size()) return false;
+  return content[value] == '1';
+}
+
+// The whole file, always written as a whole. Both keys are always present, so
+// a file written by this product never depends on a default to be read back.
+[[nodiscard]] std::string settings_text(const bool remember,
+                                        const bool mount_imported) {
+  std::string text = "# usb-vault settings\r\n";
+  text += kRememberKey;
+  text += remember ? '1' : '0';
+  text += "\r\n";
+  text += kMountImportedKey;
+  text += mount_imported ? '1' : '0';
+  text += "\r\n";
+  return text;
+}
 
 [[noreturn]] void throw_last_error(const DWORD error,
                                    const char *const operation) {
@@ -182,21 +204,28 @@ bool remember_container_paths_v1(const std::wstring_view path) {
     const DWORD attributes = ::GetFileAttributesW(std::wstring(path).c_str());
     return attributes == INVALID_FILE_ATTRIBUTES;
   }
+  return value_of(*content, kRememberKey);
+}
 
-  const std::size_t key = content->find(kRememberKey);
-  if (key == std::string::npos) {
-    return false;
-  }
-  const std::size_t value = key + kRememberKey.size();
-  if (value >= content->size()) {
-    return false;
-  }
-  return (*content)[value] == '1';
+bool mount_imported_containers_v1(const std::wstring_view path) {
+  // No file, an unreadable file and a file from before this setting existed
+  // all answer the same, because the product default is already the answer
+  // that mounts nothing.
+  const std::optional<std::string> content = read_settings(std::wstring(path));
+  if (!content.has_value()) return false;
+  return value_of(*content, kMountImportedKey);
 }
 
 void set_remember_container_paths_v1(const std::wstring_view path,
                                      const bool remember) {
-  write_settings(std::wstring(path), remember ? kRememberOn : kRememberOff);
+  write_settings(std::wstring(path),
+                 settings_text(remember, mount_imported_containers_v1(path)));
+}
+
+void set_mount_imported_containers_v1(const std::wstring_view path,
+                                      const bool mount) {
+  write_settings(std::wstring(path),
+                 settings_text(remember_container_paths_v1(path), mount));
 }
 
 }  // namespace usb_vault::application

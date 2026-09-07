@@ -268,7 +268,14 @@ bool CardProductUiSessionController::mount_container() {
 
   const std::wstring path = file_chooser_.choose_existing_container();
   if (path.empty()) return false;
-  static_cast<void>(volume_session_.mount_container(path));
+  // Picking a file says where a container is, not that it should be opened.
+  // Unless the user asked for the mount, the import stops at the list, which
+  // is also what a remembered path does at login.
+  if (volume_session_.mounting_imported_containers()) {
+    static_cast<void>(volume_session_.mount_container(path));
+  } else {
+    static_cast<void>(volume_session_.adopt_container(path));
+  }
   return true;
 }
 
@@ -310,6 +317,19 @@ void CardProductUiSessionController::set_remembering_container_paths(
         "changing this setting is not available in the current UI state");
   }
   volume_session_.set_remembering_container_paths(remember);
+}
+
+bool CardProductUiSessionController::mounting_imported_containers() {
+  return volume_session_.mounting_imported_containers();
+}
+
+void CardProductUiSessionController::set_mounting_imported_containers(
+    const bool mount) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "changing this setting is not available in the current UI state");
+  }
+  volume_session_.set_mounting_imported_containers(mount);
 }
 
 void CardProductUiSessionController::unmount() {

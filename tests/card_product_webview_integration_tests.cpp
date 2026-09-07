@@ -203,8 +203,43 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++remember_paths_writes;
   }
 
+  std::uint32_t adopt_container(const std::wstring_view path) override {
+    ++adopt_calls;
+    adopted_path.assign(path);
+    if (reject_adopt) throw std::runtime_error("adopt failed");
+    for (const Adopted& entry : containers) {
+      if (entry.path == path) return entry.id;
+    }
+    // An adopted container joins the list with no drive letter and no size:
+    // nothing has opened it, so nothing is known about it yet.
+    const std::size_t separator = path.find_last_of(L"\\/");
+    const std::wstring_view name = separator == std::wstring_view::npos
+                                       ? path
+                                       : path.substr(separator + 1);
+    const std::uint32_t id = next_id++;
+    containers.push_back({.id = id,
+                          .path = std::wstring(path),
+                          .name = std::wstring(name),
+                          .mounted = false});
+    return id;
+  }
+
+  [[nodiscard]] bool mounting_imported_containers() override {
+    return mount_imported;
+  }
+
+  void set_mounting_imported_containers(const bool mount) override {
+    mount_imported = mount;
+    ++mount_imported_writes;
+  }
+
   bool remember_paths{true};
   int remember_paths_writes{};
+  bool mount_imported{};
+  int mount_imported_writes{};
+  int adopt_calls{};
+  bool reject_adopt{};
+  std::wstring adopted_path;
 
   void forget_container(const std::uint32_t id) override {
     ++forget_container_calls;
@@ -554,9 +589,11 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
          g_volume.clear_operation_calls == 1 && g_volume.unmount_calls == 1 &&
-         // The remember switch went off and back on, and the page took its
-         // position from the session both times rather than from the click.
+         // The remember switch went off and back on, and the import switch
+         // came on, each of them taking its position from the session rather
+         // than from the click.
          g_volume.remember_paths_writes == 2 && g_volume.remember_paths &&
+         g_volume.mount_imported_writes == 1 && g_volume.mount_imported &&
          !g_volume.mounted();
 }
 

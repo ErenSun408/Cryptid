@@ -163,8 +163,43 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++remember_paths_writes;
   }
 
+  std::uint32_t adopt_container(const std::wstring_view path) override {
+    ++adopt_calls;
+    adopted_path.assign(path);
+    if (reject_adopt) throw std::runtime_error("adopt failed");
+    for (const Adopted& entry : containers) {
+      if (entry.path == path) return entry.id;
+    }
+    // An adopted container joins the list with no drive letter and no size:
+    // nothing has opened it, so nothing is known about it yet.
+    const std::size_t separator = path.find_last_of(L"\\/");
+    const std::wstring_view name = separator == std::wstring_view::npos
+                                       ? path
+                                       : path.substr(separator + 1);
+    const std::uint32_t id = next_id++;
+    containers.push_back({.id = id,
+                          .path = std::wstring(path),
+                          .name = std::wstring(name),
+                          .mounted = false});
+    return id;
+  }
+
+  [[nodiscard]] bool mounting_imported_containers() override {
+    return mount_imported;
+  }
+
+  void set_mounting_imported_containers(const bool mount) override {
+    mount_imported = mount;
+    ++mount_imported_writes;
+  }
+
   bool remember_paths{true};
   int remember_paths_writes{};
+  bool mount_imported{};
+  int mount_imported_writes{};
+  int adopt_calls{};
+  bool reject_adopt{};
+  std::wstring adopted_path;
 
   void forget_container(const std::uint32_t id) override {
     ++forget_container_calls;
@@ -863,6 +898,9 @@ void test_dropping_a_container_takes_the_record_and_not_the_file() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
+  // This case is about a container that is mounted, so the import has to be
+  // the mounting kind rather than the default one.
+  fixture.controller.set_mounting_imported_containers(true);
   fixture.chooser.existing_path = L"E:\\Media\\photos.hc";
   require(fixture.controller.mount_container(),
           "adopting a second container failed");
@@ -890,6 +928,53 @@ void test_dropping_a_container_takes_the_record_and_not_the_file() {
   require_throws<std::invalid_argument>(
       [&] { fixture.controller.forget_container(dropped); },
       "a container already off the list could be dropped again");
+}
+
+void test_importing_only_mounts_when_the_switch_asks_for_it() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.existing_path = L"D:\\vault\\imported.hc";
+
+  // Off is the default: picking a file says where a container is, not that it
+  // should be opened.
+  require(!fixture.controller.mounting_imported_containers(),
+          "importing offered to mount by default");
+  require(fixture.controller.mount_container(),
+          "the import was refused");
+  require(fixture.volume.adopt_calls == 1 && fixture.volume.mount_calls == 0 &&
+              fixture.volume.adopted_path == L"D:\\vault\\imported.hc",
+          "a default import opened the container");
+
+  fixture.controller.set_mounting_imported_containers(true);
+  fixture.chooser.existing_path = L"D:\\vault\\second.hc";
+  require(fixture.controller.mount_container(), "the second import failed");
+  require(fixture.volume.mount_calls == 1 && fixture.volume.adopt_calls == 1 &&
+              fixture.volume.mounted_path == L"D:\\vault\\second.hc",
+          "the switch did not send the import through the mount");
+
+  // A cancelled picker reaches neither call.
+  fixture.chooser.existing_path.clear();
+  require(!fixture.controller.mount_container(),
+          "a cancelled picker reported an import");
+  require(fixture.volume.mount_calls == 1 && fixture.volume.adopt_calls == 1,
+          "a cancelled picker still reached the session");
+}
+
+void test_the_import_switch_reads_anywhere_and_changes_only_inside() {
+  Fixture fixture;
+  require(!fixture.controller.mounting_imported_containers(),
+          "the switch did not read its default outside a session");
+  require_throws<std::system_error>(
+      [&] { fixture.controller.set_mounting_imported_containers(true); },
+      "the switch was changed without an authenticated session");
+  require(fixture.volume.mount_imported_writes == 0,
+          "a wrong-route change still reached the session");
+
+  fixture.authentication.establish(root_secret());
+  fixture.controller.set_mounting_imported_containers(true);
+  require(fixture.volume.mount_imported_writes == 1 &&
+              fixture.controller.mounting_imported_containers(),
+          "the switch did not change inside an authenticated session");
 }
 
 void test_the_remember_switch_reads_anywhere_and_changes_only_inside() {
@@ -1325,6 +1410,8 @@ int main() {
     test_dropping_a_container_takes_the_record_and_not_the_file();
     test_dropping_a_container_is_refused_off_the_authenticated_route();
     test_the_remember_switch_reads_anywhere_and_changes_only_inside();
+    test_importing_only_mounts_when_the_switch_asks_for_it();
+    test_the_import_switch_reads_anywhere_and_changes_only_inside();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

@@ -14,8 +14,10 @@
 
 namespace {
 
+using usb_vault::application::mount_imported_containers_v1;
 using usb_vault::application::product_settings_v1_default_path;
 using usb_vault::application::remember_container_paths_v1;
+using usb_vault::application::set_mount_imported_containers_v1;
 using usb_vault::application::set_remember_container_paths_v1;
 
 [[noreturn]] void fail(const char *const message) {
@@ -131,6 +133,45 @@ void test_writing_makes_the_directory_it_needs() {
          "a choice written into a new directory did not come back");
 }
 
+void test_mounting_imported_containers_is_off_until_it_is_asked_for() {
+  const TemporaryDirectory directory;
+  const std::wstring path = directory.settings_path();
+
+  // Unlike remembering paths, this one has no gap between absence and damage:
+  // the product default is already the answer that opens nothing.
+  expect(!mount_imported_containers_v1(path),
+         "a first run offered to mount imported containers");
+  write_raw(path, "# usb-vault settings\r\nremember-container-paths=1\r\n");
+  expect(!mount_imported_containers_v1(path),
+         "a settings file from before this setting answered yes");
+
+  set_mount_imported_containers_v1(path, true);
+  expect(mount_imported_containers_v1(path),
+         "the choice to mount imported containers was not kept");
+  set_mount_imported_containers_v1(path, false);
+  expect(!mount_imported_containers_v1(path),
+         "the choice could not be taken back");
+}
+
+void test_writing_one_setting_carries_the_other_across() {
+  // Both settings share one file, so a write has to be a read-modify-write.
+  // Losing the neighbour would silently undo a choice the user made.
+  const TemporaryDirectory directory;
+  const std::wstring path = directory.settings_path();
+
+  set_remember_container_paths_v1(path, false);
+  set_mount_imported_containers_v1(path, true);
+  expect(!remember_container_paths_v1(path),
+         "writing one setting reset the other to its default");
+  expect(mount_imported_containers_v1(path),
+         "the setting just written did not survive");
+
+  set_remember_container_paths_v1(path, true);
+  expect(mount_imported_containers_v1(path),
+         "writing the neighbour back dropped this setting");
+  expect(remember_container_paths_v1(path), "the neighbour did not change");
+}
+
 void test_a_choice_that_cannot_be_read_answers_no() {
   // Absence and damage are deliberately different. Nobody has chosen on a
   // first run, so the default stands; damage means a choice was made and is
@@ -164,6 +205,8 @@ int main() {
   test_a_first_run_remembers_by_default();
   test_a_choice_survives_and_can_be_taken_back();
   test_writing_makes_the_directory_it_needs();
+  test_mounting_imported_containers_is_off_until_it_is_asked_for();
+  test_writing_one_setting_carries_the_other_across();
   test_a_choice_that_cannot_be_read_answers_no();
   std::cout << "product_settings_v1_tests: PASS\n";
   return EXIT_SUCCESS;

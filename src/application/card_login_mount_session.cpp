@@ -190,6 +190,15 @@ class ProductionCardLoginMountSessionRuntime final
                                     remember);
   }
 
+  [[nodiscard]] bool mount_imported_containers() override {
+    return mount_imported_containers_v1(product_settings_v1_default_path());
+  }
+
+  void set_mount_imported_containers(const bool mount) override {
+    set_mount_imported_containers_v1(product_settings_v1_default_path(),
+                                     mount);
+  }
+
  private:
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
@@ -288,6 +297,20 @@ void CardLoginMountSession::unmount_container(const std::uint32_t id) {
 
 void CardLoginMountSession::forget_container(const std::uint32_t id) {
   impl_->core.forget_container(id);
+}
+
+std::uint32_t CardLoginMountSession::adopt_container(
+    const std::wstring_view path) {
+  return impl_->core.adopt_container(path);
+}
+
+bool CardLoginMountSession::mounting_imported_containers() {
+  return impl_->core.mounting_imported_containers();
+}
+
+void CardLoginMountSession::set_mounting_imported_containers(
+    const bool mount) {
+  impl_->core.set_mounting_imported_containers(mount);
 }
 
 bool CardLoginMountSession::remembering_container_paths() {
@@ -1033,6 +1056,40 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
     }
     throw;
   }
+}
+
+std::uint32_t CardLoginMountSessionCore::adopt_container(
+    const std::wstring_view path) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "adopting a container requires an authenticated card session");
+  }
+  if (const SessionContainer* const adopted = find_by_path(state_, path);
+      adopted != nullptr) {
+    return adopted->id;
+  }
+  if (!runtime_.container_exists(path)) {
+    throw std::system_error(
+        std::make_error_code(std::errc::no_such_file_or_directory),
+        "container file is unavailable");
+  }
+  // Nothing is recorded in the session log: no volume was touched, and the
+  // row appearing in the list is the whole of what happened. This is the same
+  // arrival a remembered path gets at login, and it says the same amount
+  // about the container -- which is nothing, until something mounts it.
+  const std::uint32_t id =
+      adopt(state_, path, wchar_t{}, false, false, false).id;
+  remember_container_path(path);
+  return id;
+}
+
+bool CardLoginMountSessionCore::mounting_imported_containers() {
+  return runtime_.mount_imported_containers();
+}
+
+void CardLoginMountSessionCore::set_mounting_imported_containers(
+    const bool mount) {
+  runtime_.set_mount_imported_containers(mount);
 }
 
 void CardLoginMountSessionCore::unmount_container(const std::uint32_t id) {

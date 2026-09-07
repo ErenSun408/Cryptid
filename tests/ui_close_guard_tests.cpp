@@ -85,6 +85,13 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   void set_remembering_container_paths(bool) override {
     throw std::logic_error("not used by close guard");
   }
+  std::uint32_t adopt_container(std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+  [[nodiscard]] bool mounting_imported_containers() override { return false; }
+  void set_mounting_imported_containers(bool) override {
+    throw std::logic_error("not used by close guard");
+  }
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     throw std::logic_error("not used by close guard");

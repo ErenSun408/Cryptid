@@ -229,9 +229,12 @@ chrome.webview.postMessage("driver-loaded");
   const autoMount = settingsSection.querySelector('[data-setting="auto-mount"]');
   const rememberContainers =
     settingsSection.querySelector('[data-setting="remember-containers"]');
+  const mountImported =
+    settingsSection.querySelector('[data-setting="mount-imported"]');
   const lockedUnmount = settingsSection.querySelector('[aria-disabled="true"]');
   if (autoMount.getAttribute("aria-checked") !== "false" ||
       rememberContainers.getAttribute("aria-checked") !== "true" ||
+      mountImported.getAttribute("aria-checked") !== "false" ||
       lockedUnmount.getAttribute("aria-checked") !== "true") {
     request("fail-settings-defaults");
     return;
@@ -260,6 +263,13 @@ chrome.webview.postMessage("driver-loaded");
   rememberContainers.click();
   if (!await waitFor(
       () => rememberContainers.getAttribute("aria-checked") === "true")) {
+    request("fail-settings-remember");
+    return;
+  }
+  // The import switch is the same shape, and starts from the other position.
+  mountImported.click();
+  if (!await waitFor(
+      () => mountImported.getAttribute("aria-checked") === "true")) {
     request("fail-settings-remember");
     return;
   }

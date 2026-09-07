@@ -161,8 +161,43 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++remember_paths_writes;
   }
 
+  std::uint32_t adopt_container(const std::wstring_view path) override {
+    ++adopt_calls;
+    adopted_path.assign(path);
+    if (reject_adopt) throw std::runtime_error("adopt failed");
+    for (const Adopted& entry : containers) {
+      if (entry.path == path) return entry.id;
+    }
+    // An adopted container joins the list with no drive letter and no size:
+    // nothing has opened it, so nothing is known about it yet.
+    const std::size_t separator = path.find_last_of(L"\\/");
+    const std::wstring_view name = separator == std::wstring_view::npos
+                                       ? path
+                                       : path.substr(separator + 1);
+    const std::uint32_t id = next_id++;
+    containers.push_back({.id = id,
+                          .path = std::wstring(path),
+                          .name = std::wstring(name),
+                          .mounted = false});
+    return id;
+  }
+
+  [[nodiscard]] bool mounting_imported_containers() override {
+    return mount_imported;
+  }
+
+  void set_mounting_imported_containers(const bool mount) override {
+    mount_imported = mount;
+    ++mount_imported_writes;
+  }
+
   bool remember_paths{true};
   int remember_paths_writes{};
+  bool mount_imported{};
+  int mount_imported_writes{};
+  int adopt_calls{};
+  bool reject_adopt{};
+  std::wstring adopted_path;
 
   void forget_container(const std::uint32_t id) override {
     ++forget_container_calls;
@@ -649,6 +684,35 @@ RecordingCloseSink g_close_sink;
   argument.vt = VT_BOOL;
   argument.boolVal = value ? VARIANT_TRUE : VARIANT_FALSE;
   return argument;
+}
+
+[[nodiscard]] bool invoke_setting(IDispatch& host,
+                                  const wchar_t* const name) {
+  DISPPARAMS parameters{};
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(host.Invoke(member_id(host, name), IID_NULL,
+                                LOCALE_INVARIANT, DISPATCH_METHOD,
+                                &parameters, &result, nullptr, nullptr)),
+          "setting query failed");
+  require(result.vt == VT_BOOL, "a setting query returned the wrong type");
+  const bool value = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return value;
+}
+
+[[nodiscard]] HRESULT invoke_set_setting(IDispatch& host,
+                                         const wchar_t* const name,
+                                         const bool value,
+                                         UINT* const argument_error) {
+  VARIANTARG argument = boolean_argument(value);
+  DISPPARAMS parameters{&argument, nullptr, 1, 0};
+  const HRESULT status =
+      host.Invoke(member_id(host, name), IID_NULL, LOCALE_INVARIANT,
+                  DISPATCH_METHOD, &parameters, nullptr, nullptr,
+                  argument_error);
+  static_cast<void>(::VariantClear(&argument));
+  return status;
 }
 
 [[nodiscard]] bool invoke_remember(IDispatch& host) {
@@ -1233,6 +1297,39 @@ void test_the_remember_switch_crosses_the_bridge_as_a_boolean() {
           "a refused call still reached the session");
 }
 
+void test_the_import_switch_crosses_the_bridge_as_a_boolean() {
+  Fixture fixture;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  require(!invoke_setting(*host.Get(), L"getMountImportedContainers"),
+          "the import switch did not read its default");
+  require(invoke_set_setting(*host.Get(), L"setMountImportedContainers", true,
+                             nullptr) == E_FAIL &&
+              fixture.volume.mount_imported_writes == 0,
+          "the switch was changed off the authenticated route");
+
+  fixture.authentication.establish(root_secret());
+  require(invoke_set_setting(*host.Get(), L"setMountImportedContainers", true,
+                             nullptr) == S_OK &&
+              fixture.volume.mount_imported_writes == 1 &&
+              invoke_setting(*host.Get(), L"getMountImportedContainers"),
+          "turning the switch on did not reach the session");
+
+  UINT argument_error = 99;
+  require(invoke_with_number(*host.Get(), L"setMountImportedContainers", 1,
+                             nullptr, &argument_error) ==
+                  DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "the switch accepted a number");
+  DISPPARAMS empty{};
+  require(host->Invoke(member_id(*host.Get(), L"setMountImportedContainers"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &empty,
+                       nullptr, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "the switch accepted a call with nothing to set");
+  require(fixture.volume.mount_imported_writes == 1,
+          "a refused call still reached the session");
+}
+
 void test_adopted_container_mount_and_unmount_route_through_identifiers() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -1495,6 +1592,7 @@ int main() {
     test_directory_browse_reports_the_choice_as_a_string();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
     test_the_remember_switch_crosses_the_bridge_as_a_boolean();
+    test_the_import_switch_crosses_the_bridge_as_a_boolean();
     test_container_b_creation_consumes_six_reversed_arguments();
     test_container_query_failure_does_not_invent_facts();
     test_operation_history_is_read_only_typed_and_clearable();

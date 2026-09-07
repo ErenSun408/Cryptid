@@ -1000,22 +1000,41 @@
     updateActionAvailability();
   };
 
-  // The switch is a view of what the native side holds. It is never set from
-  // what the user clicked, so a refused or failed write cannot leave the page
-  // showing a setting that was not saved.
-  const refreshRememberSwitch = async () => {
-    const control = settingSwitches.find(
-      (candidate) => candidate.dataset.setting === "remember-containers");
-    if (control === undefined) return;
-    try {
-      const remember = await bridge.getRememberContainerPaths();
-      if (remember !== true && remember !== false) {
-        throw new Error("invalid remember-container-paths setting");
+  // The switches that have a store behind them. Every other switch on the
+  // settings page is page-local and flips itself; these two are views of what
+  // the native side holds, and are never set from what the user clicked, so a
+  // refused or failed write cannot leave the page showing a setting that was
+  // not saved.
+  const storedSettings = [
+    {
+      setting: "remember-containers",
+      read: () => bridge.getRememberContainerPaths(),
+      write: (value) => bridge.setRememberContainerPaths(value),
+    },
+    {
+      setting: "mount-imported",
+      read: () => bridge.getMountImportedContainers(),
+      write: (value) => bridge.setMountImportedContainers(value),
+    },
+  ];
+  const storedSettingFor = (control) => storedSettings.find(
+    (candidate) => candidate.setting === control.dataset.setting);
+
+  const refreshStoredSwitches = async () => {
+    for (const stored of storedSettings) {
+      const control = settingSwitches.find(
+        (candidate) => candidate.dataset.setting === stored.setting);
+      if (control === undefined) continue;
+      try {
+        const value = await stored.read();
+        if (value !== true && value !== false) {
+          throw new Error("invalid stored setting");
+        }
+        control.setAttribute("aria-checked", value ? "true" : "false");
+      } catch (_) {
+        // An unreadable setting is not a licence to invent one. The switch
+        // keeps the position it already had.
       }
-      control.setAttribute("aria-checked", remember ? "true" : "false");
-    } catch (_) {
-      // An unreadable setting is not a licence to invent one. The switch keeps
-      // the position it already had.
     }
   };
 
@@ -1036,7 +1055,7 @@
         throw new Error("invalid card reset availability");
       }
       nextResetAvailable = resetAvailable;
-      await refreshRememberSwitch();
+      await refreshStoredSwitches();
       const count = await bridge.getContainerCount();
       if (!Number.isInteger(count) || count < 0 || count > 4096) {
         throw new Error("invalid container count");
@@ -1345,7 +1364,7 @@
 
   const mountExistingContainer = () => runContainerAction(
     () => bridge.mountContainer(),
-    "无法导入该容器，请确认文件与当前安全卡匹配。");
+    "无法导入该容器，请确认文件仍在原位置且与当前安全卡匹配。");
 
   const mountAdoptedContainer = (id) => runContainerAction(
     () => bridge.mountAdoptedContainer(id),
@@ -1555,14 +1574,15 @@
         "无法清空当前会话日志，请稍后重试。");
     }
   });
-  // "记住容器位置" is the one switch with a store behind it. The rest are still
-  // page-local: nothing reaches the bridge and a reload restores their
-  // defaults, and each gets its store when its own slice lands.
+  // The switches without a store stay page-local: nothing reaches the bridge
+  // and a reload restores their defaults, and each gets its store when its own
+  // slice lands.
   for (const control of settingSwitches) {
     control.addEventListener("click", async () => {
       if (control.getAttribute("aria-disabled") === "true") return;
       const enabled = control.getAttribute("aria-checked") === "true";
-      if (control.dataset.setting !== "remember-containers") {
+      const stored = storedSettingFor(control);
+      if (stored === undefined) {
         control.setAttribute("aria-checked", enabled ? "false" : "true");
         return;
       }
@@ -1571,12 +1591,12 @@
       // A refused or failed write must leave it where it really is rather
       // than where the click implied.
       try {
-        await bridge.setRememberContainerPaths(!enabled);
+        await stored.write(!enabled);
       } catch (_) {
         setDashboardStatus(
           "无法更改该设置，请稍后重试。", "error");
       }
-      await refreshRememberSwitch();
+      await refreshStoredSwitches();
     });
   }
   for (const button of creationButtons) {

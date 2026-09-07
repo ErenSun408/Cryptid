@@ -130,12 +130,14 @@ class CardProductUiSessionController final {
   // session refuses a mounted one.
   void forget_container(std::uint32_t id);
 
-  // The settings switch for remembering where containers are. Reading it needs
-  // no session, so the page can show the switch in its real position before
-  // anyone logs in; changing it does, because the change is a session action
-  // like any other.
+  // The settings switches, both of them the same shape. Reading one needs no
+  // session, so the page can show them in their real positions before anyone
+  // logs in; changing one does, because the change is a session action like
+  // any other.
   [[nodiscard]] bool remembering_container_paths();
   void set_remembering_container_paths(bool remember);
+  [[nodiscard]] bool mounting_imported_containers();
+  void set_mounting_imported_containers(bool mount);
 
   void unmount();
 

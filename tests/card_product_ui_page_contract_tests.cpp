@@ -197,18 +197,22 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
               settings.find("系统设置") != std::string::npos,
           "settings is not a reachable dashboard section like the others");
 
-  // Three switches, of which only the card-removal unmount is a real product
+  // Four switches, of which only the card-removal unmount is a real product
   // guarantee: it is locked on because 8.4 treats the unmount as part of
   // deniability, so it must never be presented as something a user can turn
-  // off. The other two are the switches requirements 8.7.5 and 8.7.4 define.
-  require(count_occurrences(settings, "role=\"switch\"") == 3 &&
-              count_occurrences(settings, "data-setting=\"") == 2 &&
+  // off. The other three are the switches requirements 8.7.5 and 8.7.4 define,
+  // plus the one deciding whether an import opens what it just listed.
+  require(count_occurrences(settings, "role=\"switch\"") == 4 &&
+              count_occurrences(settings, "data-setting=\"") == 3 &&
               settings.find("data-setting=\"auto-mount\" "
                             "aria-label=\"登录后自动挂载全部容器\"") !=
                   std::string::npos &&
               settings.find("data-setting=\"remember-containers\" "
-                            "aria-label=\"记住容器位置\"") != std::string::npos,
-          "settings switches do not match the two defined settings");
+                            "aria-label=\"记住容器位置\"") != std::string::npos &&
+              settings.find("data-setting=\"mount-imported\" "
+                            "aria-label=\"自动尝试挂载导入的容器\"") !=
+                  std::string::npos,
+          "settings switches do not match the three defined settings");
   require(settings.find("<span class=\"settings-switch\" role=\"switch\" "
                         "aria-checked=\"true\" aria-disabled=\"true\"") !=
               std::string::npos &&
@@ -545,22 +549,44 @@ void test_dropping_a_container_is_confirmed_and_says_what_it_keeps() {
           "the drop button does not go through the confirmation");
 }
 
+void test_the_import_switch_is_stored_and_defaults_to_mounting_nothing() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  // Importing a container must not open it unless the user asked for that, so
+  // the switch ships off. The page holds the same position the native default
+  // does, or the first paint would contradict the store it is about to read.
+  const std::size_t control = page.find("data-setting=\"mount-imported\"");
+  require(control != std::string::npos, "the import switch is missing");
+  const std::size_t row = page.rfind("<div class=\"settings-row\"", control);
+  require(row != std::string::npos &&
+              page.substr(row, control - row).find(
+                  "aria-checked=\"false\"") != std::string::npos,
+          "the import switch does not ship turned off");
+  require(script.find("bridge.getMountImportedContainers()") !=
+              std::string::npos &&
+              script.find("bridge.setMountImportedContainers(value)") !=
+                  std::string::npos,
+          "the import switch does not reach the native store");
+}
+
 void test_the_remember_switch_shows_what_the_native_side_holds() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   require(page.find("data-setting=\"remember-containers\"") !=
               std::string::npos,
           "the remember-containers switch is missing");
-  require(script.find("await bridge.getRememberContainerPaths();") !=
+  require(script.find("bridge.getRememberContainerPaths()") !=
               std::string::npos &&
-              script.find("await bridge.setRememberContainerPaths(!enabled);") !=
+              script.find("bridge.setRememberContainerPaths(value)") !=
                   std::string::npos,
           "the switch does not reach the native store");
-  // The switch is a view of the stored setting, never of the click. A page
-  // that set it optimistically would show a choice that was never saved.
-  require(script.find("const refreshRememberSwitch") != std::string::npos &&
-              script.find("await refreshRememberSwitch();") !=
-                  std::string::npos,
+  // Every stored switch is a view of the setting, never of the click. A page
+  // that set one optimistically would show a choice that was never saved, so
+  // the write is followed by a re-read for all of them.
+  require(script.find("const refreshStoredSwitches") != std::string::npos &&
+              script.find("await stored.write(!enabled);") !=
+                  std::string::npos &&
+              count_occurrences(script, "await refreshStoredSwitches();") == 2,
           "the switch position is not re-read from the native side");
 }
 
@@ -805,6 +831,7 @@ int main() {
     test_operation_history_is_bounded_session_only_and_inert();
     test_dropping_a_container_is_confirmed_and_says_what_it_keeps();
     test_the_remember_switch_shows_what_the_native_side_holds();
+    test_the_import_switch_is_stored_and_defaults_to_mounting_nothing();
     test_the_integration_fixture_page_carries_every_element_the_script_takes();
     test_card_reset_is_gated_and_states_its_cost();
     test_container_creation_form_is_bounded();

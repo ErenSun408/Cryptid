@@ -6088,5 +6088,83 @@
   `4c1c15c [P2.26]restore the elements the integration fixture page lost`、
   `145b63b [P2.27]remember whether to remember where containers are`、
   `2a9881c [ui]say where a dropped container file stays`；
-  文档回写另走 `[docs]write the container path memory decisions back`，
-  其哈希按惯例由下一切片补上。
+  `4833456 [docs]write the container path memory decisions back`。
+
+### 小切片 28：导入不再自动挂载，改由设置页的开关决定
+
+#### 需求审计
+
+- 需求来自用户：「导入容器默认不自动挂载，做成一个按钮开关在设置页『自动尝试挂载导入的容器』」。
+- 与主文档核对，方向一致而非冲突：8.7.5 的默认就是"不自动挂载"，此前只有登录那条路遵守它，
+  导入这条路仍然选中即挂。P2.25 之后更明显 —— 从索引读回的容器以未挂载身份进列表，
+  而同一个文件走"导入"却会被打开，同一件事两种结果。
+- 🔴 **审计出一处必须记明的代价**：不挂载就没有任何东西验证过这个文件确实是容器。
+  导入因此不再当场报"打不开"，错误推迟到首次挂载。这与索引读回的条目本就一致，
+  且好过"为了验证而擅自挂载"，已写进 8.7.5。
+
+#### 实现
+
+**设置层（`product_settings_v1`）**
+
+- 同一个 `settings.txt` 里加第二个布尔量 `mount-imported-containers`。
+- **两个键共用一个文件，所以写入必须是读—改—写**：`set_*` 各自把邻居的当前值原样写回，
+  否则改一个就会把另一个悄悄打回默认值。
+- 读法与邻居**故意不同**：「记住容器位置」区分"没有文件"（产品默认开）与"文件在但读不出"
+  （答关）；这一个不需要区分 —— 产品默认已经是"什么都不打开"那一侧，所以没有文件、读不出、
+  以及**旧版本写下的、根本没有这个键的文件**，三者答案相同，升级路径天然安全。
+
+**会话层**
+
+- 新增 `adopt_container(path)`：查存在 → 以未挂载身份进列表（`derivation_known=false`）→
+  记路径。**不派生、不占盘符、不挂载**，也**不写会话日志** —— 没有卷被碰过，列表里多出的那一行
+  就是事件本身，与登录时从索引读回的条目完全同路。
+- 已在列表里的路径直接返回原 id，重复导入不会多出第二行。
+
+**控制器与桥**
+
+- 分流放在控制器：`mount_container()` 拿到路径后按开关走 `mount_container(path)` 或
+  `adopt_container(path)`。会话层保持两个各自诚实的原语，不在里面藏策略。
+- 桥新增 `getMountImportedContainers`（DISPID 34）与 `setMountImportedContainers`（35），
+  与「记住容器位置」那对同形：零参返 `VT_BOOL`，单参且必须 `VT_BOOL`，写要求已认证。
+
+**页面**
+
+- 设置页第三个开关「自动尝试挂载导入的容器」，`aria-checked="false"` 出厂。
+- 页面里"有 store 的开关"从写死一个改成**表驱动**（`storedSettings`），
+  `refreshRememberSwitch` 相应变成 `refreshStoredSwitches`；点击仍然只发命令、随后重读，
+  失败保持原位。没有 store 的开关照旧自己翻。
+- 导入失败文案改为「无法导入该容器，请确认文件仍在原位置且与当前安全卡匹配。」——
+  关闭开关时失败只可能是文件不在了，旧文案只提"与安全卡匹配"已不准确。
+
+#### 测试
+
+- `product_settings_v1_tests`：新设置默认关、旧文件（无该键）答关、往返；
+  **另一条专钉读—改—写**：先关掉记住路径、再打开导入挂载，两个值互不冲掉。
+- `card_login_mount_session_tests`：`adopt_container` 只产生 `exists:` 一个事件、
+  条目未挂载且无盘符、路径进索引、**操作日志一条不增**，随后首次挂载走完整探测；
+  另一条钉文件不存在时抛出且不留行、不写路径。
+- `card_product_ui_session_controller_tests`：默认导入只走 `adopt`、开关打开后才走 `mount`、
+  取消选择两条都不触达；开关读不挑路由、写只在已认证。
+- `card_product_webview_host_object_tests`：布尔跨界、未认证 `E_FAIL` 且不触达会话、
+  传数字与参数个数不对各自被拒。
+- `card_product_ui_page_contract_tests`：开关计数从 3 改 4、`data-setting` 从 2 改 3，
+  新开关必须 `aria-checked="false"` 出厂且两个方法都到桥；原「记住容器位置」那条契约
+  随页面改为表驱动而改钉 `refreshStoredSwitches` 与 `stored.write`。
+- `card_product_webview_integration_tests`：夹具页补第三个开关，驱动脚本覆盖它的默认与点击，
+  原生侧断言恰好一次写入且最终为开。实跑退出码 0。
+- **两处既有断言被本片改动打破，已按新事实更新**（不是放宽）：控制器里"已挂载的不许移除"
+  那条用例依赖"导入即挂载"，现显式先打开开关；页面契约的开关计数同理。
+- 按用户要求**只跑最小目标**：上述七个目标全部通过。**未跑**其余测试、未跑 `/analyze` 与 ASan、
+  未实机。`node --check` 两个 JS 文件通过。
+
+#### 安全复核
+
+- `settings.txt` 仍只有布尔量，档二档三逐字节相同；新键不记录任何路径、容器或档位信息，
+  8.4 不受影响。
+- **默认值方向是收紧而非放宽**：改动后产品在用户没有明确要求时**更少**打开卷，
+  与 8.7.5 的默认、以及 8.7.4 "读回的条目不自动挂"一致。
+- `adopt_container` 不派生任何密钥、不占盘符、不接触卡记录；它写进索引的仍然只有路径，
+  仍不记录"哪个密码开得了它"。
+- 导入不再验证容器有效性这一点已在 8.7.5 写明，不是被遗漏的行为差异。
+- 新桥成员只收发一个布尔量，写路径要求已认证；页面未新增任何浏览器存储。
+- 提交：待定（拟 `[P2.28]let an import stop at the list`）。
