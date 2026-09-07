@@ -804,6 +804,7 @@ target_include_directories(card_product_ui_page_contract_tests PRIVATE
 target_compile_definitions(card_product_ui_page_contract_tests PRIVATE
   USB_VAULT_CARD_PRODUCT_UI_PAGE="${PROJECT_SOURCE_DIR}/ui/card_session.html"
   USB_VAULT_CARD_PRODUCT_UI_SCRIPT="${PROJECT_SOURCE_DIR}/ui/card_session.js"
+  USB_VAULT_CARD_PRODUCT_UI_FIXTURE_PAGE="${CMAKE_CURRENT_SOURCE_DIR}/card_product_webview_integration.html"
   USB_VAULT_PRODUCT_VERSION="${PROJECT_VERSION}"
 )
 

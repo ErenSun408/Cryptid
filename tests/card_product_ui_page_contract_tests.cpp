@@ -18,6 +18,10 @@
 #error USB_VAULT_CARD_PRODUCT_UI_SCRIPT must name the product UI script
 #endif
 
+#ifndef USB_VAULT_CARD_PRODUCT_UI_FIXTURE_PAGE
+#error USB_VAULT_CARD_PRODUCT_UI_FIXTURE_PAGE must name the integration page
+#endif
+
 #ifndef USB_VAULT_PRODUCT_VERSION
 #error USB_VAULT_PRODUCT_VERSION must name the CMake product version
 #endif
@@ -538,6 +542,37 @@ void test_dropping_a_container_is_confirmed_and_says_what_it_keeps() {
           "the drop button does not go through the confirmation");
 }
 
+void test_the_integration_fixture_page_carries_every_element_the_script_takes() {
+  // The WebView2 integration fixture has its own stripped-down page, and the
+  // product script runs against it unchanged. An element added to the product
+  // page and forgotten there is not a cosmetic difference: the script looks
+  // every one of these up at startup and wires listeners to them, so a missing
+  // one throws before the page ever reports a state, and the fixture then
+  // fails at its first step for a reason that says nothing about the cause.
+  //
+  // That is exactly what happened to 从列表移除 (P2.26), and it went unseen
+  // because the fixture is built and run by name rather than by CTest. This
+  // case is the cheap half of that lesson: the expensive half stays manual.
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string fixture =
+      read_source(USB_VAULT_CARD_PRODUCT_UI_FIXTURE_PAGE);
+  constexpr std::string_view lookup = "document.getElementById(\"";
+  std::size_t offset = 0;
+  std::size_t checked = 0;
+  while ((offset = script.find(lookup, offset)) != std::string::npos) {
+    offset += lookup.size();
+    const std::size_t end = script.find('"', offset);
+    require(end != std::string::npos, "an element lookup is not terminated");
+    const std::string identifier = script.substr(offset, end - offset);
+    require(fixture.find("id=\"" + identifier + "\"") != std::string::npos,
+            "the integration fixture page is missing an element the product "
+            "script looks up");
+    ++checked;
+    offset = end;
+  }
+  require(checked > 40, "the element lookups were not found in the script");
+}
+
 void test_card_reset_is_gated_and_states_its_cost() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
@@ -747,6 +782,7 @@ int main() {
     test_bridge_calls_are_narrow_and_route_specific();
     test_operation_history_is_bounded_session_only_and_inert();
     test_dropping_a_container_is_confirmed_and_says_what_it_keeps();
+    test_the_integration_fixture_page_carries_every_element_the_script_takes();
     test_card_reset_is_gated_and_states_its_cost();
     test_container_creation_form_is_bounded();
     test_hidden_container_form_is_symmetric_and_never_validated();
