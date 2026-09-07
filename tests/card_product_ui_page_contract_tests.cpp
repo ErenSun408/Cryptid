@@ -534,7 +534,7 @@ void test_dropping_a_container_is_confirmed_and_says_what_it_keeps() {
   // The one thing a user could fear here is losing the data. The dialog has to
   // say plainly that it does not touch the file, or the action is unusable.
   require(page.find("不会删除容器文件") != std::string::npos &&
-              page.find("重新加回来") != std::string::npos,
+              page.find("重新添加至列表") != std::string::npos,
           "the drop confirmation does not say the container file survives");
   require(script.find("bridge.forgetContainer(id)") != std::string::npos,
           "the page cannot drop a container off the list");
