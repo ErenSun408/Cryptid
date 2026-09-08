@@ -1,5 +1,7 @@
 #include "usb_vault/volume/volume_directory_listing.h"
 
+#include "volume/volume_containment.h"
+
 #include <Windows.h>
 
 #include <algorithm>
@@ -23,47 +25,12 @@ constexpr std::int64_t kTicksPerMillisecond = 10000LL;
                           operation);
 }
 
-[[nodiscard]] wchar_t upper(const wchar_t character) noexcept {
-  return (character >= L'a' && character <= L'z')
-             ? static_cast<wchar_t>(character - L'a' + L'A')
-             : character;
-}
-
-// The caller is meant to hand over what `resolve_volume_entry_path` produced.
-// Checking it again costs nothing and means this layer is safe to call even
-// from somewhere that forgot to go through the resolver.
-[[nodiscard]] wchar_t require_drive_absolute(
-    const std::wstring_view directory) {
-  if (directory.size() < 3 || directory[1] != L':' ||
-      (directory[2] != L'\\' && directory[2] != L'/') ||
-      upper(directory[0]) < L'A' || upper(directory[0]) > L'Z') {
-    throw std::invalid_argument("directory is not a drive-absolute path");
-  }
-  return directory[0];
-}
-
 [[nodiscard]] std::int64_t to_unix_milliseconds(const FILETIME& time) noexcept {
-  const std::int64_t ticks = (static_cast<std::int64_t>(time.dwHighDateTime)
-                              << 32) |
-                             static_cast<std::int64_t>(time.dwLowDateTime);
+  const std::int64_t ticks =
+      (static_cast<std::int64_t>(time.dwHighDateTime) << 32) |
+      static_cast<std::int64_t>(time.dwLowDateTime);
   return (ticks - kTicksToUnixEpoch) / kTicksPerMillisecond;
 }
-
-class Handle final {
- public:
-  explicit Handle(const HANDLE handle) noexcept : handle_(handle) {}
-  ~Handle() noexcept {
-    if (handle_ != INVALID_HANDLE_VALUE) ::CloseHandle(handle_);
-  }
-  Handle(const Handle&) = delete;
-  Handle& operator=(const Handle&) = delete;
-  Handle(Handle&&) = delete;
-  Handle& operator=(Handle&&) = delete;
-  [[nodiscard]] HANDLE get() const noexcept { return handle_; }
-
- private:
-  HANDLE handle_;
-};
 
 class FindHandle final {
  public:
@@ -80,61 +47,6 @@ class FindHandle final {
  private:
   HANDLE handle_;
 };
-
-// Opens the directory and asks the file system which drive it really landed
-// on. A junction planted inside the volume resolves here and nowhere else: the
-// path string still reads `X:\...`, and only the opened handle knows better.
-//
-// The handle is opened without `FILE_FLAG_OPEN_REPARSE_POINT` on purpose. The
-// point is not to refuse to open a link, it is to find out where following it
-// arrives, and that answer only exists if it is followed.
-void require_directory_stays_on_volume(const std::wstring& directory,
-                                       const wchar_t drive) {
-  const Handle handle(::CreateFileW(
-      directory.c_str(), FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-  if (handle.get() == INVALID_HANDLE_VALUE) {
-    throw_last_error(::GetLastError(), "open the directory");
-  }
-
-  BY_HANDLE_FILE_INFORMATION information{};
-  if (::GetFileInformationByHandle(handle.get(), &information) == FALSE) {
-    throw_last_error(::GetLastError(), "inspect the directory");
-  }
-  if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-    throw std::runtime_error("the path is not a directory");
-  }
-
-  const DWORD length =
-      ::GetFinalPathNameByHandleW(handle.get(), nullptr, 0, VOLUME_NAME_DOS);
-  if (length == 0) {
-    throw_last_error(::GetLastError(), "resolve the directory");
-  }
-  std::wstring final_path(length, L'\0');
-  const DWORD written = ::GetFinalPathNameByHandleW(
-      handle.get(), final_path.data(), length, VOLUME_NAME_DOS);
-  if (written == 0 || written >= length) {
-    throw_last_error(::GetLastError(), "resolve the directory");
-  }
-  final_path.resize(written);
-
-  // `VOLUME_NAME_DOS` answers as `\\?\X:\...`, and for a drive that is only
-  // reachable through a mount point it answers as `\\?\Volume{...}\...`. The
-  // second form is not this product's shape -- containers are mounted on drive
-  // letters -- and it is refused rather than parsed, because a listing that
-  // cannot name its own drive cannot prove it stayed on it.
-  constexpr std::wstring_view kPrefix = L"\\\\?\\";
-  if (!final_path.starts_with(kPrefix)) {
-    throw std::runtime_error("the directory has no drive-letter path");
-  }
-  const std::wstring_view resolved =
-      std::wstring_view(final_path).substr(kPrefix.size());
-  if (resolved.size() < 2 || resolved[1] != L':' ||
-      upper(resolved[0]) != upper(drive)) {
-    throw std::runtime_error("the directory resolves outside its volume");
-  }
-}
 
 [[nodiscard]] bool is_dot_entry(const wchar_t* const name) noexcept {
   return name[0] == L'.' &&

@@ -6401,4 +6401,64 @@ listed`、退出码 1。**越界检查确实是开火的那一个，测试是实
 `volume_directory_listing_tests` 通过；连带 `volume_entry_path_tests`、`volume_provider_tests`
 共 3/3。另完成上述变异测试。全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.2]ask the file system which volume it actually opened`）。
+- 提交：`ded4a7b [P3.2]ask the file system which volume it actually opened`。
+---
+
+### 小切片 P3.3：删除、移动、新建目录，且递归删绝不钻进链接
+
+新增 `usb_vault::volume` 三个入口：`delete_volume_entry`、`move_volume_entry`、
+`create_volume_directory`。同时把 P3.2 里的越界检查抽成内部共用件
+`src/volume/volume_containment.{h,cpp}`，因为列表和这三个操作问的是同一个问题。
+
+#### 🔴 递归删除遇到 junction 是这一片唯一真正危险的地方
+
+`X:\work\link` 若是指向 `C:\Users\<name>` 的 junction，天真的递归删会**清空用户主目录** ——
+容器里删个文件夹，损失落在容器外，且不可逆。所以目录链接一律用 `RemoveDirectoryW` 只摘链接、
+绝不下钻；`delete_directory_tree` 每一层都靠 `FindFirstFile` 拿到的属性判定，进入前就分流。
+
+判属性用 `FindFirstFileW` 而不是 `GetFileAttributesW`：前者回答的是「这个名字」，后者可能回答
+「链接指向的那个东西」，而后一个问题在这里处处是错的。
+
+**已实测**：造一个卷内 junction 指向另一个目录，递归删父树后目标目录及其文件完好。再把守卫改坏
+做变异，测试精确报出 `a recursive delete walked through a junction and emptied it`、退出码 1。
+守卫是实的。
+
+#### 几条已定语义
+
+- **永久删除，不进回收站**（P3 已定）。卷内 `$Recycle.Bin` 会在容器里默默占空间且用户看不见，
+  又要走 shell 的 undo 栈，多一块痕迹面。
+- **只读文件照删**，先清 `FILE_ATTRIBUTE_READONLY`。Windows 上只读是属性不是权限，且调用方
+  已经决定了。属性只清被删的那一个条目，不波及别处。
+- **重命名与移动是同一个函数**。对文件系统它们就是一个操作，在这一层分成两个只会多出两种写法
+  表达同一件事；「重命名」不过是两个父目录相等的那种移动。
+- **绝不覆盖已存在的目标**。`MoveFileExW` 不带 `MOVEFILE_REPLACE_EXISTING` —— 覆盖会毁掉一个
+  用户没点名的文件，而这一层没有确认屏可问，回 `ERROR_ALREADY_EXISTS` 让上层去说。
+- **目录不能移进自己或自己的子树**，在问文件系统之前就拒。文本前缀比较是可靠的，因为两条路径都
+  出自 `resolve_volume_entry_path`：不含 `.`、`..`、重复分隔符或正斜杠，故「是前缀」等价于
+  「是祖先」。已测 `X:\workshop` 不会被误判为在 `X:\work` 里面。
+- **跨卷移动在这一层直接拒**，它是「复制 + 删除」，失败模式不同，不该藏在一个承诺重命名的名字
+  后面。留给 P3.4。
+- **`create_volume_directory` 只建一级**，父目录必须已存在，免得打错路径时悄悄建出一串。
+
+#### 顺带
+
+测试夹具抽成 `tests/volume_test_support.h`（临时目录、junction 构造、subst 盘构造），
+P3.2 的测试改用它，P3.4 会继续复用。`path_exists` 这个名字是刻意避开
+`std::filesystem::exists` 的 —— 同名会因 ADL 在每个调用点都产生二义。
+
+#### 改动
+
+- 新增 `include/usb_vault/volume/volume_file_operations.h`、
+  `src/volume/volume_file_operations.cpp`。
+- 新增内部共用件 `src/volume/volume_containment.{h,cpp}`，`volume_directory_listing.cpp`
+  改为使用它。
+- 新增 `tests/volume_test_support.h`、`tests/volume_file_operations_tests.cpp`（13 组）。
+- `CMakeLists.txt` 与 `tests/CMakeLists.txt` 接线。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`review-clean`（Ninja + Debug + `/W4 /WX`）编译无警告，
+`volume_file_operations_tests` 通过；连带三个 volume 目标共 4/4。另完成上述 junction 变异测试。
+全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.3]unlink a junction instead of walking into it`）。
