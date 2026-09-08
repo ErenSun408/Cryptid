@@ -6274,4 +6274,64 @@ accessor —— 500 个文件按老模式是 2000 次串行异步 IPC，页面�
 - P3.11 起的导出与迁移尚未拆片。
 - 8.7.5 的完整回写留在 P3.10，目前只有前向指针。
 
-- 提交：待定（拟 `[docs]open P3 for the data-management work`）。
+- 提交：`7d89a50 [docs]open P3 for the data-management work`。
+---
+
+### 小切片 P3.1：卷内路径解析
+
+P3 的第一片，纯算法层，不碰文件系统。新增 `usb_vault::volume::resolve_volume_entry_path`
+与 `resolve_volume_child_path`，把「会话认定的盘符 + 页面递来的相对路径」变成一条绝对路径，
+并拒绝页面能说出口的一切越界写法。它是 `resolve_container_target_path` 的对应物：那一个管
+建卷表单，这一个管卷内容。
+
+#### 为什么是两个函数而不是一个
+
+浏览、删除、进目录递的是**路径**；重命名和新建递的是**名字**。把名字丢进路径解析器会让名字里
+的一个分隔符悄悄把条目挪到别处 —— `rename("a", "b\c")` 就成了移动。所以名字单独走
+`resolve_volume_child_path`，被按「它自称的那一个组件」检查，多一段就拒。
+
+#### 冒号是这一片最要紧的一条
+
+`a:b` 在 Windows 上不是一个叫 `a:b` 的文件，是 `a` 上的一条备用数据流（ADS）。流不是页面
+看得见、删得掉、盘得清的条目，所以相对路径的任何组件里都不许出现冒号。这与
+`container_target_path` 不同 —— 那边盘符需要恰好一个冒号，要单独放行；这边一个都不需要，
+直接进禁用字符表。
+
+#### ⚠️ 这一片保证不了什么，写在头文件里
+
+`MILESTONES.md` 的 P3.1 行写了「拒……重解析点越界」，**做不到，也不该在这里做**。判断一个
+目录是不是指向卷外的 junction 或符号链接，要开句柄、要比对最终路径，那是 I/O。本片是纯函数，
+它能保证的只有**字符串层面越不出去**。卷内的重解析点仍可指向卷外，任何字符串检查都看不见。
+拒绝跟随它是存储层开句柄时的义务（P3.2／P3.3），已写进头文件注释，不含糊过去。
+
+#### 变异测试查出的一处冗余
+
+第一次变异把 `.` / `..` 的显式拒绝改坏，**测试照样通过** —— 因为「组件不得以点结尾」那条规则
+先把 `..` 和 `.` 都兜住了。换成拿掉禁用字符表里的冒号后测试立刻报 4 条失败，并确认失败时
+进程退出码为 1（不是 0，否则 CTest 会把它当通过、整套测试形同虚设）。
+
+显式的越界检查**保留**：它给出更准的错误消息，且「以点结尾」那条规则将来若改动，越界不能跟着
+一起失守。但由此记下一条本套测试的已知边界：`require_rejects` 只断言抛了
+`std::invalid_argument`，**不区分「因正确的理由被拒」和「被另一条规则顺手拒掉」**。这是沿用
+`container_target_path_tests` 的既有写法，不是本片新引入的。
+
+#### 落在 `volume` 而不是 `ui`
+
+`container_target_path` 放在 `ui/` 是因为它只服务建卷表单。本片将来要被存储层（P3.2~P3.4）
+和会话层（P3.5）调用，放 `ui/` 会让 `application` 反向依赖 `ui`。故落在
+`include/usb_vault/volume/volume_entry_path.h`。
+
+#### 改动
+
+- 新增 `include/usb_vault/volume/volume_entry_path.h`、`src/volume/volume_entry_path.cpp`。
+- 新增 `tests/volume_entry_path_tests.cpp`（6 组：join 与规范化、越界与 rooted、组件不是名字、
+  子名必须恰好一个组件、盘符校验、Win32 长度上限）。
+- `CMakeLists.txt` 与 `tests/CMakeLists.txt` 接线。
+
+#### 验证
+
+按 P3 测试纪律只构建并运行本片的最小目标：`review-clean`（Ninja + Debug + `/W4 /WX`）下
+`volume_entry_path_tests` 编译无警告、CTest 1/1 通过；另完成上述变异测试确认断言与退出码可靠。
+全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.1]refuse every page path that could leave the volume`）。
