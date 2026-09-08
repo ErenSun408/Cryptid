@@ -6334,4 +6334,71 @@ P3 的第一片，纯算法层，不碰文件系统。新增 `usb_vault::volume:
 `volume_entry_path_tests` 编译无警告、CTest 1/1 通过；另完成上述变异测试确认断言与退出码可靠。
 全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.1]refuse every page path that could leave the volume`）。
+- 提交：`2855467 [P3.1]refuse every page path that could leave the volume`。
+---
+
+### 小切片 P3.2：目录枚举，并在这里真正堵住卷外逃逸
+
+新增 `usb_vault::volume::list_volume_directory`：给一条驱动器绝对路径，回一份
+`VolumeDirectoryListing`（名称／是否目录／是否重解析点／大小／修改时间，外加一个 `truncated`）。
+`.` 与 `..` 丢掉，顺序是「目录在前，然后按序数不分大小写」，条目上限 20000。
+
+#### 🔴 P3.1 欠的账在这里还上
+
+P3.1 只能保证**字符串**越不出卷；卷内的 junction 指向哪儿是运行时的事，路径写着 `X:\...` 也
+照样能落到 `C:\Windows`。所以这里开目录句柄后用 `GetFinalPathNameByHandleW` 问文件系统
+「你实际打开的是哪个盘」，盘符对不上就拒。**句柄故意不带 `FILE_FLAG_OPEN_REPARSE_POINT`** ——
+目的不是拒绝打开链接，而是查明跟过去会到哪儿，而这个答案只有跟过去才存在。
+
+重解析点本身**照常列出并打标**，不隐藏。一个「资源管理器里看得见、我们这儿看不见」的文件管理器
+比诚实显示再拒绝进入更糟。拒绝进入由上层按这个标做。
+
+顺带定死一条：最终路径若不是 `\\?\X:\...` 而是 `\\?\Volume{GUID}\...`（只能经挂载点抵达的卷），
+**拒而不解析** —— 本产品的容器一律挂在盘符上，一份说不出自己盘符的列表也就无法自证没越界。
+
+#### 排序为什么是序数而不是区域感知
+
+页面要按下标回指条目。区域感知排序会让同一个目录在不同机器上排出不同顺序，下标就指向别的条目了。
+故用 `CompareStringOrdinal(..., TRUE)`。
+
+#### ⚠️ 两次变异测试，第一次的结论是错的
+
+第一次把越界比较改坏，测试**照样通过**，一度以为 subst 用例是假的。查下来是**变异方法坏了**：
+构建命令写了 `>nul 2>&1`，而那个变异触发了 `/WX` 下的告警导致构建失败，跑的还是旧 exe。
+
+写了个独立探针确认 subst 盘完全可用（`CreateFile(Z:\)` 成功，最终路径 `\\?\C:\...`），再换一个
+不触发告警的变异、且不吞构建输出重跑 —— 这次精确报出 `a path resolving onto another volume was
+listed`、退出码 1。**越界检查确实是开火的那一个，测试是实的。**
+
+📝 **记一条纪律：变异测试绝不能吞构建输出。** 吞了就分不清「测试没咬」和「根本没编过」，
+而这两者的结论正好相反。
+
+#### 测试怎么造出「路径说一个卷、文件系统说另一个卷」
+
+用 `DefineDosDeviceW` 造一个指向临时目录的盘符（subst 的机制），它与卷内 junction 触发的是
+**同一个判据** —— 最终路径落在别的盘 —— 但不需要第二块物理卷、不需要任何权限，在任何机器上都
+确定可跑。另外用 `FSCTL_SET_REPARSE_POINT` 手搓了一个卷内 junction（结构体 `ntifs.h` 里才有，
+用户态 SDK 没有，故自行声明），用来验证 `is_reparse_point` 如实上报。两个用例本次实机都真的
+执行了，没有走 skip 分支。
+
+#### 已知边界
+
+- **截断发生在枚举期、排序之前**，所以 `truncated` 为真时留下的是「其中 20000 条」而不是
+  「字典序前 20000 条」。上限是给病态目录的保险丝，不是分页，头文件里写明了。
+- 目录的 `size_bytes` 恒为 0。目录自身记录的大小不是文件管理器里「大小」这个词的意思。
+
+#### 改动
+
+- 新增 `include/usb_vault/volume/volume_directory_listing.h`、
+  `src/volume/volume_directory_listing.cpp`。
+- 新增 `tests/volume_directory_listing_tests.cpp`（10 组，含临时目录夹具、junction 构造、
+  subst 盘构造）。
+- `CMakeLists.txt` 与 `tests/CMakeLists.txt` 接线。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`review-clean`（Ninja + Debug + `/W4 /WX`）下编译无警告，
+`volume_directory_listing_tests` 通过；连带 `volume_entry_path_tests`、`volume_provider_tests`
+共 3/3。另完成上述变异测试。全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.2]ask the file system which volume it actually opened`）。

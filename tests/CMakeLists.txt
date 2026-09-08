@@ -282,6 +282,19 @@ usb_vault_configure_target(container_index_view_v1_tests)
 add_test(NAME container_index_view_v1_tests
   COMMAND container_index_view_v1_tests)
 
+add_executable(volume_directory_listing_tests
+  volume_directory_listing_tests.cpp
+)
+
+target_link_libraries(volume_directory_listing_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(volume_directory_listing_tests)
+
+add_test(NAME volume_directory_listing_tests
+  COMMAND volume_directory_listing_tests)
+
 add_executable(volume_entry_path_tests
   volume_entry_path_tests.cpp
 )

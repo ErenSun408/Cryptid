@@ -162,6 +162,7 @@ add_library(usb_vault_core STATIC
   src/ui/webview_password_array.cpp
   src/volume/mount_request.cpp
   src/volume/unmount_retry.cpp
+  src/volume/volume_directory_listing.cpp
   src/volume/volume_entry_path.cpp
   src/volume/volume_provider.cpp
   src/volume_creation/creator_protocol.cpp
