@@ -22,6 +22,15 @@
       }
     },
     {
+      "name": "review-clean",
+      "displayName": "Warnings-clean test build",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USB_VAULT_ENABLE_ASAN": "OFF"
+      }
+    },
+    {
       "name": "asan",
       "displayName": "AddressSanitizer",
       "inherits": "base",
@@ -80,6 +89,10 @@
       "configurePreset": "dev"
     },
     {
+      "name": "review-clean",
+      "configurePreset": "review-clean"
+    },
+    {
       "name": "asan",
       "configurePreset": "asan"
     },
@@ -107,6 +120,13 @@
     {
       "name": "dev",
       "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "review-clean",
+      "configurePreset": "review-clean",
       "output": {
         "outputOnFailure": true
       }

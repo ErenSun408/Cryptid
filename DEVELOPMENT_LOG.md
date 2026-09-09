@@ -7140,4 +7140,62 @@ P3.14 控制器+桥、P3.15 页面与两道确认屏、P3.16 页面密文迁移�
 - 🔴 **"导出不留痕迹"必须并入 P4 的逐字节比对验收范围**。用户承担的是"备份被人找到"的风险，
   不是"软件替他记录了他备份过隐藏盘"的风险。
 
-- 提交：待定（拟 `[docs]slice the export work and name the leak in asking twice`）。
+- 提交：`bd7540b [docs]slice the export work and name the leak in asking twice`。
+
+---
+
+### 🔴 事故：`review-clean` 构建树的头文件依赖一直是失效的（2026-09-09 查出并修复）
+
+做 P3.11 时两个 UI 测试目标突然失败，症状离奇：控制器调 `container_statuses()` 却执行到了我新加的
+`export_container_entry` 桩上。**这是 vtable 错位** —— 两个翻译单元看到的接口不是同一个。
+
+#### 根因
+
+`out\build\review-clean/CMakeFiles/rules.ninja` 里记的是
+
+```
+msvc_deps_prefix = 注意: 包含文件:
+```
+
+而这台机器上 `cl.exe /showIncludes` 实际吐出的前缀与它不一致。前缀对不上，ninja 就**一条头文件
+依赖都记不下来**。后果：
+
+- 改头文件不触发任何重编译；
+- 往接口里加一个纯虚函数会挪动 vtable 槽位，而没重编的旧目标文件照旧链接得上 ——
+  **不报错，直接跑错**；
+- 整场会话里刷屏的 `注: 包含文件:` 噪声，就是 ninja 没吃掉这些行的直接证据。我一直把它当噪声。
+
+39 个核心目标文件里，头文件改动后只有 2 个被重编 —— 正是我直接改过 `.cpp` 的那两个。
+
+#### 项目其实早就防着这一条
+
+`CMakeLists.txt` 第 11～38 行有一道闸：MSVC + Ninja 时要求控制台代码页为 65001，否则**配置阶段
+直接失败**，并指向 `tools\configure-preset.cmd`。注释写得很清楚：「header-only edits appear to
+need no work, and stale objects can survive ABI changes」。
+
+**`review-clean` 是绕过这道闸配出来的**（它不在 `CMakePresets.json` 里，只能手工 `cmake -B`）。
+闸拦得住新建的构建树，拦不住一个已经配坏的。
+
+#### 处置
+
+1. **删掉重配**：`chcp 65001` + vcvars 后重新配置 `review-clean`，前缀重新探测。
+2. **新增 `review-clean` 预设**（configure／build／test 三处），于是它能且只能走
+   `tools\configure-preset.cmd review-clean` 这条带闸的路配出来。原先它无法用预设配置，
+   这正是当初被手工配坏的原因。
+3. **`MILESTONES.md` 写明**该目录必须用那个工具配。
+4. **写了一个依赖探针**：只改头文件的注释，看包含它的目标文件会不会被重编。
+   修复前会答 `DEPS BROKEN`，修复后答 `DEPS OK`。
+
+#### 这件事对已有结论的影响
+
+**全部重跑了一遍**：从零配置、从零构建、全套 `ctest` —— **53/53 通过，零警告，耗时 213 秒**，
+其中包含刚才那两个失败的 UI 目标。所以：
+
+- P3.10 记的「全套 53/53 通过」**成立**，本次干净重跑复现了它；
+- P3.1～P3.9 每片的最小目标结论也成立 —— 那些片我都直接改过对应的 `.cpp`，
+  重编是被文件时间戳触发的，没走依赖那条路。
+
+📝 **纪律加一条：`注: 包含文件:` 那类刷屏不是噪声，是 ninja 没在吃依赖的证据。** 我看了一整场
+才反应过来。下次在陌生构建树上跑第一次测试前，先跑一次依赖探针。
+
+- 提交：待定（拟 `[build]give the clean test tree a preset so its deps cannot rot`）。
