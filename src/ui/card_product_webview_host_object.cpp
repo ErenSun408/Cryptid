@@ -87,8 +87,59 @@ constexpr DISPID kGetRememberContainerPathsId = 32;
 constexpr DISPID kSetRememberContainerPathsId = 33;
 constexpr DISPID kGetMountImportedContainersId = 34;
 constexpr DISPID kSetMountImportedContainersId = 35;
+
+constexpr DISPID kListContainerDirectoryId = 36;
+constexpr DISPID kDeleteContainerEntryId = 37;
+constexpr DISPID kRenameContainerEntryId = 38;
+constexpr DISPID kCreateContainerDirectoryId = 39;
+constexpr DISPID kMoveContainerEntryId = 40;
+constexpr DISPID kCopyContainerEntryId = 41;
+
+constexpr wchar_t kListContainerDirectoryName[] = L"listContainerDirectory";
+constexpr wchar_t kDeleteContainerEntryName[] = L"deleteContainerEntry";
+constexpr wchar_t kRenameContainerEntryName[] = L"renameContainerEntry";
+constexpr wchar_t kCreateContainerDirectoryName[] = L"createContainerDirectory";
+constexpr wchar_t kMoveContainerEntryName[] = L"moveContainerEntry";
+constexpr wchar_t kCopyContainerEntryName[] = L"copyContainerEntry";
+
 constexpr wchar_t kChooseContainerDirectoryName[] =
     L"chooseContainerDirectory";
+
+// 🔴 A whole directory comes back as one packed string rather than through
+// per-entry accessors like the container list above. Five hundred files under
+// that pattern would be two thousand serialized asynchronous calls, and the
+// page would visibly stall; this is one.
+//
+// Records are separated by one control character and the fields inside a
+// record by another. Neither can occur in a name that came off a mounted
+// volume -- Windows refuses control characters in a file name, and the
+// controller refuses a listing carrying one before it reaches here -- so the
+// format needs no escaping, and therefore has no escaping to get wrong.
+//
+// The first record is a header holding only the truncation flag, so an empty
+// directory arrives as one record rather than as an empty string, which would
+// be indistinguishable from a call that returned nothing.
+constexpr wchar_t kListingRecordSeparator = L'\x1e';
+constexpr wchar_t kListingFieldSeparator = L'\x1f';
+
+[[nodiscard]] std::wstring pack_directory_listing(
+    const DirectoryUiListing& listing) {
+  std::wstring packed;
+  packed.push_back(listing.truncated ? L'1' : L'0');
+  for (const DirectoryEntryUiStatus& entry : listing.entries) {
+    packed.push_back(kListingRecordSeparator);
+    packed.append(entry.name);
+    packed.push_back(kListingFieldSeparator);
+    packed.push_back(entry.is_directory ? L'1' : L'0');
+    packed.push_back(kListingFieldSeparator);
+    packed.push_back(entry.is_link ? L'1' : L'0');
+    packed.push_back(kListingFieldSeparator);
+    packed.append(std::to_wstring(entry.size_bytes));
+    packed.push_back(kListingFieldSeparator);
+    packed.append(std::to_wstring(entry.modified_unix_ms));
+  }
+  return packed;
+}
 
 // A container name and a save location are not secrets the way a password is,
 // but a container path is precisely what section 8.4 keeps off this machine,
@@ -138,6 +189,34 @@ class LocationArgumentsWiper final {
 
   VARIANT& first_;
   VARIANT& second_;
+};
+
+// The directory a page is looking at and the name it picked are the contents
+// of an encrypted volume, so the marshalled copies go the way a container
+// location does. Every string argument of the call is cleared; anything that
+// is not a string was never read as one and is left exactly as it arrived.
+class DispatchTextWiper final {
+ public:
+  explicit DispatchTextWiper(DISPPARAMS* const parameters) noexcept
+      : parameters_(parameters) {}
+
+  ~DispatchTextWiper() noexcept {
+    if (parameters_ == nullptr || parameters_->rgvarg == nullptr) return;
+    for (UINT index = 0; index < parameters_->cArgs; ++index) {
+      VARIANT& value = parameters_->rgvarg[index];
+      if (value.vt != VT_BSTR || value.bstrVal == nullptr) continue;
+      const UINT length = ::SysStringLen(value.bstrVal);
+      if (length == 0) continue;
+      static_cast<void>(
+          ::SecureZeroMemory(value.bstrVal, length * sizeof(wchar_t)));
+    }
+  }
+
+  DispatchTextWiper(const DispatchTextWiper&) = delete;
+  DispatchTextWiper& operator=(const DispatchTextWiper&) = delete;
+
+ private:
+  DISPPARAMS* parameters_;
 };
 
 class PasswordArgumentsWiper final {
@@ -301,6 +380,30 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kSetMountImportedContainersId;
       return S_OK;
     }
+    if (matches(names[0], kListContainerDirectoryName)) {
+      ids[0] = kListContainerDirectoryId;
+      return S_OK;
+    }
+    if (matches(names[0], kDeleteContainerEntryName)) {
+      ids[0] = kDeleteContainerEntryId;
+      return S_OK;
+    }
+    if (matches(names[0], kRenameContainerEntryName)) {
+      ids[0] = kRenameContainerEntryId;
+      return S_OK;
+    }
+    if (matches(names[0], kCreateContainerDirectoryName)) {
+      ids[0] = kCreateContainerDirectoryId;
+      return S_OK;
+    }
+    if (matches(names[0], kMoveContainerEntryName)) {
+      ids[0] = kMoveContainerEntryId;
+      return S_OK;
+    }
+    if (matches(names[0], kCopyContainerEntryName)) {
+      ids[0] = kCopyContainerEntryId;
+      return S_OK;
+    }
     if (matches(names[0], kGetContainerCountName)) {
       ids[0] = kGetContainerCountId;
       return S_OK;
@@ -410,6 +513,19 @@ class CardProductWebViewHostObject final : public IDispatch {
         return invoke_get_mount_imported_containers(parameters, result);
       case kSetMountImportedContainersId:
         return invoke_set_mount_imported_containers(parameters, argument_error);
+      case kListContainerDirectoryId:
+        return invoke_list_container_directory(parameters, result,
+                                               argument_error);
+      case kDeleteContainerEntryId:
+      case kCreateContainerDirectoryId:
+        return invoke_entry_by_name(member, parameters, result, argument_error);
+      case kRenameContainerEntryId:
+        return invoke_rename_container_entry(parameters, result,
+                                             argument_error);
+      case kMoveContainerEntryId:
+      case kCopyContainerEntryId:
+        return invoke_transfer_container_entry(member, parameters, result,
+                                               argument_error);
       case kGetContainerCountId:
         return invoke_container_count(parameters, result);
       case kGetContainerIdId:
@@ -775,6 +891,156 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.set_mounting_imported_containers(argument.boolVal !=
                                                    VARIANT_FALSE);
       return S_OK;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // Two arguments: the container identifier and the directory inside it. COM
+  // delivers them in reverse order, as it does everywhere here.
+  HRESULT invoke_list_container_directory(
+      DISPPARAMS* const parameters, VARIANT* const result,
+      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 2 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t id = 0;
+    std::wstring_view relative_directory;
+    if (!exact_uint32(parameters->rgvarg[1], id) ||
+        !exact_wstring(parameters->rgvarg[0], relative_directory)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    if (result == nullptr) return S_OK;
+
+    std::wstring packed;
+    try {
+      packed = pack_directory_listing(
+          controller_.list_container_directory(id, relative_directory));
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+    // The packed listing is a volume's file names, so it is cleared here for
+    // the same reason a container location is.
+    LocationStringWiper packed_wiper(packed);
+    ::VariantInit(result);
+    return complete_string(packed.c_str(), static_cast<UINT>(packed.size()),
+                           result);
+  }
+
+  // Three arguments: the container, the directory the page is looking at, and
+  // the name it picked. Deleting and creating a directory take the same three
+  // and differ only in what they then do with them.
+  HRESULT invoke_entry_by_name(const DISPID member,
+                               DISPPARAMS* const parameters,
+                               VARIANT* const result,
+                               UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 3 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t id = 0;
+    std::wstring_view relative_directory;
+    std::wstring_view name;
+    if (!exact_uint32(parameters->rgvarg[2], id) ||
+        !exact_wstring(parameters->rgvarg[1], relative_directory) ||
+        !exact_wstring(parameters->rgvarg[0], name)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      if (member == kDeleteContainerEntryId) {
+        controller_.delete_container_entry(id, relative_directory, name);
+      } else {
+        controller_.create_container_directory(id, relative_directory, name);
+      }
+      return complete_selection(true, result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // Four arguments: the container, the directory, the current name, and the
+  // new one.
+  HRESULT invoke_rename_container_entry(
+      DISPPARAMS* const parameters, VARIANT* const result,
+      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 4 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t id = 0;
+    std::wstring_view relative_directory;
+    std::wstring_view name;
+    std::wstring_view new_name;
+    if (!exact_uint32(parameters->rgvarg[3], id) ||
+        !exact_wstring(parameters->rgvarg[2], relative_directory) ||
+        !exact_wstring(parameters->rgvarg[1], name) ||
+        !exact_wstring(parameters->rgvarg[0], new_name)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.rename_container_entry(id, relative_directory, name,
+                                         new_name);
+      return complete_selection(true, result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // Five arguments: where the entry is -- container, directory, name -- and
+  // where it goes -- container and directory. The name is not repeated,
+  // because neither of these renames anything.
+  HRESULT invoke_transfer_container_entry(
+      const DISPID member, DISPPARAMS* const parameters,
+      VARIANT* const result, UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 5 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t source_id = 0;
+    std::wstring_view source_relative_directory;
+    std::wstring_view name;
+    std::uint32_t destination_id = 0;
+    std::wstring_view destination_relative_directory;
+    if (!exact_uint32(parameters->rgvarg[4], source_id) ||
+        !exact_wstring(parameters->rgvarg[3], source_relative_directory) ||
+        !exact_wstring(parameters->rgvarg[2], name) ||
+        !exact_uint32(parameters->rgvarg[1], destination_id) ||
+        !exact_wstring(parameters->rgvarg[0],
+                       destination_relative_directory)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      if (member == kMoveContainerEntryId) {
+        controller_.move_container_entry(source_id, source_relative_directory,
+                                         name, destination_id,
+                                         destination_relative_directory);
+      } else {
+        controller_.copy_container_entry(source_id, source_relative_directory,
+                                         name, destination_id,
+                                         destination_relative_directory);
+      }
+      return complete_selection(true, result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
     } catch (...) {
       return E_FAIL;
     }

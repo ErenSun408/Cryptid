@@ -353,7 +353,7 @@ v1。8.7.5 的降级理由在 2026-09-07 已自行推翻了一半（泄露面那
 | **P3.3** | 删除／重命名／同卷移动／新建目录（存储层），含目录递归删；**递归删只摘链接不下钻** | 1＋2 | `volume_file_operations_tests`（新建） | ✅ 已完成 |
 | **P3.4** | 跨容器复制与移动：失败／空间不足／目标已存在／取消，不留半个文件 | 3 | 同上 | ✅ 已完成 |
 | **P3.5** | 接到会话：按**容器 id** 而非盘符寻址，未挂载即拒，出卷即拒 | 1~4 | `card_login_mount_session_tests` | ✅ 已完成 |
-| **P3.6** | UI 控制器投影 + WebView 桥（两者是机械镜像，合成一片） | 5 | `card_product_ui_session_controller_tests`、`card_product_webview_host_object_tests` | ⬜ |
+| **P3.6** | UI 控制器投影 + WebView 桥（两者是机械镜像，合成一片） | 5 | `card_product_ui_session_controller_tests`、`card_product_webview_host_object_tests` | ✅ 已完成 |
 | **P3.7** | 页面：启用侧栏入口 + 浏览主视图（容器选择／面包屑／列表／空态／未挂载态） | 6 | `card_product_ui_page_contract_tests` | ⬜ |
 | **P3.8** | 页面：删除与重命名 | 7 | 同上 | ⬜ |
 | **P3.9** | 页面：移动与拖放（含跨容器），拖向普通磁盘时拒绝并指向备份中心 | 8 | 同上 | ⬜ |

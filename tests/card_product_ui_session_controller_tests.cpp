@@ -32,6 +32,7 @@ using usb_vault::security::SecureBuffer;
 using usb_vault::ui::CardProductUiSessionController;
 using usb_vault::ui::CardProductUiState;
 using usb_vault::ui::ContainerUiStatus;
+using usb_vault::ui::DirectoryUiListing;
 using usb_vault::ui::kContainerCreationMaximumMib;
 using usb_vault::ui::kContainerCreationMinimumMib;
 using usb_vault::ui::OperationUiKind;
@@ -217,38 +218,106 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
-  // The file manager is not part of this fixture. P3.5 put these on the
-  // product boundary and P3.6 is where the controller starts using them; until
-  // then a call here is a mistake rather than a case worth modelling.
+  // The file manager, recorded rather than performed. What this layer is
+  // answerable for is which container and which strings it passed on, and
+  // whether it refused before passing anything on at all.
+  struct DirectoryCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+  };
+
+  struct EntryCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+    std::wstring name;
+    std::wstring new_name;
+  };
+
+  struct TransferCall final {
+    std::uint32_t source_id{};
+    std::wstring source_directory;
+    std::wstring name;
+    std::uint32_t destination_id{};
+    std::wstring destination_directory;
+  };
+
   [[nodiscard]] usb_vault::volume::VolumeDirectoryListing
-  list_container_directory(std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  list_container_directory(
+      const std::uint32_t id,
+      const std::wstring_view relative_directory) override {
+    listed.push_back({.id = id, .directory = std::wstring(relative_directory)});
+    if (reject_listing) throw std::invalid_argument("no such directory");
+    return listing;
   }
 
-  void delete_container_entry(std::uint32_t, std::wstring_view,
-                              std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  void delete_container_entry(const std::uint32_t id,
+                              const std::wstring_view relative_directory,
+                              const std::wstring_view name) override {
+    deleted.push_back({.id = id,
+                       .directory = std::wstring(relative_directory),
+                       .name = std::wstring(name)});
   }
 
-  void rename_container_entry(std::uint32_t, std::wstring_view,
-                              std::wstring_view, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  void rename_container_entry(const std::uint32_t id,
+                              const std::wstring_view relative_directory,
+                              const std::wstring_view name,
+                              const std::wstring_view new_name) override {
+    renamed.push_back({.id = id,
+                       .directory = std::wstring(relative_directory),
+                       .name = std::wstring(name),
+                       .new_name = std::wstring(new_name)});
   }
 
-  void create_container_directory(std::uint32_t, std::wstring_view,
-                                  std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  void create_container_directory(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view name) override {
+    created_directories.push_back({.id = id,
+                                   .directory =
+                                       std::wstring(relative_directory),
+                                   .name = std::wstring(name)});
   }
 
-  void move_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
-                            std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  void move_container_entry(
+      const std::uint32_t source_id,
+      const std::wstring_view source_relative_directory,
+      const std::wstring_view name, const std::uint32_t destination_id,
+      const std::wstring_view destination_relative_directory) override {
+    moved.push_back(
+        {.source_id = source_id,
+         .source_directory = std::wstring(source_relative_directory),
+         .name = std::wstring(name),
+         .destination_id = destination_id,
+         .destination_directory =
+             std::wstring(destination_relative_directory)});
   }
 
-  void copy_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
-                            std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  void copy_container_entry(
+      const std::uint32_t source_id,
+      const std::wstring_view source_relative_directory,
+      const std::wstring_view name, const std::uint32_t destination_id,
+      const std::wstring_view destination_relative_directory) override {
+    copied.push_back(
+        {.source_id = source_id,
+         .source_directory = std::wstring(source_relative_directory),
+         .name = std::wstring(name),
+         .destination_id = destination_id,
+         .destination_directory =
+             std::wstring(destination_relative_directory)});
   }
+
+  [[nodiscard]] std::size_t file_manager_calls() const noexcept {
+    return listed.size() + deleted.size() + renamed.size() +
+           created_directories.size() + moved.size() + copied.size();
+  }
+
+  usb_vault::volume::VolumeDirectoryListing listing;
+  bool reject_listing{};
+  std::vector<DirectoryCall> listed;
+  std::vector<EntryCall> deleted;
+  std::vector<EntryCall> renamed;
+  std::vector<EntryCall> created_directories;
+  std::vector<TransferCall> moved;
+  std::vector<TransferCall> copied;
 
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
@@ -1416,6 +1485,148 @@ void test_operation_history_rejects_paths_and_impossible_shapes() {
       "an oversized operation history crossed the UI boundary");
 }
 
+void test_a_directory_listing_is_projected_only_when_authenticated() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+  require_throws<std::system_error>(
+      [&] {
+        static_cast<void>(fixture.controller.list_container_directory(7, L""));
+      },
+      "an unauthenticated route browsed a container");
+  require(fixture.volume.file_manager_calls() == 0,
+          "a refused browse still reached the session");
+
+  fixture.authentication.establish(root_secret());
+  fixture.volume.listing.truncated = true;
+  fixture.volume.listing.entries.push_back({.name = L"notes.txt",
+                                            .is_directory = false,
+                                            .is_reparse_point = false,
+                                            .size_bytes = 1234,
+                                            .modified_unix_ms = 1700000000000LL});
+  fixture.volume.listing.entries.push_back({.name = L"elsewhere",
+                                            .is_directory = true,
+                                            .is_reparse_point = true,
+                                            .size_bytes = 0,
+                                            .modified_unix_ms = 1700000000001LL});
+
+  const DirectoryUiListing listing =
+      fixture.controller.list_container_directory(7, L"reports");
+  require(listing.truncated && listing.entries.size() == 2,
+          "the listing lost its entries or its truncation flag");
+  require(listing.entries[0].name == L"notes.txt" &&
+              !listing.entries[0].is_directory && !listing.entries[0].is_link &&
+              listing.entries[0].size_bytes == 1234 &&
+              listing.entries[0].modified_unix_ms == 1700000000000LL,
+          "a file entry was not projected as it stands");
+  // A link is marked rather than hidden: a manager that silently omits what
+  // Explorer shows is worse than one that says what is there.
+  require(listing.entries[1].is_directory && listing.entries[1].is_link,
+          "a link inside the container was not marked as one");
+  require(fixture.volume.listed.size() == 1 &&
+              fixture.volume.listed[0].id == 7 &&
+              fixture.volume.listed[0].directory == L"reports",
+          "the container and directory did not reach the session unchanged");
+}
+
+// A name no Windows file system can produce is evidence of a tampered volume,
+// and the packed wire format below cannot carry one either.
+void test_a_listing_entry_the_page_cannot_be_shown_fails_closed() {
+  const std::wstring impossible_names[] = {L"", L"has\\a\\separator",
+                                           L"has:a:colon",
+                                           std::wstring(L"has\x01control")};
+  for (const std::wstring& name : impossible_names) {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing.entries.push_back({.name = name});
+    require_throws<std::runtime_error>(
+        [&] {
+          static_cast<void>(fixture.controller.list_container_directory(1, L""));
+        },
+        "a listing entry the page cannot be shown was projected anyway");
+  }
+
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.listing.entries.push_back(
+      {.name = L"reports", .is_directory = true, .size_bytes = 4096});
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(fixture.controller.list_container_directory(1, L""));
+      },
+      "a directory carrying a size was projected as one");
+}
+
+void test_file_manager_actions_are_refused_off_the_authenticated_route() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+
+  require_throws<std::system_error>(
+      [&] { fixture.controller.delete_container_entry(1, L"", L"a.txt"); },
+      "an unauthenticated route deleted an entry");
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.rename_container_entry(1, L"", L"a.txt", L"b.txt");
+      },
+      "an unauthenticated route renamed an entry");
+  require_throws<std::system_error>(
+      [&] { fixture.controller.create_container_directory(1, L"", L"new"); },
+      "an unauthenticated route created a directory");
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.move_container_entry(1, L"", L"a.txt", 2, L"");
+      },
+      "an unauthenticated route moved an entry");
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.copy_container_entry(1, L"", L"a.txt", 2, L"");
+      },
+      "an unauthenticated route copied an entry");
+
+  require(fixture.volume.file_manager_calls() == 0,
+          "a refused action still reached the session");
+}
+
+void test_file_manager_actions_reach_the_session_unchanged() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+
+  fixture.controller.delete_container_entry(3, L"reports", L"old.txt");
+  require(fixture.volume.deleted.size() == 1 &&
+              fixture.volume.deleted[0].id == 3 &&
+              fixture.volume.deleted[0].directory == L"reports" &&
+              fixture.volume.deleted[0].name == L"old.txt",
+          "the delete did not reach the session as it was asked");
+
+  fixture.controller.rename_container_entry(3, L"reports", L"old.txt",
+                                            L"new.txt");
+  require(fixture.volume.renamed.size() == 1 &&
+              fixture.volume.renamed[0].name == L"old.txt" &&
+              fixture.volume.renamed[0].new_name == L"new.txt",
+          "the rename did not carry both names");
+
+  fixture.controller.create_container_directory(3, L"", L"archive");
+  require(fixture.volume.created_directories.size() == 1 &&
+              fixture.volume.created_directories[0].name == L"archive",
+          "the new directory did not reach the session");
+
+  fixture.controller.move_container_entry(3, L"reports", L"q1.txt", 4,
+                                          L"archive");
+  require(fixture.volume.moved.size() == 1 &&
+              fixture.volume.moved[0].source_id == 3 &&
+              fixture.volume.moved[0].source_directory == L"reports" &&
+              fixture.volume.moved[0].name == L"q1.txt" &&
+              fixture.volume.moved[0].destination_id == 4 &&
+              fixture.volume.moved[0].destination_directory == L"archive",
+          "the move did not carry both ends");
+
+  fixture.controller.copy_container_entry(4, L"archive", L"q1.txt", 3, L"");
+  require(fixture.volume.copied.size() == 1 &&
+              fixture.volume.copied[0].source_id == 4 &&
+              fixture.volume.copied[0].destination_id == 3 &&
+              fixture.volume.copied[0].destination_directory.empty(),
+          "the copy did not carry both ends");
+}
+
 }  // namespace
 
 int main() {
@@ -1445,6 +1656,10 @@ int main() {
     test_the_remember_switch_reads_anywhere_and_changes_only_inside();
     test_importing_only_mounts_when_the_switch_asks_for_it();
     test_the_import_switch_reads_anywhere_and_changes_only_inside();
+    test_a_directory_listing_is_projected_only_when_authenticated();
+    test_a_listing_entry_the_page_cannot_be_shown_fails_closed();
+    test_file_manager_actions_are_refused_off_the_authenticated_route();
+    test_file_manager_actions_reach_the_session_unchanged();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

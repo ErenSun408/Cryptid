@@ -214,38 +214,106 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
-  // The file manager is not part of this fixture. P3.5 put these on the
-  // product boundary and P3.6 is where the controller starts using them; until
-  // then a call here is a mistake rather than a case worth modelling.
+  // The file manager, recorded rather than performed. What this layer is
+  // answerable for is which container and which strings it passed on, and
+  // whether it refused before passing anything on at all.
+  struct DirectoryCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+  };
+
+  struct EntryCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+    std::wstring name;
+    std::wstring new_name;
+  };
+
+  struct TransferCall final {
+    std::uint32_t source_id{};
+    std::wstring source_directory;
+    std::wstring name;
+    std::uint32_t destination_id{};
+    std::wstring destination_directory;
+  };
+
   [[nodiscard]] usb_vault::volume::VolumeDirectoryListing
-  list_container_directory(std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  list_container_directory(
+      const std::uint32_t id,
+      const std::wstring_view relative_directory) override {
+    listed.push_back({.id = id, .directory = std::wstring(relative_directory)});
+    if (reject_listing) throw std::invalid_argument("no such directory");
+    return listing;
   }
 
-  void delete_container_entry(std::uint32_t, std::wstring_view,
-                              std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  void delete_container_entry(const std::uint32_t id,
+                              const std::wstring_view relative_directory,
+                              const std::wstring_view name) override {
+    deleted.push_back({.id = id,
+                       .directory = std::wstring(relative_directory),
+                       .name = std::wstring(name)});
   }
 
-  void rename_container_entry(std::uint32_t, std::wstring_view,
-                              std::wstring_view, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  void rename_container_entry(const std::uint32_t id,
+                              const std::wstring_view relative_directory,
+                              const std::wstring_view name,
+                              const std::wstring_view new_name) override {
+    renamed.push_back({.id = id,
+                       .directory = std::wstring(relative_directory),
+                       .name = std::wstring(name),
+                       .new_name = std::wstring(new_name)});
   }
 
-  void create_container_directory(std::uint32_t, std::wstring_view,
-                                  std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  void create_container_directory(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view name) override {
+    created_directories.push_back({.id = id,
+                                   .directory =
+                                       std::wstring(relative_directory),
+                                   .name = std::wstring(name)});
   }
 
-  void move_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
-                            std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  void move_container_entry(
+      const std::uint32_t source_id,
+      const std::wstring_view source_relative_directory,
+      const std::wstring_view name, const std::uint32_t destination_id,
+      const std::wstring_view destination_relative_directory) override {
+    moved.push_back(
+        {.source_id = source_id,
+         .source_directory = std::wstring(source_relative_directory),
+         .name = std::wstring(name),
+         .destination_id = destination_id,
+         .destination_directory =
+             std::wstring(destination_relative_directory)});
   }
 
-  void copy_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
-                            std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  void copy_container_entry(
+      const std::uint32_t source_id,
+      const std::wstring_view source_relative_directory,
+      const std::wstring_view name, const std::uint32_t destination_id,
+      const std::wstring_view destination_relative_directory) override {
+    copied.push_back(
+        {.source_id = source_id,
+         .source_directory = std::wstring(source_relative_directory),
+         .name = std::wstring(name),
+         .destination_id = destination_id,
+         .destination_directory =
+             std::wstring(destination_relative_directory)});
   }
+
+  [[nodiscard]] std::size_t file_manager_calls() const noexcept {
+    return listed.size() + deleted.size() + renamed.size() +
+           created_directories.size() + moved.size() + copied.size();
+  }
+
+  usb_vault::volume::VolumeDirectoryListing listing;
+  bool reject_listing{};
+  std::vector<DirectoryCall> listed;
+  std::vector<EntryCall> deleted;
+  std::vector<EntryCall> renamed;
+  std::vector<EntryCall> created_directories;
+  std::vector<TransferCall> moved;
+  std::vector<TransferCall> copied;
 
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
@@ -1610,6 +1678,224 @@ void test_operation_history_query_failures_do_not_invent_facts() {
   static_cast<void>(::VariantClear(&result));
 }
 
+// Every file-manager call takes its own shape, so the tests build the argument
+// array themselves rather than hiding COM's reverse order behind a helper.
+[[nodiscard]] HRESULT invoke_named(IDispatch& host, const wchar_t* const name,
+                                   VARIANTARG* const values, const UINT count,
+                                   VARIANT* const result,
+                                   UINT* const argument_error) {
+  DISPPARAMS parameters{values, nullptr, count, 0};
+  return host.Invoke(member_id(host, name), IID_NULL, LOCALE_INVARIANT,
+                     DISPATCH_METHOD, &parameters, result, nullptr,
+                     argument_error);
+}
+
+void clear_arguments(VARIANTARG* const values, const UINT count) {
+  for (UINT index = 0; index < count; ++index) {
+    static_cast<void>(::VariantClear(&values[index]));
+  }
+}
+
+// 🔴 One call brings a whole directory back. Five hundred files through the
+// per-entry accessors above would be two thousand serialized asynchronous
+// calls, and the page would visibly stall.
+void test_a_directory_listing_arrives_as_one_packed_string() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  fixture.volume.listing.truncated = true;
+  fixture.volume.listing.entries.push_back({.name = L"notes.txt",
+                                            .is_directory = false,
+                                            .is_reparse_point = false,
+                                            .size_bytes = 1234,
+                                            .modified_unix_ms = 1700000000000LL});
+  fixture.volume.listing.entries.push_back({.name = L"elsewhere",
+                                            .is_directory = true,
+                                            .is_reparse_point = true,
+                                            .size_bytes = 0,
+                                            .modified_unix_ms = 1700000000001LL});
+
+  std::array<VARIANTARG, 2> values{};
+  values[1] = number_argument(7);
+  values[0] = text_argument(L"reports");
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"listContainerDirectory", values.data(), 2,
+                       &result, nullptr) == S_OK &&
+              result.vt == VT_BSTR && result.bstrVal != nullptr,
+          "the listing did not come back as one string");
+
+  const std::wstring packed(result.bstrVal, ::SysStringLen(result.bstrVal));
+  const std::wstring expected =
+      std::wstring(L"1") + L'\x1e' + L"notes.txt" + L'\x1f' + L'0' + L'\x1f' +
+      L'0' + L'\x1f' + L"1234" + L'\x1f' + L"1700000000000" + L'\x1e' +
+      L"elsewhere" + L'\x1f' + L'1' + L'\x1f' + L'1' + L'\x1f' + L'0' +
+      L'\x1f' + L"1700000000001";
+  require(packed == expected, "the packed listing is not what the page parses");
+  static_cast<void>(::VariantClear(&result));
+
+  require(fixture.volume.listed.size() == 1 &&
+              fixture.volume.listed[0].id == 7 &&
+              fixture.volume.listed[0].directory == L"reports",
+          "the bridge did not carry the container and the directory");
+  // The directory a page is looking at is the content of an encrypted volume,
+  // so the marshalled copy does not outlive the call.
+  require(::SysStringLen(values[0].bstrVal) == 7 &&
+              std::wstring(values[0].bstrVal, 7) == std::wstring(7, L'\0'),
+          "the directory the page named outlived the call");
+  clear_arguments(values.data(), 2);
+
+  // An empty directory is still a header record, so the page can tell it from
+  // a call that returned nothing.
+  Fixture empty_fixture;
+  empty_fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> empty_host = make_host(empty_fixture.controller);
+  std::array<VARIANTARG, 2> empty_values{};
+  empty_values[1] = number_argument(1);
+  empty_values[0] = text_argument(L"");
+  ::VariantInit(&result);
+  require(invoke_named(*empty_host.Get(), L"listContainerDirectory",
+                       empty_values.data(), 2, &result, nullptr) == S_OK &&
+              result.vt == VT_BSTR &&
+              std::wstring(result.bstrVal, ::SysStringLen(result.bstrVal)) ==
+                  L"0",
+          "an empty directory did not come back as a header alone");
+  static_cast<void>(::VariantClear(&result));
+  clear_arguments(empty_values.data(), 2);
+}
+
+void test_the_file_manager_bridge_checks_its_shapes() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  std::array<VARIANTARG, 1> too_few{};
+  too_few[0] = number_argument(1);
+  require(invoke_named(*host.Get(), L"listContainerDirectory", too_few.data(),
+                       1, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a listing with the wrong argument count was accepted");
+  clear_arguments(too_few.data(), 1);
+
+  std::array<VARIANTARG, 2> wrong_types{};
+  wrong_types[1] = text_argument(L"7");
+  wrong_types[0] = text_argument(L"reports");
+  UINT argument_error = 99;
+  require(invoke_named(*host.Get(), L"listContainerDirectory",
+                       wrong_types.data(), 2, nullptr,
+                       &argument_error) == DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "a container identifier arrived as text and was accepted");
+  clear_arguments(wrong_types.data(), 2);
+
+  std::array<VARIANTARG, 5> wrong_arity{};
+  for (UINT index = 0; index < 5; ++index) {
+    wrong_arity[index] = number_argument(index);
+  }
+  require(invoke_named(*host.Get(), L"deleteContainerEntry", wrong_arity.data(),
+                       5, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a delete with five arguments was accepted");
+  require(invoke_named(*host.Get(), L"moveContainerEntry", wrong_arity.data(),
+                       4, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a move with four arguments was accepted");
+  clear_arguments(wrong_arity.data(), 5);
+
+  require(fixture.volume.file_manager_calls() == 0,
+          "a rejected call still reached the session");
+}
+
+void test_the_bridge_carries_each_file_manager_action() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  VARIANT result{};
+
+  std::array<VARIANTARG, 3> three{};
+  three[2] = number_argument(3);
+  three[1] = text_argument(L"reports");
+  three[0] = text_argument(L"old.txt");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"deleteContainerEntry", three.data(), 3,
+                       &result, nullptr) == S_OK &&
+              result.vt == VT_BOOL && result.boolVal == VARIANT_TRUE,
+          "the delete did not report that it happened");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.deleted.size() == 1 &&
+              fixture.volume.deleted[0].id == 3 &&
+              fixture.volume.deleted[0].directory == L"reports" &&
+              fixture.volume.deleted[0].name == L"old.txt",
+          "the delete did not cross the bridge in order");
+  clear_arguments(three.data(), 3);
+
+  std::array<VARIANTARG, 3> make{};
+  make[2] = number_argument(3);
+  make[1] = text_argument(L"");
+  make[0] = text_argument(L"archive");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"createContainerDirectory", make.data(), 3,
+                       &result, nullptr) == S_OK,
+          "the new directory did not cross the bridge");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.created_directories.size() == 1 &&
+              fixture.volume.created_directories[0].name == L"archive",
+          "the new directory arrived under another name");
+  clear_arguments(make.data(), 3);
+
+  std::array<VARIANTARG, 4> four{};
+  four[3] = number_argument(3);
+  four[2] = text_argument(L"reports");
+  four[1] = text_argument(L"old.txt");
+  four[0] = text_argument(L"new.txt");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"renameContainerEntry", four.data(), 4,
+                       &result, nullptr) == S_OK,
+          "the rename did not cross the bridge");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.renamed.size() == 1 &&
+              fixture.volume.renamed[0].name == L"old.txt" &&
+              fixture.volume.renamed[0].new_name == L"new.txt",
+          "the rename lost one of its two names");
+  clear_arguments(four.data(), 4);
+
+  std::array<VARIANTARG, 5> five{};
+  five[4] = number_argument(3);
+  five[3] = text_argument(L"reports");
+  five[2] = text_argument(L"q1.txt");
+  five[1] = number_argument(4);
+  five[0] = text_argument(L"archive");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"moveContainerEntry", five.data(), 5,
+                       &result, nullptr) == S_OK,
+          "the move did not cross the bridge");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.moved.size() == 1 &&
+              fixture.volume.moved[0].source_id == 3 &&
+              fixture.volume.moved[0].source_directory == L"reports" &&
+              fixture.volume.moved[0].name == L"q1.txt" &&
+              fixture.volume.moved[0].destination_id == 4 &&
+              fixture.volume.moved[0].destination_directory == L"archive",
+          "the move arrived with its two ends confused");
+  clear_arguments(five.data(), 5);
+
+  std::array<VARIANTARG, 5> copy{};
+  copy[4] = number_argument(4);
+  copy[3] = text_argument(L"archive");
+  copy[2] = text_argument(L"q1.txt");
+  copy[1] = number_argument(3);
+  copy[0] = text_argument(L"");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"copyContainerEntry", copy.data(), 5,
+                       &result, nullptr) == S_OK,
+          "the copy did not cross the bridge");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.copied.size() == 1 &&
+              fixture.volume.copied[0].source_id == 4 &&
+              fixture.volume.copied[0].destination_id == 3 &&
+              fixture.volume.copied[0].destination_directory.empty(),
+          "the copy arrived with its two ends confused");
+  clear_arguments(copy.data(), 5);
+}
+
 }  // namespace
 
 int main() {
@@ -1630,6 +1916,9 @@ int main() {
     test_container_query_failure_does_not_invent_facts();
     test_operation_history_is_read_only_typed_and_clearable();
     test_operation_history_query_failures_do_not_invent_facts();
+    test_a_directory_listing_arrives_as_one_packed_string();
+    test_the_file_manager_bridge_checks_its_shapes();
+    test_the_bridge_carries_each_file_manager_action();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

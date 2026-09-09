@@ -41,6 +41,29 @@ struct ContainerUiStatus final {
   wchar_t drive_letter{};
 };
 
+// One entry of a directory inside a mounted container, projected for the
+// page. The name is a single component and never a path, so nothing a listing
+// hands the page can name somewhere else.
+struct DirectoryEntryUiStatus final {
+  std::wstring name;
+  bool is_directory{};
+  // A junction, symbolic link, or other reparse point. Marked rather than
+  // hidden: a manager that silently omits what Explorer shows is worse than
+  // one that says what is there and refuses to follow it.
+  bool is_link{};
+  // Zero for a directory. A directory's own record size is not what the word
+  // "size" means in a file manager.
+  std::uint64_t size_bytes{};
+  std::int64_t modified_unix_ms{};
+};
+
+struct DirectoryUiListing final {
+  std::vector<DirectoryEntryUiStatus> entries;
+  // Set when the directory held more than one listing carries. What is here is
+  // then some of it rather than the first of it by any order the page can see.
+  bool truncated{};
+};
+
 enum class OperationUiKind : std::uint8_t {
   session_opened = 0,
   container_created = 1,
@@ -129,6 +152,48 @@ class CardProductUiSessionController final {
   // the same file can be brought back later through the import button. The
   // session refuses a mounted one.
   void forget_container(std::uint32_t id);
+
+  // Lists one directory inside a mounted container, named by the identifier
+  // this session handed the page. Every one of these refuses on any route
+  // other than `authenticated`, and refuses rather than answering emptily: an
+  // empty listing would read as an empty directory.
+  //
+  // The page never names a drive letter and never assembles an absolute path.
+  // It says which container and which directory inside it, and the session
+  // turns that into a path that provably cannot leave the volume.
+  [[nodiscard]] DirectoryUiListing list_container_directory(
+      std::uint32_t id, std::wstring_view relative_directory);
+
+  // Deletes one entry permanently. There is no confirmation here or below it:
+  // the page owns whatever it wants to ask before calling this.
+  void delete_container_entry(std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              std::wstring_view name);
+
+  void rename_container_entry(std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              std::wstring_view name,
+                              std::wstring_view new_name);
+
+  void create_container_directory(std::uint32_t id,
+                                  std::wstring_view relative_directory,
+                                  std::wstring_view name);
+
+  // Moves or copies one entry into a directory in this or another mounted
+  // container, keeping its name.
+  //
+  // ⚠️ Between two containers this reads and writes every byte and cannot be
+  // cancelled, and the call is synchronous. Nothing on a page reaches it yet;
+  // wiring it to a drag is P3.9's, together with somewhere other than the UI
+  // thread to run it.
+  void move_container_entry(
+      std::uint32_t source_id, std::wstring_view source_relative_directory,
+      std::wstring_view name, std::uint32_t destination_id,
+      std::wstring_view destination_relative_directory);
+  void copy_container_entry(
+      std::uint32_t source_id, std::wstring_view source_relative_directory,
+      std::wstring_view name, std::uint32_t destination_id,
+      std::wstring_view destination_relative_directory);
 
   // The settings switches, both of them the same shape. Reading one needs no
   // session, so the page can show them in their real positions before anyone

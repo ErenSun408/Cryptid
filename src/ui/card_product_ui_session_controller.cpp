@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -44,6 +45,22 @@ class MutableInputWiper final {
 };
 
 constexpr std::uint64_t kBytesPerMib = 1024ULL * 1024ULL;
+
+// A name that could have come off a mounted volume. Windows refuses every one
+// of these characters in a file name, so a listing carrying one did not come
+// from a file system this product can mount. Control characters matter twice
+// over: the bridge packs a whole listing into one string and separates it with
+// two of them, and a name able to hold one could make the page read a listing
+// other than the one it was given.
+[[nodiscard]] bool is_displayable_name(const std::wstring_view name) noexcept {
+  constexpr std::wstring_view kForbidden = L"\\/:*?\"<>|";
+  if (name.empty()) return false;
+  for (const wchar_t character : name) {
+    if (character < 0x20 || character == 0x7f) return false;
+    if (kForbidden.find(character) != std::wstring_view::npos) return false;
+  }
+  return true;
+}
 
 // Converts a live volume capacity the page can display. A volume is never an
 // exact MiB multiple - the header group costs bytes, and a hidden volume sits
@@ -304,6 +321,95 @@ void CardProductUiSessionController::forget_container(
         "dropping a container is not available in the current UI state");
   }
   volume_session_.forget_container(id);
+}
+
+DirectoryUiListing CardProductUiSessionController::list_container_directory(
+    const std::uint32_t id, const std::wstring_view relative_directory) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "browsing a container is not available in the current UI state");
+  }
+  const volume::VolumeDirectoryListing listing =
+      volume_session_.list_container_directory(id, relative_directory);
+
+  DirectoryUiListing result;
+  result.truncated = listing.truncated;
+  result.entries.reserve(listing.entries.size());
+  for (const volume::VolumeDirectoryEntry& entry : listing.entries) {
+    // 🔴 A name no Windows file system can produce is evidence of a tampered
+    // volume, not a file to draw, and every projection past this point carries
+    // names as text. Refusing the listing says so; drawing it would leave the
+    // page describing something other than what is there.
+    if (!is_displayable_name(entry.name) ||
+        (entry.is_directory && entry.size_bytes != 0)) {
+      throw std::runtime_error("directory entry is inconsistent");
+    }
+    result.entries.push_back({.name = entry.name,
+                              .is_directory = entry.is_directory,
+                              .is_link = entry.is_reparse_point,
+                              .size_bytes = entry.size_bytes,
+                              .modified_unix_ms = entry.modified_unix_ms});
+  }
+  return result;
+}
+
+void CardProductUiSessionController::delete_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "deleting an entry is not available in the current UI state");
+  }
+  volume_session_.delete_container_entry(id, relative_directory, name);
+}
+
+void CardProductUiSessionController::rename_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name, const std::wstring_view new_name) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "renaming an entry is not available in the current UI state");
+  }
+  volume_session_.rename_container_entry(id, relative_directory, name,
+                                         new_name);
+}
+
+void CardProductUiSessionController::create_container_directory(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "creating a directory is not available in the current UI state");
+  }
+  volume_session_.create_container_directory(id, relative_directory, name);
+}
+
+void CardProductUiSessionController::move_container_entry(
+    const std::uint32_t source_id,
+    const std::wstring_view source_relative_directory,
+    const std::wstring_view name, const std::uint32_t destination_id,
+    const std::wstring_view destination_relative_directory) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "moving an entry is not available in the current UI state");
+  }
+  volume_session_.move_container_entry(source_id, source_relative_directory,
+                                       name, destination_id,
+                                       destination_relative_directory);
+}
+
+void CardProductUiSessionController::copy_container_entry(
+    const std::uint32_t source_id,
+    const std::wstring_view source_relative_directory,
+    const std::wstring_view name, const std::uint32_t destination_id,
+    const std::wstring_view destination_relative_directory) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "copying an entry is not available in the current UI state");
+  }
+  volume_session_.copy_container_entry(source_id, source_relative_directory,
+                                       name, destination_id,
+                                       destination_relative_directory);
 }
 
 bool CardProductUiSessionController::remembering_container_paths() {

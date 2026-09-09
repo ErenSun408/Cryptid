@@ -6686,4 +6686,90 @@ a link was copied」等 4 条，退出码 1 —— 说明不拒的话它真的�
 
 全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.5]let a page reach a container by its identifier`）。
+- 提交：`bb7cc9d [P3.5]let a page reach a container by its identifier`。
+
+---
+
+### 小切片 P3.6：控制器投影 + WebView 桥
+
+把 P3.5 的六个会话入口镜像到 `CardProductUiSessionController`，再镜像到 WebView 宿主对象
+（`listContainerDirectory`／`deleteContainerEntry`／`renameContainerEntry`／
+`createContainerDirectory`／`moveContainerEntry`／`copyContainerEntry`，DISPID 36～41）。
+两者是机械镜像，所以合成一片。
+
+#### 🔴 目录列表一次调用回一个打包串
+
+P3 开篇已定：不沿用 `getContainerName(index)` 那套逐项 accessor。500 个文件按老模式是 2000 次
+串行异步 IPC，页面会肉眼可见地卡；这里是 1 次。
+
+格式：**记录之间用 `{B}x1e`，字段之间用 `{B}x1f`**。选控制字符不是图省事 —— 挂载卷上的文件名
+**不可能**含控制字符（Windows 本身不允许，控制器又在这之前拒掉了任何含控制字符的列表），所以
+**这个格式不需要转义，也就没有转义可以写错**。JSON 手工拼接的引号与反斜杠转义 bug 在这里根本
+不存在。页面侧一行 `split` 即可。
+
+**首记录是头**，只放截断标志。于是空目录回的是 `"0"` 而不是空串 —— 空串与「调用失败什么也没回」
+分不开。
+
+字段顺序：名称、是否目录、是否链接、字节数、修改时间（Unix 毫秒）。链接**照常列出并打标**，
+沿用 P3.2 定的调子：一个「资源管理器里看得见、我们这儿看不见」的文件管理器比诚实显示更糟。
+
+#### 控制器对「不可能的名字」失败关闭
+
+`is_displayable_name` 拒绝空名、控制字符、以及 `{B}/:*?"<>|` 这九个字符。Windows 的文件系统
+本身不允许它们出现在名字里，所以**一份含它们的列表不是一份文件列表，是卷被动过的证据**。
+
+这里是**拒整份列表**而不是跳过那一条。跳过会让页面画出一个与卷里实际内容不同的目录，而这正是
+这类攻击想要的效果；拒绝则会说出来。代价是一个坏名字挡住整个目录 —— 在一个安全产品里这个取舍
+是对的，且已写进注释。
+
+#### 浏览在错误路由上是拒绝，不是回空列表
+
+`container_statuses()` 在未认证时回空表，因为页面在每个状态下都会轮询它。目录列表不一样：
+**一份空列表会被读成一个空目录**。所以六个入口在 `authenticated` 之外一律 `throw_wrong_route`。
+
+#### 参数擦除
+
+新增 `DispatchTextWiper`：把一次调用里所有 `VT_BSTR` 参数的字符清零（长度与 BSTR 本身不动，
+非字符串参数根本没被当字符串读过，原样留下）。理由与容器保存位置那条相同 —— **页面正在看的目录
+名和它挑中的条目名，是加密卷里的内容**。回给页面的打包串也同样在返回后清掉。
+
+#### HRESULT 映射
+
+`std::invalid_argument`（未知 id、越界路径、不是一个组件的名字）→ `DISP_E_TYPEMISMATCH` 且
+`argument_error = 0`；其余（错误路由、未挂载、文件系统拒绝）→ `E_FAIL`。页面因此能分开「我传错了」
+与「现在不能做」。
+
+#### ⚠️ 仍然是同步的
+
+跨容器移动要读写每一个字节，而桥是同步的 —— 调用它就会卡住 UI 线程。**本片没有任何页面代码调它**
+（页面是 P3.7～P3.9），所以这个缺口现在不可达，异步与取消仍按 P3.5 的记录留给 P3.9。头文件里写明了。
+
+#### 四次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| `is_displayable_name` 不再拒绝 | a listing entry the page cannot be shown was projected anyway |
+| 打包串丢掉头记录 | the packed listing is not what the page parses |
+| 浏览去掉路由门 | an unauthenticated route browsed a container |
+| 桥把两个容器 id 读反 | the move arrived with its two ends confused |
+
+#### 改动
+
+- `include/usb_vault/ui/card_product_ui_session_controller.h`：新增
+  `DirectoryEntryUiStatus`、`DirectoryUiListing` 与六个入口。
+- `src/ui/card_product_ui_session_controller.cpp`：投影、`is_displayable_name`、五个直通。
+- `src/ui/card_product_webview_host_object.cpp`：六个 DISPID 与名字、`pack_directory_listing`、
+  `DispatchTextWiper`、四个 invoke 处理（删除与新建目录共用一个，移动与复制共用一个）。
+- `tests/card_product_ui_session_controller_tests.cpp`、
+  `tests/card_product_webview_host_object_tests.cpp`：假会话由抛桩改为记录，各新增 4／3 组用例。
+- 无 CMake 改动。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`review-clean`（Ninja + Debug + `/W4 /WX`）编译无警告，
+`card_product_ui_session_controller_tests` 与 `card_product_webview_host_object_tests` 均通过；
+受核心改动波及的 `ui_close_guard_tests` 一并构建并通过，`card_product_webview_integration_tests`
+（`EXCLUDE_FROM_ALL` 的手动夹具）只构建。另完成上表四次变异测试，每次都不吞构建输出且确认退出码
+为 1。全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.6]bring a whole directory across the bridge in one call`）。
