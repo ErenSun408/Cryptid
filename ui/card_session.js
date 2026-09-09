@@ -77,6 +77,15 @@
   const backupExportBrowse = document.getElementById("backup-export-browse");
   const backupExportConfirm = document.getElementById("backup-export-confirm");
   const backupExportStatus = document.getElementById("backup-export-status");
+  const backupMigrateSelect =
+    document.getElementById("backup-migrate-select");
+  const backupMigrateLocation =
+    document.getElementById("backup-migrate-location");
+  const backupMigrateBrowse = document.getElementById("backup-migrate-browse");
+  const backupMigrateConfirm =
+    document.getElementById("backup-migrate-confirm");
+  const backupMigrateStatus =
+    document.getElementById("backup-migrate-status");
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
@@ -1032,6 +1041,10 @@
   // means there is nothing to export, which is what the page opens on.
   let pendingExport = null;
   let exportLocation = "";
+  // The migration export names a container of its own: the one being taken to
+  // another machine is rarely the one being browsed.
+  let migrateContainerId = 0;
+  let migrateLocation = "";
 
   const renderBackupCentre = () => {
     if (pendingExport === null) {
@@ -1047,11 +1060,48 @@
     backupExportBrowse.disabled = busy;
     backupExportConfirm.disabled =
       busy || pendingExport === null || exportLocation === "";
+
+    // Every adopted container is offered, mounted or not, and the mounted ones
+    // say why they cannot be taken yet rather than quietly not being there.
+    let known = false;
+    for (const container of containers) {
+      if (container.id === migrateContainerId) known = true;
+    }
+    if (!known) {
+      migrateContainerId = containers.length === 0 ? 0 : containers[0].id;
+    }
+    while (backupMigrateSelect.firstChild !== null) {
+      backupMigrateSelect.removeChild(backupMigrateSelect.firstChild);
+    }
+    let migrateReady = false;
+    for (const container of containers) {
+      const option = document.createElement("option");
+      option.value = String(container.id);
+      option.textContent = container.mounted
+        ? `${container.name}（已挂载，需先卸载）`
+        : container.name;
+      option.selected = container.id === migrateContainerId;
+      backupMigrateSelect.appendChild(option);
+      if (container.id === migrateContainerId && !container.mounted) {
+        migrateReady = true;
+      }
+    }
+    backupMigrateSelect.disabled = busy || containers.length === 0;
+    backupMigrateLocation.textContent =
+      migrateLocation === "" ? "还没有选择位置" : migrateLocation;
+    backupMigrateBrowse.disabled = busy;
+    backupMigrateConfirm.disabled =
+      busy || !migrateReady || migrateLocation === "";
   };
 
   const setBackupStatus = (message, tone = "") => {
     backupExportStatus.textContent = message;
     backupExportStatus.dataset.tone = tone;
+  };
+
+  const setMigrateStatus = (message, tone = "") => {
+    backupMigrateStatus.textContent = message;
+    backupMigrateStatus.dataset.tone = tone;
   };
 
   // The file manager hands an entry over and steps aside. It does not export.
@@ -1106,6 +1156,44 @@
     pendingExport = null;
     exportLocation = "";
     setBackupStatus("已导出。这份副本不再受本软件保护。", "success");
+    renderBackupCentre();
+  };
+
+  const runMigration = async () => {
+    if (busy || migrateContainerId === 0 || migrateLocation === "") return;
+    const id = migrateContainerId;
+    const location = migrateLocation;
+    busy = true;
+    setMigrateStatus("");
+    render(messageForCurrentState());
+    // A whole container is copied on the thread that draws this page, and a
+    // container is the largest thing this product moves.
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    let failed = false;
+    try {
+      await bridge.exportContainerFile(id, location);
+    } catch (_) {
+      failed = true;
+    }
+    try {
+      await refreshNativeState();
+    } catch (_) {
+      currentState = nativeState.unavailable;
+      activeVolumes = true;
+    }
+    busy = false;
+    render(messageForCurrentState());
+    if (failed) {
+      setMigrateStatus(
+        "迁移没有完成。容器可能仍挂载着，位置不可写、空间不足，或那里已经有同名文件了。",
+        "error");
+      renderBackupCentre();
+      return;
+    }
+    // The location goes the way the plaintext export's does, and for the same
+    // reason: an export leaves nothing behind, on either side.
+    migrateLocation = "";
+    setMigrateStatus("已导出。换机后仍须原安全卡与原口令。", "success");
     renderBackupCentre();
   };
 
@@ -2157,6 +2245,24 @@
   });
   backupExportConfirm.addEventListener("click", async () => {
     await runExport();
+  });
+  backupMigrateSelect.addEventListener("change", () => {
+    const chosen = Number(backupMigrateSelect.value);
+    if (!Number.isInteger(chosen) || chosen <= 0) return;
+    migrateContainerId = chosen;
+    setMigrateStatus("");
+    renderBackupCentre();
+  });
+  backupMigrateBrowse.addEventListener("click", async () => {
+    if (busy || bridge === null) return;
+    const chosen = await bridge.chooseContainerDirectory();
+    if (typeof chosen !== "string" || chosen.length === 0) return;
+    migrateLocation = chosen;
+    setMigrateStatus("");
+    renderBackupCentre();
+  });
+  backupMigrateConfirm.addEventListener("click", async () => {
+    await runMigration();
   });
   fileListBody.addEventListener("dragstart", (event) => {
     const row = event.target instanceof Element

@@ -1032,11 +1032,71 @@ void test_the_backup_centre_owns_the_plaintext_export() {
               std::string::npos,
           "the page kept the exported entry or its location afterwards");
 
-  // A blocking copy again, so the disabled state has to reach the screen.
+  // Every call that copies bytes on the drawing thread paints the disabled
+  // state first: a transfer between containers, a plaintext export, and a
+  // whole-container migration. The count is here so a fourth one cannot be
+  // added without deciding about this.
   require(count_occurrences(
               script, "await new Promise((resolve) => { setTimeout(resolve, "
-                      "0); });") == 2,
-          "an export starts before the page looks busy");
+                      "0); });") == 3,
+          "a copy starts before the page looks busy");
+}
+
+// The migration export: a whole container, still encrypted, for a user moving
+// to another machine.
+void test_the_migration_export_says_what_it_does_and_does_not_do() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "backup");
+
+  require(section.find("id=\"backup-migrate-select\"") != std::string::npos &&
+              section.find("id=\"backup-migrate-location\"") !=
+                  std::string::npos &&
+              section.find("id=\"backup-migrate-browse\"") !=
+                  std::string::npos &&
+              section.find("id=\"backup-migrate-confirm\"") !=
+                  std::string::npos &&
+              section.find("id=\"backup-migrate-status\"") !=
+                  std::string::npos,
+          "the migration export cannot pick a container, a location, or run");
+
+  // 🔴 What a migrating user has to understand, in Q-04's own terms: this is
+  // not a key backup and not a recovery channel, and a lost card is still a
+  // lost vault.
+  require(section.find("不解密、不重新加密") != std::string::npos &&
+              section.find("原安全卡 + 原口令") != std::string::npos &&
+              section.find("卡丢失或损坏，数据仍然永久不可恢复") !=
+                  std::string::npos &&
+              section.find("容器必须先卸载") != std::string::npos,
+          "the migration export does not say what it is and is not");
+
+  // 🔴 The plaintext warning is inside the plaintext panel, not over the whole
+  // section. A migration copy is still encrypted, so "no longer protected" is
+  // untrue of it, and a warning in the wrong place teaches the wrong thing.
+  const std::size_t plaintext_panel = section.find("<h3>明文导出</h3>");
+  const std::size_t warning = section.find("导出后的数据不再受本软件保护");
+  const std::size_t migration_panel = section.find("<h3>密文迁移导出</h3>");
+  require(plaintext_panel != std::string::npos &&
+              warning != std::string::npos &&
+              migration_panel != std::string::npos &&
+              plaintext_panel < warning && warning < migration_panel,
+          "the plaintext warning is not scoped to the plaintext panel");
+
+  require(count_occurrences(script, "bridge.exportContainerFile") == 1 &&
+              script.find("await bridge.exportContainerFile(id, location);") !=
+                  std::string::npos,
+          "the migration export is not reached in exactly one place");
+
+  // A mounted container is offered and says why it cannot go yet, rather than
+  // being missing from a list the user expects to be complete.
+  require(script.find("`${container.name}（已挂载，需先卸载）`") !=
+              std::string::npos &&
+              script.find("migrateReady = true;") != std::string::npos,
+          "a mounted container is hidden rather than explained");
+
+  require(script.find("migrateLocation = \"\";\n    setMigrateStatus(") !=
+              std::string::npos,
+          "the page kept the migration location afterwards");
 }
 
 }  // namespace
@@ -1066,6 +1126,7 @@ int main() {
     test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name();
     test_a_drag_stays_inside_the_containers_and_says_where_out_lives();
     test_the_backup_centre_owns_the_plaintext_export();
+    test_the_migration_export_says_what_it_does_and_does_not_do();
     std::cout << "card_product_ui_page_contract_tests: PASS\n";
     return 0;
   } catch (const std::exception& error) {
