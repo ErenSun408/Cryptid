@@ -6864,4 +6864,81 @@ JS 里就不必到处写转义反斜杠，少一类写错的机会。
 按 P3 测试纪律只跑本片最小目标：`card_product_ui_page_contract_tests` 通过（`review-clean`，
 `/W4 /WX` 编译无警告）。另完成上表三次变异测试、node 语法检查与上述跨层解析验证。全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.7]open the file manager on a container the page cannot name a drive for`）。
+- 提交：`785e25d [P3.7]open the file manager on a container the page cannot name a drive for`。
+
+---
+
+### 小切片 P3.8：删除与重命名
+
+列表每行加「重命名」「删除」两个按钮，工具栏加「新建文件夹」，重命名与新建共用一个取名对话框
+（`file-name-dialog`）。
+
+#### 🔴 删除是永久删除，且只问一次 —— 按已定事实实现
+
+2026-09-08 已定：**和系统文件管理器同标准，不设二次确认，不进回收站。** 本片照此实现：点「删除」
+直接调 `deleteContainerEntry`，没有对话框。
+
+但**页面必须把这件事说出来**，所以分区里加了一条常驻提示：「删除是永久删除，不进回收站，点下去
+就没有第二次询问 —— 与系统文件管理器同标准。」常驻提示不是二次确认，它不拦任何东西；它只是让
+按钮旁边站着一句实话。契约测试同时钉住两头：**这句话必须在**，以及**页面上不许出现
+`file-delete-dialog`** —— 后者是为了让「将来有人悄悄加回确认屏」这件事必须先改测试、也就必须
+先回头看那条决策。
+
+⚠️ MILESTONES 里那条留档仍然成立：Explorer 的 Shift+Delete 其实**有**确认弹窗，无确认只在删到
+回收站时成立，所以本产品比 Explorer 更利落。要补确认屏是一处局部改动，随时可加。
+
+#### 🔵 顺带把「新建文件夹」也做了，这是一处计划外的小扩张
+
+P3.8 那一行只写了「删除与重命名」。但 `create_volume_directory` 从 P3.3 一路建到 P3.6 的桥，
+而 P3.9 是移动与拖放 —— **不在这一片放入口，它到 P3 结束都不会有任何页面能调到它**，即一条建好
+却死掉的通路。它与重命名共用同一个取名对话框，代价是一个按钮加一个分支。
+
+**记在这里，是因为它确实超出了那一行的字面范围。** 同类的还有一个：`copy_container_entry` 至今
+没有页面入口（拖放复制不在 P3.9 的字面范围内），这一条**没有**顺手做，留给 P3.9 决定。
+
+#### 一个动作只有一个刷新点
+
+P3.7 把「列表刷新」挂在了 `renderContainers()` 上，本片撤掉了：动作完成后要显示错误消息，而
+`render()` 顺手 `void` 出去的那次刷新会把消息覆盖掉 —— 一个真实的竞态。现在刷新只有四个来源：
+进入分区、切换容器、进出目录、以及一次动作结束（`runFileAction` 与 `runContainerAction` 各自
+`await` 完再写消息）。容器在「容器」页被卸载时，文件视图也因此跟着更新了 —— 这比 P3.7 记的
+「停留在旧内容」要好一些。
+
+#### 取名对话框的几条
+
+- 重命名预填原名并全选，直接回车即确认；名字没变或为空就当取消，不发请求。
+- `maxlength="255"`，与 `kVolumeEntryNameMaximumLength` 对齐；其余规则不在页面重做一遍，
+  由原生侧拒绝并回消息 —— **校验只写一处**，页面重写一份迟早会和原生侧对不上。
+- 输入框自成 `.file-name-text` 一类而不复用 `.creation-text`：8.7.2 那条契约按数量钉死了两个建卷
+  表单的控件，蹭它的类会把这个对话框算进那两个表单里去。CSS 用选择器并列复用，样式一致，契约不动。
+
+#### 顺带修的一处既有契约
+
+「每个文本控件都要关掉浏览器辅助」那条按数量断言（8 个 `autocomplete="off"` / `spellcheck="false"`）
+改为 9 个 —— 容器内的文件名是加密卷的内容，比容器路径更该关掉输入法记忆与拼写检查。
+
+#### 三次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| 常驻提示改成一句软话 | the page does not say that deleting is permanent and unasked |
+| 重命名忘掉原名（两个参数都传新名） | the rename does not carry both the old and the new name |
+| 页面上加一个 `file-delete-dialog` | a delete confirmation appeared without the decision being revisited |
+
+#### 改动
+
+- `ui/card_session.html`：工具栏按钮、`操作` 列、常驻删除提示、取名对话框、四条 CSS。
+- `ui/card_session.js`：八个元素查找、`openFileNameFlow`／`closeFileNameFlow`／`submitFileName`／
+  `deleteFileEntry`／`runFileAction`，行内两个按钮，列表点击处理改为同时管进目录与两个动作；
+  刷新点收敛。
+- `tests/card_product_webview_integration.html`：新增七个 id。
+- `tests/card_product_ui_page_contract_tests.cpp`：新增一组契约，另改两处既有计数。
+- 无 CMake 改动。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`card_product_ui_page_contract_tests` 通过。另完成上表三次变异
+测试、`node --check` 语法检查，并重跑了 P3.7 那个跨层解析验证（格式未变，仍然对得上）。
+全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.8]delete once and rename in place`）。

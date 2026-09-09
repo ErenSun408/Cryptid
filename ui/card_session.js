@@ -61,6 +61,15 @@
   const fileBreadcrumb = document.getElementById("file-breadcrumb");
   const fileListBody = document.getElementById("file-list-body");
   const fileListStatus = document.getElementById("file-list-status");
+  const fileCreateDirectoryButton =
+    document.getElementById("file-create-directory");
+  const fileNameDialog = document.getElementById("file-name-dialog");
+  const fileNameTitle = document.getElementById("file-name-title");
+  const fileNameInput = document.getElementById("file-name-input");
+  const fileNameStatus = document.getElementById("file-name-status");
+  const fileNameCloseButton = document.getElementById("file-name-close");
+  const fileNameCancelButton = document.getElementById("file-name-cancel");
+  const fileNameConfirmButton = document.getElementById("file-name-confirm");
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
@@ -748,7 +757,7 @@
   const appendFileNotice = (text) => {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 3;
+    cell.colSpan = 4;
     cell.className = "file-empty";
     cell.textContent = text;
     row.appendChild(cell);
@@ -798,9 +807,119 @@
       size.textContent = formatEntrySize(entry);
       const modified = document.createElement("td");
       modified.textContent = formatOperationTime(entry.modifiedUnixMs);
-      row.append(name, size, modified);
+      const actions = document.createElement("td");
+      actions.className = "file-actions";
+      for (const [action, label, danger] of [
+        ["rename", "重命名", false], ["delete", "删除", true],
+      ]) {
+        const button = document.createElement("button");
+        button.className = danger ? "shell-button danger" : "shell-button";
+        button.type = "button";
+        button.textContent = label;
+        button.disabled = busy;
+        button.dataset.fileAction = action;
+        button.dataset.fileName = entry.name;
+        actions.appendChild(button);
+      }
+      row.append(name, size, modified, actions);
       fileListBody.appendChild(row);
     }
+  };
+
+  // What the open name dialog is for, and about which entry. An empty mode
+  // means no question is pending, so a stale confirmation cannot act on a row
+  // the user has since navigated away from.
+  let fileNameMode = "";
+  let fileNameTarget = "";
+
+  const closeFileNameFlow = (force = false) => {
+    if (busy && !force) return;
+    fileNameMode = "";
+    fileNameTarget = "";
+    fileNameDialog.hidden = true;
+    fileNameInput.value = "";
+    fileNameStatus.textContent = "";
+    fileNameStatus.dataset.tone = "";
+  };
+
+  const openFileNameFlow = (mode, name) => {
+    const container = selectedFileContainer();
+    if (busy || currentState !== nativeState.authenticated ||
+        container === null || !container.mounted) {
+      return;
+    }
+    fileNameMode = mode;
+    fileNameTarget = name;
+    fileNameTitle.textContent = mode === "rename" ? "重命名" : "新建文件夹";
+    fileNameInput.value = mode === "rename" ? name : "";
+    fileNameStatus.textContent = "";
+    fileNameStatus.dataset.tone = "";
+    fileNameDialog.hidden = false;
+    fileNameInput.focus();
+    fileNameInput.select();
+  };
+
+  // A file-manager action reports where the file manager is looking, not on
+  // the dashboard: the two views are never open at once and the message
+  // belongs next to the list it is about.
+  const runFileAction = async (action, failure) => {
+    busy = true;
+    setFileStatus("");
+    render(messageForCurrentState());
+    let failed = false;
+    try {
+      await action();
+      await refreshNativeState();
+    } catch (_) {
+      failed = true;
+      try {
+        await refreshNativeState();
+      } catch (_) {
+        currentState = nativeState.unavailable;
+        activeVolumes = true;
+      }
+    }
+    busy = false;
+    render(messageForCurrentState());
+    await refreshFileManager();
+    if (failed) setFileStatus(failure, "error");
+  };
+
+  const deleteFileEntry = async (name) => {
+    const container = selectedFileContainer();
+    if (container === null || !container.mounted) return;
+    // 🔴 Permanent, and asked once. The product decided this on 2026-09-08:
+    // the same standard as the system file manager, with no recycle bin behind
+    // it. The page says so in a standing notice rather than in a dialog,
+    // because a notice is not a second question.
+    await runFileAction(
+      () => bridge.deleteContainerEntry(
+        container.id, filePath.join("/"), name),
+      "无法删除这个条目，它可能正在被使用或已经不在了。");
+  };
+
+  const submitFileName = async () => {
+    const container = selectedFileContainer();
+    const mode = fileNameMode;
+    const target = fileNameTarget;
+    const value = fileNameInput.value;
+    if (busy || mode === "" || container === null || !container.mounted) return;
+    if (value.length === 0 || (mode === "rename" && value === target)) {
+      closeFileNameFlow();
+      return;
+    }
+    closeFileNameFlow();
+    if (mode === "rename") {
+      await runFileAction(
+        () => bridge.renameContainerEntry(
+          container.id, filePath.join("/"), target, value),
+        "无法改名，这个名字可能不合规或已经被占用。");
+      return;
+    }
+    await runFileAction(
+      () => bridge.createContainerDirectory(
+        container.id, filePath.join("/"), value),
+      "无法新建文件夹，这个名字可能不合规或已经存在。");
   };
 
   const refreshFileManager = async () => {
@@ -1013,10 +1132,10 @@
         list.appendChild(containerRow(container));
       }
     }
-    // The picker follows the container list at no cost; the listing itself is
-    // only re-read while the view is open and nothing else is in flight.
+    // The picker follows the container list at no cost. The listing is not
+    // re-read here: exactly one place owns that, so a message set after an
+    // action cannot race a refresh a re-render fired off.
     renderFileContainerOptions();
-    if (activeSection === "files" && !busy) void refreshFileManager();
   };
 
   const twoDigits = (value) => String(value).padStart(2, "0");
@@ -1576,6 +1695,7 @@
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
+      if (activeSection === "files") void refreshFileManager();
       if (outcome === false) setDashboardStatus("已取消。");
     } catch (_) {
       try {
@@ -1586,6 +1706,7 @@
       }
       busy = false;
       render(messageForCurrentState());
+      if (activeSection === "files") void refreshFileManager();
       setDashboardStatus(failure, "error");
     } finally {
       if (externalRefreshPending) {
@@ -1813,13 +1934,41 @@
     filePath = filePath.slice(0, Number(crumb.dataset.fileDepth));
     void refreshFileManager();
   });
-  fileListBody.addEventListener("click", (event) => {
-    const open = event.target instanceof Element
-      ? event.target.closest("[data-file-enter]")
-      : null;
-    if (open === null || busy) return;
-    filePath = [...filePath, open.dataset.fileEnter];
-    void refreshFileManager();
+  fileListBody.addEventListener("click", async (event) => {
+    const element = event.target instanceof Element ? event.target : null;
+    if (element === null || busy ||
+        currentState !== nativeState.authenticated) {
+      return;
+    }
+    const open = element.closest("[data-file-enter]");
+    if (open !== null) {
+      filePath = [...filePath, open.dataset.fileEnter];
+      void refreshFileManager();
+      return;
+    }
+    const act = element.closest("[data-file-action]");
+    if (act === null) return;
+    if (act.dataset.fileAction === "delete") {
+      await deleteFileEntry(act.dataset.fileName);
+      return;
+    }
+    openFileNameFlow("rename", act.dataset.fileName);
+  });
+  fileCreateDirectoryButton.addEventListener(
+    "click", () => openFileNameFlow("create", ""));
+  fileNameCloseButton.addEventListener("click", () => closeFileNameFlow());
+  fileNameCancelButton.addEventListener("click", () => closeFileNameFlow());
+  fileNameDialog.addEventListener("click", (event) => {
+    if (event.target === fileNameDialog) closeFileNameFlow();
+  });
+  fileNameInput.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      await submitFileName();
+    }
+  });
+  fileNameConfirmButton.addEventListener("click", async () => {
+    await submitFileName();
   });
   operationHistoryClear.addEventListener("click", async () => {
     if (!busy && currentState === nativeState.authenticated &&

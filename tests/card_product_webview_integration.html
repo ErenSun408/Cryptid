@@ -76,6 +76,7 @@
       <nav id="file-breadcrumb"></nav>
       <table><tbody id="file-list-body"></tbody></table>
       <output id="file-list-status" data-tone="" hidden></output>
+      <button id="file-create-directory" type="button">新建文件夹</button>
     </section>
     <section id="dashboard-section-history" class="dashboard-section">
       <button id="operation-history-clear" type="button">清空日志</button>
@@ -94,6 +95,14 @@
             >拔出安全卡时立即卸载全部卷</span>
     </section>
   </section>
+  <div id="file-name-dialog" role="dialog" hidden>
+    <h3 id="file-name-title">重命名</h3>
+    <button id="file-name-close" type="button">关闭</button>
+    <input id="file-name-input" type="text">
+    <output id="file-name-status"></output>
+    <button id="file-name-cancel" type="button">取消</button>
+    <button id="file-name-confirm" type="button">确定</button>
+  </div>
   <div id="reset-card-dialog" role="dialog" hidden>
     <button id="reset-card-close" type="button">关闭</button>
     <input id="reset-card-acknowledge" type="checkbox">

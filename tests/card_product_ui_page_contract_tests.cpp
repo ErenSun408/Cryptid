@@ -90,11 +90,13 @@ void test_page_has_route_specific_password_surfaces() {
   require(page.find("id=\"confirmation-field\" class=\"field\" hidden") !=
               std::string::npos,
           "confirmation must start hidden outside initialization");
-  // The two password controls, the two the creation forms add, and the four
-  // name/save-location fields. A remembered container path is exactly what
-  // section 8.4 forbids, so browser assistance is off on those too.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 8 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 8,
+  // The two password controls, the two the creation forms add, the four
+  // name/save-location fields, and the file manager's name field. A remembered
+  // container path is exactly what section 8.4 forbids, so browser assistance
+  // is off on those too; a file name inside a container is the content of an
+  // encrypted volume, which is at least as good a reason.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 9 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 9,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
@@ -875,6 +877,56 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
           "a truncated listing would be presented as a whole one");
 }
 
+void test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "files");
+
+  require(section.find("<th>操作</th>") != std::string::npos &&
+              section.find("id=\"file-create-directory\"") != std::string::npos,
+          "the browse view has nowhere to act on an entry from");
+
+  // 🔴 Deleting is permanent and there is no second question: the product
+  // decided that on 2026-09-08, to the same standard as the system file
+  // manager. A standing notice is not a second question, and it is the only
+  // thing standing between the button and the loss, so the page must carry it.
+  require(section.find("删除是永久删除") != std::string::npos &&
+              section.find("不进回收站") != std::string::npos &&
+              section.find("没有第二次询问") != std::string::npos,
+          "the page does not say that deleting is permanent and unasked");
+  require(page.find("id=\"file-delete-dialog\"") == std::string::npos,
+          "a delete confirmation appeared without the decision being revisited");
+  require(script.find("() => bridge.deleteContainerEntry(") !=
+              std::string::npos &&
+              script.find("container.id, filePath.join(\"/\"), name),") !=
+                  std::string::npos,
+          "the delete does not name the entry in the directory being shown");
+
+  // Renaming and making a directory ask for a name in the same dialog, because
+  // they are the same question with two answers.
+  require(page.find("id=\"file-name-dialog\"") != std::string::npos &&
+              page.find("id=\"file-name-input\"") != std::string::npos &&
+              page.find("id=\"file-name-confirm\"") != std::string::npos &&
+              page.find("id=\"file-name-cancel\"") != std::string::npos &&
+              page.find("id=\"file-name-status\"") != std::string::npos,
+          "the name dialog is incomplete");
+  require(script.find("() => bridge.renameContainerEntry(\n"
+                      "          container.id, filePath.join(\"/\"), target, "
+                      "value),") != std::string::npos,
+          "the rename does not carry both the old and the new name");
+  require(script.find("() => bridge.createContainerDirectory(\n"
+                      "        container.id, filePath.join(\"/\"), value),") !=
+              std::string::npos,
+          "the new directory is not made where the page is looking");
+
+  // A name that is only a name: 255 is the limit every file system a mounted
+  // volume can carry imposes, and the native side refuses the rest.
+  require(page.find("id=\"file-name-input\" class=\"file-name-text\" type=\"text\"") !=
+              std::string::npos &&
+              page.find("maxlength=\"255\"") != std::string::npos,
+          "the name field does not match the native name limit");
+}
+
 }  // namespace
 
 int main() {
@@ -899,6 +951,7 @@ int main() {
     test_visibility_controls_persist_until_sensitive_inputs_are_cleared();
     test_actions_are_serialized_and_external_changes_coalesce();
     test_the_file_manager_browses_a_container_without_naming_a_volume();
+    test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name();
     std::cout << "card_product_ui_page_contract_tests: PASS\n";
     return 0;
   } catch (const std::exception& error) {
