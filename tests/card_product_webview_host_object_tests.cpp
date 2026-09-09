@@ -315,6 +315,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::vector<TransferCall> moved;
   std::vector<TransferCall> copied;
 
+  void export_container_entry(std::uint32_t, std::wstring_view,
+                              std::wstring_view,
+                              std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the host object fixture");
+  }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     if (fail_container_statuses) {

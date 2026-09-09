@@ -149,6 +149,27 @@ std::wstring resolve_volume_entry_path(const wchar_t drive_letter,
   return path;
 }
 
+std::wstring resolve_exported_entry_path(
+    const std::wstring_view absolute_directory, const std::wstring_view name) {
+  // The name is checked before the location is walked, for the same reason as
+  // above: a caller that supplied both a bad location and a bad name is told
+  // about the name it just typed.
+  validate_component(name);
+
+  // An absolute directory is a drive root and then a relative path, so the
+  // three characters of the root are all that needs a rule of its own.
+  if (absolute_directory.size() < 3 || absolute_directory[1] != L':' ||
+      !is_separator(absolute_directory[2])) {
+    reject("export location is not a drive-absolute directory");
+  }
+  std::wstring path = volume_root(absolute_directory[0]);
+  append_relative(path, absolute_directory.substr(3));
+  if (!is_separator(path.back())) path.push_back(L'\\');
+  path.append(name);
+  require_within_limit(path);
+  return path;
+}
+
 std::wstring resolve_volume_child_path(const wchar_t drive_letter,
                                        const std::wstring_view parent_relative,
                                        const std::wstring_view name) {

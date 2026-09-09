@@ -2226,6 +2226,116 @@ void test_a_move_within_one_container_renames_and_between_two_carries_bytes() {
           "the refused move still carried an entry");
 }
 
+// 🔴 The one entry point that deliberately writes past a volume. It is a
+// separate name rather than a flag, so that reaching it is always a decision.
+void test_an_export_leaves_the_volume_and_nothing_records_that_it_did() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  const std::size_t events_before = session.operation_history().size();
+  const int index_writes_before = runtime.index_writes;
+
+  session.export_container_entry(id, L"reports", L"q1.txt", L"D:\\Backups");
+  require(runtime.copied.size() == 1 &&
+              runtime.copied[0].first == L"X:\\reports\\q1.txt" &&
+              runtime.copied[0].second == L"D:\\Backups\\q1.txt",
+          "the export did not carry the entry out to the chosen location");
+
+  // 🔴 Q-04 makes this the product's obligation, not the user's risk: what the
+  // user accepted is that the copy may be found, never that this product would
+  // write down that they made one.
+  require(session.operation_history().size() == events_before,
+          "the export was written into the operation history");
+  require(runtime.index_writes == index_writes_before,
+          "the export touched the container index");
+
+  // The volume root is a location like any other.
+  session.export_container_entry(id, L"", L"notes.txt", L"D:\\");
+  require(runtime.copied.size() == 2 &&
+              runtime.copied[1].first == L"X:\\notes.txt" &&
+              runtime.copied[1].second == L"D:\\notes.txt",
+          "an export from the volume root did not resolve");
+}
+
+void test_an_export_into_a_container_is_refused_as_a_copy() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t first = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  static_cast<void>(session.create_container(L"C:\\vault\\two.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+
+  // W is the second container's letter, and X is the first's own. Neither is
+  // an export: copying into a container is the file manager's job and carries
+  // none of what this call implies.
+  for (const std::wstring_view inside : {L"W:\\", L"W:\\reports", L"X:\\",
+                                         L"x:\\reports"}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          session.export_container_entry(first, L"reports", L"q1.txt", inside);
+        },
+        "an export into a mounted container was accepted");
+  }
+  require(runtime.copied.empty(),
+          "a refused export still reached the storage layer");
+
+  // An unmounted container's letter is nobody's, so the location is ordinary
+  // again the moment it is given back.
+  session.unmount_container(first);
+  const std::uint32_t again =
+      session.mount_container(L"C:\\vault\\one.hc");
+  session.export_container_entry(again, L"", L"q1.txt", L"X:\\Backups");
+  require(runtime.copied.size() == 1 &&
+              runtime.copied[0].second == L"X:\\Backups\\q1.txt",
+          "a letter no container holds any more was still refused");
+}
+
+void test_an_export_location_that_is_not_one_never_reaches_the_disk() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  const std::wstring_view locations[] = {
+      L"",                    // nothing at all
+      L"Backups",             // relative
+      L"D:Backups",           // drive-relative, which is not the D root
+      L"\\\\server\\share",   // UNC
+      L"\\\\?\\D:\\Backups",  // device namespace
+      L"D:\\..\\Windows",     // walks out of what was named
+      L"D:\\Back*ups",        // a wildcard is not a directory name
+      L"D:\\Backups.",        // Windows would silently strip the dot
+  };
+  for (const std::wstring_view location : locations) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          session.export_container_entry(id, L"", L"q1.txt", location);
+        },
+        "an export location that is not one was accepted");
+  }
+
+  // The name is still a name, wherever it is going.
+  require_throws<std::invalid_argument>(
+      [&] {
+        session.export_container_entry(id, L"", L"sub\\q1.txt", L"D:\\Backups");
+      },
+      "an export named a path rather than an entry");
+
+  require(runtime.copied.empty(),
+          "a refused export still reached the storage layer");
+}
+
 }  // namespace
 
 int main() {
@@ -2283,6 +2393,9 @@ int main() {
     test_deleting_and_creating_name_the_entry_the_page_picked();
     test_renaming_stays_inside_one_directory();
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
+    test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
+    test_an_export_into_a_container_is_refused_as_a_copy();
+    test_an_export_location_that_is_not_one_never_reaches_the_disk();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

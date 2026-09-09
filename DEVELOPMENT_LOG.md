@@ -7198,4 +7198,92 @@ need no work, and stale objects can survive ABI changes」。
 📝 **纪律加一条：`注: 包含文件:` 那类刷屏不是噪声，是 ninja 没在吃依赖的证据。** 我看了一整场
 才反应过来。下次在陌生构建树上跑第一次测试前，先跑一次依赖探针。
 
-- 提交：待定（拟 `[build]give the clean test tree a preset so its deps cannot rot`）。
+- 提交：`0a1b0c3 [build]give the clean test tree a preset so its deps cannot rot`。
+
+---
+
+### 小切片 P3.11：会话层的明文导出入口
+
+新增 `export_container_entry(id, 相对目录, 名字, 绝对目标目录)`：把已挂载容器里的一个条目复制到
+本机上的普通位置。**这就是 Q-04 说的明文导出**，写出去的东西不再受本产品任何机制保护。
+
+#### 🔴 为什么是一个新入口，而不是给复制加个开关
+
+文件管理器的 `copy_container_entry` 两端都按容器 id 寻址，**结构上就出不了卷**。导出这一个接受
+绝对目标路径。两者不是一个函数加一个 `allow_outside` 参数的关系 ——
+
+**开关迟早会有人传错，名字不会。** 一个叫 `export_` 的函数在调用点就写着"这行代码会把明文写到卷
+外"，而 `copy(..., true)` 不写着任何东西。
+
+#### 存储层一行没改
+
+`copy_volume_entry`（P3.4）本来就允许目标落在另一个卷上 —— 它检查的是**每一端的父目录都停在
+它自己那个卷上**，不是"两端必须同卷"。所以导出与文件管理器的分野**不在存储层，在会话层的入口
+形状**。这一点在拆片时就看出来了，本片证实了。
+
+#### `resolve_exported_entry_path`：这个单元里唯一允许落在卷外的解析器
+
+放在 `volume_entry_path.h`，与其余几个并排，但注释第一句就写明它是那个例外。
+
+实现上有个便宜的观察：**一条绝对目录就是"盘符根 + 一条相对路径"**。于是三个字符的根单独判，
+其余部分交给已有的 `append_relative` 逐段走同一套规则。因此它免费继承了 `..`、空段、通配符、
+控制字符、结尾空格或点、保留设备名、超长这一整套拒绝，而我没有重写一份校验器 ——
+**校验规则重写一份，迟早和原版对不上。**
+
+顺带一条语义：**导出的文件保留自己的扩展名**。这与 `resolve_container_target_path` 相反，那边会
+追加 `.hc`（建卷时文件类型由产品决定），这边是把一个已有文件搬出去，产品无权改它是什么。
+
+#### 目标落在已挂载容器上 = 拒
+
+那不是导出，是复制，而文件管理器已经在做复制，且不带导出的任何后果。按盘符判：目标盘符若等于
+本会话任一已挂载容器的盘符就拒（大小写不敏感）。容器一旦卸载，那个盘符立刻又是普通位置 ——
+这一条也测了。
+
+#### 🔴 什么都不记
+
+`record_operation` 一次都没调，索引没写，设置没写，目标路径没留。Q-04 第 3 条明说这**不属于
+"用户自担风险"的范畴，是我方实现义务** —— 用户接受的是"备份可能被人找到"，**不是**"软件替他
+记下了他备份过隐藏盘"。测试直接断言导出前后 `operation_history()` 的长度和索引写次数都不变。
+
+#### 确认屏不在这一层
+
+Q-04 要两道确认，那是 P3.15 的事。这个入口执行的是一次**已经被同意过**的导出，它不问。
+把"问"和"做"分在两层，是因为问什么、问几次还没定（见拆片时记的那个 🟡 无条件两道确认的提议）。
+
+#### 四次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| 导出后补一条 `record_operation` | the export was written into the operation history |
+| 去掉"目标在已挂载容器上就拒" | an export into a mounted container was accepted |
+| 解析器改成"非空即通过" | a relative location was accepted（另加 drive-relative 一条） |
+| —— | 三条均确认退出码为 1 |
+
+#### ⚠️ 本片的测试结论一度是假的
+
+第三次变异复验时，`volume_entry_path_tests` 显示 exit=0 却打印了失败 —— 那是我把
+`./exe | tail` 的退出码当成了 exe 的退出码。改成分开跑后确认是 1。**管道会吃掉退出码**，
+与"变异测试不能吞构建输出"是同一类错误的两个面。
+
+另外本片撞上的构建树事故（头文件依赖失效）单独记在上一条，两个 UI 目标那次失败与 P3.11 的代码
+无关，干净重建后 53/53 全过。
+
+#### 改动
+
+- `include/usb_vault/volume/volume_entry_path.h`、`src/volume/volume_entry_path.cpp`：
+  新增 `resolve_exported_entry_path`。
+- `include/usb_vault/application/card_login_mount_session.h`、
+  `src/application/card_login_mount_session_internal.h`、`.cpp`：新增导出入口与
+  `upper_drive_letter`。
+- `tests/volume_entry_path_tests.cpp`：新增一组解析器用例（4 条通过形态 + 13 条拒绝形态）。
+- `tests/card_login_mount_session_tests.cpp`：新增 3 组用例。
+- 四个 UI 假会话补桩（P3.14 接线）。
+- 无 CMake 改动，无运行时接口新增（导出复用既有的 `copy_entry`）。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`card_login_mount_session_tests` 与 `volume_entry_path_tests`
+均通过（`review-clean` 重配后，`/W4 /WX` 编译无警告）。另完成上表变异测试。
+全套留到 P3.17。
+
+- 提交：待定（拟 `[P3.11]give the plaintext export its own name`）。

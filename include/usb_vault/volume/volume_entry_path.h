@@ -61,4 +61,27 @@ inline constexpr std::size_t kVolumePathMaximumLength = 259;
     wchar_t drive_letter, std::wstring_view parent_relative,
     std::wstring_view name);
 
+// Joins a location outside any container with one entry name, for the single
+// operation that deliberately writes past a volume: the plaintext export.
+//
+// 🔴 Every other resolver here exists to keep a path inside a volume. This one
+// is the exception, and it is a separate function with a separate name so that
+// it cannot be reached by mistake: there is no flag on the others that turns
+// them into this, because a flag would eventually be passed wrongly.
+//
+// `absolute_directory` is a location the user picked, so it is checked the way
+// a save location is -- an absolute directory is just a drive root followed by
+// a relative path, and every component of it goes through the same rules as a
+// component inside a volume. `name` is checked as the single component it
+// claims to be, and keeps whatever extension it already had: this copies a
+// file out, it does not create a new kind of file.
+//
+// Rejected with `std::invalid_argument`: anything that is not drive-absolute,
+// which covers relative, drive-relative, UNC and device-namespace paths; every
+// component fault the resolvers above reject; and a result past the length
+// limit. The check is pure, so the caller still has to establish that the
+// directory exists.
+[[nodiscard]] std::wstring resolve_exported_entry_path(
+    std::wstring_view absolute_directory, std::wstring_view name);
+
 }  // namespace usb_vault::volume

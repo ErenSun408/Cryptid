@@ -9,6 +9,7 @@ namespace {
 
 using usb_vault::volume::kVolumeEntryNameMaximumLength;
 using usb_vault::volume::kVolumePathMaximumLength;
+using usb_vault::volume::resolve_exported_entry_path;
 using usb_vault::volume::resolve_volume_child_path;
 using usb_vault::volume::resolve_volume_entry_path;
 
@@ -221,6 +222,70 @@ void test_the_joined_path_stays_inside_the_win32_limit() {
                         "a name pushing the path past the limit was accepted");
 }
 
+// 🔴 The one resolver here that is allowed to land outside a volume. Every
+// other one exists to prevent exactly that, so this one is tested for what it
+// still refuses at least as hard as for what it allows.
+void test_an_export_location_is_a_drive_root_and_a_relative_path() {
+  const auto resolves = [](const std::wstring_view directory,
+                           const std::wstring_view name,
+                           const std::wstring_view expected,
+                           const char* const message) {
+    try {
+      require(resolve_exported_entry_path(directory, name) == expected,
+              message);
+    } catch (const std::exception&) {
+      require(false, message);
+    }
+  };
+  const auto rejects = [](const std::wstring_view directory,
+                          const std::wstring_view name,
+                          const char* const message) {
+    try {
+      static_cast<void>(resolve_exported_entry_path(directory, name));
+    } catch (const std::invalid_argument&) {
+      return;
+    } catch (...) {
+      require(false, message);
+      return;
+    }
+    require(false, message);
+  };
+
+  resolves(L"D:\\", L"notes.txt", L"D:\\notes.txt",
+           "a drive root did not join with a name");
+  resolves(L"D:\\Backups", L"notes.txt", L"D:\\Backups\\notes.txt",
+           "a directory did not join with a name");
+  resolves(L"D:/Backups/2026/", L"notes.txt",
+           L"D:\\Backups\\2026\\notes.txt",
+           "forward separators and a trailing one were not normalized");
+  // The exported file keeps whatever it already was. This copies a file out;
+  // it does not create a new kind of file the way container creation does.
+  resolves(L"D:\\Backups", L"archive.tar.gz", L"D:\\Backups\\archive.tar.gz",
+           "the export renamed or retyped the file on its way out");
+
+  rejects(L"", L"notes.txt", "an empty location was accepted");
+  rejects(L"Backups", L"notes.txt", "a relative location was accepted");
+  rejects(L"D:Backups", L"notes.txt", "a drive-relative location was accepted");
+  rejects(L"\\\\server\\share", L"notes.txt", "a UNC location was accepted");
+  rejects(L"\\\\?\\D:\\Backups", L"notes.txt",
+          "a device-namespace location was accepted");
+  rejects(L"D:\\..\\Windows", L"notes.txt",
+          "a location that walks out of itself was accepted");
+  rejects(L"D:\\Back*ups", L"notes.txt", "a wildcard was accepted in a location");
+  rejects(L"D:\\Backups ", L"notes.txt",
+          "a location ending in a space was accepted");
+  rejects(L"1:\\Backups", L"notes.txt", "a drive letter that is not one was accepted");
+  rejects(L"D:\\Backups", L"sub\\notes.txt",
+          "an export name that is a path was accepted");
+  rejects(L"D:\\Backups", L"", "an empty export name was accepted");
+  rejects(L"D:\\Backups", L"CON", "a reserved device name was accepted");
+  rejects(L"D:\\Backups", L"a:b", "an alternate data stream was accepted");
+
+  // The Win32 limit applies to what comes out, wherever it is going.
+  rejects(L"D:\\" + std::wstring(kVolumePathMaximumLength, L'd'), L"notes.txt",
+          "an export past the Win32 length limit was accepted");
+}
+
 }  // namespace
 
 int main() {
@@ -231,6 +296,7 @@ int main() {
     test_a_child_name_must_be_exactly_one_component();
     test_only_a_drive_letter_names_a_volume();
     test_the_joined_path_stays_inside_the_win32_limit();
+    test_an_export_location_is_a_drive_root_and_a_relative_path();
   } catch (const std::exception& error) {
     std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';
     return 1;

@@ -396,6 +396,14 @@ void CardLoginMountSession::copy_container_entry(
                                    destination_relative_directory);
 }
 
+void CardLoginMountSession::export_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name,
+    const std::wstring_view absolute_destination_directory) {
+  impl_->core.export_container_entry(id, relative_directory, name,
+                                     absolute_destination_directory);
+}
+
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
   return impl_->core.container_statuses();
 }
@@ -474,6 +482,15 @@ namespace {
                                         std::current_exception());
   }
   std::rethrow_exception(operation_failure);
+}
+
+// Drive letters are compared with this and nothing here wants a locale
+// involved in that. The volume layer has its own copy behind a private header;
+// duplicating four lines is cheaper than reaching across that boundary.
+[[nodiscard]] wchar_t upper_drive_letter(const wchar_t letter) noexcept {
+  return (letter >= L'a' && letter <= L'z')
+             ? static_cast<wchar_t>(letter - L'a' + L'A')
+             : letter;
 }
 
 [[nodiscard]] SessionContainer* find_by_id(
@@ -1296,6 +1313,40 @@ void CardLoginMountSessionCore::copy_container_entry(
                                         source_relative_directory, name),
       volume::resolve_volume_child_path(destination_drive,
                                         destination_relative_directory, name));
+}
+
+void CardLoginMountSessionCore::export_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name,
+    const std::wstring_view absolute_destination_directory) {
+  const wchar_t drive_letter = mounted_drive_letter(id);
+  const std::wstring destination = volume::resolve_exported_entry_path(
+      absolute_destination_directory, name);
+
+  // 🔴 A location on a drive this session has a container mounted on is not an
+  // export, it is a copy, and the file manager already does copies without any
+  // of what this call implies. Refusing it here also keeps the one entry point
+  // that may leave a volume from being the convenient way to do everything.
+  for (const SessionContainer& container : state_.containers) {
+    if (container.mounted &&
+        upper_drive_letter(container.drive_letter) ==
+            upper_drive_letter(destination[0])) {
+      throw std::invalid_argument(
+          "that location is inside a container, which is a copy and not an "
+          "export");
+    }
+  }
+
+  // 🔴 A location on a drive this session has a container mounted on is not an
+  // export, it is a copy, and the file manager already does copies without any
+  // of what this call implies. Refusing it here also keeps the one entry point
+  // that may leave a volume from being the convenient way to do everything.
+  // 🔴 No `record_operation` here, and none below it. The operation history is
+  // a closed schema with no export in it, and Q-04 makes leaving it that way
+  // this product's obligation.
+  runtime_.copy_entry(
+      volume::resolve_volume_child_path(drive_letter, relative_directory, name),
+      destination);
 }
 
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
