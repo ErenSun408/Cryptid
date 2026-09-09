@@ -52,8 +52,8 @@
       <button class="dashboard-nav" type="button"
               data-section="containers">容器<span
               id="nav-container-count">0</span></button>
-      <div role="link" aria-disabled="true" title="正在开发中"
-           data-tooltip="正在开发中">文件管理</div>
+      <button class="dashboard-nav" type="button"
+              data-section="files">文件管理</button>
       <div role="link" aria-disabled="true" title="正在开发中"
            data-tooltip="正在开发中">备份中心</div>
       <button class="dashboard-nav" type="button"
@@ -70,6 +70,12 @@
       <button type="button" data-create-container>新建容器</button>
       <button type="button" data-mount-existing>导入容器</button>
       <div class="container-list" data-container-list></div>
+    </section>
+    <section id="dashboard-section-files" class="dashboard-section">
+      <select id="file-container-select"></select>
+      <nav id="file-breadcrumb"></nav>
+      <table><tbody id="file-list-body"></tbody></table>
+      <output id="file-list-status" data-tone="" hidden></output>
     </section>
     <section id="dashboard-section-history" class="dashboard-section">
       <button id="operation-history-clear" type="button">清空日志</button>

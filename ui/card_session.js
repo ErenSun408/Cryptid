@@ -57,6 +57,10 @@
     document.getElementById("operation-history-body");
   const operationHistoryClear =
     document.getElementById("operation-history-clear");
+  const fileContainerSelect = document.getElementById("file-container-select");
+  const fileBreadcrumb = document.getElementById("file-breadcrumb");
+  const fileListBody = document.getElementById("file-list-body");
+  const fileListStatus = document.getElementById("file-list-status");
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
@@ -608,7 +612,228 @@
     creationBackIcon.hidden = true;
   };
 
+  // ---- File manager ------------------------------------------------------
+  // 🔴 The page never names a drive letter and never builds an absolute path.
+  // It says which container and which directory inside it; the native side
+  // turns that into a path that provably cannot leave the volume. A letter
+  // here would let the page name any volume on the machine.
+  //
+  // The container being browsed, and where inside it. Zero means none is
+  // chosen, which is what an empty container list leaves behind.
+  let activeSection = "dashboard";
+  let fileContainerId = 0;
+  let filePath = [];
+  let fileEntries = [];
+
+  // One call brings a whole directory back: records separated by U+001E,
+  // fields by U+001F. Neither can occur in a Windows file name, so there is
+  // nothing to unescape. The first record is a header carrying the truncation
+  // flag, so an empty directory arrives as "0" and never as "".
+  const listingRecordSeparator = "\u001e";
+  const listingFieldSeparator = "\u001f";
+
+  const parseDirectoryListing = (packed) => {
+    if (typeof packed !== "string" || packed.length === 0) {
+      throw new Error("invalid directory listing");
+    }
+    const records = packed.split(listingRecordSeparator);
+    if (records[0] !== "0" && records[0] !== "1") {
+      throw new Error("invalid directory listing header");
+    }
+    const entries = [];
+    for (let index = 1; index < records.length; index += 1) {
+      const fields = records[index].split(listingFieldSeparator);
+      if (fields.length !== 5) throw new Error("invalid directory entry");
+      const [name, isDirectory, isLink, sizeBytes, modifiedUnixMs] = fields;
+      const size = Number(sizeBytes);
+      const modified = Number(modifiedUnixMs);
+      if (name.length === 0 ||
+          (isDirectory !== "0" && isDirectory !== "1") ||
+          (isLink !== "0" && isLink !== "1") ||
+          !Number.isSafeInteger(size) || size < 0 ||
+          !Number.isSafeInteger(modified)) {
+        throw new Error("invalid directory entry");
+      }
+      entries.push({
+        name,
+        isDirectory: isDirectory === "1",
+        isLink: isLink === "1",
+        sizeBytes: size,
+        modifiedUnixMs: modified,
+      });
+    }
+    return { truncated: records[0] === "1", entries };
+  };
+
+  const selectedFileContainer = () => {
+    for (const container of containers) {
+      if (container.id === fileContainerId) return container;
+    }
+    return null;
+  };
+
+  const formatEntrySize = (entry) => {
+    if (entry.isDirectory) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = entry.sizeBytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return unit === 0
+      ? `${entry.sizeBytes} B`
+      : `${value.toFixed(1)} ${units[unit]}`;
+  };
+
+  const setFileStatus = (message, tone = "") => {
+    fileListStatus.textContent = message;
+    fileListStatus.dataset.tone = tone;
+    fileListStatus.hidden = message === "";
+  };
+
+  const renderFileContainerOptions = () => {
+    // Browsing stays where it was as long as that container is still listed.
+    let known = false;
+    for (const container of containers) {
+      if (container.id === fileContainerId) known = true;
+    }
+    if (!known) {
+      fileContainerId = containers.length === 0 ? 0 : containers[0].id;
+      filePath = [];
+    }
+    while (fileContainerSelect.firstChild !== null) {
+      fileContainerSelect.removeChild(fileContainerSelect.firstChild);
+    }
+    for (const container of containers) {
+      const option = document.createElement("option");
+      option.value = String(container.id);
+      option.textContent = container.mounted
+        ? `${container.name} · ${container.drive}`
+        : `${container.name}（未挂载）`;
+      option.selected = container.id === fileContainerId;
+      fileContainerSelect.appendChild(option);
+    }
+    fileContainerSelect.disabled = busy || containers.length === 0;
+  };
+
+  const renderFileBreadcrumb = () => {
+    while (fileBreadcrumb.firstChild !== null) {
+      fileBreadcrumb.removeChild(fileBreadcrumb.firstChild);
+    }
+    const container = selectedFileContainer();
+    const crumbs = [container === null ? "容器" : container.name, ...filePath];
+    for (let index = 0; index < crumbs.length; index += 1) {
+      if (index !== 0) {
+        const separator = document.createElement("span");
+        separator.className = "file-crumb-separator";
+        separator.textContent = "/";
+        fileBreadcrumb.appendChild(separator);
+      }
+      const crumb = document.createElement("button");
+      crumb.className = "file-crumb";
+      crumb.type = "button";
+      crumb.textContent = crumbs[index];
+      if (index === crumbs.length - 1) {
+        crumb.setAttribute("aria-current", "page");
+        crumb.disabled = true;
+      } else {
+        crumb.dataset.fileDepth = String(index);
+        crumb.disabled = busy;
+      }
+      fileBreadcrumb.appendChild(crumb);
+    }
+  };
+
+  const appendFileNotice = (text) => {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 3;
+    cell.className = "file-empty";
+    cell.textContent = text;
+    row.appendChild(cell);
+    fileListBody.appendChild(row);
+  };
+
+  const renderFileList = () => {
+    while (fileListBody.firstChild !== null) {
+      fileListBody.removeChild(fileListBody.firstChild);
+    }
+    const container = selectedFileContainer();
+    if (container === null) {
+      appendFileNotice("还没有容器。先新建或导入一个容器，再回到这里。");
+      return;
+    }
+    if (!container.mounted) {
+      appendFileNotice("这个容器没有挂载。到「容器」里挂载它，才能看到里面的文件。");
+      return;
+    }
+    if (fileEntries.length === 0) {
+      appendFileNotice("这个文件夹是空的。");
+      return;
+    }
+    for (const entry of fileEntries) {
+      const row = document.createElement("tr");
+      const name = document.createElement("td");
+      if (entry.isDirectory) {
+        const open = document.createElement("button");
+        open.className = "file-name-button";
+        open.type = "button";
+        open.textContent = entry.name;
+        open.dataset.fileEnter = entry.name;
+        open.disabled = busy;
+        name.appendChild(open);
+      } else {
+        name.textContent = entry.name;
+      }
+      if (entry.isLink) {
+        // Shown rather than hidden: a manager that silently omits what the
+        // system file manager shows is worse than one that marks it.
+        const mark = document.createElement("span");
+        mark.className = "file-entry-link";
+        mark.textContent = "链接";
+        name.appendChild(mark);
+      }
+      const size = document.createElement("td");
+      size.textContent = formatEntrySize(entry);
+      const modified = document.createElement("td");
+      modified.textContent = formatOperationTime(entry.modifiedUnixMs);
+      row.append(name, size, modified);
+      fileListBody.appendChild(row);
+    }
+  };
+
+  const refreshFileManager = async () => {
+    renderFileContainerOptions();
+    renderFileBreadcrumb();
+    const container = selectedFileContainer();
+    if (bridge === null || container === null || !container.mounted) {
+      fileEntries = [];
+      setFileStatus("");
+      renderFileList();
+      return;
+    }
+    try {
+      const packed = await bridge.listContainerDirectory(
+        container.id, filePath.join("/"));
+      const listing = parseDirectoryListing(packed);
+      fileEntries = listing.entries;
+      setFileStatus(listing.truncated
+        ? "这个文件夹里的条目太多，只显示了其中一部分。"
+        : "");
+    } catch (_) {
+      // The root is the one place that always has somewhere to land, so a
+      // folder that cannot be read does not strand the page inside it.
+      fileEntries = [];
+      filePath = [];
+      renderFileBreadcrumb();
+      setFileStatus("无法读取这个文件夹，它可能已经不在这个容器里了。", "error");
+    }
+    renderFileList();
+  };
+
   const showDashboardSection = (sectionName) => {
+    activeSection = sectionName;
     for (const item of dashboardNavigation) {
       const selected = item.dataset.section === sectionName;
       item.classList.toggle("active", selected);
@@ -622,6 +847,9 @@
       section.classList.toggle(
         "active", section.id === `dashboard-section-${sectionName}`);
     }
+    // Opening the view is what asks for a listing. Nothing polls: the page
+    // reads a directory when the user arrives at it or moves inside it.
+    if (sectionName === "files") void refreshFileManager();
   };
 
   const openCreationFlow = () => {
@@ -785,6 +1013,10 @@
         list.appendChild(containerRow(container));
       }
     }
+    // The picker follows the container list at no cost; the listing itself is
+    // only re-read while the view is open and nothing else is in flight.
+    renderFileContainerOptions();
+    if (activeSection === "files" && !busy) void refreshFileManager();
   };
 
   const twoDigits = (value) => String(value).padStart(2, "0");
@@ -1566,6 +1798,29 @@
       }
     });
   }
+  fileContainerSelect.addEventListener("change", () => {
+    const chosen = Number(fileContainerSelect.value);
+    if (!Number.isInteger(chosen) || chosen <= 0) return;
+    fileContainerId = chosen;
+    filePath = [];
+    void refreshFileManager();
+  });
+  fileBreadcrumb.addEventListener("click", (event) => {
+    const crumb = event.target instanceof Element
+      ? event.target.closest("[data-file-depth]")
+      : null;
+    if (crumb === null || busy) return;
+    filePath = filePath.slice(0, Number(crumb.dataset.fileDepth));
+    void refreshFileManager();
+  });
+  fileListBody.addEventListener("click", (event) => {
+    const open = event.target instanceof Element
+      ? event.target.closest("[data-file-enter]")
+      : null;
+    if (open === null || busy) return;
+    filePath = [...filePath, open.dataset.fileEnter];
+    void refreshFileManager();
+  });
   operationHistoryClear.addEventListener("click", async () => {
     if (!busy && currentState === nativeState.authenticated &&
         operationEvents.length !== 0) {

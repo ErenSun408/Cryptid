@@ -6772,4 +6772,96 @@ P3 开篇已定：不沿用 `getContainerName(index)` 那套逐项 accessor。50
 （`EXCLUDE_FROM_ALL` 的手动夹具）只构建。另完成上表四次变异测试，每次都不吞构建输出且确认退出码
 为 1。全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.6]bring a whole directory across the bridge in one call`）。
+- 提交：`9a109c1 [P3.6]bring a whole directory across the bridge in one call`。
+
+---
+
+### 小切片 P3.7：启用侧栏入口，做出浏览主视图
+
+侧栏「文件管理」从 `nav-item-disabled` 占位改成真入口（`data-section="files"`），新增
+`dashboard-section-files`：容器选择器、面包屑、列表、以及三个态 —— 没有容器／容器未挂载／
+文件夹为空。「备份中心」仍是占位，那是 P3.11 起的事。
+
+#### 🔴 页面自始至终不知道盘符
+
+页面说的是「哪个容器（id）＋容器内哪个目录（相对路径）」，绝对路径由原生侧拼。面包屑、进目录、
+容器切换，没有一处产生或读取盘符。相对路径用 `/` 连接 —— P3.1 的解析器会把正斜杠规范化，这样
+JS 里就不必到处写转义反斜杠，少一类写错的机会。
+
+#### 一次调用取回整个目录，页面这边一行 `split`
+
+`listingRecordSeparator = "{B}u001e"`、`listingFieldSeparator = "{B}u001f"`，与 P3.6 的桥一一对应。
+`parseDirectoryListing` 校验：头记录只能是 `"0"`／`"1"`，每条记录恰好 5 个字段，名字非空，
+两个布尔位只能是 `0`／`1`，大小与时间必须是安全整数。**不合规就抛**，不猜、不容错 ——
+一份读错的目录列表会让页面显示出与卷里实际内容不同的东西。
+
+#### 三个态必须分得开
+
+「还没有容器」「容器未挂载」「文件夹是空的」在屏幕上都是一行灰字，但意思完全不同，尤其后两者：
+**一个空列表若被当成空目录，用户会以为容器里的东西没了。** 三句话分别写死在三个分支里，契约测试
+逐条钉住。截断也单独说（「条目太多，只显示了其中一部分」），不假装是全部。
+
+#### 出错时退回根目录
+
+读不到某个目录（被移走、已不在这个容器里）时，页面把路径清空退回根 —— 根是唯一一个永远有地方
+可落的位置，否则页面会卡在一个进不去也退不出的路径上。
+
+#### 链接照常显示并打标
+
+沿用 P3.2／P3.6 的调子：列出来、标上「链接」。点进去若真的越界，原生侧会拒，页面把错误显示出来。
+藏起来比显示更糟。
+
+#### 边界文案写在页面上
+
+「这里只管容器内部。把文件移出加密卷就是明文导出，要走『备份中心』，不在这里做。」—— 这是 P3
+开篇定的边界，写在页面上，也被契约测试钉住。P3.9 的拖放会真正执行这条拒绝。
+
+#### 📝 集成夹具页那一课，这次没有再踩
+
+契约测试里那条「脚本 `getElementById` 的每一个 id，集成夹具页都必须有」（P2.26 的教训）本轮直接
+生效：新增四个 id 的同时补进 `tests/card_product_webview_integration.html`。做了变异实测 ——
+夹具页去掉 `file-list-body`，测试立刻报出。
+
+#### 🔵 契约测试测不到什么，以及这次怎么补的
+
+页面契约测试是**文本断言**：它能钉住「这段代码在」，钉不住「这段代码跑起来是对的」。所以本片额外
+做了一件事：用 node 把 `parseDirectoryListing` 从已发布的 `card_session.js` 里原样切出来求值，
+喂给它**P3.6 宿主对象测试里钉死的那个打包串**，验证解析结果逐字段正确，并确认它拒绝空串、非法
+头、字段数不对、布尔位非法、空名字五种畸形输入。
+
+**这是一次真正的跨层验证**：C++ 侧写出的格式与 JS 侧读入的格式由同一个字符串串起来，两边各自
+的测试都钉住了它。（这只是本轮的一次性验证脚本，不是提交进仓库的测试 —— 项目里还没有 JS 测试
+运行器，建立它不在本片范围内。真正的页面行为验证仍在 P3.10 实机。）
+
+另外用 `node --check` 确认了 72KB 的 `card_session.js` 改动后语法无误。
+
+#### 三次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| 侧栏入口改回 `nav-item-disabled` | unfinished navigation is not visibly present and unavailable |
+| 集成夹具页丢掉 `file-list-body` | the integration fixture page is missing an element the product script looks up |
+| 页面读一个桥不写的字段分隔符 | the packed listing is not read the way the bridge writes it |
+
+#### 改动
+
+- `ui/card_session.html`：侧栏入口、`dashboard-section-files`、约 25 行 CSS。
+- `ui/card_session.js`：四个元素查找、`parseDirectoryListing`、容器选择／面包屑／列表三个渲染、
+  `refreshFileManager`、三个监听器；`showDashboardSection` 记录当前分区并在进入 files 时取一次
+  列表；`renderContainers` 顺带同步选择器。
+- `tests/card_product_webview_integration.html`：真入口 + 新分区 + 四个 id。
+- `tests/card_product_ui_page_contract_tests.cpp`：侧栏占位数 2 改 1，新增一组文件管理契约。
+- 无 CMake 改动。
+
+#### ⚠️ 已知边界
+
+- **列表不轮询**。用户进入该分区、切换容器、进出目录时各取一次；容器在别处被卸载后，列表会停留在
+  旧内容直到下一次触发。页面没有定时器，本片也不打算引入一个。
+- 目录只能进不能「上一级」按钮 —— 面包屑本身就是上一级，点祖先即可回退。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`card_product_ui_page_contract_tests` 通过（`review-clean`，
+`/W4 /WX` 编译无警告）。另完成上表三次变异测试、node 语法检查与上述跨层解析验证。全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.7]open the file manager on a container the page cannot name a drive for`）。

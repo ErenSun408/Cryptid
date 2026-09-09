@@ -148,11 +148,15 @@ void test_authenticated_dashboard_is_real_state_only() {
           page.find("id=\"dashboard-section-hidden\"") == std::string::npos &&
           page.find("id=\"dashboard-section-encrypted\"") == std::string::npos,
       "containers are still split by volume type");
+  // 文件管理 became a real entry in P3.7; 备份中心 is still ahead of the work
+  // and stays visibly present and unavailable, which 8.7 requires either way.
   require(
-      count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 2 &&
-          count_occurrences(page, "data-tooltip=\"正在开发中\"") == 2 &&
+      count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 1 &&
+          count_occurrences(page, "data-tooltip=\"正在开发中\"") == 1 &&
           page.find("文件管理") != std::string::npos &&
           page.find("备份中心") != std::string::npos &&
+          page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
+                    " data-section=\"files\">") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
                     " data-section=\"history\">") != std::string::npos &&
           page.find("操作日志") != std::string::npos,
@@ -819,6 +823,58 @@ void test_actions_are_serialized_and_external_changes_coalesce() {
           "a residual mount does not override a raced action route");
 }
 
+void test_the_file_manager_browses_a_container_without_naming_a_volume() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "files");
+
+  require(section.find("id=\"file-container-select\"") != std::string::npos &&
+              section.find("id=\"file-breadcrumb\"") != std::string::npos &&
+              section.find("id=\"file-list-body\"") != std::string::npos &&
+              section.find("id=\"file-list-status\"") != std::string::npos,
+          "the browse view is missing the picker, the breadcrumb, the list, "
+          "or its status line");
+
+  // 🔴 The boundary this whole stage is drawn around: taking a file out of the
+  // volume is a plaintext export, so the page says where that lives instead of
+  // doing it here. Q-04's confirmation surface is then built once, in one
+  // place, rather than twice.
+  require(section.find("把文件移出加密卷就是明文导出") != std::string::npos &&
+              section.find("备份中心") != std::string::npos,
+          "the browse view does not send a way out to the backup centre");
+
+  // The page names a container and a directory inside it. A drive letter would
+  // let it name any volume on the machine, so it is never given one.
+  require(script.find("await bridge.listContainerDirectory(\n"
+                      "        container.id, filePath.join(\"/\"));") !=
+              std::string::npos,
+          "the listing is not requested by container identifier");
+
+  // One call brings a whole directory back, separated by the two control
+  // characters no name off a mounted volume can hold.
+  require(script.find("const listingRecordSeparator = \"\\u001e\";") !=
+              std::string::npos &&
+              script.find("const listingFieldSeparator = \"\\u001f\";") !=
+                  std::string::npos &&
+              count_occurrences(script, "bridge.listContainerDirectory") == 1,
+          "the packed listing is not read the way the bridge writes it");
+  require(script.find("if (records[0] !== \"0\" && records[0] !== \"1\") {") !=
+              std::string::npos &&
+              script.find("if (fields.length !== 5) throw new Error(") !=
+                  std::string::npos,
+          "the page draws a listing it has not fully checked");
+
+  // Every state the browse view has to be able to say, including the two that
+  // look alike on screen and mean opposite things.
+  require(script.find("这个容器没有挂载。") != std::string::npos &&
+              script.find("这个文件夹是空的。") != std::string::npos &&
+              script.find("还没有容器。先新建或导入一个容器") !=
+                  std::string::npos,
+          "the browse view cannot say unmounted, empty, or no containers yet");
+  require(script.find("这个文件夹里的条目太多") != std::string::npos,
+          "a truncated listing would be presented as a whole one");
+}
+
 }  // namespace
 
 int main() {
@@ -842,6 +898,7 @@ int main() {
     test_initialization_feedback_is_stable_and_recoverable();
     test_visibility_controls_persist_until_sensitive_inputs_are_cleared();
     test_actions_are_serialized_and_external_changes_coalesce();
+    test_the_file_manager_browses_a_container_without_naming_a_volume();
     std::cout << "card_product_ui_page_contract_tests: PASS\n";
     return 0;
   } catch (const std::exception& error) {
