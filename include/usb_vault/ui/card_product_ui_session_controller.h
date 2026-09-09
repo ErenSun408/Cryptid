@@ -195,6 +195,26 @@ class CardProductUiSessionController final {
       std::wstring_view name, std::uint32_t destination_id,
       std::wstring_view destination_relative_directory);
 
+  // 🔴 Copies one entry out of a mounted container to an ordinary location:
+  // the plaintext export. What it writes is no longer protected by anything
+  // this product does, and if what was exported came out of a hidden volume,
+  // the copy's existence is itself evidence that the hidden volume exists.
+  //
+  // The page picks the location with the same native chooser the creation form
+  // uses, so nothing here is trusted for having been picked: the session
+  // checks the location again, and refuses one inside a mounted container.
+  void export_container_entry(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view name,
+      std::wstring_view absolute_destination_directory);
+
+  // Copies one adopted container's own file out, byte for byte: the migration
+  // export, for a user moving to another machine. The container must not be
+  // mounted, because a copy of a volume the driver is writing to is not a
+  // usable one.
+  void export_container_file(
+      std::uint32_t id, std::wstring_view absolute_destination_directory);
+
   // The settings switches, both of them the same shape. Reading one needs no
   // session, so the page can show them in their real positions before anyone
   // logs in; changing one does, because the change is a session action like

@@ -94,6 +94,8 @@ constexpr DISPID kRenameContainerEntryId = 38;
 constexpr DISPID kCreateContainerDirectoryId = 39;
 constexpr DISPID kMoveContainerEntryId = 40;
 constexpr DISPID kCopyContainerEntryId = 41;
+constexpr DISPID kExportContainerEntryId = 42;
+constexpr DISPID kExportContainerFileId = 43;
 
 constexpr wchar_t kListContainerDirectoryName[] = L"listContainerDirectory";
 constexpr wchar_t kDeleteContainerEntryName[] = L"deleteContainerEntry";
@@ -101,6 +103,8 @@ constexpr wchar_t kRenameContainerEntryName[] = L"renameContainerEntry";
 constexpr wchar_t kCreateContainerDirectoryName[] = L"createContainerDirectory";
 constexpr wchar_t kMoveContainerEntryName[] = L"moveContainerEntry";
 constexpr wchar_t kCopyContainerEntryName[] = L"copyContainerEntry";
+constexpr wchar_t kExportContainerEntryName[] = L"exportContainerEntry";
+constexpr wchar_t kExportContainerFileName[] = L"exportContainerFile";
 
 constexpr wchar_t kChooseContainerDirectoryName[] =
     L"chooseContainerDirectory";
@@ -404,6 +408,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kCopyContainerEntryId;
       return S_OK;
     }
+    if (matches(names[0], kExportContainerEntryName)) {
+      ids[0] = kExportContainerEntryId;
+      return S_OK;
+    }
+    if (matches(names[0], kExportContainerFileName)) {
+      ids[0] = kExportContainerFileId;
+      return S_OK;
+    }
     if (matches(names[0], kGetContainerCountName)) {
       ids[0] = kGetContainerCountId;
       return S_OK;
@@ -526,6 +538,12 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCopyContainerEntryId:
         return invoke_transfer_container_entry(member, parameters, result,
                                                argument_error);
+      case kExportContainerEntryId:
+        return invoke_export_container_entry(parameters, result,
+                                             argument_error);
+      case kExportContainerFileId:
+        return invoke_export_container_file(parameters, result,
+                                            argument_error);
       case kGetContainerCountId:
         return invoke_container_count(parameters, result);
       case kGetContainerIdId:
@@ -1037,6 +1055,69 @@ class CardProductWebViewHostObject final : public IDispatch {
                                          name, destination_id,
                                          destination_relative_directory);
       }
+      return complete_selection(true, result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // Four arguments: the container, the directory the page is looking at, the
+  // entry it picked, and the location the export goes to. The last one is a
+  // path on this machine, so it is wiped with the rest.
+  HRESULT invoke_export_container_entry(
+      DISPPARAMS* const parameters, VARIANT* const result,
+      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 4 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t id = 0;
+    std::wstring_view relative_directory;
+    std::wstring_view name;
+    std::wstring_view destination_directory;
+    if (!exact_uint32(parameters->rgvarg[3], id) ||
+        !exact_wstring(parameters->rgvarg[2], relative_directory) ||
+        !exact_wstring(parameters->rgvarg[1], name) ||
+        !exact_wstring(parameters->rgvarg[0], destination_directory)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.export_container_entry(id, relative_directory, name,
+                                         destination_directory);
+      return complete_selection(true, result);
+    } catch (const std::invalid_argument&) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      return E_FAIL;
+    }
+  }
+
+  // Two arguments: the container, and where its file goes. The container is
+  // named by identifier here as everywhere else, so the page never learns
+  // where the container itself lives.
+  HRESULT invoke_export_container_file(
+      DISPPARAMS* const parameters, VARIANT* const result,
+      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 2 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t id = 0;
+    std::wstring_view destination_directory;
+    if (!exact_uint32(parameters->rgvarg[1], id) ||
+        !exact_wstring(parameters->rgvarg[0], destination_directory)) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      controller_.export_container_file(id, destination_directory);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
       if (argument_error != nullptr) *argument_error = 0;

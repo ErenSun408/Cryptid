@@ -319,15 +319,34 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::vector<TransferCall> moved;
   std::vector<TransferCall> copied;
 
-  void export_container_entry(std::uint32_t, std::wstring_view,
-                              std::wstring_view,
-                              std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  struct ExportCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+    std::wstring name;
+    std::wstring destination;
+  };
+
+  void export_container_entry(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view name,
+      const std::wstring_view absolute_destination_directory) override {
+    exported_entries.push_back(
+        {.id = id,
+         .directory = std::wstring(relative_directory),
+         .name = std::wstring(name),
+         .destination = std::wstring(absolute_destination_directory)});
   }
 
-  void export_container_file(std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the controller fixture");
+  void export_container_file(
+      const std::uint32_t id,
+      const std::wstring_view absolute_destination_directory) override {
+    exported_files.push_back(
+        {.id = id,
+         .destination = std::wstring(absolute_destination_directory)});
   }
+
+  std::vector<ExportCall> exported_entries;
+  std::vector<ExportCall> exported_files;
 
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
@@ -1637,6 +1656,51 @@ void test_file_manager_actions_reach_the_session_unchanged() {
           "the copy did not carry both ends");
 }
 
+void test_exports_are_refused_off_the_authenticated_route() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::login_required;
+
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.export_container_entry(1, L"", L"q1.txt",
+                                                  L"D:\\Out");
+      },
+      "an unauthenticated route exported an entry in plaintext");
+  require_throws<std::system_error>(
+      [&] { fixture.controller.export_container_file(1, L"D:\\Out"); },
+      "an unauthenticated route migrated a container");
+  require(fixture.volume.exported_entries.empty() &&
+              fixture.volume.exported_files.empty(),
+          "a refused export still reached the session");
+}
+
+void test_exports_reach_the_session_unchanged() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+
+  fixture.controller.export_container_entry(3, L"reports", L"q1.txt",
+                                            L"D:\\Out");
+  require(fixture.volume.exported_entries.size() == 1 &&
+              fixture.volume.exported_entries[0].id == 3 &&
+              fixture.volume.exported_entries[0].directory == L"reports" &&
+              fixture.volume.exported_entries[0].name == L"q1.txt" &&
+              fixture.volume.exported_entries[0].destination == L"D:\\Out",
+          "the plaintext export did not carry all four of its parts");
+
+  fixture.controller.export_container_file(4, L"D:\\Migration");
+  require(fixture.volume.exported_files.size() == 1 &&
+              fixture.volume.exported_files[0].id == 4 &&
+              fixture.volume.exported_files[0].destination == L"D:\\Migration",
+          "the migration export did not carry the container and location");
+
+  // The controller decides nothing about either: the location is checked by
+  // the session, which is also the only layer that knows whether it lands
+  // inside a container or whether that container is mounted.
+  require(fixture.volume.exported_entries.size() == 1 &&
+              fixture.volume.exported_files.size() == 1,
+          "the controller turned one export into more than one call");
+}
+
 }  // namespace
 
 int main() {
@@ -1670,6 +1734,8 @@ int main() {
     test_a_listing_entry_the_page_cannot_be_shown_fails_closed();
     test_file_manager_actions_are_refused_off_the_authenticated_route();
     test_file_manager_actions_reach_the_session_unchanged();
+    test_exports_are_refused_off_the_authenticated_route();
+    test_exports_reach_the_session_unchanged();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

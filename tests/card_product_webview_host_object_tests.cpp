@@ -315,15 +315,34 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::vector<TransferCall> moved;
   std::vector<TransferCall> copied;
 
-  void export_container_entry(std::uint32_t, std::wstring_view,
-                              std::wstring_view,
-                              std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  struct ExportCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+    std::wstring name;
+    std::wstring destination;
+  };
+
+  void export_container_entry(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view name,
+      const std::wstring_view absolute_destination_directory) override {
+    exported_entries.push_back(
+        {.id = id,
+         .directory = std::wstring(relative_directory),
+         .name = std::wstring(name),
+         .destination = std::wstring(absolute_destination_directory)});
   }
 
-  void export_container_file(std::uint32_t, std::wstring_view) override {
-    throw std::logic_error("the file manager is not part of the host object fixture");
+  void export_container_file(
+      const std::uint32_t id,
+      const std::wstring_view absolute_destination_directory) override {
+    exported_files.push_back(
+        {.id = id,
+         .destination = std::wstring(absolute_destination_directory)});
   }
+
+  std::vector<ExportCall> exported_entries;
+  std::vector<ExportCall> exported_files;
 
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
@@ -1906,6 +1925,86 @@ void test_the_bridge_carries_each_file_manager_action() {
   clear_arguments(copy.data(), 5);
 }
 
+// The two exports cross the bridge like everything else: the container by
+// identifier, and the location as text the session checks again.
+void test_the_bridge_carries_both_exports() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  VARIANT result{};
+
+  std::array<VARIANTARG, 4> entry{};
+  entry[3] = number_argument(3);
+  entry[2] = text_argument(L"reports");
+  entry[1] = text_argument(L"q1.txt");
+  entry[0] = text_argument(L"D:\\Out");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"exportContainerEntry", entry.data(), 4,
+                       &result, nullptr) == S_OK &&
+              result.vt == VT_BOOL && result.boolVal == VARIANT_TRUE,
+          "the plaintext export did not report that it happened");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.exported_entries.size() == 1 &&
+              fixture.volume.exported_entries[0].id == 3 &&
+              fixture.volume.exported_entries[0].directory == L"reports" &&
+              fixture.volume.exported_entries[0].name == L"q1.txt" &&
+              fixture.volume.exported_entries[0].destination == L"D:\\Out",
+          "the plaintext export crossed the bridge out of order");
+  // The location is a path on this machine and the name is the content of an
+  // encrypted volume, so neither outlives the call.
+  require(::SysStringLen(entry[0].bstrVal) == 6 &&
+              std::wstring(entry[0].bstrVal, 6) == std::wstring(6, L'\0'),
+          "the export location outlived the call");
+  clear_arguments(entry.data(), 4);
+
+  std::array<VARIANTARG, 2> file{};
+  file[1] = number_argument(4);
+  file[0] = text_argument(L"D:\\Migration");
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"exportContainerFile", file.data(), 2,
+                       &result, nullptr) == S_OK,
+          "the migration export did not cross the bridge");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.exported_files.size() == 1 &&
+              fixture.volume.exported_files[0].id == 4 &&
+              fixture.volume.exported_files[0].destination == L"D:\\Migration",
+          "the migration export crossed the bridge out of order");
+  clear_arguments(file.data(), 2);
+}
+
+void test_the_export_bridge_checks_its_shapes() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+
+  std::array<VARIANTARG, 4> values{};
+  values[3] = number_argument(3);
+  values[2] = text_argument(L"reports");
+  values[1] = text_argument(L"q1.txt");
+  values[0] = text_argument(L"D:\\Out");
+  require(invoke_named(*host.Get(), L"exportContainerEntry", values.data(), 3,
+                       nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a plaintext export with three arguments was accepted");
+  require(invoke_named(*host.Get(), L"exportContainerFile", values.data(), 4,
+                       nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a migration export with four arguments was accepted");
+  clear_arguments(values.data(), 4);
+
+  std::array<VARIANTARG, 2> wrong_types{};
+  wrong_types[1] = text_argument(L"4");
+  wrong_types[0] = text_argument(L"D:\\Migration");
+  UINT argument_error = 99;
+  require(invoke_named(*host.Get(), L"exportContainerFile", wrong_types.data(),
+                       2, nullptr, &argument_error) == DISP_E_TYPEMISMATCH &&
+              argument_error == 0,
+          "a container identifier arrived as text and was accepted");
+  clear_arguments(wrong_types.data(), 2);
+
+  require(fixture.volume.exported_entries.empty() &&
+              fixture.volume.exported_files.empty(),
+          "a rejected export still reached the session");
+}
+
 }  // namespace
 
 int main() {
@@ -1929,6 +2028,8 @@ int main() {
     test_a_directory_listing_arrives_as_one_packed_string();
     test_the_file_manager_bridge_checks_its_shapes();
     test_the_bridge_carries_each_file_manager_action();
+    test_the_bridge_carries_both_exports();
+    test_the_export_bridge_checks_its_shapes();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

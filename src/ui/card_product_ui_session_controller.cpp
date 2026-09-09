@@ -384,6 +384,28 @@ void CardProductUiSessionController::create_container_directory(
   volume_session_.create_container_directory(id, relative_directory, name);
 }
 
+void CardProductUiSessionController::export_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name,
+    const std::wstring_view absolute_destination_directory) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "exporting an entry is not available in the current UI state");
+  }
+  volume_session_.export_container_entry(id, relative_directory, name,
+                                         absolute_destination_directory);
+}
+
+void CardProductUiSessionController::export_container_file(
+    const std::uint32_t id,
+    const std::wstring_view absolute_destination_directory) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "migrating a container is not available in the current UI state");
+  }
+  volume_session_.export_container_file(id, absolute_destination_directory);
+}
+
 void CardProductUiSessionController::move_container_entry(
     const std::uint32_t source_id,
     const std::wstring_view source_relative_directory,

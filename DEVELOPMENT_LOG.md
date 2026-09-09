@@ -7428,4 +7428,56 @@ switch 钉的是**只有这四个**。两件事，两个手段。
 按 P3 测试纪律只跑本片最小目标：`card_login_mount_session_tests` 通过。受前两片接口变更波及的
 四个目标一并构建运行，全过。另完成上表三次变异测试。全套留到 P3.17。
 
-- 提交：待定（拟 `[P3.13]ask every export whether it wrote anything down`）。
+- 提交：`9b7b004 [P3.13]ask every export whether it wrote anything down`。
+
+---
+
+### 小切片 P3.14：导出的控制器投影 + WebView 桥
+
+把 P3.11／P3.12 的两个导出入口镜像到控制器，再镜像到宿主对象：
+`exportContainerEntry`（4 参，DISPID 42）与 `exportContainerFile`（2 参，DISPID 43）。
+与 P3.6 一样是机械镜像，合成一片。
+
+#### 控制器什么都不判
+
+两个入口只做一件事：**路由门**（非 `authenticated` 即 `throw_wrong_route`），然后原样递下去。
+位置合不合规、是不是落在已挂载容器里、那个容器是不是挂着 —— **全部由会话判**。理由是会话是
+唯一知道这些的层：容器在哪个盘符上、哪个还挂着，都不跨应用边界。
+
+控制器多判一遍只会带来两份可能对不上的规则。**校验写一处**，与 P3.8 那条取名规则的处置一致。
+
+#### 桥这边照旧擦参数
+
+`exportContainerEntry` 的四个参数里有三个字符串：页面正在看的目录、它挑的条目名、
+以及**导出目标位置**。前两个是加密卷的内容，第三个是本机路径（8.4 管的东西），
+三个都由 `DispatchTextWiper` 在调用返回时清零。已变异实测：去掉那个 wiper，
+测试报出「the export location outlived the call」。
+
+#### 目标目录哪来的
+
+复用既有的 `chooseContainerDirectory` —— 建卷表单那个原生文件夹选择器。页面不必新造一个选择器，
+且和建卷一样，**选出来的东西回来仍要重新检查**，没有"因为是选的所以可信"这回事。
+
+#### 三次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| 桥把导出的目录与条目名读反 | the plaintext export crossed the bridge out of order |
+| 控制器去掉明文导出的路由门 | an unauthenticated route exported an entry in plaintext |
+| 去掉导出参数的擦除 | the export location outlived the call |
+
+#### 改动
+
+- `include/usb_vault/ui/card_product_ui_session_controller.h`、`.cpp`：两个入口。
+- `src/ui/card_product_webview_host_object.cpp`：两个 DISPID 与名字、两个 invoke 处理。
+- `tests/card_product_ui_session_controller_tests.cpp`、
+  `tests/card_product_webview_host_object_tests.cpp`：假会话由抛桩改为记录，各新增 2 组用例。
+- 无 CMake 改动。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：两个目标均通过（`/W4 /WX` 编译无警告）。受接口变更波及的
+`card_product_ui_page_contract_tests`、`ui_close_guard_tests` 与集成夹具一并构建，前两个运行通过。
+另完成上表三次变异测试。全套留到 P3.17。
+
+- 提交：待定（拟 `[P3.14]mirror both exports onto the controller and the bridge`）。
