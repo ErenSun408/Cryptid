@@ -150,19 +150,22 @@ void test_authenticated_dashboard_is_real_state_only() {
           page.find("id=\"dashboard-section-hidden\"") == std::string::npos &&
           page.find("id=\"dashboard-section-encrypted\"") == std::string::npos,
       "containers are still split by volume type");
-  // 文件管理 became a real entry in P3.7; 备份中心 is still ahead of the work
-  // and stays visibly present and unavailable, which 8.7 requires either way.
+  // Both 数据管理 entries are real as of P3.15, so nothing in the sidebar is a
+  // placeholder any more. The disabled styling stays defined for whatever
+  // comes next; what must not come back is a placeholder nobody removed.
   require(
-      count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 1 &&
-          count_occurrences(page, "data-tooltip=\"正在开发中\"") == 1 &&
+      count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 0 &&
+          count_occurrences(page, "data-tooltip=\"正在开发中\"") == 0 &&
           page.find("文件管理") != std::string::npos &&
           page.find("备份中心") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
                     " data-section=\"files\">") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
+                    " data-section=\"backup\">") != std::string::npos &&
+          page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
                     " data-section=\"history\">") != std::string::npos &&
           page.find("操作日志") != std::string::npos,
-      "unfinished navigation is not visibly present and unavailable");
+      "the navigation still carries a placeholder or lost a real entry");
   require(
       script.find("const showDashboard = currentState === "
                   "nativeState.authenticated;") != std::string::npos &&
@@ -978,6 +981,64 @@ void test_a_drag_stays_inside_the_containers_and_says_where_out_lives() {
           "a blocking transfer starts before the page looks busy");
 }
 
+// 🔴 The plaintext export happens in one place, under one notice, and the file
+// manager only ever hands an entry over to it.
+void test_the_backup_centre_owns_the_plaintext_export() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "backup");
+  const std::string files = dashboard_section(page, "files");
+
+  require(section.find("id=\"backup-export-source\"") != std::string::npos &&
+              section.find("id=\"backup-export-location\"") !=
+                  std::string::npos &&
+              section.find("id=\"backup-export-browse\"") !=
+                  std::string::npos &&
+              section.find("id=\"backup-export-confirm\"") !=
+                  std::string::npos &&
+              section.find("id=\"backup-export-status\"") != std::string::npos,
+          "the backup centre cannot pick a file, a location, or export");
+
+  // 🔴 Q-04's wording. The confirmation screens it also asks for are absent by
+  // the product's 2026-09-09 decision, which MILESTONES.md records together
+  // with the fact that it conflicts with a client-signed acceptance item. The
+  // notice is what survives that decision, so the page must carry it: a notice
+  // is not a confirmation and stops nothing, but it is the only place this
+  // wording still appears.
+  require(section.find("导出后的数据不再受本软件保护") != std::string::npos &&
+              section.find("击穿否认性") != std::string::npos &&
+              section.find("隐藏卷存在的物证") != std::string::npos &&
+              section.find("SSD 上覆写不保证有效") != std::string::npos,
+          "the backup centre does not say what an export costs");
+
+  // The file manager hands the entry over and steps aside; it never exports.
+  require(files.find("把文件移出加密卷就是明文导出") != std::string::npos &&
+              files.find("备份中心") != std::string::npos &&
+              count_occurrences(script, "bridge.exportContainerEntry") == 1,
+          "the export is reachable from more than the backup centre");
+  require(script.find("[\"export\", \"导出\", false], [\"rename\", \"重命名\", false],") !=
+              std::string::npos &&
+              script.find("offerEntryForExport(act.dataset.fileName);") !=
+                  std::string::npos,
+          "the file manager cannot hand an entry to the backup centre");
+  require(script.find("await bridge.exportContainerEntry(\n"
+                      "        request.id, request.directory, request.name, "
+                      "location);") != std::string::npos,
+          "the export does not name all four of its parts");
+
+  // 🔴 Nothing about a finished export is kept on the page either, for the
+  // same reason the native side writes nothing down.
+  require(script.find("pendingExport = null;\n    exportLocation = \"\";") !=
+              std::string::npos,
+          "the page kept the exported entry or its location afterwards");
+
+  // A blocking copy again, so the disabled state has to reach the screen.
+  require(count_occurrences(
+              script, "await new Promise((resolve) => { setTimeout(resolve, "
+                      "0); });") == 2,
+          "an export starts before the page looks busy");
+}
+
 }  // namespace
 
 int main() {
@@ -1004,6 +1065,7 @@ int main() {
     test_the_file_manager_browses_a_container_without_naming_a_volume();
     test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name();
     test_a_drag_stays_inside_the_containers_and_says_where_out_lives();
+    test_the_backup_centre_owns_the_plaintext_export();
     std::cout << "card_product_ui_page_contract_tests: PASS\n";
     return 0;
   } catch (const std::exception& error) {

@@ -7480,4 +7480,72 @@ switch 钉的是**只有这四个**。两件事，两个手段。
 `card_product_ui_page_contract_tests`、`ui_close_guard_tests` 与集成夹具一并构建，前两个运行通过。
 另完成上表三次变异测试。全套留到 P3.17。
 
-- 提交：待定（拟 `[P3.14]mirror both exports onto the controller and the bridge`）。
+- 提交：`7ffd22c [P3.14]mirror both exports onto the controller and the bridge`。
+
+---
+
+### 小切片 P3.15：备份中心，以及在那里发生的明文导出
+
+侧栏「备份中心」从占位改成真入口 —— **至此侧栏没有任何占位了**。新增
+`dashboard-section-backup`：一条常驻风险提示，加一个明文导出面板（要导出什么／导出到哪／
+选择位置／导出）。
+
+#### 🔴 文件管理器只负责"交出去"，导出发生在备份中心
+
+行末新增「导出」按钮，它**不导出**：它把这一项交给备份中心，然后切过去。P3 开篇定的边界
+（文件管理器只管容器内部）因此原样成立，页面文案也随之从"不在这里做"改成
+"点行末的『导出』会带你去备份中心，那件事在那里做"。
+
+契约测试钉住了这一点：**整个脚本里 `bridge.exportContainerEntry` 只能出现一次**。已变异实测 ——
+让文件管理器自己调一次导出，测试报出「the export is reachable from more than the backup
+centre」。
+
+#### ⚠️ 没有确认屏，这是产品决定，不是遗漏
+
+Q-04 可验收项 1 是 🔴「**不可跳过的**明文导出风险确认」，项 2 是隐藏盘的二次确认。
+**2026-09-09 用户决定：不弹确认。** 我在决定前把冲突讲清楚了（去掉的是两条可验收项，
+其中项 1 明标不可跳过；而项 3「不得留任何痕迹」意味着不能记日志，所以确认屏本身就是 Q-04 说的
+那个"举证依据"），用户重申继续。决定与冲突已记入 `MILESTONES.md`，本条再记一次。
+
+**留下来的是那条常驻提示**，它把 Q-04 要求明示的话原样写在页面上：
+
+> 导出后的数据不再受本软件保护。……如果导出的内容来自隐藏卷，**这份副本的存在本身就是隐藏卷
+> 存在的物证**，可能击穿否认性。普通删除也删不干净：SSD 上覆写不保证有效。
+
+**提示不是确认** —— 它不拦任何东西。但 Q-04 要求"须明示"的那段话，在没有确认屏之后只剩这一处
+还说得出来，所以契约测试逐句钉住它。
+
+🔵 **注释里写明了这不是审美选择**：将来若客户要求把确认屏加回来，没有任何测试会反对
+（我特意**没有**像 P3.8 的删除那样去钉"页面上不许出现确认屏 id"）—— 那一条是产品自己定的，
+这一条是与客户需求冲突的，两者不该用同样的力度锁死。
+
+#### 页面这边也不留痕
+
+导出成功后，`pendingExport` 与 `exportLocation` 都清空。原生侧什么都不写，页面留着上次导出到
+哪儿也是一样的痕迹 —— 只是它活在内存里。已变异实测：不清空，测试报出「the page kept the
+exported entry or its location afterwards」。
+
+#### 三次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| 提示删掉"物证／击穿否认性"那句 | the backup centre does not say what an export costs |
+| 文件管理器自己调导出 | the export is reachable from more than the backup centre |
+| 导出完不清空来源与位置 | the page kept the exported entry or its location afterwards |
+
+#### 改动
+
+- `ui/card_session.html`：侧栏入口、`dashboard-section-backup`、风险提示、约 20 行 CSS、
+  文件管理器那条文案。
+- `ui/card_session.js`：六个元素查找、行末「导出」按钮、`offerEntryForExport`／
+  `renderBackupCentre`／`runExport`、两个监听器，`showDashboardSection` 进入 backup 时重绘。
+- `tests/card_product_webview_integration.html`：真入口 + 新分区 + 五个 id。
+- `tests/card_product_ui_page_contract_tests.cpp`：侧栏占位数 1 改 0，新增一组备份中心契约。
+- 无 CMake 改动。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`card_product_ui_page_contract_tests` 通过。另完成上表三次变异
+测试、`node --check`，并重跑了跨层解析验证。全套留到 P3.17。
+
+- 提交：待定（拟 `[P3.15]put the plaintext export where it can be said out loud`）。

@@ -54,8 +54,8 @@
               id="nav-container-count">0</span></button>
       <button class="dashboard-nav" type="button"
               data-section="files">文件管理</button>
-      <div role="link" aria-disabled="true" title="正在开发中"
-           data-tooltip="正在开发中">备份中心</div>
+      <button class="dashboard-nav" type="button"
+              data-section="backup">备份中心</button>
       <button class="dashboard-nav" type="button"
               data-section="history">操作日志</button>
       <button class="dashboard-nav" type="button"
@@ -78,6 +78,13 @@
       <output id="file-list-status" data-tone="" hidden></output>
       <button id="file-create-directory" type="button">新建文件夹</button>
       <div id="file-drop-targets"></div>
+    </section>
+    <section id="dashboard-section-backup" class="dashboard-section">
+      <span id="backup-export-source"></span>
+      <span id="backup-export-location"></span>
+      <button id="backup-export-browse" type="button">选择位置</button>
+      <button id="backup-export-confirm" type="button" disabled>导出</button>
+      <output id="backup-export-status"></output>
     </section>
     <section id="dashboard-section-history" class="dashboard-section">
       <button id="operation-history-clear" type="button">清空日志</button>

@@ -71,6 +71,12 @@
   const fileNameCancelButton = document.getElementById("file-name-cancel");
   const fileNameConfirmButton = document.getElementById("file-name-confirm");
   const fileDropTargets = document.getElementById("file-drop-targets");
+  const backupExportSource = document.getElementById("backup-export-source");
+  const backupExportLocation =
+    document.getElementById("backup-export-location");
+  const backupExportBrowse = document.getElementById("backup-export-browse");
+  const backupExportConfirm = document.getElementById("backup-export-confirm");
+  const backupExportStatus = document.getElementById("backup-export-status");
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
@@ -819,7 +825,8 @@
       const actions = document.createElement("td");
       actions.className = "file-actions";
       for (const [action, label, danger] of [
-        ["rename", "重命名", false], ["delete", "删除", true],
+        ["export", "导出", false], ["rename", "重命名", false],
+        ["delete", "删除", true],
       ]) {
         const button = document.createElement("button");
         button.className = danger ? "shell-button danger" : "shell-button";
@@ -1009,6 +1016,99 @@
       "要把文件拿出加密卷，那是明文导出，请到「备份中心」做。", "error");
   };
 
+  // ---- Backup centre -----------------------------------------------------
+  // 🔴 The plaintext export lives here and nowhere else. The file manager only
+  // ever hands an entry over; what leaves the volume leaves from this section,
+  // under the notice above it.
+  //
+  // ⚠️ There is no confirmation dialog. Q-04's acceptance items 1 and 2 ask for
+  // two, the first of them explicitly non-skippable; the product decided on
+  // 2026-09-09 not to have them. That decision, and the fact that it conflicts
+  // with a client-signed requirement, is recorded in MILESTONES.md. The notice
+  // stays because Q-04's wording can still be shown even when the blocking
+  // screen is gone -- a notice is not a confirmation, and it stops nothing.
+  //
+  // The entry the file manager handed over, and where it goes. Both empty
+  // means there is nothing to export, which is what the page opens on.
+  let pendingExport = null;
+  let exportLocation = "";
+
+  const renderBackupCentre = () => {
+    if (pendingExport === null) {
+      backupExportSource.textContent = "还没有挑选任何文件";
+    } else {
+      const inside = pendingExport.directory === ""
+        ? pendingExport.container
+        : `${pendingExport.container} / ${pendingExport.directory}`;
+      backupExportSource.textContent = `${pendingExport.name}（${inside}）`;
+    }
+    backupExportLocation.textContent =
+      exportLocation === "" ? "还没有选择位置" : exportLocation;
+    backupExportBrowse.disabled = busy;
+    backupExportConfirm.disabled =
+      busy || pendingExport === null || exportLocation === "";
+  };
+
+  const setBackupStatus = (message, tone = "") => {
+    backupExportStatus.textContent = message;
+    backupExportStatus.dataset.tone = tone;
+  };
+
+  // The file manager hands an entry over and steps aside. It does not export.
+  const offerEntryForExport = (name) => {
+    const container = selectedFileContainer();
+    if (container === null || !container.mounted) return;
+    pendingExport = {
+      id: container.id,
+      container: container.name,
+      directory: filePath.join("/"),
+      name,
+    };
+    setBackupStatus("");
+    showDashboardSection("backup");
+    renderBackupCentre();
+  };
+
+  const runExport = async () => {
+    if (busy || pendingExport === null || exportLocation === "") return;
+    const request = pendingExport;
+    const location = exportLocation;
+    busy = true;
+    setBackupStatus("");
+    render(messageForCurrentState());
+    // The same reason as a transfer: the copy runs on the thread that draws
+    // this page, so the disabled state has to reach the screen first.
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    let failed = false;
+    try {
+      await bridge.exportContainerEntry(
+        request.id, request.directory, request.name, location);
+    } catch (_) {
+      failed = true;
+    }
+    try {
+      await refreshNativeState();
+    } catch (_) {
+      currentState = nativeState.unavailable;
+      activeVolumes = true;
+    }
+    busy = false;
+    render(messageForCurrentState());
+    if (failed) {
+      setBackupStatus(
+        "导出没有完成。位置可能不可写、空间不足，或那里已经有同名文件了。", "error");
+      renderBackupCentre();
+      return;
+    }
+    // 🔴 Nothing about a finished export is kept: not the location, not the
+    // entry, not that it happened. The page clears itself for the same reason
+    // the native side writes nothing.
+    pendingExport = null;
+    exportLocation = "";
+    setBackupStatus("已导出。这份副本不再受本软件保护。", "success");
+    renderBackupCentre();
+  };
+
   const refreshFileManager = async () => {
     renderFileContainerOptions();
     renderFileBreadcrumb();
@@ -1057,6 +1157,7 @@
     // Opening the view is what asks for a listing. Nothing polls: the page
     // reads a directory when the user arrives at it or moves inside it.
     if (sectionName === "files") void refreshFileManager();
+    if (sectionName === "backup") renderBackupCentre();
   };
 
   const openCreationFlow = () => {
@@ -2040,7 +2141,22 @@
       await deleteFileEntry(act.dataset.fileName);
       return;
     }
+    if (act.dataset.fileAction === "export") {
+      offerEntryForExport(act.dataset.fileName);
+      return;
+    }
     openFileNameFlow("rename", act.dataset.fileName);
+  });
+  backupExportBrowse.addEventListener("click", async () => {
+    if (busy || bridge === null) return;
+    const chosen = await bridge.chooseContainerDirectory();
+    if (typeof chosen !== "string" || chosen.length === 0) return;
+    exportLocation = chosen;
+    setBackupStatus("");
+    renderBackupCentre();
+  });
+  backupExportConfirm.addEventListener("click", async () => {
+    await runExport();
   });
   fileListBody.addEventListener("dragstart", (event) => {
     const row = event.target instanceof Element
