@@ -495,7 +495,7 @@ add({
         <li><em>23</em>密文迁移</li><li><em>24</em>操作日志</li><li><em>25</em>设置</li></ol></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px">
-      <div class="note"><span class="ni">${ic('info')}</span><span><b>与旧原型的三处结构性差异：</b>① 删除"注册／忘记密码"（认证锚点在卡上，且忘记密码不实现）；② 侧栏不再按"加密盘／隐藏盘"分类，改为统一的<b>容器</b>视图；③ 应用内文件管理器降级为 v1.1，v1 只做只读状态展示。</span></div>
+      <div class="note"><span class="ni">${ic('info')}</span><span><b>与旧原型的三处结构性差异：</b>① 删除"注册／忘记密码"（认证锚点在卡上，且忘记密码不实现）；② 侧栏不再按"加密盘／隐藏盘"分类，改为统一的<b>容器</b>视图；③ 应用内文件管理器于 2026-09-08 经用户决定提前回 v1（原议降级 v1.1），侧栏「文件管理」是真入口，只管容器内部。</span></div>
       <div class="note warn"><span class="ni">${ic('alert')}</span><span><b>贯穿全流程的红线：</b>界面在任何密码下都必须逐字一致 —— 入口恒显、文案固定、不作第二密码校验、不留导出痕迹。屏 14／16／22 是三处最容易做错的地方。</span></div>
     </div>
   </div>`,
@@ -729,7 +729,7 @@ add({
           <span class="btn sm ghost">${ic('trash')}从列表移除</span>
         </div>
         <div class="note" style="margin-top:14px"><span class="ni">${ic('info')}</span><span>
-          <b>应用不内置文件管理器。</b>卷挂载后就是一个普通盘符，增删改移请在资源管理器中完成 —— 在应用内重做一套文件管理器会新增"最近打开"一类痕迹面。</span></div>
+          <b>应用内置文件管理器，只管容器内部。</b>卷挂载后同时也是一个普通盘符，资源管理器那条路照旧可走。但把文件移出加密卷是明文导出，那条路在「备份中心」，文件管理器会拒绝并指路。原文所担心的"最近打开"痕迹面已于 2026-09-07 自行推翻：那个列表是我们自己写的，不写即可。</span></div>
       </div></div>`
   }),
   notes: [
