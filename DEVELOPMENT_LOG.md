@@ -6461,4 +6461,130 @@ P3.2 的测试改用它，P3.4 会继续复用。`path_exists` 这个名字是�
 `volume_file_operations_tests` 通过；连带三个 volume 目标共 4/4。另完成上述 junction 变异测试。
 全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.3]unlink a junction instead of walking into it`）。
+- 提交：`6d2105b [P3.3]unlink a junction instead of walking into it`。
+
+---
+
+### 小切片 P3.4：跨容器复制与移动，且不留半个文件
+
+新增 `usb_vault::volume::copy_volume_entry` 与 `move_volume_entry_by_copying`。前者把一个条目
+（文件或整棵目录）复制到另一处，同卷跨卷都行；后者复制完再删源，就是跨容器的「移动」。两者都收
+一个 `TransferCancellation`（`std::function<bool()>`），页面将来要用它做取消。
+
+#### 为什么不是把 `move_volume_entry` 扩成能跨卷
+
+P3.3 的头文件里写过一句「跨卷是复制加删除，失败模式不同，不该藏在一个承诺重命名的名字后面」，
+这一片没有推翻它。跨卷的那个要读写每一个字节、耗时与数据量成正比、可以被取消、可以没空间 ——
+重命名一样都不会。调用方必须知道自己叫的是哪一个，所以是两个名字。
+
+但 `move_volume_entry_by_copying` **不要求两条路径在不同卷上**。要求了名字就得叫
+`..._across_volumes`，而那样它在单卷机器上根本无法被测到 —— 见下面「已知边界」。同卷调用它只是
+慢，不会错，判断该走哪条由 P3.5 的会话层比一次盘符即可。
+
+#### 一次预走查，把「没空间」和「有链接」都挡在第一个字节之前
+
+`survey_source` 先把源整个走一遍，同时做两件事：加总字节数、拒绝任何重解析点。然后按目标盘符
+问 `GetDiskFreeSpaceExW`，不够就报 `ERROR_DISK_FULL`。
+
+两件事合在一次走查里是有意的：**任何一条不满足，都在还没写任何东西的时候就退出**，于是没有需要
+回滚的残留。空间检查问的是驱动器根而不是目标目录 —— 空闲空间是卷的属性不是目录的，且根目录在
+目标还不存在时就已经在了；顺带这个 API 回的是「本账户可用」，配额会削减的正是这个数，而那才是
+复制真正拥有的空间。
+
+⚠️ 空间检查是**礼貌而非保证**：检查与写入之间空间会变，文件系统仍可能中途写满，那条路径按普通
+失败处理（回滚 + 上报）。头文件里写明了。
+
+#### 🔴 回滚绝不能吃掉用户已有的东西
+
+这一片最危险的地方不是复制，是**回滚**。目标已存在时复制必须失败，而失败后的清理如果不加区分，
+清掉的就是用户自己的目录 —— 一次「复制到已有文件夹」的误操作会变成删库。
+
+所以目标目录的 `CreateDirectoryW` **写在 try 之外**：它若因 `ERROR_ALREADY_EXISTS` 失败，
+回滚作用域根本没打开过，那个目录不在任何清理路径上。单文件同理，`copy_file_entry` 里
+`ERROR_FILE_EXISTS` / `ERROR_ALREADY_EXISTS` 是唯一不做清理就直接抛的分支。
+
+**已变异实测**：把 `CreateDirectoryW` 挪进 try 里，测试精确报出「the refused copy took away what
+the destination already held」，退出码 1。
+
+#### 取消用 `PROGRESS_CANCEL` 而不是 `PROGRESS_STOP`
+
+两者的差别正好是这一片的出口条件：`CANCEL` 会让 `CopyFileEx` **自己把写了一半的目标文件删掉**，
+`STOP` 把碎片留在原地。目录层面的残留则由外层 `catch` 调 `delete_volume_entry` 收走 —— 复用
+P3.3 那个不跟随链接的递归删，而我们自己造的目标树里本来就不可能有链接。
+
+回调里包了 `try/catch`：异常不能穿回文件系统自己的栈帧，而一个会抛的取消回调本身就够格停下来。
+头文件里把「不得抛」写成了契约。
+
+#### 链接：既不跟随也不重建
+
+跟随它读的是卷外的东西（可能极大，且不是用户指的那个）；在目标里重建它，等于往容器里写了一个
+出口，而这一层剩下的代码整天都在拒绝这种出口。两条都不是「复制」，所以直接拒。
+
+**已变异实测**：把 `require_not_a_link` 的判据换成一个永不置位的属性，测试报出「a tree holding
+a link was copied」等 4 条，退出码 1 —— 说明不拒的话它真的会跟着 junction 把卷外文件复制进来。
+
+#### 几条已定语义
+
+- **目标绝不覆盖、绝不合并**。已存在就失败，报 `ERROR_FILE_EXISTS`／`ERROR_ALREADY_EXISTS`，
+  让上层去说；这一层没有确认屏可问。
+- **不能复制进自己**（同卷时按 P3.3 的 `is_same_or_inside` 判），已测 `X:\treehouse` 不会被
+  误判为在 `X:\tree` 里。
+- **源只在复制完整成功后才删**。取消或失败都不动源；反过来若复制成功而删源失败，条目会同时存在
+  于两处，报删除的错 —— **宁可留重复也不留窟窿**。
+- 文件的时间戳与属性随 `CopyFileEx` 带过去；**目录自己的时间戳不带**。
+
+#### 已知边界
+
+- 🔴 **自动化测试没有真正跑过「两个物理卷之间」的复制。** 造不出来：本套测试造第二个盘符的手段是
+  `DefineDosDeviceW`（subst），而 subst 盘的最终路径落在 `C:`，正好会被 P3.2 起的越界检查拒掉 ——
+  那个夹具存在的目的就是触发拒绝。复制逻辑本身与盘符无关，跨卷特有的只有「盘符比较」与「复制 +
+  删源」两处，后者已在同卷上测到。**真正的双容器复制留给 P3.10 实机验证**，已记入待办。
+- 目标路径比源路径长，深树复制可能撞上 `MAX_PATH`。撞上就是一次普通失败（回滚 + 上报），没有
+  静默截断。
+- 递归深度不设上限，与 P3.3 的递归删一致；实际由路径长度上限兜住。
+
+#### 测试怎么造出「复制到一半失败」和「空间不够」
+
+- **中途失败**：`ExclusiveFile` 以不共享（share mode 0）占住树里的一个文件，`CopyFileEx` 打开它时
+  必然 `ERROR_SHARING_VIOLATION`。不需要满盘、不需要拔盘、不需要权限。注意预走查用的是
+  `FindFirstFile`（不开文件），所以失败精确地发生在复制阶段 —— 正是回滚要管的那一段。
+- **空间不足**：`try_make_sparse_file` 造一个**声称 8 TiB、实占约 0** 的稀疏文件。先试了 1 PB，
+  `SetEndOfFile` 失败（超出 NTFS 单文件上限），测试走了 skip 分支；改成 8 TiB 后本次真的执行了。
+  📝 再记一条：**skip 分支必须打印**，否则一条从没跑过的用例看起来和通过一模一样。
+- **取消**：单文件那条用「第 1 次问答否、之后答是」，第 1 次正好是复制前的那一次检查，于是取消
+  必然发生在 `CopyFileEx` 的进度回调里。目录那条用「目标里一旦有文件就取消」，它在预走查期间
+  恒假（那时目标还不存在），进复制阶段后必真，与目录枚举顺序无关。
+
+#### 四次变异测试
+
+守卫是不是真的在开火，逐条验过（每次都不吞构建输出，且确认退出码为 1）：
+
+| 变异 | 测试报出 |
+|---|---|
+| 目标目录的创建挪进回滚作用域 | the refused copy took away what the destination already held（2 条） |
+| 去掉树复制的回滚 | a failed copy left part of the tree behind（3 条） |
+| 链接判据换成永不置位的属性 | a tree holding a link was copied（4 条） |
+| 无空间分支改报 `ERROR_ACCESS_DENIED` | a copy with nowhere to put the bytes went ahead（`(got 5: ...)`） |
+
+最后一条顺带确认了新加的 `require_win32_error` 不是空断言 —— 它真的在比对错误码，而不是见到
+任何异常就放行。这补上了 P3.1 记下的那条已知边界（`require_rejects` 不区分「因正确的理由被拒」）
+在本片新增用例上的缺口。
+
+#### 改动
+
+- `include/usb_vault/volume/volume_file_operations.h`：新增 `TransferCancellation`、
+  `copy_volume_entry`、`move_volume_entry_by_copying`。
+- `src/volume/volume_file_operations.cpp`：预走查、空间检查、进度回调、回滚、递归复制。
+- `tests/volume_test_support.h`：新增 `write_text_file`／`read_text_file`／`count_files_below`、
+  `ExclusiveFile`、`try_make_sparse_file`。
+- `tests/volume_file_operations_tests.cpp`：新增 12 组用例与 `require_win32_error` 断言辅助，
+  并给既有的非驱动器绝对路径那组补上复制的两条。
+- 无 CMake 改动：两个新入口落在既有的 `volume_file_operations.cpp` 里。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`review-clean`（Ninja + Debug + `/W4 /WX`）编译无警告，
+`volume_file_operations_tests` 通过；连带四个 volume 目标 4/4。**本次运行无任何 skip 分支**
+（junction、subst 盘、稀疏文件三个夹具都真的执行了）。另完成上表四次变异测试。全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.4]copy across containers without leaving half a file`）。

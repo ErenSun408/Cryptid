@@ -11,8 +11,10 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -83,6 +85,89 @@ inline void make_file(const std::filesystem::path& path,
 [[nodiscard]] inline bool path_exists(const std::filesystem::path& path) {
   std::error_code ignored;
   return std::filesystem::exists(path, ignored);
+}
+
+inline void write_text_file(const std::filesystem::path& path,
+                            const std::string& content) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output.is_open()) throw std::runtime_error("create a fixture file");
+  output.write(content.data(), static_cast<std::streamsize>(content.size()));
+}
+
+// Empty for a file that is not there, which is what the copy tests want to
+// say about a destination that was rolled back.
+[[nodiscard]] inline std::string read_text_file(
+    const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) return {};
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
+}
+
+[[nodiscard]] inline std::size_t count_files_below(
+    const std::filesystem::path& root) {
+  std::error_code ignored;
+  std::size_t count = 0;
+  for (std::filesystem::recursive_directory_iterator iterator(root, ignored),
+       end;
+       iterator != end; iterator.increment(ignored)) {
+    if (iterator->is_regular_file(ignored)) ++count;
+  }
+  return count;
+}
+
+// Holds one file open sharing nothing, so any other open of it fails with
+// `ERROR_SHARING_VIOLATION`. This is how a copy is made to fail part-way
+// through a tree without needing a full disk or a removed drive.
+class ExclusiveFile final {
+ public:
+  explicit ExclusiveFile(const std::filesystem::path& path)
+      : handle_(::CreateFileW(path.wstring().c_str(), GENERIC_READ, 0, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)) {}
+
+  ~ExclusiveFile() noexcept {
+    if (handle_ != INVALID_HANDLE_VALUE) ::CloseHandle(handle_);
+  }
+
+  ExclusiveFile(const ExclusiveFile&) = delete;
+  ExclusiveFile& operator=(const ExclusiveFile&) = delete;
+  ExclusiveFile(ExclusiveFile&&) = delete;
+  ExclusiveFile& operator=(ExclusiveFile&&) = delete;
+
+  [[nodiscard]] bool held() const noexcept {
+    return handle_ != INVALID_HANDLE_VALUE;
+  }
+
+ private:
+  HANDLE handle_;
+};
+
+// A file that claims to be enormous while occupying almost nothing. The size
+// the file system reports is the logical one, so this is how a copy can be
+// asked for more room than any machine has without filling a disk to find out
+// what happens. NTFS only, hence the answer rather than an exception.
+[[nodiscard]] inline bool try_make_sparse_file(
+    const std::filesystem::path& path, const std::uint64_t logical_bytes) {
+  const HANDLE handle =
+      ::CreateFileW(path.wstring().c_str(), GENERIC_WRITE, 0, nullptr,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) return false;
+
+  DWORD returned = 0;
+  bool made = ::DeviceIoControl(handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr,
+                                0, &returned, nullptr) != FALSE;
+  if (made) {
+    LARGE_INTEGER size{};
+    size.QuadPart = static_cast<LONGLONG>(logical_bytes);
+    made = ::SetFilePointerEx(handle, size, nullptr, FILE_BEGIN) != FALSE &&
+           ::SetEndOfFile(handle) != FALSE;
+  }
+  ::CloseHandle(handle);
+  if (!made) {
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+  }
+  return made;
 }
 
 // A mount-point reparse point, built by hand because the structure lives in

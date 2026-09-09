@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -147,6 +148,201 @@ void delete_directory_tree(const std::wstring& directory) {
   return inner[outer.size()] == L'\\';
 }
 
+[[nodiscard]] std::uint64_t file_size_of(const WIN32_FIND_DATAW& found) noexcept {
+  return (static_cast<std::uint64_t>(found.nFileSizeHigh) << 32) |
+         static_cast<std::uint64_t>(found.nFileSizeLow);
+}
+
+[[nodiscard]] bool wants_stop(const TransferCancellation& cancelled) {
+  return static_cast<bool>(cancelled) && cancelled();
+}
+
+[[noreturn]] void throw_cancelled() {
+  throw std::system_error(static_cast<int>(ERROR_CANCELLED),
+                          std::system_category(),
+                          "the transfer was cancelled");
+}
+
+// 🔴 Neither of the two things a copy could do with a link is a copy.
+// Following it reads whatever it names, which is off this volume and not what
+// the user pointed at; recreating it writes a way out of the container into
+// the container, which the rest of this layer then spends its time refusing.
+// So a link in the source stops the operation instead.
+void require_not_a_link(const DWORD attributes) {
+  if (is_reparse_point(attributes)) {
+    throw std::runtime_error("a link cannot be copied");
+  }
+}
+
+// Adds up what one directory holds, refusing any link on the way.
+[[nodiscard]] std::uint64_t measure_directory_tree(
+    const std::wstring& directory, const TransferCancellation& cancelled) {
+  const std::wstring pattern = directory + L"\\*";
+  WIN32_FIND_DATAW found{};
+  const FindHandle find(::FindFirstFileExW(pattern.c_str(), FindExInfoBasic,
+                                           &found, FindExSearchNameMatch,
+                                           nullptr, FIND_FIRST_EX_LARGE_FETCH));
+  if (find.get() == INVALID_HANDLE_VALUE) {
+    const DWORD error = ::GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND) return 0;
+    throw_last_error(error, "list the directory being copied");
+  }
+
+  std::uint64_t total = 0;
+  do {
+    if (is_dot_entry(found.cFileName)) continue;
+    if (wants_stop(cancelled)) throw_cancelled();
+    require_not_a_link(found.dwFileAttributes);
+    total += is_directory(found.dwFileAttributes)
+                 ? measure_directory_tree(directory + L"\\" + found.cFileName,
+                                          cancelled)
+                 : file_size_of(found);
+  } while (::FindNextFileW(find.get(), &found) != FALSE);
+
+  const DWORD error = ::GetLastError();
+  if (error != ERROR_NO_MORE_FILES && error != 0) {
+    throw_last_error(error, "finish listing the directory being copied");
+  }
+  return total;
+}
+
+struct SourceSurvey final {
+  bool is_directory{};
+  std::uint64_t total_bytes{};
+};
+
+// One walk of the source before a single byte is written. It settles how much
+// room the copy needs and refuses every link in it, and doing both here is why
+// neither answer can leave a half-copied tree to undo.
+[[nodiscard]] SourceSurvey survey_source(
+    const std::wstring& source, const TransferCancellation& cancelled) {
+  DWORD attributes = 0;
+  std::uint64_t size = 0;
+  {
+    WIN32_FIND_DATAW found{};
+    const FindHandle find(::FindFirstFileW(source.c_str(), &found));
+    if (find.get() == INVALID_HANDLE_VALUE) {
+      throw_last_error(::GetLastError(), "inspect the entry being copied");
+    }
+    attributes = found.dwFileAttributes;
+    size = file_size_of(found);
+  }
+
+  require_not_a_link(attributes);
+  if (!is_directory(attributes)) {
+    return SourceSurvey{.is_directory = false, .total_bytes = size};
+  }
+  return SourceSurvey{.is_directory = true,
+                      .total_bytes = measure_directory_tree(source, cancelled)};
+}
+
+// Free space belongs to the volume rather than to any directory on it, so the
+// drive root is both the right thing to ask about and one that already exists
+// when the destination does not. The answer is what this account may use,
+// which is what a quota would cut down, and that is the room the copy has.
+void require_room_on_volume(const wchar_t drive, const std::uint64_t needed) {
+  const std::wstring root{drive, L':', L'\\'};
+  ULARGE_INTEGER available{};
+  if (::GetDiskFreeSpaceExW(root.c_str(), &available, nullptr, nullptr) ==
+      FALSE) {
+    throw_last_error(::GetLastError(), "measure the room on the destination");
+  }
+  if (available.QuadPart < needed) {
+    throw std::system_error(static_cast<int>(ERROR_DISK_FULL),
+                            std::system_category(),
+                            "the destination has no room for the copy");
+  }
+}
+
+// Asked by `CopyFileEx` as it writes. `PROGRESS_CANCEL` rather than
+// `PROGRESS_STOP` on purpose: cancel makes it delete the partly written
+// destination file itself, stop leaves the fragment sitting there.
+DWORD CALLBACK on_copy_progress(LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER,
+                                LARGE_INTEGER, DWORD, DWORD, HANDLE, HANDLE,
+                                const LPVOID data) {
+  const auto* const cancelled = static_cast<const TransferCancellation*>(data);
+  // An exception must not cross back into the file system's own frames, and a
+  // cancellation that misbehaves is reason enough to stop.
+  try {
+    return wants_stop(*cancelled) ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
+  } catch (...) {
+    return PROGRESS_CANCEL;
+  }
+}
+
+// Takes away what this copy created. Best-effort on purpose: the failure that
+// brought us here is the one worth reporting, and a rollback that cannot run
+// does not make it more useful to hear about.
+void discard_partial_destination(const std::wstring& path) noexcept {
+  try {
+    delete_volume_entry(path);
+  } catch (...) {
+  }
+}
+
+void copy_file_entry(const std::wstring& source,
+                     const std::wstring& destination,
+                     const TransferCancellation& cancelled) {
+  // The cast is only because `CopyFileEx` takes its callback data as a plain
+  // `void*`; the callback puts the const straight back on.
+  auto* const data = const_cast<TransferCancellation*>(&cancelled);
+  if (::CopyFileExW(source.c_str(), destination.c_str(), &on_copy_progress,
+                    data, nullptr, COPY_FILE_FAIL_IF_EXISTS) != FALSE) {
+    return;
+  }
+
+  const DWORD error = ::GetLastError();
+  if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS) {
+    // 🔴 Not this operation's to take away. The entry standing in the way is
+    // the user's, and nothing was written over it.
+    throw_last_error(error, "copy the file");
+  }
+  discard_partial_destination(destination);
+  if (error == ERROR_REQUEST_ABORTED) throw_cancelled();
+  throw_last_error(error, "copy the file");
+}
+
+// Copies what is inside one directory into another that already exists. The
+// survey refused every link in the tree before this started; the attributes
+// are read again here because the source is a mounted volume and nothing stops
+// one appearing in between.
+void copy_directory_contents(const std::wstring& source,
+                             const std::wstring& destination,
+                             const TransferCancellation& cancelled) {
+  const std::wstring pattern = source + L"\\*";
+  WIN32_FIND_DATAW found{};
+  const FindHandle find(::FindFirstFileExW(pattern.c_str(), FindExInfoBasic,
+                                           &found, FindExSearchNameMatch,
+                                           nullptr, FIND_FIRST_EX_LARGE_FETCH));
+  if (find.get() == INVALID_HANDLE_VALUE) {
+    const DWORD error = ::GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND) return;
+    throw_last_error(error, "list the directory being copied");
+  }
+
+  do {
+    if (is_dot_entry(found.cFileName)) continue;
+    if (wants_stop(cancelled)) throw_cancelled();
+    require_not_a_link(found.dwFileAttributes);
+    const std::wstring child_source = source + L"\\" + found.cFileName;
+    const std::wstring child_destination =
+        destination + L"\\" + found.cFileName;
+    if (!is_directory(found.dwFileAttributes)) {
+      copy_file_entry(child_source, child_destination, cancelled);
+      continue;
+    }
+    if (::CreateDirectoryW(child_destination.c_str(), nullptr) == FALSE) {
+      throw_last_error(::GetLastError(), "create a directory being copied");
+    }
+    copy_directory_contents(child_source, child_destination, cancelled);
+  } while (::FindNextFileW(find.get(), &found) != FALSE);
+
+  const DWORD error = ::GetLastError();
+  if (error != ERROR_NO_MORE_FILES && error != 0) {
+    throw_last_error(error, "finish listing the directory being copied");
+  }
+}
+
 }  // namespace
 
 void delete_volume_entry(const std::wstring_view absolute_path) {
@@ -188,6 +384,57 @@ void move_volume_entry(const std::wstring_view absolute_source,
   if (::MoveFileExW(source.c_str(), destination.c_str(), 0) == FALSE) {
     throw_last_error(::GetLastError(), "move the entry");
   }
+}
+
+void copy_volume_entry(const std::wstring_view absolute_source,
+                       const std::wstring_view absolute_destination,
+                       const TransferCancellation& cancelled) {
+  const wchar_t source_drive = require_drive_absolute(absolute_source);
+  const wchar_t destination_drive = require_drive_absolute(absolute_destination);
+
+  const std::wstring source(absolute_source);
+  const std::wstring destination(absolute_destination);
+  // Only a question on one volume. Across two, neither path is inside the
+  // other whatever the text looks like.
+  if (upper_ascii(source_drive) == upper_ascii(destination_drive) &&
+      is_same_or_inside(source, destination)) {
+    throw std::invalid_argument("an entry cannot be copied inside itself");
+  }
+
+  require_parent_stays_on_volume(source, source_drive);
+  require_parent_stays_on_volume(destination, destination_drive);
+
+  const SourceSurvey survey = survey_source(source, cancelled);
+  require_room_on_volume(destination_drive, survey.total_bytes);
+  if (wants_stop(cancelled)) throw_cancelled();
+
+  if (!survey.is_directory) {
+    copy_file_entry(source, destination, cancelled);
+    return;
+  }
+
+  // 🔴 Made before the rollback scope opens, deliberately. If this fails
+  // because something is already there, that something is the user's, and a
+  // rollback must never be in a position to take it away.
+  if (::CreateDirectoryW(destination.c_str(), nullptr) == FALSE) {
+    throw_last_error(::GetLastError(), "create the destination directory");
+  }
+  try {
+    copy_directory_contents(source, destination, cancelled);
+  } catch (...) {
+    discard_partial_destination(destination);
+    throw;
+  }
+}
+
+void move_volume_entry_by_copying(const std::wstring_view absolute_source,
+                                  const std::wstring_view absolute_destination,
+                                  const TransferCancellation& cancelled) {
+  copy_volume_entry(absolute_source, absolute_destination, cancelled);
+  // Only once the copy is whole. A cancelled or failed copy has already taken
+  // its own leavings away and thrown, so the source is never removed against a
+  // destination in doubt.
+  delete_volume_entry(absolute_source);
 }
 
 void create_volume_directory(const std::wstring_view absolute_path) {
