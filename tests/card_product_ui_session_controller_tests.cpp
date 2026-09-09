@@ -325,6 +325,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     throw std::logic_error("the file manager is not part of the controller fixture");
   }
 
+  void export_container_file(std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     ++container_statuses_calls;

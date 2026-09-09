@@ -2336,6 +2336,104 @@ void test_an_export_location_that_is_not_one_never_reaches_the_disk() {
           "a refused export still reached the storage layer");
 }
 
+// The migration export: the container's own file, byte for byte. It is what a
+// user takes to another machine, where the same card and password open it.
+void test_a_container_file_is_migrated_verbatim_and_nothing_else_moves() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  session.unmount_container(id);
+
+  const std::size_t events_before = session.operation_history().size();
+  const int index_writes_before = runtime.index_writes;
+
+  session.export_container_file(id, L"D:\\Migration");
+  require(runtime.copied.size() == 1 &&
+              runtime.copied[0].first == L"C:\\vault\\one.hc" &&
+              runtime.copied[0].second == L"D:\\Migration\\one.hc",
+          "the migration did not copy the container file under its own name");
+  // Nothing is decrypted, nothing is re-encrypted, and nothing else is
+  // written: what comes out is the file that went in, which is why it carries
+  // no key material and no sign of what is inside it.
+  require(runtime.copied.size() == 1 && runtime.moved.empty() &&
+              runtime.moved_by_copying.empty() && runtime.deleted.empty(),
+          "the migration did more than copy one file");
+  require(session.operation_history().size() == events_before,
+          "the migration was written into the operation history");
+  require(runtime.index_writes == index_writes_before,
+          "the migration touched the container index");
+
+  // A container inside a container is still encrypted, so unlike a plaintext
+  // export this location is allowed.
+  const std::uint32_t other = session.create_container(
+      L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 2, "the fixture lost a container");
+  session.export_container_file(id, L"X:\\Archive");
+  require(runtime.copied.size() == 2 &&
+              runtime.copied[1].second == L"X:\\Archive\\one.hc",
+          "a migration into another container was refused");
+  static_cast<void>(other);
+}
+
+// 🔴 The driver is writing to a mounted volume, so a copy taken then is a copy
+// of something in flight. Q-04 forbids handing an incomplete copy back as a
+// usable migration result.
+void test_a_mounted_container_is_not_migrated() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  require_throws_plain_logic_error(
+      [&] { session.export_container_file(id, L"D:\\Migration"); },
+      "a mounted container was copied out from under the driver");
+  require(runtime.copied.empty(),
+          "the refused migration still reached the storage layer");
+
+  // Giving the volume back makes the file an ordinary one again.
+  session.unmount_container(id);
+  session.export_container_file(id, L"D:\\Migration");
+  require(runtime.copied.size() == 1,
+          "an unmounted container was still refused");
+}
+
+void test_a_migration_refuses_what_it_cannot_name() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+
+  require_throws_plain_logic_error(
+      [&] { session.export_container_file(1, L"D:\\Migration"); },
+      "an unauthenticated session migrated a container");
+
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  session.unmount_container(id);
+
+  require_throws<std::invalid_argument>(
+      [&] { session.export_container_file(id + 100, L"D:\\Migration"); },
+      "an identifier no container answers to was accepted");
+  for (const std::wstring_view location : {L"", L"Migration", L"D:Migration",
+                                           L"\\\\server\\share",
+                                           L"D:\\..\\Windows"}) {
+    require_throws<std::invalid_argument>(
+        [&] { session.export_container_file(id, location); },
+        "a migration location that is not one was accepted");
+  }
+  require(runtime.copied.empty(),
+          "a refused migration still reached the storage layer");
+}
+
 }  // namespace
 
 int main() {
@@ -2396,6 +2494,9 @@ int main() {
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
     test_an_export_into_a_container_is_refused_as_a_copy();
     test_an_export_location_that_is_not_one_never_reaches_the_disk();
+    test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();
+    test_a_mounted_container_is_not_migrated();
+    test_a_migration_refuses_what_it_cannot_name();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

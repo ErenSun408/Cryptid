@@ -203,6 +203,8 @@ class CardLoginMountSessionCore final {
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view name,
       std::wstring_view absolute_destination_directory);
+  void export_container_file(
+      std::uint32_t id, std::wstring_view absolute_destination_directory);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();

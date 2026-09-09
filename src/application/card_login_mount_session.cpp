@@ -404,6 +404,12 @@ void CardLoginMountSession::export_container_entry(
                                      absolute_destination_directory);
 }
 
+void CardLoginMountSession::export_container_file(
+    const std::uint32_t id,
+    const std::wstring_view absolute_destination_directory) {
+  impl_->core.export_container_file(id, absolute_destination_directory);
+}
+
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
   return impl_->core.container_statuses();
 }
@@ -1347,6 +1353,37 @@ void CardLoginMountSessionCore::export_container_entry(
   runtime_.copy_entry(
       volume::resolve_volume_child_path(drive_letter, relative_directory, name),
       destination);
+}
+
+void CardLoginMountSessionCore::export_container_file(
+    const std::uint32_t id,
+    const std::wstring_view absolute_destination_directory) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "migrating a container requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  // 🔴 A mounted container is one the driver is writing to, so a copy taken
+  // now is a copy of something in flight. Q-04 forbids handing back an
+  // incomplete copy as a usable migration result, and the only way to be sure
+  // of that here is to refuse rather than to copy and hope.
+  if (entry->mounted) {
+    throw std::logic_error(
+        "unmount the container before migrating it, so what is copied is a "
+        "volume nothing is writing to");
+  }
+
+  // Byte for byte, under the container's own name. Nothing is decrypted,
+  // nothing is re-encrypted, nothing is added: what comes out is the file that
+  // went in. No `record_operation` here either -- a migration is an export,
+  // and Q-04 says an export leaves no trace of itself behind.
+  runtime_.copy_entry(entry->path,
+                      volume::resolve_exported_entry_path(
+                          absolute_destination_directory, entry->name));
 }
 
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {

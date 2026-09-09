@@ -285,6 +285,33 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
       std::wstring_view name,
       std::wstring_view absolute_destination_directory) = 0;
 
+  // Copies one adopted container's own file, byte for byte, to an ordinary
+  // location. This is the migration export: it is what a user takes to another
+  // machine, where the same card and the same password open it again.
+  //
+  // Nothing is decrypted and nothing is re-encrypted. What comes out is the
+  // file that went in, which is the whole reason it carries no root secret, no
+  // password, no derivation, and no sign of whether a hidden volume is inside
+  // it: adding any of those would be building a key backup, and this product
+  // has none. A lost card stays a lost vault.
+  //
+  // 🔴 The container must not be mounted. The driver is writing to a mounted
+  // volume, so a copy taken then is a copy of something in flight -- crash
+  // consistent at best. Q-04 forbids handing back an incomplete copy as a
+  // usable migration result, so this refuses rather than producing one and
+  // hoping.
+  //
+  // The destination keeps the container's own file name and is never
+  // replaced; an occupied name fails. Unlike the plaintext export above, a
+  // location inside another mounted container is allowed: a container stored
+  // inside a container is still encrypted, so none of what makes an export
+  // dangerous applies.
+  //
+  // Nothing about the call is written down, for the same reason as above.
+  virtual void export_container_file(
+      std::uint32_t id,
+      std::wstring_view absolute_destination_directory) = 0;
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -372,6 +399,9 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void export_container_entry(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view name,
+      std::wstring_view absolute_destination_directory) override;
+  void export_container_file(
+      std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
