@@ -92,6 +92,39 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   void set_mounting_imported_containers(bool) override {
     throw std::logic_error("not used by close guard");
   }
+  // The file manager is not part of this fixture. P3.5 put these on the
+  // product boundary and P3.6 is where the controller starts using them; until
+  // then a call here is a mistake rather than a case worth modelling.
+  [[nodiscard]] usb_vault::volume::VolumeDirectoryListing
+  list_container_directory(std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+
+  void delete_container_entry(std::uint32_t, std::wstring_view,
+                              std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+
+  void rename_container_entry(std::uint32_t, std::wstring_view,
+                              std::wstring_view, std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+
+  void create_container_directory(std::uint32_t, std::wstring_view,
+                                  std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+
+  void move_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
+                            std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+
+  void copy_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
+                            std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("not used by close guard");
+  }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     throw std::logic_error("not used by close guard");

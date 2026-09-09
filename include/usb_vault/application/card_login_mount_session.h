@@ -3,6 +3,7 @@
 #include "usb_vault/application/active_volume_session.h"
 #include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/application/mount_orchestrator.h"
+#include "usb_vault/volume/volume_directory_listing.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -187,6 +188,76 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   [[nodiscard]] virtual bool remembering_container_paths() = 0;
   virtual void set_remembering_container_paths(bool remember) = 0;
 
+  // Lists one directory inside a container this session has mounted.
+  //
+  // 🔴 A container is named by its session identifier and never by a drive
+  // letter. A caller able to name a letter could name any letter on the
+  // machine, including the system disk; an identifier reaches only a container
+  // this session opened, and the session is the one thing that knows which
+  // letter that is. No drive letter is accepted by any call below, and none of
+  // them will read one out of a path.
+  //
+  // `relative_directory` is relative to the volume root, which is what an
+  // empty string names. It is checked by `resolve_volume_entry_path` before it
+  // reaches the file system, so nothing the caller can say leaves the
+  // container as a string; a junction inside the volume that points out of it
+  // is refused by the storage layer when it opens the directory. Both halves
+  // of "out of the volume is refused" are therefore covered, and neither is
+  // this layer's own work.
+  //
+  // Throws `std::logic_error` when the session is not authenticated or the
+  // container is adopted but not mounted, `std::invalid_argument` for an
+  // identifier no container answers to or a relative path that is not one, and
+  // whatever the storage layer throws for what the file system refused.
+  [[nodiscard]] virtual volume::VolumeDirectoryListing list_container_directory(
+      std::uint32_t id, std::wstring_view relative_directory) = 0;
+
+  // Deletes one entry, permanently and with no confirmation at this layer.
+  // `name` is one component of `relative_directory`, checked as the single
+  // name it claims to be: a separator inside it would otherwise turn a delete
+  // of the entry the user picked into a delete of something else.
+  virtual void delete_container_entry(std::uint32_t id,
+                                      std::wstring_view relative_directory,
+                                      std::wstring_view name) = 0;
+
+  // Renames one entry in place. Both names are checked as single components,
+  // so a rename can never become a move.
+  virtual void rename_container_entry(std::uint32_t id,
+                                      std::wstring_view relative_directory,
+                                      std::wstring_view name,
+                                      std::wstring_view new_name) = 0;
+
+  // Creates one directory inside `relative_directory`. The parent must exist:
+  // this makes the directory the user just named and never a chain of them.
+  virtual void create_container_directory(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view name) = 0;
+
+  // Moves one entry to a directory in this or another mounted container,
+  // keeping its name. Both containers must be mounted, and an entry already
+  // called that at the destination is never replaced.
+  //
+  // Two identifiers are two containers, and this session never mounts two
+  // containers on one letter, so the identifiers alone settle whether this is
+  // a rename inside one volume or a copy-and-delete between two -- the letters
+  // never have to be compared, and a caller never states which it wanted.
+  //
+  // ⚠️ A move between containers reads and writes every byte and cannot be
+  // cancelled through this boundary yet; the storage layer takes a
+  // cancellation but nothing here can produce one until the UI has somewhere
+  // to run the transfer other than the calling thread.
+  virtual void move_container_entry(
+      std::uint32_t source_id, std::wstring_view source_relative_directory,
+      std::wstring_view name, std::uint32_t destination_id,
+      std::wstring_view destination_relative_directory) = 0;
+
+  // Copies one entry into a directory in this or another mounted container,
+  // under the same rules and with the same caveat about cancellation.
+  virtual void copy_container_entry(
+      std::uint32_t source_id, std::wstring_view source_relative_directory,
+      std::wstring_view name, std::uint32_t destination_id,
+      std::wstring_view destination_relative_directory) = 0;
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -251,6 +322,26 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void set_mounting_imported_containers(bool mount) override;
   [[nodiscard]] bool remembering_container_paths() override;
   void set_remembering_container_paths(bool remember) override;
+  [[nodiscard]] volume::VolumeDirectoryListing list_container_directory(
+      std::uint32_t id, std::wstring_view relative_directory) override;
+  void delete_container_entry(std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              std::wstring_view name) override;
+  void rename_container_entry(std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              std::wstring_view name,
+                              std::wstring_view new_name) override;
+  void create_container_directory(std::uint32_t id,
+                                  std::wstring_view relative_directory,
+                                  std::wstring_view name) override;
+  void move_container_entry(
+      std::uint32_t source_id, std::wstring_view source_relative_directory,
+      std::wstring_view name, std::uint32_t destination_id,
+      std::wstring_view destination_relative_directory) override;
+  void copy_container_entry(
+      std::uint32_t source_id, std::wstring_view source_relative_directory,
+      std::wstring_view name, std::uint32_t destination_id,
+      std::wstring_view destination_relative_directory) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;

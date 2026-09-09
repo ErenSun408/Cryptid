@@ -14,6 +14,7 @@
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/volume/unmount_retry.h"
+#include "usb_vault/volume/volume_directory_listing.h"
 
 namespace usb_vault::application::detail {
 
@@ -76,6 +77,25 @@ class CardLoginMountSessionRuntime {
   // Whether the user wants an imported container mounted straight away.
   [[nodiscard]] virtual bool mount_imported_containers() = 0;
   virtual void set_mount_imported_containers(bool mount) = 0;
+  // The storage layer, reached through here for the same reason as everything
+  // else on this interface: the session's own job is turning a container
+  // identifier into a checked absolute path, and that is worth testing without
+  // a mounted volume underneath it. Every path arriving here is drive-absolute
+  // and came out of `resolve_volume_entry_path` or `resolve_volume_child_path`.
+  [[nodiscard]] virtual volume::VolumeDirectoryListing list_directory(
+      std::wstring_view absolute_directory) = 0;
+  virtual void delete_entry(std::wstring_view absolute_path) = 0;
+  virtual void create_directory(std::wstring_view absolute_path) = 0;
+  // A rename, which is what a move inside one volume is.
+  virtual void move_entry(std::wstring_view absolute_source,
+                          std::wstring_view absolute_destination) = 0;
+  // The move that crosses volumes: every byte read and written, then the
+  // source deleted.
+  virtual void move_entry_by_copying(
+      std::wstring_view absolute_source,
+      std::wstring_view absolute_destination) = 0;
+  virtual void copy_entry(std::wstring_view absolute_source,
+                          std::wstring_view absolute_destination) = 0;
 };
 
 // One container adopted by the session. Nothing here is persisted: a restart
@@ -157,6 +177,28 @@ class CardLoginMountSessionCore final {
   void set_remembering_container_paths(bool remember);
   [[nodiscard]] bool mounting_imported_containers();
   void set_mounting_imported_containers(bool mount);
+  [[nodiscard]] volume::VolumeDirectoryListing list_container_directory(
+      std::uint32_t id, std::wstring_view relative_directory);
+  void delete_container_entry(std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              std::wstring_view name);
+  void rename_container_entry(std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              std::wstring_view name,
+                              std::wstring_view new_name);
+  void create_container_directory(std::uint32_t id,
+                                  std::wstring_view relative_directory,
+                                  std::wstring_view name);
+  void move_container_entry(std::uint32_t source_id,
+                            std::wstring_view source_relative_directory,
+                            std::wstring_view name,
+                            std::uint32_t destination_id,
+                            std::wstring_view destination_relative_directory);
+  void copy_container_entry(std::uint32_t source_id,
+                            std::wstring_view source_relative_directory,
+                            std::wstring_view name,
+                            std::uint32_t destination_id,
+                            std::wstring_view destination_relative_directory);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();
@@ -176,6 +218,15 @@ class CardLoginMountSessionCore final {
   // derivation nothing may need.
   [[nodiscard]] const security::SecureBuffer& hidden_container_password();
   [[nodiscard]] wchar_t reserve_drive_letter();
+  // The letter one identifier currently answers on, refusing everything the
+  // file manager must not reach: an unauthenticated session, an identifier no
+  // container answers to, and a container adopted but not mounted.
+  //
+  // Authentication is required here as it is for mounting, and unlike for
+  // unmounting. Unmounting is how a session gives a volume back and has to
+  // stay possible; reading and writing what is inside one is not, and a mount
+  // that somehow outlived the card must not keep serving contents.
+  [[nodiscard]] wchar_t mounted_drive_letter(std::uint32_t id);
   // Writing a path down, and taking it back out, are conveniences rather than
   // parts of the operations they follow. A container that exists and is
   // mounted has been created whether or not the index could be reached, so

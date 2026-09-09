@@ -217,6 +217,39 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
         "no container is adopted under that identifier");
   }
 
+  // The file manager is not part of this fixture. P3.5 put these on the
+  // product boundary and P3.6 is where the controller starts using them; until
+  // then a call here is a mistake rather than a case worth modelling.
+  [[nodiscard]] usb_vault::volume::VolumeDirectoryListing
+  list_container_directory(std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
+  void delete_container_entry(std::uint32_t, std::wstring_view,
+                              std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
+  void rename_container_entry(std::uint32_t, std::wstring_view,
+                              std::wstring_view, std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
+  void create_container_directory(std::uint32_t, std::wstring_view,
+                                  std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
+  void move_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
+                            std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
+  void copy_container_entry(std::uint32_t, std::wstring_view, std::wstring_view,
+                            std::uint32_t, std::wstring_view) override {
+    throw std::logic_error("the file manager is not part of the controller fixture");
+  }
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     ++container_statuses_calls;

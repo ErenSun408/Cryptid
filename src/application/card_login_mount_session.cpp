@@ -8,6 +8,8 @@
 #include "usb_vault/application/product_settings_v1.h"
 #include "usb_vault/security/kdf_v1.h"
 #include "usb_vault/volume/unmount_retry.h"
+#include "usb_vault/volume/volume_entry_path.h"
+#include "usb_vault/volume/volume_file_operations.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "volume/mount_request.h"
 
@@ -199,6 +201,35 @@ class ProductionCardLoginMountSessionRuntime final
                                      mount);
   }
 
+  [[nodiscard]] volume::VolumeDirectoryListing list_directory(
+      const std::wstring_view absolute_directory) override {
+    return volume::list_volume_directory(absolute_directory);
+  }
+
+  void delete_entry(const std::wstring_view absolute_path) override {
+    volume::delete_volume_entry(absolute_path);
+  }
+
+  void create_directory(const std::wstring_view absolute_path) override {
+    volume::create_volume_directory(absolute_path);
+  }
+
+  void move_entry(const std::wstring_view absolute_source,
+                  const std::wstring_view absolute_destination) override {
+    volume::move_volume_entry(absolute_source, absolute_destination);
+  }
+
+  void move_entry_by_copying(
+      const std::wstring_view absolute_source,
+      const std::wstring_view absolute_destination) override {
+    volume::move_volume_entry_by_copying(absolute_source, absolute_destination);
+  }
+
+  void copy_entry(const std::wstring_view absolute_source,
+                  const std::wstring_view absolute_destination) override {
+    volume::copy_volume_entry(absolute_source, absolute_destination);
+  }
+
  private:
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
@@ -320,6 +351,49 @@ bool CardLoginMountSession::remembering_container_paths() {
 void CardLoginMountSession::set_remembering_container_paths(
     const bool remember) {
   impl_->core.set_remembering_container_paths(remember);
+}
+
+volume::VolumeDirectoryListing CardLoginMountSession::list_container_directory(
+    const std::uint32_t id, const std::wstring_view relative_directory) {
+  return impl_->core.list_container_directory(id, relative_directory);
+}
+
+void CardLoginMountSession::delete_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name) {
+  impl_->core.delete_container_entry(id, relative_directory, name);
+}
+
+void CardLoginMountSession::rename_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name, const std::wstring_view new_name) {
+  impl_->core.rename_container_entry(id, relative_directory, name, new_name);
+}
+
+void CardLoginMountSession::create_container_directory(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name) {
+  impl_->core.create_container_directory(id, relative_directory, name);
+}
+
+void CardLoginMountSession::move_container_entry(
+    const std::uint32_t source_id,
+    const std::wstring_view source_relative_directory,
+    const std::wstring_view name, const std::uint32_t destination_id,
+    const std::wstring_view destination_relative_directory) {
+  impl_->core.move_container_entry(source_id, source_relative_directory, name,
+                                   destination_id,
+                                   destination_relative_directory);
+}
+
+void CardLoginMountSession::copy_container_entry(
+    const std::uint32_t source_id,
+    const std::wstring_view source_relative_directory,
+    const std::wstring_view name, const std::uint32_t destination_id,
+    const std::wstring_view destination_relative_directory) {
+  impl_->core.copy_container_entry(source_id, source_relative_directory, name,
+                                   destination_id,
+                                   destination_relative_directory);
 }
 
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
@@ -1133,6 +1207,95 @@ void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
     return;
   }
   throw std::invalid_argument("no container is adopted under that identifier");
+}
+
+wchar_t CardLoginMountSessionCore::mounted_drive_letter(
+    const std::uint32_t id) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "reaching into a container requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  if (!entry->mounted) {
+    throw std::logic_error(
+        "that container is not mounted, so it has no contents to reach");
+  }
+  return entry->drive_letter;
+}
+
+volume::VolumeDirectoryListing
+CardLoginMountSessionCore::list_container_directory(
+    const std::uint32_t id, const std::wstring_view relative_directory) {
+  const wchar_t drive_letter = mounted_drive_letter(id);
+  return runtime_.list_directory(
+      volume::resolve_volume_entry_path(drive_letter, relative_directory));
+}
+
+void CardLoginMountSessionCore::delete_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name) {
+  const wchar_t drive_letter = mounted_drive_letter(id);
+  runtime_.delete_entry(volume::resolve_volume_child_path(
+      drive_letter, relative_directory, name));
+}
+
+void CardLoginMountSessionCore::rename_container_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name, const std::wstring_view new_name) {
+  const wchar_t drive_letter = mounted_drive_letter(id);
+  // Both ends are resolved before either is used, so a bad new name refuses
+  // the rename rather than half-performing it.
+  const std::wstring source = volume::resolve_volume_child_path(
+      drive_letter, relative_directory, name);
+  const std::wstring destination = volume::resolve_volume_child_path(
+      drive_letter, relative_directory, new_name);
+  runtime_.move_entry(source, destination);
+}
+
+void CardLoginMountSessionCore::create_container_directory(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name) {
+  const wchar_t drive_letter = mounted_drive_letter(id);
+  runtime_.create_directory(volume::resolve_volume_child_path(
+      drive_letter, relative_directory, name));
+}
+
+void CardLoginMountSessionCore::move_container_entry(
+    const std::uint32_t source_id,
+    const std::wstring_view source_relative_directory,
+    const std::wstring_view name, const std::uint32_t destination_id,
+    const std::wstring_view destination_relative_directory) {
+  const wchar_t source_drive = mounted_drive_letter(source_id);
+  const wchar_t destination_drive = mounted_drive_letter(destination_id);
+  const std::wstring source = volume::resolve_volume_child_path(
+      source_drive, source_relative_directory, name);
+  const std::wstring destination = volume::resolve_volume_child_path(
+      destination_drive, destination_relative_directory, name);
+  // One identifier is one volume, and this session never puts two containers
+  // on one letter, so the identifiers settle which move this is.
+  if (source_id == destination_id) {
+    runtime_.move_entry(source, destination);
+    return;
+  }
+  runtime_.move_entry_by_copying(source, destination);
+}
+
+void CardLoginMountSessionCore::copy_container_entry(
+    const std::uint32_t source_id,
+    const std::wstring_view source_relative_directory,
+    const std::wstring_view name, const std::uint32_t destination_id,
+    const std::wstring_view destination_relative_directory) {
+  const wchar_t source_drive = mounted_drive_letter(source_id);
+  const wchar_t destination_drive = mounted_drive_letter(destination_id);
+  runtime_.copy_entry(
+      volume::resolve_volume_child_path(source_drive,
+                                        source_relative_directory, name),
+      volume::resolve_volume_child_path(destination_drive,
+                                        destination_relative_directory, name));
 }
 
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {

@@ -6587,4 +6587,103 @@ a link was copied」等 4 条，退出码 1 —— 说明不拒的话它真的�
 `volume_file_operations_tests` 通过；连带四个 volume 目标 4/4。**本次运行无任何 skip 分支**
 （junction、subst 盘、稀疏文件三个夹具都真的执行了）。另完成上表四次变异测试。全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.4]copy across containers without leaving half a file`）。
+- 提交：`54691b1 [P3.4]copy across containers without leaving half a file`。
+
+---
+
+### 小切片 P3.5：接到会话，按容器 id 而非盘符寻址
+
+把 P3.1～P3.4 的存储层接到 `IAuthenticatedCardVolumeSession`，新增六个入口：
+`list_container_directory`、`delete_container_entry`、`rename_container_entry`、
+`create_container_directory`、`move_container_entry`、`copy_container_entry`。存储层本身仍走
+`CardLoginMountSessionRuntime`（新增六个虚函数），所以会话这一层能在没有真实卷的情况下被测。
+
+#### 🔴 页面只能说容器 id，绝不能说盘符
+
+能说出盘符的页面就能说出机器上任何一个盘符 —— 包括系统盘。id 只能指到本会话打开过的容器，而
+「那个容器现在在哪个字母上」只有会话知道。**六个入口没有一个接受盘符，也没有一个会从路径里读
+盘符出来。**
+
+#### 「出卷即拒」是两半，都不是这一层自己做的
+
+- 字符串那一半在 `resolve_volume_entry_path`／`resolve_volume_child_path`（P3.1）：本层是页面
+  字符串变成路径的唯一入口，所以也是它必须止步的地方。
+- 运行时那一半在存储层（P3.2／P3.3）：卷内 junction 指向哪儿要开句柄才知道。
+
+这一层的职责因此很窄：**把 id 换成一个盘符，把页面的字符串交给正确的那个解析器**。测试断言的
+也正是这两件事 —— 存储层假件只记录「每次调用收到的绝对路径」。
+
+#### 名字与路径走两个解析器，所以重命名不可能变成移动
+
+页面递「路径」的地方（浏览、进目录）用 `resolve_volume_entry_path`；递「名字」的地方（删除、
+重命名、新建、移动的那一项）用 `resolve_volume_child_path`，名字被按「它自称的那一个组件」检查。
+用错解析器，`sub{B}new.txt` 这样的新名字就会把条目挪到别处 —— 这条已做变异实测（见下表）。
+
+#### id 相等即同卷，不必比盘符
+
+本会话从不把两个容器挂在同一个字母上（`reserve_drive_letter` 会跳过已记录的字母），所以
+**两个 id 相等就是同一个卷，不等就是两个卷**。`move_container_entry` 据此分流：同 id 走
+`move_entry`（一次重命名，瞬时），不同 id 走 `move_entry_by_copying`（读写每一个字节）。
+调用方不必比较盘符，也不必声明自己想要哪一种。
+
+#### 认证要查，且与卸载不同
+
+`mounted_drive_letter` 拒三种情况：未认证、id 无人应答、容器已收录但未挂载。**未认证要拒**，与
+`mount_adopted_container` 一致，而与 `unmount_container` 不同 —— 卸载是把卷交回去的动作，必须
+一直可用；读写卷里的内容不是，一个不知怎么活过了拔卡的挂载不该继续供内容。
+
+#### 🔴 本片最值得记的一条：`invalid_argument` 本身就是 `logic_error`
+
+第一版测试用 `require_throws<std::logic_error>` 断言「未挂载即拒」。**变异测试直接拆穿了它**：
+把未挂载那条守卫整个删掉，测试照样通过。原因是未挂载的容器 `drive_letter` 是 `'{B}0'`，
+`volume_root` 会因「不是驱动器字母」抛 `std::invalid_argument` —— 而 `invalid_argument`
+派生自 `logic_error`，断言收下了它。
+
+这不只是测试的问题，也是**页面的问题**：「没有这个容器」和「这个容器没挂载」是要分别说给用户听
+的两句话，而基类断言把它们糊成了一句。故新增 `require_throws_plain_logic_error`（是
+`logic_error` 但**不是** `invalid_argument`），改用它之后同一个变异立刻被咬住。
+
+📝 纪律再加一条：**断言异常时要问「这个类型能不能被它的派生类顺手满足」**。这与 P3.1 记下的
+「`require_rejects` 不区分因何被拒」是同一类账，只是这一次是继承而不是规则重叠。
+
+#### ⚠️ 取消还没接到这一层
+
+存储层的 `TransferCancellation` 在这里传的是空。跨容器移动要读写每一个字节，而会话入口是同步的，
+页面没有第二个线程可以放这件事，也就产生不出一个有意义的取消回调。**头文件里写明了这个缺口**，
+留给 P3.6／P3.9 连同异步一起解决，已记入 `MILESTONES.md`。
+
+#### 顺带：四个 UI 假会话补了桩
+
+`IAuthenticatedCardVolumeSession` 加了六个纯虚，四个测试里的假会话
+（controller／host object／integration／close guard）随之补上抛 `std::logic_error` 的桩，
+并注明「文件管理器不属于本夹具，P3.6 才开始用」。这四个目标本轮都构建并运行过，没有留下坏掉的
+构建 —— 最小切片纪律管的是跑哪些测试，不包括容忍别的目标编不过。
+
+#### 改动
+
+- `include/usb_vault/application/card_login_mount_session.h`：产品边界新增六个入口。
+- `src/application/card_login_mount_session_internal.h`：运行时新增六个虚函数，核心新增六个方法
+  与私有的 `mounted_drive_letter`。
+- `src/application/card_login_mount_session.cpp`：生产运行时转发到存储层；核心实现。
+- `tests/card_login_mount_session_tests.cpp`：假件记录调用，新增 6 组用例与
+  `require_throws_plain_logic_error`。
+- 四个 UI 测试的假会话补桩。
+- 无 CMake 改动。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`review-clean`（Ninja + Debug + `/W4 /WX`）编译无警告，
+`card_login_mount_session_tests` 通过；受接口变更波及的四个 UI 目标一并构建，注册为测试的三个
+连同本片共 4/4 通过（`card_product_webview_integration_tests` 是 `EXCLUDE_FROM_ALL` 的手动
+夹具，只构建）。另完成下表四次变异测试，每次都不吞构建输出且确认退出码为 1。
+
+| 变异 | 测试报出 |
+|---|---|
+| 删掉「未挂载即拒」 | an unmounted container was read from anyway（换用新断言后才咬住） |
+| 移动一律走重命名 | a move between containers did not become a copy and a delete |
+| 重命名的新名字改用路径解析器 | a rename did not become a move between two names in one directory |
+| 删掉认证检查 | an unauthenticated session served a directory listing |
+
+全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.5]let a page reach a container by its identifier`）。

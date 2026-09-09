@@ -42,6 +42,8 @@ using usb_vault::application::kContainerIndexV1FileSize;
 using usb_vault::application::kContainerIndexV1SlotCount;
 using usb_vault::application::list_container_index_paths_v1;
 using usb_vault::security::SecureBuffer;
+using usb_vault::volume::VolumeDirectoryEntry;
+using usb_vault::volume::VolumeDirectoryListing;
 
 static_assert(std::derived_from<
               CardLoginMountSession,
@@ -436,6 +438,55 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     ++mount_imported_writes;
   }
 
+  // The storage layer, recorded rather than performed. What the session is
+  // answerable for is the absolute path each call arrives with, and that is
+  // exactly what these keep.
+  [[nodiscard]] VolumeDirectoryListing list_directory(
+      const std::wstring_view absolute_directory) override {
+    listed.emplace_back(absolute_directory);
+    return listing;
+  }
+
+  void delete_entry(const std::wstring_view absolute_path) override {
+    deleted.emplace_back(absolute_path);
+  }
+
+  void create_directory(const std::wstring_view absolute_path) override {
+    created_directories.emplace_back(absolute_path);
+  }
+
+  void move_entry(const std::wstring_view absolute_source,
+                  const std::wstring_view absolute_destination) override {
+    moved.emplace_back(std::wstring(absolute_source),
+                       std::wstring(absolute_destination));
+  }
+
+  void move_entry_by_copying(
+      const std::wstring_view absolute_source,
+      const std::wstring_view absolute_destination) override {
+    moved_by_copying.emplace_back(std::wstring(absolute_source),
+                                  std::wstring(absolute_destination));
+  }
+
+  void copy_entry(const std::wstring_view absolute_source,
+                  const std::wstring_view absolute_destination) override {
+    copied.emplace_back(std::wstring(absolute_source),
+                        std::wstring(absolute_destination));
+  }
+
+  [[nodiscard]] std::size_t storage_calls() const noexcept {
+    return listed.size() + deleted.size() + created_directories.size() +
+           moved.size() + moved_by_copying.size() + copied.size();
+  }
+
+  VolumeDirectoryListing listing;
+  std::vector<std::wstring> listed;
+  std::vector<std::wstring> deleted;
+  std::vector<std::wstring> created_directories;
+  std::vector<std::pair<std::wstring, std::wstring>> moved;
+  std::vector<std::pair<std::wstring, std::wstring>> moved_by_copying;
+  std::vector<std::pair<std::wstring, std::wstring>> copied;
+
   bool remember_paths{true};
   int remember_paths_writes{};
   bool mount_imported{};
@@ -479,6 +530,24 @@ void require_throws(Action&& action, const char* const message) {
   try {
     action();
   } catch (const Exception&) {
+    return;
+  }
+  throw std::runtime_error(message);
+}
+
+// 🔴 `std::invalid_argument` is itself a `std::logic_error`, so asking only
+// for the base accepts either one. The two mean different things at this
+// boundary -- "no container answers to that" against "that container is not
+// mounted" -- and a page has to be able to say which, so the tests insist on
+// the difference rather than letting the hierarchy blur it.
+template <typename Action>
+void require_throws_plain_logic_error(Action&& action,
+                                      const char* const message) {
+  try {
+    action();
+  } catch (const std::invalid_argument&) {
+    throw std::runtime_error(message);
+  } catch (const std::logic_error&) {
     return;
   }
   throw std::runtime_error(message);
@@ -1965,6 +2034,198 @@ void test_dropping_a_record_works_whether_or_not_remembering_is_on() {
           "a record could not be cleared once remembering was turned off");
 }
 
+// 🔴 A page names a container by the identifier this session handed it and
+// never by a drive letter, because a page able to name a letter could name
+// any volume on the machine.
+void test_the_file_manager_reaches_a_container_by_identifier() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t first = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t second = session.create_container(
+      L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+
+  runtime.listing.entries.push_back(
+      VolumeDirectoryEntry{.name = L"notes.txt"});
+  const VolumeDirectoryListing listing =
+      session.list_container_directory(first, L"");
+  require(listing.entries.size() == 1 &&
+              listing.entries[0].name == L"notes.txt",
+          "the listing did not come back from the storage layer");
+  require(runtime.listed.size() == 1 && runtime.listed[0] == L"X:\\",
+          "an empty relative path did not name the first container's root");
+
+  static_cast<void>(
+      session.list_container_directory(second, L"reports\\2026"));
+  require(runtime.listed.size() == 2 &&
+              runtime.listed[1] == L"W:\\reports\\2026",
+          "the second container was not reached on its own drive letter");
+}
+
+void test_the_file_manager_refuses_a_container_it_cannot_reach() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+
+  require_throws_plain_logic_error(
+      [&] { static_cast<void>(session.list_container_directory(1, L"")); },
+      "an unauthenticated session served a directory listing");
+
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  require_throws<std::invalid_argument>(
+      [&] {
+        static_cast<void>(session.list_container_directory(id + 100, L""));
+      },
+      "an identifier no container answers to was accepted");
+
+  // Adopted but not mounted is the case the page will hit most: the container
+  // is in the list, and there is nothing behind it to read.
+  session.unmount_container(id);
+  require_throws_plain_logic_error(
+      [&] { static_cast<void>(session.list_container_directory(id, L"")); },
+      "an unmounted container was read from anyway");
+  require_throws_plain_logic_error(
+      [&] { session.delete_container_entry(id, L"", L"notes.txt"); },
+      "an unmounted container was written to anyway");
+
+  require(runtime.storage_calls() == 0,
+          "a refused request still reached the storage layer");
+}
+
+// This is where a page-supplied string becomes a path, so it is where one that
+// could leave the container has to stop.
+void test_a_path_that_could_leave_the_container_never_reaches_the_disk() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  const std::wstring_view escapes[] = {L"..",
+                                       L"..\\..\\Windows",
+                                       L"C:\\Windows",
+                                       L"\\\\server\\share",
+                                       L"\\rooted",
+                                       L"reports\\..\\..\\secrets"};
+  for (const std::wstring_view relative : escapes) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          static_cast<void>(session.list_container_directory(id, relative));
+        },
+        "a relative path that leaves the container was resolved");
+  }
+
+  // A name is checked as the one component it claims to be, so nothing in it
+  // can turn an operation on the entry the user picked into an operation on
+  // something else. The colon matters most: `a:b` is a stream on `a`.
+  const std::wstring_view names[] = {L"", L"..", L"sub\\file.txt", L"a:b",
+                                     L"con"};
+  for (const std::wstring_view name : names) {
+    require_throws<std::invalid_argument>(
+        [&] { session.delete_container_entry(id, L"", name); },
+        "a name that is not one plain component was accepted");
+  }
+
+  require(runtime.storage_calls() == 0,
+          "a refused path still reached the storage layer");
+}
+
+void test_deleting_and_creating_name_the_entry_the_page_picked() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  session.delete_container_entry(id, L"reports", L"old.txt");
+  require(runtime.deleted.size() == 1 &&
+              runtime.deleted[0] == L"X:\\reports\\old.txt",
+          "the delete did not name the entry inside the directory shown");
+
+  session.create_container_directory(id, L"", L"archive");
+  require(runtime.created_directories.size() == 1 &&
+              runtime.created_directories[0] == L"X:\\archive",
+          "the new directory was not made where the page was looking");
+}
+
+void test_renaming_stays_inside_one_directory() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  session.rename_container_entry(id, L"reports", L"old.txt", L"new.txt");
+  require(runtime.moved.size() == 1 &&
+              runtime.moved[0].first == L"X:\\reports\\old.txt" &&
+              runtime.moved[0].second == L"X:\\reports\\new.txt",
+          "a rename did not become a move between two names in one directory");
+
+  require_throws<std::invalid_argument>(
+      [&] {
+        session.rename_container_entry(id, L"reports", L"old.txt",
+                                       L"sub\\new.txt");
+      },
+      "a new name holding a separator was accepted");
+  require(runtime.moved.size() == 1, "the refused rename still moved an entry");
+}
+
+// The identifiers alone decide which move this is, because this session never
+// puts two containers on one drive letter.
+void test_a_move_within_one_container_renames_and_between_two_carries_bytes() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t first = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t second = session.create_container(
+      L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+
+  session.move_container_entry(first, L"reports", L"q1.txt", first, L"archive");
+  require(runtime.moved.size() == 1 && runtime.moved_by_copying.empty() &&
+              runtime.moved[0].first == L"X:\\reports\\q1.txt" &&
+              runtime.moved[0].second == L"X:\\archive\\q1.txt",
+          "a move inside one container did not stay a rename");
+
+  session.move_container_entry(first, L"reports", L"q1.txt", second, L"");
+  require(runtime.moved.size() == 1 && runtime.moved_by_copying.size() == 1 &&
+              runtime.moved_by_copying[0].first == L"X:\\reports\\q1.txt" &&
+              runtime.moved_by_copying[0].second == L"W:\\q1.txt",
+          "a move between containers did not become a copy and a delete");
+
+  session.copy_container_entry(second, L"", L"q1.txt", first, L"archive");
+  require(runtime.copied.size() == 1 &&
+              runtime.copied[0].first == L"W:\\q1.txt" &&
+              runtime.copied[0].second == L"X:\\archive\\q1.txt",
+          "a copy did not reach across the two containers");
+
+  // The destination is checked as strictly as the source, so a container that
+  // is no longer mounted cannot be moved into.
+  session.unmount_container(second);
+  require_throws_plain_logic_error(
+      [&] {
+        session.move_container_entry(first, L"", L"q1.txt", second, L"");
+      },
+      "an unmounted destination container accepted a move");
+  require(runtime.moved_by_copying.size() == 1,
+          "the refused move still carried an entry");
+}
+
 }  // namespace
 
 int main() {
@@ -2016,6 +2277,12 @@ int main() {
     test_a_login_that_cannot_read_the_index_still_opens();
     test_turning_remembering_off_stops_writing_without_erasing();
     test_dropping_a_record_works_whether_or_not_remembering_is_on();
+    test_the_file_manager_reaches_a_container_by_identifier();
+    test_the_file_manager_refuses_a_container_it_cannot_reach();
+    test_a_path_that_could_leave_the_container_never_reaches_the_disk();
+    test_deleting_and_creating_name_the_entry_the_page_picked();
+    test_renaming_stays_inside_one_directory();
+    test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
