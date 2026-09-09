@@ -52,6 +52,43 @@ static_assert(std::derived_from<
               CardLoginMountSession,
               usb_vault::application::IActiveVolumeSession>);
 
+// 🔴 The operation history is a closed schema, and Q-04 turns that from a
+// design preference into an obligation: an export kind here would mean the
+// product records that an export happened, which is precisely what the user
+// did not agree to carry. Pinning the four values makes adding a fifth a
+// deliberate act that has to come through this line.
+static_assert(static_cast<std::uint8_t>(OperationKind::session_opened) == 0);
+static_assert(static_cast<std::uint8_t>(OperationKind::container_created) == 1);
+static_assert(static_cast<std::uint8_t>(OperationKind::container_mounted) == 2);
+static_assert(static_cast<std::uint8_t>(OperationKind::container_unmounted) ==
+              3);
+
+// The values above pin what each kind is on the wire; this pins that there are
+// only those four. A fifth enumerator makes the switch below incomplete, and
+// C4062 is raised to an error right here so that becomes a build failure -- an
+// export kind cannot be added to the history quietly, which is the whole point
+// of Q-04's third acceptance item.
+//
+// The pragma is not optional: C4062 is off by default in MSVC and `/W4` does
+// not turn it on, so a switch like this one is silent about the very thing it
+// is here to catch unless the warning is asked for by number.
+#pragma warning(push)
+#pragma warning(error : 4062)
+[[nodiscard]] constexpr bool operation_kind_is_closed(
+    const OperationKind kind) noexcept {
+  switch (kind) {
+    case OperationKind::session_opened:
+    case OperationKind::container_created:
+    case OperationKind::container_mounted:
+    case OperationKind::container_unmounted:
+      return true;
+  }
+  return false;
+}
+#pragma warning(pop)
+
+static_assert(operation_kind_is_closed(OperationKind::session_opened));
+
 void require(const bool condition, const char* const message) {
   if (!condition) throw std::runtime_error(message);
 }
@@ -472,6 +509,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
                   const std::wstring_view absolute_destination) override {
     copied.emplace_back(std::wstring(absolute_source),
                         std::wstring(absolute_destination));
+    if (fail_copy) throw std::runtime_error("the copy failed");
   }
 
   [[nodiscard]] std::size_t storage_calls() const noexcept {
@@ -480,6 +518,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   }
 
   VolumeDirectoryListing listing;
+  bool fail_copy{};
   std::vector<std::wstring> listed;
   std::vector<std::wstring> deleted;
   std::vector<std::wstring> created_directories;
@@ -2434,6 +2473,82 @@ void test_a_migration_refuses_what_it_cannot_name() {
           "a refused migration still reached the storage layer");
 }
 
+// 🔴 Q-04's third acceptance item, checked over the whole export surface at
+// once. It is the one item that is not the user's risk to carry: what they
+// accepted is that a copy may be found, never that this product would write
+// down that they made one. So this asks the question of every export entry
+// point, of successes and of failures alike, and of every place the session
+// can write to.
+void test_no_export_leaves_a_single_local_trace() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t mounted = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t idle = session.create_container(
+      L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+  session.unmount_container(idle);
+
+  // Everything the session is able to write to, recorded before any export
+  // happens. Adding a place the session can write means adding it here.
+  const std::size_t events_before = session.operation_history().size();
+  const std::size_t runtime_events_before = runtime.events.size();
+  const int index_writes_before = runtime.index_writes;
+  const int remember_writes_before = runtime.remember_paths_writes;
+  const int import_writes_before = runtime.mount_imported_writes;
+  const std::vector<std::byte> index_before = runtime.container_index;
+
+  const auto nothing_was_written = [&](const char* const message) {
+    require(session.operation_history().size() == events_before &&
+                runtime.events.size() == runtime_events_before &&
+                runtime.index_writes == index_writes_before &&
+                runtime.remember_paths_writes == remember_writes_before &&
+                runtime.mount_imported_writes == import_writes_before &&
+                runtime.container_index == index_before,
+            message);
+  };
+
+  session.export_container_entry(mounted, L"reports", L"q1.txt", L"D:\\Out");
+  nothing_was_written("a plaintext export left a local trace");
+
+  session.export_container_file(idle, L"D:\\Out");
+  nothing_was_written("a migration export left a local trace");
+
+  // 🔴 The case a product usually gets wrong: a failed export is exactly the
+  // one an implementation is tempted to record, and recording it would say
+  // that an export was attempted on this machine.
+  runtime.fail_copy = true;
+  require_throws<std::runtime_error>(
+      [&] {
+        session.export_container_entry(mounted, L"", L"q1.txt", L"D:\\Out");
+      },
+      "a failing plaintext export did not report the failure");
+  nothing_was_written("a failed plaintext export left a local trace");
+
+  require_throws<std::runtime_error>(
+      [&] { session.export_container_file(idle, L"D:\\Out"); },
+      "a failing migration did not report the failure");
+  nothing_was_written("a failed migration left a local trace");
+  runtime.fail_copy = false;
+
+  // A refused export must not record the attempt either.
+  require_throws<std::invalid_argument>(
+      [&] {
+        session.export_container_entry(mounted, L"", L"q1.txt", L"Backups");
+      },
+      "a refused export was accepted");
+  nothing_was_written("a refused export left a local trace");
+
+  // And the ordinary operations still do record themselves, so the checks
+  // above are about exports rather than about a session that records nothing.
+  session.unmount_container(mounted);
+  require(session.operation_history().size() == events_before + 1,
+          "an unmount stopped being recorded, so the export checks prove "
+          "nothing");
+}
+
 }  // namespace
 
 int main() {
@@ -2497,6 +2612,7 @@ int main() {
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();
     test_a_mounted_container_is_not_migrated();
     test_a_migration_refuses_what_it_cannot_name();
+    test_no_export_leaves_a_single_local_trace();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
