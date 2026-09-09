@@ -927,6 +927,57 @@ void test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name() {
           "the name field does not match the native name limit");
 }
 
+void test_a_drag_stays_inside_the_containers_and_says_where_out_lives() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "files");
+
+  require(section.find("id=\"file-drop-targets\"") != std::string::npos,
+          "there is nowhere to drop an entry into another container");
+  require(script.find("row.draggable = !busy;") != std::string::npos &&
+              script.find("row.dataset.fileDrag = entry.name;") !=
+                  std::string::npos &&
+              script.find("row.dataset.fileDropDirectory = entry.name;") !=
+                  std::string::npos,
+          "the listing rows neither travel nor receive");
+
+  // 🔴 The drag carries a marker and nothing else. A page that put a file on
+  // the drag would have made a plaintext export out of a gesture, with none of
+  // the confirmations Q-04 requires standing in front of it.
+  require(script.find("event.dataTransfer.setData(\"text/plain\", \"\");") !=
+              std::string::npos &&
+              script.find("DownloadURL") == std::string::npos &&
+              script.find("dataTransfer.files") == std::string::npos &&
+              script.find("dataTransfer.items.add") == std::string::npos,
+          "the drag hands something other than a marker to the shell");
+
+  // 🔴 And when it lands nowhere this page owns, the page says where out of
+  // the volume actually lives instead of quietly doing nothing.
+  require(script.find("要把文件拿出加密卷，那是明文导出，请到「备份中心」做。") !=
+              std::string::npos &&
+              script.find("if (!dropped) reportFileDropRefused();") !=
+                  std::string::npos,
+          "a drag that left the page is not answered with the backup centre");
+
+  // Both ends of a transfer, and the modifier that makes it a copy.
+  require(script.find("? bridge.copyContainerEntry(\n"
+                      "          container.id, here, name, destinationId, "
+                      "destinationPath)") != std::string::npos &&
+              script.find(": bridge.moveContainerEntry(\n"
+                          "          container.id, here, name, destinationId, "
+                          "destinationPath)") != std::string::npos,
+          "a transfer does not name both of its ends");
+  require(script.find("event.dataTransfer.dropEffect = event.ctrlKey ? "
+                      "\"copy\" : \"move\";") != std::string::npos,
+          "the drag does not distinguish a copy from a move");
+
+  // A transfer between containers reads and writes every byte on the thread
+  // that draws this page. The disabled state has to reach the screen first.
+  require(script.find("await new Promise((resolve) => { setTimeout(resolve, "
+                      "0); });") != std::string::npos,
+          "a blocking transfer starts before the page looks busy");
+}
+
 }  // namespace
 
 int main() {
@@ -952,6 +1003,7 @@ int main() {
     test_actions_are_serialized_and_external_changes_coalesce();
     test_the_file_manager_browses_a_container_without_naming_a_volume();
     test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name();
+    test_a_drag_stays_inside_the_containers_and_says_where_out_lives();
     std::cout << "card_product_ui_page_contract_tests: PASS\n";
     return 0;
   } catch (const std::exception& error) {

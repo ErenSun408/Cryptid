@@ -6941,4 +6941,81 @@ P3.7 把「列表刷新」挂在了 `renderContainers()` 上，本片撤掉了�
 测试、`node --check` 语法检查，并重跑了 P3.7 那个跨层解析验证（格式未变，仍然对得上）。
 全套留到 P3.10。
 
-- 提交：待定（拟 `[P3.8]delete once and rename in place`）。
+- 提交：`8116f0d [P3.8]delete once and rename in place`。
+
+---
+
+### 小切片 P3.9：移动与拖放，含跨容器，且拖出去时指路
+
+行可拖，落点有三种：**本容器的子目录**（行本身）、**面包屑上的任一祖先**（往上移）、
+**另一个已挂载容器**（列表上方那条虚线拖放条）。按住 Ctrl 拖为复制。
+
+#### 🔴 拖动只携带一个标记，绝不递给 shell 任何文件
+
+`setData("text/plain", "")` —— 就这一个空标记。**不设 `DownloadURL`，不碰
+`dataTransfer.files`，不用 `items.add`。** 一旦页面把文件放上拖动数据，「拖到桌面」就成了一次
+明文导出，而 Q-04 要求的那两道确认屏一道都没经过。契约测试三条负断言把这三个 API 名字钉死在
+「不许出现」上，并做了变异实测：加一行 `setData("DownloadURL", ...)`，测试立刻报出。
+
+#### 🔴 落在本页管不到的地方，就说清楚出口在哪
+
+`dragend` 时若本页没有接住这次拖放（`fileDropHandled` 为假），页面报：
+「没有移动。文件只能放进本容器的文件夹，或另一个已挂载的容器。要把文件拿出加密卷，那是明文导出，
+请到『备份中心』做。」
+
+这正是 P3.9 那一行要求的「拖向普通磁盘时拒绝并指向备份中心」。实现上它比字面要求覆盖得更宽：
+拖到窗口外、拖到页面空白处、拖回原地，都会得到同一句话 —— 因为这三种情况用户想知道的是同一件事。
+
+#### 🔵 复制在这一片补上了入口（第二处计划外扩张，同样记档）
+
+P3.9 那一行只写「移动与拖放」。但 `copy_container_entry` 从 P3.4 建到 P3.6 的桥，若这一片不给它
+入口，它到 P3 结束都是一条死通路（P3.8 的日志里已经把这个问题挂起，说「留给 P3.9 决定」）。
+Ctrl+拖=复制 是系统文件管理器的通行手势，代价是一个 `event.ctrlKey` 三元和一句提示文案
+（「按住 Ctrl 拖为复制」，写在拖放条上，不是隐藏手势）。**至此 P3.1～P3.6 建的每一条通路都有页面
+入口了。**
+
+#### ⚠️ 跨容器移动仍然会冻住界面 —— 这一片只让它「看起来在忙」而不是「看起来死了」
+
+桥是同步的：跨容器移动在画这个页面的那条线程上逐字节读写。P3.5 就记下了这个缺口，本片**没有**
+解决它 —— 引入线程模型是 P3 计划里没有排的一大块，硬塞进最后一个切片是错的做法。
+
+本片只做了一件便宜而真实的改善：`runFileAction` 在发起调用前 `await` 一个
+`setTimeout(resolve, 0)`，让「禁用 + 忙」的那次绘制真正落到屏幕上再开始阻塞。一个看起来在忙的
+界面和一个看起来死了的界面，对用户是两件事。契约测试把这一行钉住了。
+
+🔴 **异步与取消仍是未解项**，已在 `MILESTONES.md` 记为 P3.6／P3.9 的遗留，现随本片一并顺延给
+P3.10 复核后决定放 P4 还是补做。
+
+#### 几条实现上的取舍
+
+- 落点高亮用一个 `fileDropHighlight` 变量托管，`dragleave`／`drop`／`dragend` 都会清掉，
+  避免拖过多个目标后留下一串高亮。
+- 拖到自己身上（目录行等于被拖的那一项）在 `dragover` 就不放行，不必等到调用才被原生侧拒。
+- 拖到另一个容器落在**它的根**：拖放条上放的是容器名，它说的是「哪个容器」，没说「容器里哪儿」。
+- 面包屑最后一节（当前目录）没有 `data-file-depth`，所以拖到它上面等于没落点，会走上面那句提示。
+
+#### 三次变异测试
+
+| 变异 | 测试报出 |
+|---|---|
+| 拖动数据里加 `DownloadURL` | the drag hands something other than a marker to the shell |
+| `dragend` 不再报「没有移动」 | a drag that left the page is not answered with the backup centre |
+| 去掉忙态绘制前的那次让出 | a blocking transfer starts before the page looks busy |
+
+#### 改动
+
+- `ui/card_session.html`：拖放条容器、六条 CSS（含拖中与落点高亮）。
+- `ui/card_session.js`：`transferFileEntry`／`renderFileDropTargets`／`reportFileDropRefused`
+  与高亮托管，行加 `draggable` 与两个 dataset，三组 `dragover`／`drop` 监听
+  （列表／面包屑／拖放条）、`dragstart`／`dragend`，`runFileAction` 加一次让出。
+- `tests/card_product_webview_integration.html`：新增 `file-drop-targets`。
+- `tests/card_product_ui_page_contract_tests.cpp`：新增一组契约（含三条负断言）。
+- 无 CMake 改动。
+
+#### 验证
+
+按 P3 测试纪律只跑本片最小目标：`card_product_ui_page_contract_tests` 通过。另完成上表三次变异
+测试与 `node --check`。**拖放本身是纯交互，契约测试只能钉住代码在不在、数据给不给，给不出「拖起来
+是对的」—— 这一条必须留到 P3.10 实机。** 全套留到 P3.10。
+
+- 提交：待定（拟 `[P3.9]let a drag cross containers and never leave one`）。

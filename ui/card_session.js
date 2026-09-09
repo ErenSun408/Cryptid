@@ -70,6 +70,7 @@
   const fileNameCloseButton = document.getElementById("file-name-close");
   const fileNameCancelButton = document.getElementById("file-name-cancel");
   const fileNameConfirmButton = document.getElementById("file-name-confirm");
+  const fileDropTargets = document.getElementById("file-drop-targets");
   const creationButtons =
     Array.from(document.querySelectorAll("[data-create-container]"));
   const creationTypeButtons =
@@ -783,6 +784,14 @@
     }
     for (const entry of fileEntries) {
       const row = document.createElement("tr");
+      // Dragging carries nothing but a marker: the page never hands the shell
+      // a file, so a drag out of the window cannot become an export by
+      // accident. Where it may land is decided below, in this page only.
+      row.draggable = !busy;
+      row.dataset.fileDrag = entry.name;
+      if (entry.isDirectory && !entry.isLink) {
+        row.dataset.fileDropDirectory = entry.name;
+      }
       const name = document.createElement("td");
       if (entry.isDirectory) {
         const open = document.createElement("button");
@@ -866,6 +875,10 @@
     busy = true;
     setFileStatus("");
     render(messageForCurrentState());
+    // A transfer between two containers reads and writes every byte on the
+    // thread that draws this page, so the disabled state has to reach the
+    // screen before the call starts. One task boundary is what buys that.
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
     let failed = false;
     try {
       await action();
@@ -922,9 +935,84 @@
       "无法新建文件夹，这个名字可能不合规或已经存在。");
   };
 
+  // ---- Dragging ----------------------------------------------------------
+  // The entry being dragged, and whether this page took the drop. Empty means
+  // no drag is in flight, so a stale drop cannot move an entry the user has
+  // since navigated away from.
+  let fileDragName = "";
+  let fileDropHandled = false;
+  let fileDropHighlight = null;
+
+  const clearFileDropHighlight = () => {
+    if (fileDropHighlight === null) return;
+    fileDropHighlight.classList.remove("file-drop-over");
+    fileDropHighlight = null;
+  };
+
+  const highlightFileDrop = (element) => {
+    if (fileDropHighlight === element) return;
+    clearFileDropHighlight();
+    element.classList.add("file-drop-over");
+    fileDropHighlight = element;
+  };
+
+  const transferFileEntry = async (name, destinationId, destinationPath,
+                                   copy) => {
+    const container = selectedFileContainer();
+    if (container === null || !container.mounted || name === "") return;
+    const here = filePath.join("/");
+    if (!copy && destinationId === container.id && destinationPath === here) {
+      return;
+    }
+    await runFileAction(
+      () => (copy
+        ? bridge.copyContainerEntry(
+          container.id, here, name, destinationId, destinationPath)
+        : bridge.moveContainerEntry(
+          container.id, here, name, destinationId, destinationPath)),
+      copy
+        ? "无法复制到那里，目标可能已经有同名条目了。"
+        : "无法移动到那里，目标可能已经有同名条目了。");
+  };
+
+  const renderFileDropTargets = () => {
+    while (fileDropTargets.firstChild !== null) {
+      fileDropTargets.removeChild(fileDropTargets.firstChild);
+    }
+    const container = selectedFileContainer();
+    if (container === null || !container.mounted) return;
+    const others = [];
+    for (const other of containers) {
+      if (other.mounted && other.id !== container.id) others.push(other);
+    }
+    if (others.length === 0) return;
+    const hint = document.createElement("span");
+    hint.className = "file-drop-hint";
+    hint.textContent = "拖到这里放进另一个容器（按住 Ctrl 拖为复制）：";
+    fileDropTargets.appendChild(hint);
+    for (const other of others) {
+      const chip = document.createElement("span");
+      chip.className = "file-drop-chip";
+      chip.textContent = `${other.name} · ${other.drive}`;
+      chip.dataset.fileDropContainer = String(other.id);
+      fileDropTargets.appendChild(chip);
+    }
+  };
+
+  // 🔴 A drag that landed nowhere this page owns is the one gesture the file
+  // manager has to answer for. Taking a file out of the volume is a plaintext
+  // export, which lives behind the backup centre's confirmations, so the page
+  // says where that is instead of doing it here.
+  const reportFileDropRefused = () => {
+    setFileStatus(
+      "没有移动。文件只能放进本容器的文件夹，或另一个已挂载的容器。" +
+      "要把文件拿出加密卷，那是明文导出，请到「备份中心」做。", "error");
+  };
+
   const refreshFileManager = async () => {
     renderFileContainerOptions();
     renderFileBreadcrumb();
+    renderFileDropTargets();
     const container = selectedFileContainer();
     if (bridge === null || container === null || !container.mounted) {
       fileEntries = [];
@@ -1954,6 +2042,117 @@
     }
     openFileNameFlow("rename", act.dataset.fileName);
   });
+  fileListBody.addEventListener("dragstart", (event) => {
+    const row = event.target instanceof Element
+      ? event.target.closest("[data-file-drag]")
+      : null;
+    if (row === null || busy || currentState !== nativeState.authenticated) {
+      event.preventDefault();
+      return;
+    }
+    fileDragName = row.dataset.fileDrag;
+    fileDropHandled = false;
+    row.classList.add("file-row-dragging");
+    // Only a marker. No file, no path, and no name goes onto the drag, so
+    // nothing outside this page can be handed the volume's contents.
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData("text/plain", "");
+  });
+  fileListBody.addEventListener("dragend", (event) => {
+    const row = event.target instanceof Element
+      ? event.target.closest("[data-file-drag]")
+      : null;
+    if (row !== null) row.classList.remove("file-row-dragging");
+    clearFileDropHighlight();
+    const dropped = fileDropHandled;
+    fileDragName = "";
+    fileDropHandled = false;
+    if (!dropped) reportFileDropRefused();
+  });
+
+  const allowFileDrop = (event, element) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = event.ctrlKey ? "copy" : "move";
+    highlightFileDrop(element);
+  };
+
+  fileListBody.addEventListener("dragover", (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest("[data-file-drop-directory]")
+      : null;
+    if (target === null || fileDragName === "" || busy ||
+        target.dataset.fileDropDirectory === fileDragName) {
+      return;
+    }
+    allowFileDrop(event, target);
+  });
+  fileListBody.addEventListener("drop", async (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest("[data-file-drop-directory]")
+      : null;
+    if (target === null || fileDragName === "" || busy) return;
+    event.preventDefault();
+    clearFileDropHighlight();
+    fileDropHandled = true;
+    const name = fileDragName;
+    fileDragName = "";
+    const container = selectedFileContainer();
+    if (container === null) return;
+    await transferFileEntry(
+      name, container.id,
+      [...filePath, target.dataset.fileDropDirectory].join("/"),
+      event.ctrlKey);
+  });
+
+  fileBreadcrumb.addEventListener("dragover", (event) => {
+    const crumb = event.target instanceof Element
+      ? event.target.closest("[data-file-depth]")
+      : null;
+    if (crumb === null || fileDragName === "" || busy) return;
+    allowFileDrop(event, crumb);
+  });
+  fileBreadcrumb.addEventListener("drop", async (event) => {
+    const crumb = event.target instanceof Element
+      ? event.target.closest("[data-file-depth]")
+      : null;
+    if (crumb === null || fileDragName === "" || busy) return;
+    event.preventDefault();
+    clearFileDropHighlight();
+    fileDropHandled = true;
+    const name = fileDragName;
+    fileDragName = "";
+    const container = selectedFileContainer();
+    if (container === null) return;
+    await transferFileEntry(
+      name, container.id,
+      filePath.slice(0, Number(crumb.dataset.fileDepth)).join("/"),
+      event.ctrlKey);
+  });
+
+  fileDropTargets.addEventListener("dragover", (event) => {
+    const chip = event.target instanceof Element
+      ? event.target.closest("[data-file-drop-container]")
+      : null;
+    if (chip === null || fileDragName === "" || busy) return;
+    allowFileDrop(event, chip);
+  });
+  fileDropTargets.addEventListener("drop", async (event) => {
+    const chip = event.target instanceof Element
+      ? event.target.closest("[data-file-drop-container]")
+      : null;
+    if (chip === null || fileDragName === "" || busy) return;
+    event.preventDefault();
+    clearFileDropHighlight();
+    fileDropHandled = true;
+    const name = fileDragName;
+    fileDragName = "";
+    // The root of the other container: a drop onto its name says which
+    // container, and says nothing about where inside it.
+    await transferFileEntry(
+      name, Number(chip.dataset.fileDropContainer), "", event.ctrlKey);
+  });
+  fileDropTargets.addEventListener("dragleave", () => clearFileDropHighlight());
+
   fileCreateDirectoryButton.addEventListener(
     "click", () => openFileNameFlow("create", ""));
   fileNameCloseButton.addEventListener("click", () => closeFileNameFlow());

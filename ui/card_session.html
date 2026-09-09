@@ -257,6 +257,20 @@
     .file-actions { display: flex; gap: .35rem; justify-content: flex-end; }
     .file-actions .shell-button { padding: .18rem .5rem; font-size: .7rem; }
     .file-actions .danger { color: var(--danger); border-color: rgba(224, 123, 114, .45); }
+    .file-drop-targets:not(:empty) {
+      display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
+      margin: 0 0 .7rem; padding: .5rem .6rem;
+      border: 1px dashed var(--line-2); border-radius: .5rem;
+    }
+    .file-drop-hint { color: var(--text-3); font-size: .72rem; }
+    .file-drop-chip {
+      padding: .2rem .55rem; border: 1px solid var(--line-2); border-radius: .35rem;
+      color: var(--text-2); font-size: .72rem;
+    }
+    .file-drop-over, tr.file-drop-over > td {
+      border-color: var(--gold); background: rgba(200, 169, 106, .12);
+    }
+    .file-row-dragging { opacity: .5; }
 
     .content { min-width: 0; padding: 1.5rem 1.75rem; overflow-y: auto; max-height: calc(100vh - 3.25rem); }
     .dashboard-section { display: none; }
@@ -707,6 +721,7 @@
             </div>
           </div>
           <nav id="file-breadcrumb" class="file-breadcrumb" aria-label="当前位置"></nav>
+          <div id="file-drop-targets" class="file-drop-targets"></div>
           <div class="operation-card">
             <table class="operation-table">
               <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
