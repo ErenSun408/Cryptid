@@ -1533,6 +1533,26 @@ void test_unmount_active_releases_every_adopted_container() {
           "unmount_active dropped the adopted containers");
 }
 
+void test_operation_logging_can_pause_without_affecting_volume_actions() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(
+      authentication, runtime, layout(), LoginMountPolicy::manual);
+  require(session.operation_logging_enabled(), "logging is not enabled by default");
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto before = session.operation_history().size();
+  session.set_operation_logging_enabled(false);
+  const auto id = session.create_container(L"C:\\vault\\work.hc",
+                                           64ULL * 1024ULL * 1024ULL);
+  session.unmount_container(id);
+  require(session.operation_history().size() == before,
+          "disabled logging recorded operations or removed existing history");
+  session.set_operation_logging_enabled(true);
+  session.mount_adopted_container(id);
+  require(session.operation_history().size() == before + 1,
+          "re-enabled logging did not record the next operation");
+}
+
 void test_operation_history_records_only_committed_session_facts() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -2586,6 +2606,7 @@ int main() {
     test_mount_requires_authentication_and_an_existing_file();
     test_unmount_active_releases_every_adopted_container();
     test_operation_history_records_only_committed_session_facts();
+    test_operation_logging_can_pause_without_affecting_volume_actions();
     test_operation_history_distinguishes_publish_from_mount_failure();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();

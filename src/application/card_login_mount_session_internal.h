@@ -131,6 +131,7 @@ struct CardLoginMountSessionState final {
       operation_events;
   std::size_t operation_start{};
   std::size_t operation_count{};
+  bool operation_logging_enabled{true};
   std::uint64_t next_operation_sequence{1};
   // The password this session was opened under. Unlike the derived value
   // above it is the password itself, kept for the one operation that cannot
@@ -211,6 +212,12 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] std::vector<::usb_vault::application::OperationEvent>
   operation_history();
   void clear_operation_history() noexcept;
+  [[nodiscard]] bool operation_logging_enabled() const noexcept {
+    return state_.operation_logging_enabled;
+  }
+  void set_operation_logging_enabled(bool enabled) noexcept {
+    state_.operation_logging_enabled = enabled;
+  }
   void release_session_secrets() noexcept;
   void unmount_active();
   [[nodiscard]] bool force_unmount_active();

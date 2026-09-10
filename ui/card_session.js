@@ -682,6 +682,7 @@
   // The container being browsed, and where inside it. Zero means none is
   // chosen, which is what an empty container list leaves behind.
   let activeSection = "dashboard";
+  let operationLoggingEnabled = true;
   let fileContainerId = 0;
   let filePath = [];
   let fileEntries = [];
@@ -1916,6 +1917,7 @@
   };
 
   const showDashboardSection = (sectionName) => {
+    if (sectionName === "history" && !operationLoggingEnabled) return;
     closeFileContextMenu();
     activeSection = sectionName;
     for (const item of dashboardNavigation) {
@@ -2424,6 +2426,11 @@
   // not saved.
   const storedSettings = [
     {
+      setting: "operation-logging",
+      read: () => bridge.getOperationLoggingEnabled(),
+      write: (value) => bridge.setOperationLoggingEnabled(value),
+    },
+    {
       setting: "remember-containers",
       read: () => bridge.getRememberContainerPaths(),
       write: (value) => bridge.setRememberContainerPaths(value),
@@ -2448,6 +2455,13 @@
           throw new Error("invalid stored setting");
         }
         control.setAttribute("aria-checked", value ? "true" : "false");
+        if (stored.setting === "operation-logging") {
+          operationLoggingEnabled = value;
+          for (const item of dashboardNavigation) {
+            if (item.dataset.section === "history") item.hidden = !value;
+          }
+          if (!value && activeSection === "history") showDashboardSection("settings");
+        }
       } catch (_) {
         // An unreadable setting is not a licence to invent one. The switch
         // keeps the position it already had.
@@ -3268,6 +3282,7 @@
       // The switch shows what the native side holds, never what was clicked.
       // A refused or failed write must leave it where it really is rather
       // than where the click implied.
+      control.setAttribute("aria-disabled", "true");
       try {
         await stored.write(!enabled);
       } catch (_) {
@@ -3275,6 +3290,7 @@
           "无法更改该设置，请稍后重试。", "error");
       }
       await refreshStoredSwitches();
+      control.setAttribute("aria-disabled", "false");
     });
   }
   for (const button of creationButtons) {

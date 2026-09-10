@@ -426,6 +426,14 @@ void CardLoginMountSession::clear_operation_history() noexcept {
   impl_->core.clear_operation_history();
 }
 
+bool CardLoginMountSession::operation_logging_enabled() {
+  return impl_->core.operation_logging_enabled();
+}
+
+void CardLoginMountSession::set_operation_logging_enabled(const bool enabled) {
+  impl_->core.set_operation_logging_enabled(enabled);
+}
+
 void CardLoginMountSession::release_session_secrets() noexcept {
   impl_->core.release_session_secrets();
 }
@@ -576,6 +584,7 @@ void CardLoginMountSessionCore::record_operation(
     const OperationOutcome outcome,
     const std::wstring_view container_name,
     const wchar_t drive_letter) noexcept {
+  if (!state_.operation_logging_enabled) return;
   try {
     const auto completed =
         std::chrono::duration_cast<std::chrono::milliseconds>(

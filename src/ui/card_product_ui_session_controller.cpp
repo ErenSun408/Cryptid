@@ -627,4 +627,18 @@ void CardProductUiSessionController::clear_operation_history() {
   volume_session_.clear_operation_history();
 }
 
+bool CardProductUiSessionController::operation_logging_enabled() {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("operation logging preference requires authentication");
+  }
+  return volume_session_.operation_logging_enabled();
+}
+
+void CardProductUiSessionController::set_operation_logging_enabled(bool enabled) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("operation logging preference requires authentication");
+  }
+  volume_session_.set_operation_logging_enabled(enabled);
+}
+
 }  // namespace usb_vault::ui

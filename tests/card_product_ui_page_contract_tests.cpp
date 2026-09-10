@@ -213,10 +213,11 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
   // Four switches, of which only the card-removal unmount is a real product
   // guarantee: it is locked on because 8.4 treats the unmount as part of
   // deniability, so it must never be presented as something a user can turn
-  // off. The other three are the switches requirements 8.7.5 and 8.7.4 define,
-  // plus the one deciding whether an import opens what it just listed.
-  require(count_occurrences(settings, "role=\"switch\"") == 4 &&
-              count_occurrences(settings, "data-setting=\"") == 3 &&
+  // off. The four editable switches include the user-requested logging toggle.
+  require(count_occurrences(settings, "role=\"switch\"") == 5 &&
+              count_occurrences(settings, "data-setting=\"") == 4 &&
+              settings.find("data-setting=\"operation-logging\" "
+                            "aria-label=\"开启操作日志\"") != std::string::npos &&
               settings.find("data-setting=\"auto-mount\" "
                             "aria-label=\"登录后自动挂载全部容器\"") !=
                   std::string::npos &&
@@ -225,7 +226,7 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
               settings.find("data-setting=\"mount-imported\" "
                             "aria-label=\"自动尝试挂载导入的容器\"") !=
                   std::string::npos,
-          "settings switches do not match the three defined settings");
+          "settings switches do not match the four defined settings");
   require(settings.find("<span class=\"settings-switch\" role=\"switch\" "
                         "aria-checked=\"true\" aria-disabled=\"true\"") !=
               std::string::npos &&

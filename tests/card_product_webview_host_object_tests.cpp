@@ -68,6 +68,9 @@ void require(const bool condition, const char* const message) {
 
 class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
  public:
+  bool logging_enabled{true};
+  bool operation_logging_enabled() override { return logging_enabled; }
+  void set_operation_logging_enabled(bool enabled) override { logging_enabled = enabled; }
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
       : authentication_(authentication) {}
 
@@ -1043,6 +1046,22 @@ RecordingCloseSink g_close_sink;
   const bool adopted = result.boolVal == VARIANT_TRUE;
   static_cast<void>(::VariantClear(&result));
   return adopted;
+}
+
+void test_operation_logging_setting_is_authenticated_and_boolean() {
+  Fixture fixture;
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  require(FAILED(invoke_set_setting(*host.Get(), L"setOperationLoggingEnabled",
+      false, nullptr)), "unauthenticated logging setting accepted");
+  fixture.authentication.establish(root_secret());
+  require(invoke_setting(*host.Get(), L"getOperationLoggingEnabled"),
+      "logging default was not projected");
+  require(SUCCEEDED(invoke_set_setting(*host.Get(), L"setOperationLoggingEnabled",
+      false, nullptr)) && !fixture.volume.logging_enabled,
+      "logging preference did not reach the session");
+  require(invoke_with_number(*host.Get(), L"setOperationLoggingEnabled", 1,
+      nullptr, nullptr) == DISP_E_TYPEMISMATCH,
+      "non-boolean logging setting accepted");
 }
 
 void test_window_size_presets_are_bounded() {
@@ -2050,6 +2069,7 @@ int main() {
   try {
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();
+    test_operation_logging_setting_is_authenticated_and_boolean();
     test_login_consumes_and_wipes_one_array();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();

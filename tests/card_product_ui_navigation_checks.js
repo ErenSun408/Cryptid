@@ -69,6 +69,25 @@
     $("[data-section=backup]").click();
     $("[data-section=settings]").click();
     const sizeSelect = $("#settings-window-size");
+    const loggingSwitch = $('[data-setting="operation-logging"]');
+    const historyNav = $('[data-section="history"]');
+    check(loggingSwitch.getAttribute("aria-checked") === "true" && !historyNav.hidden,
+      "Operation logging and its navigation are enabled by default");
+    loggingSwitch.click();
+    await wait(() => historyNav.hidden);
+    historyNav.click();
+    check(!window.navigationFixture.loggingEnabled &&
+      $('#dashboard-section-settings').classList.contains("active"),
+      "Disabling logging hides and blocks the history route");
+    window.navigationFixture.failLogging = true;
+    loggingSwitch.click();
+    await tick();
+    check(historyNav.hidden && loggingSwitch.getAttribute("aria-checked") === "false",
+      "Failed logging preference change preserves native state");
+    window.navigationFixture.failLogging = false;
+    loggingSwitch.click();
+    await wait(() => !historyNav.hidden);
+    check(window.navigationFixture.loggingEnabled, "Re-enabling logging restores navigation");
     check(sizeSelect.value === "1", "Spacious is the default window preset");
     sizeSelect.value = "3";
     sizeSelect.dispatchEvent(new Event("change"));

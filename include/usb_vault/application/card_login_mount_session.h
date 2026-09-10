@@ -325,6 +325,10 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // Nothing is persisted, and opening a new session replaces the old history.
   [[nodiscard]] virtual std::vector<OperationEvent> operation_history() = 0;
   virtual void clear_operation_history() noexcept = 0;
+  [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
+  virtual void set_operation_logging_enabled(bool) {
+    throw std::runtime_error("operation logging preference is unavailable");
+  }
 
   // Releases every secret this session retained: the input it was opened
   // under and anything derived from it. The card identity they came from no
@@ -407,6 +411,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;
   void clear_operation_history() noexcept override;
+  [[nodiscard]] bool operation_logging_enabled() override;
+  void set_operation_logging_enabled(bool enabled) override;
   void release_session_secrets() noexcept override;
 
   void unmount_active() override;

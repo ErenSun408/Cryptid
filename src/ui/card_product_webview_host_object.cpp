@@ -97,6 +97,8 @@ constexpr DISPID kCopyContainerEntryId = 41;
 constexpr DISPID kExportContainerEntryId = 42;
 constexpr DISPID kExportContainerFileId = 43;
 constexpr DISPID kSetWindowSizeId = 44;
+constexpr DISPID kGetOperationLoggingEnabledId = 45;
+constexpr DISPID kSetOperationLoggingEnabledId = 46;
 
 constexpr wchar_t kListContainerDirectoryName[] = L"listContainerDirectory";
 constexpr wchar_t kDeleteContainerEntryName[] = L"deleteContainerEntry";
@@ -331,6 +333,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kSetWindowSizeId;
       return S_OK;
     }
+    if (matches(names[0], L"getOperationLoggingEnabled")) {
+      ids[0] = kGetOperationLoggingEnabledId;
+      return S_OK;
+    }
+    if (matches(names[0], L"setOperationLoggingEnabled")) {
+      ids[0] = kSetOperationLoggingEnabledId;
+      return S_OK;
+    }
     if (matches(names[0], kSubmitLoginPasswordBytesName)) {
       ids[0] = kSubmitLoginPasswordBytesId;
       return S_OK;
@@ -499,6 +509,31 @@ class CardProductWebViewHostObject final : public IDispatch {
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
 
     switch (member) {
+      case kGetOperationLoggingEnabledId:
+      case kSetOperationLoggingEnabledId: {
+        const bool write = member == kSetOperationLoggingEnabledId;
+        if (parameters == nullptr || parameters->cArgs != (write ? 1U : 0U) ||
+            parameters->cNamedArgs != 0 || (write && parameters->rgvarg == nullptr)) {
+          return DISP_E_BADPARAMCOUNT;
+        }
+        if (write && parameters->rgvarg[0].vt != VT_BOOL) {
+          if (argument_error != nullptr) *argument_error = 0;
+          return DISP_E_TYPEMISMATCH;
+        }
+        try {
+          if (write) {
+            controller_.set_operation_logging_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+          } else {
+            const bool enabled = controller_.operation_logging_enabled();
+            if (result != nullptr) {
+              ::VariantInit(result);
+              result->vt = VT_BOOL;
+              result->boolVal = enabled ? VARIANT_TRUE : VARIANT_FALSE;
+            }
+          }
+          return S_OK;
+        } catch (...) { return E_FAIL; }
+      }
       case kSetWindowSizeId: {
         if (parameters == nullptr || parameters->cArgs != 1 ||
             parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {

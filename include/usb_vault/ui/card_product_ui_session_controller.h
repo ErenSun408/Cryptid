@@ -233,6 +233,8 @@ class CardProductUiSessionController final {
   [[nodiscard]] std::vector<ContainerUiStatus> container_statuses();
   [[nodiscard]] std::vector<OperationUiEvent> operation_history();
   void clear_operation_history();
+  [[nodiscard]] bool operation_logging_enabled();
+  void set_operation_logging_enabled(bool enabled);
 
   // Reset is offered only inside an authenticated session. The card entry
   // layer performs a new read-only inspection when the action is invoked; no
