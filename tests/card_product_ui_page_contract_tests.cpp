@@ -95,8 +95,8 @@ void test_page_has_route_specific_password_surfaces() {
   // container path is exactly what section 8.4 forbids, so browser assistance
   // is off on those too; a file name inside a container is the content of an
   // encrypted volume, which is at least as good a reason.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 9 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 9,
+  require(count_occurrences(page, "autocomplete=\"off\"") == 10 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 10,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
@@ -157,7 +157,7 @@ void test_authenticated_dashboard_is_real_state_only() {
       count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 0 &&
           count_occurrences(page, "data-tooltip=\"正在开发中\"") == 0 &&
           page.find("文件管理") != std::string::npos &&
-          page.find("备份中心") != std::string::npos &&
+          page.find("导出与迁移") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
                     " data-section=\"files\">") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
@@ -845,8 +845,8 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
   // doing it here. Q-04's confirmation surface is then built once, in one
   // place, rather than twice.
   require(section.find("把文件移出加密卷就是明文导出") != std::string::npos &&
-              section.find("备份中心") != std::string::npos,
-          "the browse view does not send a way out to the backup centre");
+              section.find("导出与迁移") != std::string::npos,
+          "the browse view does not send a way out to the export section");
 
   // The page names a container and a directory inside it. A drive letter would
   // let it name any volume on the machine, so it is never given one.
@@ -857,11 +857,16 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
 
   // One call brings a whole directory back, separated by the two control
   // characters no name off a mounted volume can hold.
+  //
+  // There are two callers and no more: this one, which walks wherever the
+  // user browses, and the export panel, which reads a container root and
+  // never anything below it. The second is held to the root by its own case,
+  // so a third caller here would be a third way to walk a volume.
   require(script.find("const listingRecordSeparator = \"\\u001e\";") !=
               std::string::npos &&
               script.find("const listingFieldSeparator = \"\\u001f\";") !=
                   std::string::npos &&
-              count_occurrences(script, "bridge.listContainerDirectory") == 1,
+              count_occurrences(script, "bridge.listContainerDirectory") == 2,
           "the packed listing is not read the way the bridge writes it");
   require(script.find("if (records[0] !== \"0\" && records[0] !== \"1\") {") !=
               std::string::npos &&
@@ -956,7 +961,7 @@ void test_a_drag_stays_inside_the_containers_and_says_where_out_lives() {
 
   // 🔴 And when it lands nowhere this page owns, the page says where out of
   // the volume actually lives instead of quietly doing nothing.
-  require(script.find("要把文件拿出加密卷，那是明文导出，请到「备份中心」做。") !=
+  require(script.find("要把文件拿出加密卷，那是明文导出，请到「导出与迁移」做。") !=
               std::string::npos &&
               script.find("if (!dropped) reportFileDropRefused();") !=
                   std::string::npos,
@@ -989,7 +994,7 @@ void test_the_backup_centre_owns_the_plaintext_export() {
   const std::string section = dashboard_section(page, "backup");
   const std::string files = dashboard_section(page, "files");
 
-  require(section.find("id=\"backup-export-source\"") != std::string::npos &&
+  require(section.find("id=\"export-container-list\"") != std::string::npos &&
               section.find("id=\"backup-export-location\"") !=
                   std::string::npos &&
               section.find("id=\"backup-export-browse\"") !=
@@ -999,38 +1004,71 @@ void test_the_backup_centre_owns_the_plaintext_export() {
               section.find("id=\"backup-export-status\"") != std::string::npos,
           "the backup centre cannot pick a file, a location, or export");
 
-  // 🔴 Q-04's wording. The confirmation screens it also asks for are absent by
-  // the product's 2026-09-09 decision, which MILESTONES.md records together
-  // with the fact that it conflicts with a client-signed acceptance item. The
-  // notice is what survives that decision, so the page must carry it: a notice
-  // is not a confirmation and stops nothing, but it is the only place this
-  // wording still appears.
-  require(section.find("导出后的数据不再受本软件保护") != std::string::npos &&
-              section.find("击穿否认性") != std::string::npos &&
-              section.find("隐藏卷存在的物证") != std::string::npos &&
-              section.find("SSD 上覆写不保证有效") != std::string::npos,
-          "the backup centre does not say what an export costs");
-
-  // The file manager hands the entry over and steps aside; it never exports.
-  require(files.find("把文件移出加密卷就是明文导出") != std::string::npos &&
-              files.find("备份中心") != std::string::npos &&
-              count_occurrences(script, "bridge.exportContainerEntry") == 1,
-          "the export is reachable from more than the backup centre");
-  require(script.find("[\"export\", \"导出\", false], [\"rename\", \"重命名\", false],") !=
-              std::string::npos &&
-              script.find("offerEntryForExport(act.dataset.fileName);") !=
+  // The panel picks by ticking containers open, not by naming one entry. Every
+  // ticked entry goes through the one entry point that may leave a volume, so
+  // a selection is many calls to it rather than a second, bulk way out.
+  require(section.find("class=\"xlist\"") != std::string::npos &&
+              script.find("const exportSelection = new Map();") !=
+                  std::string::npos &&
+              script.find("head.dataset.exportToggle = String(container.id);") !=
                   std::string::npos,
-          "the file manager cannot hand an entry to the backup centre");
-  require(script.find("await bridge.exportContainerEntry(\n"
-                      "        request.id, request.directory, request.name, "
-                      "location);") != std::string::npos,
-          "the export does not name all four of its parts");
+          "the export panel does not select through container cards");
 
-  // 🔴 Nothing about a finished export is kept on the page either, for the
-  // same reason the native side writes nothing down.
-  require(script.find("pendingExport = null;\n    exportLocation = \"\";") !=
+  require(script.find("row.dataset.exportPick = entry.name;") !=
+              std::string::npos &&
+              script.find("tail.dataset.exportSelectAll = String(container.id);") !=
+                  std::string::npos,
+          "the export panel cannot tick one entry or a whole container");
+
+  // Each container row carries its own mount control and a drag handle, and
+  // shows only the drive letter: capacity and a spelled-out state were both
+  // saying what the icon and the button already say.
+  require(script.find("grab.dataset.reorderGrip = String(container.id);") !=
+              std::string::npos &&
+              script.find("mount.dataset.rowMount = String(container.id);") !=
+                  std::string::npos &&
+              script.find("factCell(\"盘符\"") != std::string::npos &&
+              script.find("factCell(\"容量\"") == std::string::npos &&
+              script.find("factCell(\"状态\"") == std::string::npos,
+          "a container row does not carry its own handle and mount control");
+
+  // 🔴 Only the handle starts a reorder, so the row body keeps the meaning
+  // it has, and the order is page-local: nothing about it is written down.
+  require(script.find("beginContainerReorder(event, row, container.id);") !=
+              std::string::npos &&
+              script.find("let containerOrder = [];") != std::string::npos,
+          "the container order is not dragged from the handle alone");
+
+  // A card reads its container's root and only its root. Anything deeper is
+  // the file manager's job, and a second way to walk a volume from here would
+  // be a second thing to keep inside the boundary.
+  require(script.find("const readContainerRoot = async (id) => {") !=
               std::string::npos,
+          "an opened card reads more than the container root");
+
+  // 🔴 What succeeded leaves the selection as it goes, so a partial failure
+  // leaves exactly the unfinished entries ticked and says how many.
+  require(script.find("exportSelection.delete(\n"
+                      "          exportKey(request.id, request.directory, "
+                      "request.name));") != std::string::npos &&
+              script.find("exportLocation = \"\";\n    setBackupStatus(") !=
+                  std::string::npos,
           "the page kept the exported entry or its location afterwards");
+
+  // A run that half fails says how many landed and how many did not, and the
+  // ones that did not stay ticked -- the page never reports a whole export
+  // for a partial one.
+  require(script.find("failed.push(request);") != std::string::npos &&
+              script.find("项没有完成，仍勾选着。") != std::string::npos,
+          "a partly failed export does not say what is left to do");
+
+  // The migration wording sits beside the title, where it is read before the
+  // panels rather than inside the one it describes.
+  require(section.find("class=\"section-aside\"") != std::string::npos &&
+              section.find("迁移只复制容器文件本身") != std::string::npos &&
+              section.find("不导出根密钥、密码或任何恢复材料") !=
+                  std::string::npos,
+          "the section does not carry the migration wording by its title");
 
   // Every call that copies bytes on the drawing thread paints the disabled
   // state first: a transfer between containers, a plaintext export, and a
@@ -1049,7 +1087,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   const std::string section = dashboard_section(page, "backup");
 
-  require(section.find("id=\"backup-migrate-select\"") != std::string::npos &&
+  require(section.find("id=\"migrate-container-list\"") != std::string::npos &&
               section.find("id=\"backup-migrate-location\"") !=
                   std::string::npos &&
               section.find("id=\"backup-migrate-browse\"") !=
@@ -1063,24 +1101,34 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
   // 🔴 What a migrating user has to understand, in Q-04's own terms: this is
   // not a key backup and not a recovery channel, and a lost card is still a
   // lost vault.
-  require(section.find("不解密、不重新加密") != std::string::npos &&
-              section.find("原安全卡 + 原口令") != std::string::npos &&
-              section.find("卡丢失或损坏，数据仍然永久不可恢复") !=
+  require(section.find("原样复制容器文件本身") != std::string::npos &&
+              section.find("不导出根密钥、密码或任何恢复材料") !=
                   std::string::npos &&
-              section.find("容器必须先卸载") != std::string::npos,
+              section.find("仍需原卡与原密码才能打开") !=
+                  std::string::npos,
           "the migration export does not say what it is and is not");
 
-  // 🔴 The plaintext warning is inside the plaintext panel, not over the whole
-  // section. A migration copy is still encrypted, so "no longer protected" is
-  // untrue of it, and a warning in the wrong place teaches the wrong thing.
-  const std::size_t plaintext_panel = section.find("<h3>明文导出</h3>");
-  const std::size_t warning = section.find("导出后的数据不再受本软件保护");
-  const std::size_t migration_panel = section.find("<h3>密文迁移导出</h3>");
-  require(plaintext_panel != std::string::npos &&
-              warning != std::string::npos &&
-              migration_panel != std::string::npos &&
-              plaintext_panel < warning && warning < migration_panel,
-          "the plaintext warning is not scoped to the plaintext panel");
+  // 🔴 The plaintext export asks before it runs, and the question cannot be
+  // clicked through: the user types the words. Q-04 acceptance item 1 asks
+  // for a non-skippable confirmation, and with nothing about an export
+  // written down anywhere this screen is the only place the user is told
+  // what is about to happen. It came back on 2026-09-10, after the
+  // 2026-09-09 decision had removed both screens Q-04 asked for.
+  require(page.find("id=\"export-confirm-dialog\"") != std::string::npos &&
+              page.find("请键入 <b>明文导出</b> 以确认") != std::string::npos &&
+              script.find("const kExportConfirmPhrase = \"明文导出\";") !=
+                  std::string::npos &&
+              script.find(
+                  "exportConfirmPhrase.value.trim() !== kExportConfirmPhrase") !=
+                  std::string::npos,
+          "the plaintext export can be confirmed without typing");
+
+  // 🔴 Only the dialog runs it. The section button opens the question, so no
+  // path reaches an export that was never asked about.
+  require(script.find("backupExportConfirm.addEventListener(\"click\", () => { openExportConfirm(); });") !=
+              std::string::npos &&
+              script.find("closeExportConfirm();") != std::string::npos,
+          "an export can start without the confirmation");
 
   require(count_occurrences(script, "bridge.exportContainerFile") == 1 &&
               script.find("await bridge.exportContainerFile(id, location);") !=
@@ -1089,9 +1137,10 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
 
   // A mounted container is offered and says why it cannot go yet, rather than
   // being missing from a list the user expects to be complete.
-  require(script.find("`${container.name}（已挂载，需先卸载）`") !=
+  require(script.find("container.mounted ? \"已挂载\" : \"未挂载\"") !=
               std::string::npos &&
-              script.find("migrateReady = true;") != std::string::npos,
+              script.find("container.id === migrateContainerId && !container.mounted") !=
+                  std::string::npos,
           "a mounted container is hidden rather than explained");
 
   require(script.find("migrateLocation = \"\";\n    setMigrateStatus(") !=

@@ -55,7 +55,7 @@
       <button class="dashboard-nav" type="button"
               data-section="files">文件管理</button>
       <button class="dashboard-nav" type="button"
-              data-section="backup">备份中心</button>
+              data-section="backup">导出与迁移</button>
       <button class="dashboard-nav" type="button"
               data-section="history">操作日志</button>
       <button class="dashboard-nav" type="button"
@@ -80,16 +80,22 @@
       <div id="file-drop-targets"></div>
     </section>
     <section id="dashboard-section-backup" class="dashboard-section">
-      <span id="backup-export-source"></span>
+      <button id="export-mode-plain" type="button" aria-pressed="true">明文导出</button>
+      <button id="export-mode-migrate" type="button" aria-pressed="false">密文迁移</button>
+      <div id="export-plain-pane">
+      <div id="export-container-list"></div>
       <span id="backup-export-location"></span>
       <button id="backup-export-browse" type="button">选择位置</button>
       <button id="backup-export-confirm" type="button" disabled>导出</button>
       <output id="backup-export-status"></output>
-      <select id="backup-migrate-select"></select>
+      </div>
+      <div id="export-migrate-pane" hidden>
+      <div id="migrate-container-list"></div>
       <span id="backup-migrate-location"></span>
       <button id="backup-migrate-browse" type="button">选择位置</button>
       <button id="backup-migrate-confirm" type="button" disabled>导出</button>
       <output id="backup-migrate-status"></output>
+      </div>
     </section>
     <section id="dashboard-section-history" class="dashboard-section">
       <button id="operation-history-clear" type="button">清空日志</button>
@@ -122,6 +128,15 @@
     <output id="reset-card-status"></output>
     <button id="reset-card-cancel" type="button">取消</button>
     <button id="reset-card-confirm" type="button" disabled>重新初始化</button>
+  </div>
+  <div id="export-confirm-dialog" hidden>
+    <strong id="export-confirm-count"></strong>
+    <span id="export-confirm-summary"></span>
+    <input id="export-confirm-phrase" type="text">
+    <output id="export-confirm-status"></output>
+    <button id="export-confirm-close" type="button">关闭</button>
+    <button id="export-confirm-cancel" type="button">取消</button>
+    <button id="export-confirm-run" type="button" disabled>开始导出</button>
   </div>
   <div id="forget-container-dialog" role="dialog" hidden>
     <h3 id="forget-container-title">从列表移除</h3>

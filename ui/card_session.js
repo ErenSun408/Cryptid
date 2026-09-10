@@ -71,14 +71,27 @@
   const fileNameCancelButton = document.getElementById("file-name-cancel");
   const fileNameConfirmButton = document.getElementById("file-name-confirm");
   const fileDropTargets = document.getElementById("file-drop-targets");
-  const backupExportSource = document.getElementById("backup-export-source");
+  const exportContainerList = document.getElementById("export-container-list");
   const backupExportLocation =
     document.getElementById("backup-export-location");
   const backupExportBrowse = document.getElementById("backup-export-browse");
   const backupExportConfirm = document.getElementById("backup-export-confirm");
   const backupExportStatus = document.getElementById("backup-export-status");
-  const backupMigrateSelect =
-    document.getElementById("backup-migrate-select");
+  const migrateContainerList =
+    document.getElementById("migrate-container-list");
+  const exportConfirmDialog = document.getElementById("export-confirm-dialog");
+  const exportConfirmSummary =
+    document.getElementById("export-confirm-summary");
+  const exportConfirmCount = document.getElementById("export-confirm-count");
+  const exportConfirmPhrase = document.getElementById("export-confirm-phrase");
+  const exportConfirmStatus = document.getElementById("export-confirm-status");
+  const exportConfirmClose = document.getElementById("export-confirm-close");
+  const exportConfirmCancel = document.getElementById("export-confirm-cancel");
+  const exportConfirmRun = document.getElementById("export-confirm-run");
+  const exportModePlain = document.getElementById("export-mode-plain");
+  const exportModeMigrate = document.getElementById("export-mode-migrate");
+  const exportPlainPane = document.getElementById("export-plain-pane");
+  const exportMigratePane = document.getElementById("export-migrate-pane");
   const backupMigrateLocation =
     document.getElementById("backup-migrate-location");
   const backupMigrateBrowse = document.getElementById("backup-migrate-browse");
@@ -1022,7 +1035,7 @@
   const reportFileDropRefused = () => {
     setFileStatus(
       "没有移动。文件只能放进本容器的文件夹，或另一个已挂载的容器。" +
-      "要把文件拿出加密卷，那是明文导出，请到「备份中心」做。", "error");
+      "要把文件拿出加密卷，那是明文导出，请到「导出与迁移」做。", "error");
   };
 
   // ---- Backup centre -----------------------------------------------------
@@ -1037,62 +1050,469 @@
   // stays because Q-04's wording can still be shown even when the blocking
   // screen is gone -- a notice is not a confirmation, and it stops nothing.
   //
-  // The entry the file manager handed over, and where it goes. Both empty
-  // means there is nothing to export, which is what the page opens on.
-  let pendingExport = null;
+  // What has been ticked, and where it goes. An empty selection means there is
+  // nothing to export, which is what the page opens on.
+  //
+  // The key carries the directory as well as the name because the file manager
+  // can hand over an entry from anywhere inside a container, while a card only
+  // ever lists that container's root. Two entries of the same name in two
+  // folders are two selections, and neither hides the other.
+  const exportSelection = new Map();
+  const exportKey = (id, directory, name) => `${id}\u0000${directory}\u0000${name}`;
+  // One card is open at a time. Opening the next closes the last, so the panel
+  // stays a list of containers rather than growing into a second file manager.
+  let openExportContainer = 0;
+  let openExportListing = null;
+  let openExportError = "";
+  // Which of the two exports the pane is showing. Plain is what the section
+  // opens on: it is the one the file manager hands entries to.
+  let exportMode = "plain";
   let exportLocation = "";
   // The migration export names a container of its own: the one being taken to
   // another machine is rarely the one being browsed.
   let migrateContainerId = 0;
   let migrateLocation = "";
 
-  const renderBackupCentre = () => {
-    if (pendingExport === null) {
-      backupExportSource.textContent = "还没有挑选任何文件";
-    } else {
-      const inside = pendingExport.directory === ""
-        ? pendingExport.container
-        : `${pendingExport.container} / ${pendingExport.directory}`;
-      backupExportSource.textContent = `${pendingExport.name}（${inside}）`;
+  const exportGlyph = (paths, cls) => {
+    const svg = document.createElementNS(kSvgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    if (cls !== undefined) svg.setAttribute("class", cls);
+    for (const definition of paths) {
+      const path = document.createElementNS(kSvgNamespace, "path");
+      path.setAttribute("d", definition);
+      svg.appendChild(path);
     }
-    backupExportLocation.textContent =
-      exportLocation === "" ? "还没有选择位置" : exportLocation;
-    backupExportBrowse.disabled = busy;
-    backupExportConfirm.disabled =
-      busy || pendingExport === null || exportLocation === "";
+    return svg;
+  };
 
-    // Every adopted container is offered, mounted or not, and the mounted ones
-    // say why they cannot be taken yet rather than quietly not being there.
+  const kBoxPaths = Object.freeze([
+    "M5.5 6.5A1.5 1.5 0 017 5h10a1.5 1.5 0 011.5 1.5v11a1.5 1.5 0" +
+      " 01-1.5 1.5H7a1.5 1.5 0 01-1.5-1.5z",
+  ]);
+  const kCheckPaths = Object.freeze(["M6 12.5l4 4 8-9"]);
+  // Six dots, drawn as circles so the handle reads as a grip rather than a
+  // glyph. They need their own builder because the icons elsewhere are paths.
+  const kGripPaths = Object.freeze([]);
+  const gripGlyph = () => {
+    const svg = document.createElementNS(kSvgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    for (const [cx, cy] of [[9, 6], [15, 6], [9, 12], [15, 12], [9, 18], [15, 18]]) {
+      const dot = document.createElementNS(kSvgNamespace, "circle");
+      dot.setAttribute("cx", String(cx));
+      dot.setAttribute("cy", String(cy));
+      dot.setAttribute("r", "1.35");
+      svg.appendChild(dot);
+    }
+    return svg;
+  };
+  const kFolderPaths = Object.freeze([
+    "M4.5 7.5A1.5 1.5 0 016 6h3.6a1.5 1.5 0 011.2.6l1.05 1.4H18a1.5 1.5 0" +
+      " 011.5 1.5v9a1.5 1.5 0 01-1.5 1.5H6a1.5 1.5 0 01-1.5-1.5z",
+  ]);
+  const kFilePaths = Object.freeze([
+    "M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0" +
+      " 001.5-1.5V8.5z",
+    "M13.5 3.5V8.5h5",
+  ]);
+
+  const checkBox = (on) => {
+    const box = document.createElement("span");
+    box.className = on ? "cbx on" : "cbx";
+    if (on) box.appendChild(exportGlyph(kCheckPaths));
+    return box;
+  };
+
+  const factCell = (key, value) => {
+    const wrap = document.createElement("span");
+    wrap.className = "fact";
+    const k = document.createElement("span");
+    k.className = "fk";
+    k.textContent = key;
+    const v = document.createElement("span");
+    v.className = "fv";
+    v.textContent = value;
+    wrap.append(k, v);
+    return wrap;
+  };
+
+  const containerSizeText = (container) => {
+    const mib = container.sizeMib;
+    return mib >= 1024
+      ? `${(mib / 1024).toFixed(mib % 1024 === 0 ? 0 : 1)} GiB`
+      : `${mib} MiB`;
+  };
+
+  // One container row, in the shape the design gives every container row: the
+  // icon tile says mounted, the facts line up in monospace, and what the row
+  // can be told to do sits at its end.
+  // The order the user dragged the containers into. It holds identifiers
+  // rather than containers because the container list is rebuilt from the
+  // native side on every refresh, and an order that survives a refresh has to
+  // be keyed by something that survives one.
+  //
+  // ⚠️ It lasts as long as the page does. Keeping it across sessions means a
+  // field in the container index slot, which the format reserved room for but
+  // which is not built; nothing here writes anything down.
+  let containerOrder = [];
+
+  const orderedContainers = () => {
+    const byId = new Map();
+    for (const container of containers) byId.set(container.id, container);
+    const ordered = [];
+    for (const id of containerOrder) {
+      const container = byId.get(id);
+      if (container !== undefined) {
+        ordered.push(container);
+        byId.delete(id);
+      }
+    }
+    // Anything adopted since the last drag keeps its adoption order, at the end.
+    for (const container of containers) {
+      if (byId.has(container.id)) ordered.push(container);
+    }
+    return ordered;
+  };
+
+  const rememberContainerOrder = (ordered) => {
+    containerOrder = ordered.map((container) => container.id);
+  };
+
+  const exportRow = (container, tail, onActivate) => {
+    const row = document.createElement("div");
+    row.className = "xrow";
+    row.dataset.rowContainer = String(container.id);
+
+    const grab = document.createElement("span");
+    grab.className = "grab";
+    grab.dataset.reorderGrip = String(container.id);
+    grab.setAttribute("aria-hidden", "true");
+    grab.appendChild(gripGlyph());
+    grab.addEventListener("pointerdown", (event) => {
+      beginContainerReorder(event, row, container.id);
+    });
+    row.appendChild(grab);
+
+    const open = document.createElement("button");
+    open.className = "xrow-open";
+    open.type = "button";
+    open.disabled = busy;
+    open.addEventListener("click", onActivate);
+    const icon = document.createElement("span");
+    icon.className = container.mounted ? "ic on" : "ic";
+    icon.appendChild(exportGlyph(kBoxPaths));
+    open.appendChild(icon);
+    const name = document.createElement("span");
+    name.className = "nm";
+    const title = document.createElement("span");
+    title.className = "t";
+    title.textContent = container.name;
+    name.appendChild(title);
+    open.appendChild(name);
+    const facts = document.createElement("span");
+    facts.className = "facts";
+    facts.appendChild(factCell("盘符", container.mounted ? container.drive : "—"));
+    open.appendChild(facts);
+    row.appendChild(open);
+
+    const ops = document.createElement("span");
+    ops.className = "ops";
+    const mount = document.createElement("button");
+    mount.className = "shell-button";
+    mount.type = "button";
+    mount.disabled = busy;
+    mount.dataset.rowMount = String(container.id);
+    mount.textContent = container.mounted ? "卸载" : "挂载";
+    mount.addEventListener("click", async () => {
+      if (busy) return;
+      if (container.mounted) {
+        await unmountAdoptedContainer(container.id);
+      } else {
+        await mountAdoptedContainer(container.id);
+      }
+    });
+    ops.appendChild(mount);
+    ops.appendChild(tail);
+    row.appendChild(ops);
+    return row;
+  };
+
+  // Dragging starts from the handle and nowhere else, so the row body keeps
+  // the meaning it already has. The drop lands between rows rather than on
+  // one: a highlighted row would read as "put it inside this", which is what
+  // a drag means everywhere else in this product.
+  let reorderState = null;
+
+  const rowsAround = (list) =>
+    [...list.querySelectorAll(":scope > .xrow, :scope > div > .xrow")];
+
+  const beginContainerReorder = (event, row, id) => {
+    if (busy || reorderState !== null) return;
+    const list = row.closest(".xlist");
+    if (list === null) return;
+    event.preventDefault();
+    const marker = document.createElement("div");
+    marker.className = "xins";
+    reorderState = { list, row, id, marker, index: null };
+    row.classList.add("xrow-ghost");
+    try {
+      event.target.setPointerCapture(event.pointerId);
+    } catch (_) {
+      // A pointer that cannot be captured still moves; the listeners below are
+      // on the document, so the drag keeps working without it.
+    }
+    document.addEventListener("pointermove", moveContainerReorder);
+    document.addEventListener("pointerup", endContainerReorder);
+    document.addEventListener("pointercancel", cancelContainerReorder);
+  };
+
+  const moveContainerReorder = (event) => {
+    if (reorderState === null) return;
+    const rows = rowsAround(reorderState.list);
+    let index = rows.length;
+    for (let at = 0; at < rows.length; at += 1) {
+      const box = rows[at].getBoundingClientRect();
+      if (event.clientY < box.top + box.height / 2) {
+        index = at;
+        break;
+      }
+    }
+    reorderState.index = index;
+    const anchor = rows[index];
+    if (anchor === undefined) {
+      reorderState.list.appendChild(reorderState.marker);
+    } else {
+      const holder = anchor.parentElement === reorderState.list
+        ? anchor
+        : anchor.parentElement;
+      reorderState.list.insertBefore(reorderState.marker, holder);
+    }
+  };
+
+  const finishContainerReorder = () => {
+    document.removeEventListener("pointermove", moveContainerReorder);
+    document.removeEventListener("pointerup", endContainerReorder);
+    document.removeEventListener("pointercancel", cancelContainerReorder);
+    if (reorderState !== null) {
+      reorderState.row.classList.remove("xrow-ghost");
+      reorderState.marker.remove();
+    }
+  };
+
+  const cancelContainerReorder = () => {
+    finishContainerReorder();
+    reorderState = null;
+    renderBackupCentre();
+  };
+
+  const endContainerReorder = () => {
+    if (reorderState === null) return;
+    const { id, index } = reorderState;
+    finishContainerReorder();
+    reorderState = null;
+    if (index !== null) {
+      const ordered = orderedContainers();
+      const from = ordered.findIndex((container) => container.id === id);
+      if (from !== -1) {
+        const [moved] = ordered.splice(from, 1);
+        const to = index > from ? index - 1 : index;
+        ordered.splice(Math.max(0, Math.min(to, ordered.length)), 0, moved);
+        rememberContainerOrder(ordered);
+      }
+    }
+    renderBackupCentre();
+  };
+
+
+  const selectionForContainer = (id) => {
+    const picked = [];
+    for (const entry of exportSelection.values()) {
+      if (entry.id === id) picked.push(entry);
+    }
+    return picked;
+  };
+
+  const exportFileRow = (entry, checked, subtitle, onToggle) => {
+    const row = document.createElement("button");
+    row.className = "xfile";
+    row.type = "button";
+    row.disabled = busy;
+    row.dataset.exportPick = entry.name;
+    row.addEventListener("click", onToggle);
+    row.appendChild(exportGlyph(
+      entry.isDirectory ? kFolderPaths : kFilePaths,
+      entry.isDirectory ? "g dir" : "g"));
+    const name = document.createElement("span");
+    name.className = "n";
+    name.textContent = subtitle === "" || subtitle === undefined
+      ? entry.name
+      : `${subtitle} / ${entry.name}`;
+    row.appendChild(name);
+    const size = document.createElement("span");
+    size.className = "s";
+    size.textContent = entry.isDirectory ? "文件夹" : formatEntrySize(entry);
+    row.appendChild(size);
+    row.appendChild(checkBox(checked));
+    return row;
+  };
+
+  const exportNote = (parent, text) => {
+    const note = document.createElement("p");
+    note.className = "xnote";
+    note.textContent = text;
+    parent.appendChild(note);
+  };
+
+  // 🔴 A card lists one container's root and nothing deeper. Ticking is what
+  // this pane is for; browsing is the file manager's job, and building a
+  // second one here would mean two places that can walk a volume.
+  const renderExportContainers = () => {
+    while (exportContainerList.firstChild !== null) {
+      exportContainerList.removeChild(exportContainerList.firstChild);
+    }
+    if (containers.length === 0) {
+      exportNote(exportContainerList, "还没有容器。");
+      return;
+    }
+    for (const container of orderedContainers()) {
+      const group = document.createElement("div");
+      const open = container.id === openExportContainer;
+      const picked = selectionForContainer(container.id);
+      // The box at the end of a container row is that container's select-all.
+      // It reads as full only when every root entry is ticked, so a container
+      // holding one ticked file does not claim to be entirely chosen.
+      const roots = open && openExportError === "" && openExportListing !== null
+        ? openExportListing.entries
+        : null;
+      const every = roots !== null && roots.length !== 0 && roots.every(
+        (entry) => exportSelection.has(exportKey(container.id, "", entry.name)));
+      const tail = checkBox(every || (roots === null && picked.length !== 0));
+      tail.dataset.exportSelectAll = String(container.id);
+      tail.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void toggleExportContainerAll(container.id, !every);
+      });
+      const head = exportRow(container, tail, () => {
+        void toggleExportContainer(container.id);
+      });
+      head.dataset.exportToggle = String(container.id);
+      head.setAttribute("aria-expanded", open ? "true" : "false");
+      group.appendChild(head);
+
+      if (open) {
+        const files = document.createElement("div");
+        files.className = "xfiles";
+        if (!container.mounted) {
+          exportNote(files, "这个容器没有挂载。");
+        } else if (openExportError !== "") {
+          exportNote(files, openExportError);
+        } else if (openExportListing === null) {
+          exportNote(files, "正在读取…");
+        } else {
+          const roots = openExportListing.entries;
+          for (const entry of roots) {
+            const key = exportKey(container.id, "", entry.name);
+            files.appendChild(exportFileRow(
+              entry, exportSelection.has(key), "",
+              () => { toggleExportPick(container.id, "", entry); }));
+          }
+          const rootNames = new Set(roots.map((entry) => entry.name));
+          for (const entry of picked) {
+            if (entry.directory === "" && rootNames.has(entry.name)) continue;
+            files.appendChild(exportFileRow(
+              entry, true, entry.directory,
+              () => { toggleExportPick(container.id, entry.directory, entry); }));
+          }
+          if (roots.length === 0 && picked.length === 0) {
+            exportNote(files, "这个容器是空的。");
+          }
+          if (openExportListing.truncated) {
+            exportNote(files, "条目太多，只列出了其中一部分。");
+          }
+        }
+        group.appendChild(files);
+      }
+      exportContainerList.appendChild(group);
+    }
+  };
+
+  // Every adopted container is offered, mounted or not, and a mounted one says
+  // so in its state rather than quietly not being there.
+  const renderMigrateContainers = () => {
+    while (migrateContainerList.firstChild !== null) {
+      migrateContainerList.removeChild(migrateContainerList.firstChild);
+    }
+    if (containers.length === 0) {
+      exportNote(migrateContainerList, "还没有容器。");
+      return;
+    }
     let known = false;
     for (const container of containers) {
       if (container.id === migrateContainerId) known = true;
     }
-    if (!known) {
-      migrateContainerId = containers.length === 0 ? 0 : containers[0].id;
+    if (!known) migrateContainerId = 0;
+    for (const container of orderedContainers()) {
+      // 🔴 A mounted container cannot be migrated: the driver is writing to it,
+      // so a copy taken now is a copy of something in flight. The box says so
+      // by being unusable rather than by accepting a tick the export refuses.
+      const pick = () => {
+        if (busy || container.mounted) return;
+        migrateContainerId =
+          migrateContainerId === container.id ? 0 : container.id;
+        setMigrateStatus("");
+        renderBackupCentre();
+      };
+      const tail = checkBox(container.id === migrateContainerId);
+      tail.classList.add(container.mounted ? "off" : "selectable");
+      tail.dataset.migrateSelect = String(container.id);
+      if (!container.mounted) {
+        tail.addEventListener("click", (event) => {
+          event.stopPropagation();
+          pick();
+        });
+      }
+      const row = exportRow(container, tail, pick);
+      row.dataset.migratePick = String(container.id);
+      migrateContainerList.appendChild(row);
     }
-    while (backupMigrateSelect.firstChild !== null) {
-      backupMigrateSelect.removeChild(backupMigrateSelect.firstChild);
-    }
+  };
+
+  const renderBackupCentre = () => {
+    const plain = exportMode === "plain";
+    exportModePlain.setAttribute("aria-pressed", plain ? "true" : "false");
+    exportModeMigrate.setAttribute("aria-pressed", plain ? "false" : "true");
+    exportPlainPane.hidden = !plain;
+    exportMigratePane.hidden = plain;
+    exportModePlain.disabled = busy;
+    exportModeMigrate.disabled = busy;
+
+    renderExportContainers();
+    backupExportLocation.textContent =
+      exportLocation === "" ? "选择一个位置…" : exportLocation;
+    backupExportLocation.classList.toggle("ph", exportLocation === "");
+    backupExportBrowse.disabled = busy;
+    backupExportConfirm.disabled =
+      busy || exportSelection.size === 0 || exportLocation === "";
+    backupExportConfirm.textContent = exportSelection.size === 0
+      ? "开始导出"
+      : `开始导出（${exportSelection.size}）`;
+
+    renderMigrateContainers();
     let migrateReady = false;
     for (const container of containers) {
-      const option = document.createElement("option");
-      option.value = String(container.id);
-      option.textContent = container.mounted
-        ? `${container.name}（已挂载，需先卸载）`
-        : container.name;
-      option.selected = container.id === migrateContainerId;
-      backupMigrateSelect.appendChild(option);
       if (container.id === migrateContainerId && !container.mounted) {
         migrateReady = true;
       }
     }
-    backupMigrateSelect.disabled = busy || containers.length === 0;
     backupMigrateLocation.textContent =
-      migrateLocation === "" ? "还没有选择位置" : migrateLocation;
+      migrateLocation === "" ? "选择一个位置…" : migrateLocation;
+    backupMigrateLocation.classList.toggle("ph", migrateLocation === "");
     backupMigrateBrowse.disabled = busy;
     backupMigrateConfirm.disabled =
       busy || !migrateReady || migrateLocation === "";
   };
+
 
   const setBackupStatus = (message, tone = "") => {
     backupExportStatus.textContent = message;
@@ -1104,24 +1524,175 @@
     backupMigrateStatus.dataset.tone = tone;
   };
 
-  // The file manager hands an entry over and steps aside. It does not export.
-  const offerEntryForExport = (name) => {
-    const container = selectedFileContainer();
+  // 🔴 The one place this section reads a container. It reads the root and
+  // only the root, so nothing here can become a second way to walk a volume,
+  // and both the card and its select-all go through it.
+  const readContainerRoot = async (id) => {
+    try {
+      return parseDirectoryListing(
+        await bridge.listContainerDirectory(id, ""));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  // Opening a card reads that container's root.
+  const toggleExportContainer = async (id) => {
+    if (busy) return;
+    if (openExportContainer === id) {
+      openExportContainer = 0;
+      openExportListing = null;
+      openExportError = "";
+      renderBackupCentre();
+      return;
+    }
+    openExportContainer = id;
+    openExportListing = null;
+    openExportError = "";
+    renderBackupCentre();
+    let container = null;
+    for (const candidate of containers) {
+      if (candidate.id === id) container = candidate;
+    }
     if (container === null || !container.mounted) return;
-    pendingExport = {
-      id: container.id,
-      container: container.name,
-      directory: filePath.join("/"),
-      name,
-    };
-    setBackupStatus("");
-    showDashboardSection("backup");
+    const listing = await readContainerRoot(id);
+    if (openExportContainer !== id) return;
+    if (listing === null) {
+      openExportError = "无法读取这个容器的根目录。";
+    } else {
+      openExportListing = listing;
+    }
     renderBackupCentre();
   };
 
+  const toggleExportPick = (id, directory, entry) => {
+    const key = exportKey(id, directory, entry.name);
+    if (exportSelection.has(key)) {
+      exportSelection.delete(key);
+    } else {
+      exportSelection.set(key, {
+        id,
+        directory,
+        name: entry.name,
+        isDirectory: entry.isDirectory === true,
+        sizeBytes: entry.sizeBytes,
+        modifiedUnixMs: entry.modifiedUnixMs,
+      });
+    }
+    setBackupStatus("");
+    renderBackupCentre();
+  };
+
+  // Ticking a whole container from its own row. The root listing is what
+  // "everything" means here, so a container that has not been read yet is read
+  // first rather than ticking nothing and looking like it worked.
+  const toggleExportContainerAll = async (id, checked) => {
+    if (busy) return;
+    if (!checked) {
+      for (const entry of selectionForContainer(id)) {
+        exportSelection.delete(exportKey(id, entry.directory, entry.name));
+      }
+      setBackupStatus("");
+      renderBackupCentre();
+      return;
+    }
+    let container = null;
+    for (const candidate of containers) {
+      if (candidate.id === id) container = candidate;
+    }
+    if (container === null || !container.mounted) {
+      void toggleExportContainer(id);
+      return;
+    }
+    let listing = openExportContainer === id && openExportError === ""
+      ? openExportListing
+      : null;
+    if (listing === null) {
+      listing = await readContainerRoot(id);
+      if (listing === null) {
+        void toggleExportContainer(id);
+        return;
+      }
+      if (openExportContainer === id) openExportListing = listing;
+    }
+    for (const entry of listing.entries) {
+      exportSelection.set(exportKey(id, "", entry.name), {
+        id,
+        directory: "",
+        name: entry.name,
+        isDirectory: entry.isDirectory === true,
+        sizeBytes: entry.sizeBytes,
+        modifiedUnixMs: entry.modifiedUnixMs,
+      });
+    }
+    setBackupStatus("");
+    renderBackupCentre();
+  };
+
+  // The file manager hands an entry over and steps aside. It does not export:
+  // it ticks the entry here and opens the card it landed in.
+  const offerEntryForExport = (name) => {
+    const container = selectedFileContainer();
+    if (container === null || !container.mounted) return;
+    const directory = filePath.join("/");
+    const entry = fileEntries.find((candidate) => candidate.name === name);
+    exportSelection.set(exportKey(container.id, directory, name), {
+      id: container.id,
+      directory,
+      name,
+      isDirectory: entry !== undefined && entry.isDirectory === true,
+      sizeBytes: entry === undefined ? 0 : entry.sizeBytes,
+      modifiedUnixMs: entry === undefined ? 0 : entry.modifiedUnixMs,
+    });
+    setBackupStatus("");
+    showDashboardSection("backup");
+    void toggleExportContainer(container.id);
+  };
+
+  // 🔴 The plaintext export asks before it runs, and asks for something that
+  // cannot be clicked through: the user has to type the words. Q-04 calls for
+  // a non-skippable confirmation of exactly this kind, and with nothing about
+  // an export written down anywhere, this screen is the only place the user is
+  // ever told what is about to happen.
+  const kExportConfirmPhrase = "明文导出";
+
+  const updateExportConfirmAvailability = () => {
+    exportConfirmRun.disabled =
+      busy || exportConfirmPhrase.value.trim() !== kExportConfirmPhrase;
+  };
+
+  const closeExportConfirm = () => {
+    exportConfirmDialog.hidden = true;
+    exportConfirmPhrase.value = "";
+    exportConfirmStatus.textContent = "";
+    exportConfirmStatus.dataset.tone = "";
+    updateExportConfirmAvailability();
+  };
+
+  const openExportConfirm = () => {
+    if (busy || exportSelection.size === 0 || exportLocation === "") return;
+    exportConfirmCount.textContent = `${exportSelection.size} 项`;
+    exportConfirmSummary.textContent = exportLocation;
+    exportConfirmPhrase.value = "";
+    exportConfirmStatus.textContent = "";
+    exportConfirmStatus.dataset.tone = "";
+    exportConfirmDialog.hidden = false;
+    updateExportConfirmAvailability();
+    exportConfirmPhrase.focus();
+  };
+
+  // 🔴 Every ticked entry is exported by the one entry point that may leave a
+  // volume, called once per entry. A directory goes across whole, because the
+  // copy underneath it already walks one.
+  //
+  // ⚠️ The calls run in order on the thread that draws this page, so a large
+  // selection freezes the window for as long as the whole of it takes. The
+  // asynchronous path and its cancellation are still not built; this panel
+  // makes that gap easier to reach, and nothing here hides it.
   const runExport = async () => {
-    if (busy || pendingExport === null || exportLocation === "") return;
-    const request = pendingExport;
+    if (busy || exportSelection.size === 0 || exportLocation === "") return;
+    closeExportConfirm();
+    const requests = [...exportSelection.values()];
     const location = exportLocation;
     busy = true;
     setBackupStatus("");
@@ -1129,12 +1700,16 @@
     // The same reason as a transfer: the copy runs on the thread that draws
     // this page, so the disabled state has to reach the screen first.
     await new Promise((resolve) => { setTimeout(resolve, 0); });
-    let failed = false;
-    try {
-      await bridge.exportContainerEntry(
-        request.id, request.directory, request.name, location);
-    } catch (_) {
-      failed = true;
+    const failed = [];
+    for (const request of requests) {
+      try {
+        await bridge.exportContainerEntry(
+          request.id, request.directory, request.name, location);
+        exportSelection.delete(
+          exportKey(request.id, request.directory, request.name));
+      } catch (_) {
+        failed.push(request);
+      }
     }
     try {
       await refreshNativeState();
@@ -1144,18 +1719,23 @@
     }
     busy = false;
     render(messageForCurrentState());
-    if (failed) {
-      setBackupStatus(
-        "导出没有完成。位置可能不可写、空间不足，或那里已经有同名文件了。", "error");
+    if (failed.length !== 0) {
+      // What succeeded is already gone from the selection, so what stays
+      // ticked is exactly what still has to be dealt with.
+      const done = requests.length - failed.length;
+      setBackupStatus(done === 0
+        ? "导出没有完成。位置可能不可写、空间不足，或那里已经有同名文件了。"
+        : `已导出 ${done} 项，${failed.length} 项没有完成，仍勾选着。` +
+          "位置可能不可写、空间不足，或那里已经有同名文件了。", "error");
       renderBackupCentre();
       return;
     }
     // 🔴 Nothing about a finished export is kept: not the location, not the
-    // entry, not that it happened. The page clears itself for the same reason
-    // the native side writes nothing.
-    pendingExport = null;
+    // entries, not that it happened. The page clears itself for the same
+    // reason the native side writes nothing.
     exportLocation = "";
-    setBackupStatus("已导出。这份副本不再受本软件保护。", "success");
+    setBackupStatus(
+      `已导出 ${requests.length} 项。这些副本不再受本软件保护。`, "success");
     renderBackupCentre();
   };
 
@@ -1485,6 +2065,10 @@
     navContainerCount.textContent = String(containers.length);
     renderContainers();
     renderOperationHistory();
+    // This section is a view of the same native state the container list is,
+    // so it has to be redrawn with it. Without this a mount made from one of
+    // its own rows left the row saying what was true before the mount.
+    renderBackupCentre();
     dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
     dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
     // Every creation entry stays visible on every route the page can reach.
@@ -2243,15 +2827,30 @@
     setBackupStatus("");
     renderBackupCentre();
   });
-  backupExportConfirm.addEventListener("click", async () => {
+  // The section button opens the confirmation; only the dialog runs the export.
+  backupExportConfirm.addEventListener("click", () => { openExportConfirm(); });
+  exportConfirmPhrase.addEventListener("input", updateExportConfirmAvailability);
+  exportConfirmPhrase.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter" || exportConfirmRun.disabled) return;
+    event.preventDefault();
     await runExport();
   });
-  backupMigrateSelect.addEventListener("change", () => {
-    const chosen = Number(backupMigrateSelect.value);
-    if (!Number.isInteger(chosen) || chosen <= 0) return;
-    migrateContainerId = chosen;
+  exportConfirmRun.addEventListener("click", async () => { await runExport(); });
+  exportConfirmClose.addEventListener("click", closeExportConfirm);
+  exportConfirmCancel.addEventListener("click", closeExportConfirm);
+  exportConfirmDialog.addEventListener("click", (event) => {
+    if (event.target === exportConfirmDialog) closeExportConfirm();
+  });
+  const chooseExportMode = (mode) => {
+    if (busy || exportMode === mode) return;
+    exportMode = mode;
+    setBackupStatus("");
     setMigrateStatus("");
     renderBackupCentre();
+  };
+  exportModePlain.addEventListener("click", () => { chooseExportMode("plain"); });
+  exportModeMigrate.addEventListener("click", () => {
+    chooseExportMode("migrate");
   });
   backupMigrateBrowse.addEventListener("click", async () => {
     if (busy || bridge === null) return;
@@ -2579,6 +3178,10 @@
     }
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !exportConfirmDialog.hidden) {
+      closeExportConfirm();
+      return;
+    }
     if (event.key === "Escape" && !forgetDialog.hidden) {
       closeForgetFlow();
       return;

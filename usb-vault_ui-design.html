@@ -1203,7 +1203,7 @@ add({
 add({
   g: '四 · 维护与数据', t: '明文导出 · 第二道确认', path: 'export · plaintext', st: 'todo', w: AW, h: AH,
   body: app({
-    nav: 'send', title: '导出与迁移', sub: '把数据带出容器，或把容器带到另一台机器', acts: '', count: '3',
+    nav: 'send', title: '导出与迁移', sub: '把数据带出容器，或把容器带到另一台机器', acts: `<span style="max-width:22rem;text-align:right;color:var(--text-3);font-size:11.5px;line-height:1.6">迁移只复制容器文件本身，<b style="color:var(--text-2)">不导出根密钥、密码或任何恢复材料</b>。</span>`, count: '3',
     body: `
       <div class="picks" style="max-width:760px;margin-bottom:18px">
         <div class="pick on"><div class="ic">${ic('file')}</div><h4>明文导出</h4><p>把容器里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p></div>
@@ -1233,7 +1233,7 @@ add({
 add({
   g: '四 · 维护与数据', t: '密文迁移导出', path: 'export · migrate', st: 'todo', w: AW, h: AH,
   body: app({
-    nav: 'send', title: '导出与迁移', sub: '把数据带出容器，或把容器带到另一台机器', acts: '', count: '3',
+    nav: 'send', title: '导出与迁移', sub: '把数据带出容器，或把容器带到另一台机器', acts: `<span style="max-width:22rem;text-align:right;color:var(--text-3);font-size:11.5px;line-height:1.6">迁移只复制容器文件本身，<b style="color:var(--text-2)">不导出根密钥、密码或任何恢复材料</b>。</span>`, count: '3',
     body: `
       <div class="picks" style="max-width:760px;margin-bottom:18px">
         <div class="pick"><div class="ic">${ic('file')}</div><h4>明文导出</h4><p>把容器里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p></div>
@@ -1247,7 +1247,7 @@ add({
         <div style="display:flex;gap:8px"><div class="inp mono" style="flex:1"><span class="val ph">选择一个位置…</span></div><span class="btn">${ic('folder')}浏览</span></div>
       </div>
       <div class="note gold" style="max-width:760px"><span class="ni">${ic('shield')}</span><span>
-        迁移只复制容器文件本身，<b>不导出根密钥、密码或任何恢复材料</b>。在新机器上打开这些容器，仍然需要原来那张卡和原来的密码。</span></div>
+        换机后仍须<b>原安全卡 + 原口令</b>才能挂载：卡丢失或损坏，数据仍然永久不可恢复。<b>容器必须先卸载</b>。</span></div>
       <div style="display:flex;gap:8px;margin-top:18px"><span class="btn pri">${ic('send')}开始迁移</span><span class="btn ghost">取消</span></div>`
   }),
   notes: [

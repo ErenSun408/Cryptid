@@ -271,26 +271,110 @@
       border-color: var(--gold); background: rgba(200, 169, 106, .12);
     }
     .file-row-dragging { opacity: .5; }
-    .backup-panel {
-      margin-top: .9rem; padding: .9rem 1rem;
-      border: 1px solid var(--line-2); border-radius: .6rem;
+    /* 「导出与迁移」整段照设计稿 usb-vault_ui-design.html 的构件复刻：
+       顶部 .picks 选模式，下面是 .list + .row 的容器列表，.cbx 是勾选态。 */
+    /* 设计稿 .note.gold 的黄底，用在页头右侧承载迁移那句。 */
+    .section-aside {
+      display: flex; gap: .6rem; flex: 0 1 26rem; margin: 0;
+      padding: .6rem .8rem; border-radius: .625rem;
+      border: 1px solid rgba(200, 169, 106, .26); background: rgba(200, 169, 106, .06);
+      color: var(--text-2); font-size: .72rem; line-height: 1.6; text-align: left;
     }
-    .backup-panel h3 { margin: 0 0 .2rem; font-size: .9rem; }
-    .backup-panel p { margin: 0 0 .8rem; color: var(--text-3); font-size: .74rem; }
-    .backup-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-    .backup-row + .backup-row { margin-top: .55rem; }
-    .backup-label { min-width: 4.5rem; color: var(--text-3); font-size: .74rem; }
-    .backup-value {
-      flex: 1 1 12rem; min-width: 0; padding: .3rem .5rem;
-      border: 1px solid var(--line); border-radius: .4rem;
-      color: var(--text-2); font-family: var(--mono); font-size: .72rem;
+    .section-aside .ni { flex: 0 0 auto; margin-top: .06rem; color: var(--gold); }
+    .section-aside .ni svg { width: .9375rem; height: .9375rem; }
+    .section-aside b { color: var(--text); font-weight: 600; }
+
+    .picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; max-width: 47.5rem; margin: 0 0 1.15rem; }
+    .pick {
+      padding: 1rem; border: 1px solid var(--line-2); border-radius: .625rem;
+      background: rgba(255, 255, 255, .02); color: inherit; font: inherit;
+      text-align: left; cursor: pointer;
+    }
+    .pick:hover:not(:disabled) { border-color: var(--line-3); }
+    .pick[aria-pressed="true"] { border-color: rgba(200, 169, 106, .5); background: rgba(200, 169, 106, .07); }
+    .pick .ic {
+      width: 1.875rem; height: 1.875rem; border-radius: .5625rem; display: grid; place-items: center;
+      color: var(--text-2); background: rgba(255, 255, 255, .05); margin-bottom: .7rem;
+    }
+    .pick[aria-pressed="true"] .ic { color: var(--gold); background: rgba(200, 169, 106, .14); }
+    .pick .ic svg { width: .9375rem; height: .9375rem; }
+    .pick h4 { margin: 0 0 .3rem; font-size: .8125rem; font-weight: 600; }
+    .pick p { margin: 0; font-size: .72rem; color: var(--text-3); line-height: 1.6; }
+
+    .xlist { border: 1px solid var(--line); border-radius: .875rem; overflow: hidden; background: var(--ink-850); margin: 0 0 1rem; }
+    .xrow { display: flex; align-items: center; gap: .875rem; padding: .875rem 1.125rem; border-bottom: 1px solid var(--line); }
+    .xlist > *:last-child > .xrow, .xlist > .xrow:last-child { border-bottom: 0; }
+    /* 行体的可点区域：图标、名称、盘符。手柄与行尾按钮在它之外，
+       因为按钮不能嵌套在按钮里。 */
+    .xrow-open {
+      display: flex; align-items: center; gap: .875rem; flex: 0 1 76%; min-width: 0;
+      margin: -.875rem 0; padding: .875rem 0;
+      border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+    }
+    .xrow-open:disabled { cursor: default; }
+    .xrow:hover { background: rgba(255, 255, 255, .02); }
+    .xrow .ops .shell-button { padding: .2rem .55rem; font-size: .72rem; }
+    .xrow .ic {
+      width: 2.125rem; height: 2.125rem; border-radius: .625rem; display: grid; place-items: center;
+      flex: 0 0 auto; color: var(--text-2); background: rgba(255, 255, 255, .04); border: 1px solid var(--line);
+    }
+    .xrow .ic svg { width: 1rem; height: 1rem; }
+    .xrow .ic.on { color: var(--gold); background: rgba(200, 169, 106, .1); border-color: rgba(200, 169, 106, .22); }
+    .xrow .nm { min-width: 0; flex: 1 1 auto; }
+    .xrow .nm .t { font-size: .845rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .xrow .facts { display: flex; gap: 1.375rem; flex: 0 0 auto; margin-right: .375rem; }
+    /* 只有从手柄按下才排序；行体保持它原来的含义。 */
+    .grab {
+      flex: 0 0 auto; margin-left: -.4rem; padding: .2rem .1rem; display: grid; place-items: center;
+      color: var(--text-3); cursor: grab; touch-action: none;
+    }
+    .grab:hover { color: var(--text-2); }
+    .grab svg { width: 1rem; height: 1rem; }
+    .grab circle { fill: currentColor; stroke: none; }
+    .xrow-lift { background: var(--ink-750); box-shadow: 0 .8rem 1.6rem -.7rem rgba(0, 0, 0, .75); }
+    .xrow-lift .grab { color: var(--gold); cursor: grabbing; }
+    .xrow-ghost { opacity: .35; }
+    .xins { height: 2px; margin: 0 1.125rem; border-radius: 2px; background: var(--gold); }
+    .xrow .ops { display: flex; align-items: center; gap: .75rem; flex: 1 1 auto; min-width: 0; }
+    /* 勾选框永远贴着行的最右边，与文件行的那一列对齐。 */
+    .xrow .ops > .cbx { margin-left: auto; }
+    .fact { min-width: 4rem; }
+    .fact .fk { font-size: .625rem; letter-spacing: .12em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+    .fact .fv { margin-top: .125rem; font-size: .78rem; font-family: var(--mono); }
+    .cbx {
+      width: 1rem; height: 1rem; border-radius: .3125rem; border: 1px solid var(--line-3);
+      flex: 0 0 auto; display: grid; place-items: center; color: transparent;
+    }
+    .cbx.on { background: var(--gold); border-color: var(--gold); color: #14160f; }
+    /* 🔴 不要叫 .pick —— 顶部模式卡片已经是 .pick，那条规则带 padding: 1rem，
+       会把 16px 的勾选框撑成 48px。同一个样式表里的类名是共享命名空间。 */
+    .cbx.selectable { cursor: pointer; }
+    .cbx.off { opacity: .3; cursor: not-allowed; }
+    .cbx svg { width: .625rem; height: .625rem; stroke-width: 2.6; }
+
+    /* 展开后的文件行：比容器行矮得多，这里是勾选清单不是浏览视图。 */
+    .xfiles { border-top: 1px solid var(--line); background: rgba(0, 0, 0, .18); }
+    .xfile { display: flex; align-items: center; gap: .55rem; width: 100%; padding: .25rem 1.125rem .25rem 3.9rem;
+      border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .xfile:hover:not(:disabled) { background: rgba(255, 255, 255, .025); }
+    .xfile svg.g { flex: 0 0 auto; width: .85rem; height: .85rem; color: var(--text-3); }
+    .xfile svg.g.dir { color: var(--gold); }
+    .xfile .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .74rem; color: var(--text-2); }
+    .xfile .s { flex: 0 0 auto; color: var(--text-3); font-family: var(--mono); font-size: .68rem; }
+    .xfile > .cbx { flex: 0 0 auto; margin-left: .3rem; }
+    .xnote { padding: .6rem 1.125rem .6rem 3.5rem; color: var(--text-3); font-size: .72rem; }
+
+    .xfield { max-width: 35rem; margin: 0 0 1rem; }
+    .xfield label { display: block; margin-bottom: .45rem; color: var(--text-2); font-size: .75rem; }
+    .xfield .line { display: flex; gap: .5rem; }
+    .xinp {
+      flex: 1; min-width: 0; display: flex; align-items: center; height: 2.375rem; padding: 0 .75rem;
+      border: 1px solid var(--line-2); border-radius: .625rem; background: var(--ink-850);
+      color: var(--text); font-family: var(--mono); font-size: .78rem;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .backup-warning {
-      margin: 0 0 .9rem; padding: .75rem .9rem;
-      border: 1px solid var(--danger); border-radius: .6rem;
-      color: var(--text-2); font-size: .76rem; line-height: 1.75;
-    }
+    .xinp.ph { color: var(--text-3); }
+    .xacts { display: flex; gap: .5rem; margin-top: 1.125rem; }
 
     .content { min-width: 0; padding: 1.5rem 1.75rem; overflow-y: auto; max-height: calc(100vh - 3.25rem); }
     .dashboard-section { display: none; }
@@ -508,6 +592,22 @@
       font-size: .75rem; line-height: 1.65; color: var(--text-2);
     }
     .creation-note svg { flex: 0 0 auto; width: .9rem; height: .9rem; margin-top: .16rem; color: var(--gold); }
+    .creation-note.danger { border-color: rgba(217, 107, 98, .35); background: rgba(217, 107, 98, .07); }
+    .creation-note.danger svg { color: var(--danger); }
+    .export-confirm-path {
+      margin: 0 0 1.1rem; padding: .55rem .7rem;
+      border: 1px solid var(--line); border-radius: .5rem; background: var(--ink-850);
+      color: var(--text-2); font-family: var(--mono); font-size: .75rem;
+      overflow-wrap: anywhere;
+    }
+    .export-confirm-field { margin: 1.1rem 0 0; }
+    #export-confirm-phrase {
+      width: 14rem; max-width: 100%; height: 2.25rem; padding: 0 .7rem;
+      border: 1px solid var(--line-2); border-radius: .5rem;
+      background: var(--ink-850); color: var(--text); font: inherit; letter-spacing: .04em;
+    }
+    #export-confirm-phrase::placeholder { color: var(--text-3); letter-spacing: 0; }
+    #export-confirm-phrase:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
     #create-type-note { margin-top: 1.1rem; }
     .creation-check {
       display: flex; align-items: flex-start; gap: .6rem; margin-top: .9rem;
@@ -672,7 +772,7 @@
         </button>
         <button class="nav-item dashboard-nav" type="button" data-section="backup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12"></path><path d="M13 7l5 5-5 5"></path><path d="M20 4v16"></path></svg>
-          <span class="nav-label">备份中心</span>
+          <span class="nav-label">导出与迁移</span>
         </button>
         <button class="nav-item dashboard-nav" type="button" data-section="history">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 1.8"></path></svg>
@@ -755,50 +855,57 @@
           </p>
           <p class="section-note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 11v5.5"></path><path d="M12 8h.01"></path></svg>
-            <span>这里只管容器内部。把文件移出加密卷就是明文导出 —— 点行末的「导出」会带你去「备份中心」，那件事在那里做。</span>
+            <span>这里只管容器内部。把文件移出加密卷就是明文导出 —— 点行末的「导出」会带你去「导出与迁移」，那件事在那里做。</span>
           </p>
         </section>
 
         <section id="dashboard-section-backup" class="dashboard-section" aria-labelledby="backup-title">
           <div class="section-header">
-            <div><h2 id="backup-title">备份中心</h2><p>把容器里的东西带出去，以及把整个容器带去别的机器</p></div>
-          </div>
-          <div class="backup-panel">
-            <h3>明文导出</h3>
-            <p>在「文件管理」里点某一行的「导出」，那一项会出现在这里。</p>
-            <p class="backup-warning">
-              <b>导出后的数据不再受本软件保护。</b>它落在你选的位置上，本产品的容器加密、卡绑定、拔卡卸载都不再管它。
-              如果导出的内容来自隐藏卷，<b>这份副本的存在本身就是隐藏卷存在的物证</b>，可能击穿否认性。
-              普通删除也删不干净：SSD 上覆写不保证有效。
+            <div><h2 id="backup-title">导出与迁移</h2></div>
+            <p class="section-aside">
+              <span class="ni"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z"></path></svg></span>
+              <span>迁移只复制容器文件本身，<b>不导出根密钥、密码或任何恢复材料</b>。</span>
             </p>
-            <div class="backup-row">
-              <span class="backup-label">要导出</span>
-              <span id="backup-export-source" class="backup-value">还没有挑选任何文件</span>
+          </div>
+          <div class="picks" role="group" aria-label="导出方式">
+            <button id="export-mode-plain" class="pick" type="button" aria-pressed="true">
+              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0 001.5-1.5V8.5z"></path><path d="M13.5 3.5V8.5h5"></path></svg></span>
+              <h4>明文导出</h4>
+              <p>把容器里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p>
+            </button>
+            <button id="export-mode-migrate" class="pick" type="button" aria-pressed="false">
+              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 6.5A1.5 1.5 0 017 5h10a1.5 1.5 0 011.5 1.5v11a1.5 1.5 0 01-1.5 1.5H7a1.5 1.5 0 01-1.5-1.5z"></path></svg></span>
+              <h4>密文迁移</h4>
+              <p>原样复制容器文件本身，用于换机或备份。仍需原卡与原密码才能打开。</p>
+            </button>
+          </div>
+
+          <div id="export-plain-pane">
+            <div id="export-container-list" class="xlist"></div>
+            <div class="xfield">
+              <label for="backup-export-browse">目标位置</label>
+              <div class="line">
+                <span id="backup-export-location" class="xinp ph">选择一个位置…</span>
+                <button id="backup-export-browse" class="shell-button" type="button">浏览</button>
+              </div>
             </div>
-            <div class="backup-row">
-              <span class="backup-label">导出到</span>
-              <span id="backup-export-location" class="backup-value">还没有选择位置</span>
-              <button id="backup-export-browse" class="shell-button" type="button">选择位置</button>
-              <button id="backup-export-confirm" class="create-button" type="button" disabled>导出</button>
+            <div class="xacts">
+              <button id="backup-export-confirm" class="create-button" type="button" disabled>开始导出</button>
             </div>
             <output id="backup-export-status" class="creation-status" aria-live="polite"></output>
           </div>
-          <div class="backup-panel">
-            <h3>密文迁移导出</h3>
-            <p>把整个容器文件逐字节复制出去，换一台机器继续用。它不解密、不重新加密，复制出来的还是那个容器。</p>
-            <p class="section-note">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 11v5.5"></path><path d="M12 8h.01"></path></svg>
-              <span>换机后仍须<b>原安全卡 + 原口令</b>才能挂载。这不是密钥备份，也不是恢复通道：<b>卡丢失或损坏，数据仍然永久不可恢复</b>。<b>容器必须先卸载</b>，否则复制到的是一份正在被写入的卷。</span>
-            </p>
-            <div class="backup-row">
-              <span class="backup-label">容器</span>
-              <select id="backup-migrate-select" class="file-select"></select>
+
+          <div id="export-migrate-pane" hidden>
+            <div id="migrate-container-list" class="xlist"></div>
+            <div class="xfield">
+              <label for="backup-migrate-browse">目标位置</label>
+              <div class="line">
+                <span id="backup-migrate-location" class="xinp ph">选择一个位置…</span>
+                <button id="backup-migrate-browse" class="shell-button" type="button">浏览</button>
+              </div>
             </div>
-            <div class="backup-row">
-              <span class="backup-label">导出到</span>
-              <span id="backup-migrate-location" class="backup-value">还没有选择位置</span>
-              <button id="backup-migrate-browse" class="shell-button" type="button">选择位置</button>
-              <button id="backup-migrate-confirm" class="create-button" type="button" disabled>导出</button>
+            <div class="xacts">
+              <button id="backup-migrate-confirm" class="create-button" type="button" disabled>开始迁移</button>
             </div>
             <output id="backup-migrate-status" class="creation-status" aria-live="polite"></output>
           </div>
@@ -904,6 +1011,35 @@
       <div class="modal-footer">
         <button id="reset-card-cancel" class="modal-button" type="button">取消</button>
         <button id="reset-card-confirm" class="modal-button danger" type="button" disabled>重新初始化</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="export-confirm-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="export-confirm-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="export-confirm-title">确认明文导出</h3>
+        <button id="export-confirm-close" class="modal-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p>即将把 <strong id="export-confirm-count"></strong> 以明文写入：</p>
+        <p id="export-confirm-summary" class="export-confirm-path"></p>
+        <div class="creation-note danger">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+          <span>写出去的是<b>解密后的原始文件</b>。</span>
+        </div>
+        <div class="field export-confirm-field">
+          <label for="export-confirm-phrase">请键入 <b>明文导出</b> 以确认</label>
+          <input id="export-confirm-phrase" type="text" autocomplete="off"
+                 autocapitalize="off" spellcheck="false" placeholder="明文导出">
+        </div>
+        <output id="export-confirm-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="export-confirm-cancel" class="modal-button" type="button">取消</button>
+        <button id="export-confirm-run" class="modal-button danger" type="button" disabled>开始导出</button>
       </div>
     </div>
   </div>
