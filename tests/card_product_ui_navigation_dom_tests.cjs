@@ -13,6 +13,7 @@ const dom = new JSDOM(fs.readFileSync(path.join(root, "ui/card_session.html"), "
   runScripts: "outside-only", virtualConsole,
 });
 const window = dom.window;
+window.TextEncoder = TextEncoder;
 // jsdom has no pointer capture or layout. Assertions exercise event routing
 // and resulting state; actual pointer hit-testing remains a browser check.
 window.PointerEvent = class extends window.MouseEvent {

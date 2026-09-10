@@ -191,6 +191,21 @@
     document.getElementById("create-container-b-second-confirmation");
   const containerBAcknowledge =
     document.getElementById("create-container-b-acknowledge");
+  const hiddenReview = document.getElementById("hidden-create-review");
+  const hiddenReviewPassword = document.getElementById("hidden-create-review-password");
+  const hiddenReviewVisibility = document.getElementById("hidden-create-review-visibility");
+  const hiddenReviewCancel = document.getElementById("hidden-create-review-cancel");
+  const hiddenReviewConfirm = document.getElementById("hidden-create-review-confirm");
+  const closeHiddenReview = () => {
+    hiddenReview.hidden = true;
+    hiddenReviewPassword.value = "";
+    hiddenReviewPassword.type = "password";
+    hiddenReviewVisibility.setAttribute("aria-pressed", "false");
+    hiddenReviewVisibility.setAttribute("aria-label", "显示当前诱饵密码");
+    containerBAcknowledge.checked = false;
+    hiddenReviewConfirm.disabled = true;
+    creationDialog.inert = false;
+  };
   const containerBError =
     document.getElementById("create-container-b-error");
   const containerBInputs = [
@@ -490,8 +505,7 @@
       containerLocationReady(containerBName, containerBDirectory) &&
       second !== null &&
       second >= 12 && second <= 128 &&
-      containerBSecond.value === containerBSecondConfirmation.value &&
-      containerBAcknowledge.checked;
+      containerBSecond.value === containerBSecondConfirmation.value;
   };
 
   const updateCreationAvailability = () => {
@@ -592,6 +606,7 @@
   // Leaving a parameter step discards what was typed on it: a decoy password
   // must not outlive the step that asked for it.
   const resetCreationInputs = () => {
+    closeHiddenReview();
     applyCapacityUnit(containerUnit, "mib");
     applyCapacityUnit(containerBUnit, "mib");
     closeUnitLists();
@@ -2851,6 +2866,7 @@
   };
 
   const createContainerB = async () => {
+    if (busy || hiddenReview.hidden || !containerBAcknowledge.checked) return;
     const sizes = containerBSizes();
     if (sizes === null || !containerBInputReady() ||
         creationKind !== "hidden" ||
@@ -2861,6 +2877,7 @@
       return;
     }
 
+    closeHiddenReview();
     let encodedSecond = null;
     let encodedConfirmation = null;
     let secondBytes = null;
@@ -3380,7 +3397,44 @@
     if (creationKind === "encrypted") {
       await createContainer();
     } else if (creationKind === "hidden") {
-      await createContainerB();
+      if (!containerBInputReady() || currentState !== nativeState.authenticated) return;
+      closeHiddenReview();
+      hiddenReviewPassword.value = containerBSecond.value;
+      hiddenReview.hidden = false;
+      creationDialog.inert = true;
+      hiddenReviewCancel.focus();
+    }
+  });
+  hiddenReviewCancel.addEventListener("click", () => {
+    closeHiddenReview();
+    creationContinueButton.focus();
+  });
+  containerBAcknowledge.addEventListener("change", () => {
+    hiddenReviewConfirm.disabled = busy || !containerBAcknowledge.checked;
+  });
+  hiddenReviewVisibility.addEventListener("click", () => {
+    const visible = hiddenReviewPassword.type === "password";
+    hiddenReviewPassword.type = visible ? "text" : "password";
+    hiddenReviewVisibility.setAttribute("aria-pressed", String(visible));
+    hiddenReviewVisibility.setAttribute("aria-label", visible ? "隐藏当前诱饵密码" : "显示当前诱饵密码");
+  });
+  hiddenReviewConfirm.addEventListener("click", async () => { await createContainerB(); });
+  hiddenReview.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") {
+      const controls = Array.from(hiddenReview.querySelectorAll("input, button"))
+        .filter((control) => !control.disabled);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hiddenReviewCancel.click();
     }
   });
   for (const button of mountExistingButtons) {

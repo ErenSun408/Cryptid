@@ -79,10 +79,10 @@ void require(const bool condition, const char* const message) {
 
 void test_page_has_route_specific_password_surfaces() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
-  // Two session inputs plus the two the hidden-volume creation form needs.
+  // Two session inputs, two creation inputs and one read-only review preview.
   // The password the session was opened under is not among them.
-  require(count_occurrences(page, "type=\"password\"") == 4,
-          "product page must have exactly the session and creation inputs");
+  require(count_occurrences(page, "type=\"password\"") == 5,
+          "product page must have the session, creation and review inputs");
   require(page.find("id=\"card-password\"") != std::string::npos &&
               page.find("id=\"card-password-confirmation\"") !=
                   std::string::npos,
@@ -95,8 +95,8 @@ void test_page_has_route_specific_password_surfaces() {
   // container path is exactly what section 8.4 forbids, so browser assistance
   // is off on those too; a file name inside a container is the content of an
   // encrypted volume, which is at least as good a reason.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 10 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 10,
+  require(count_occurrences(page, "autocomplete=\"off\"") == 11 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 11,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
@@ -107,13 +107,13 @@ void test_page_has_route_specific_password_surfaces() {
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
   require(
-      count_occurrences(page, "class=\"password-visibility\"") == 2 &&
+      count_occurrences(page, "class=\"password-visibility\"") == 3 &&
           page.find("aria-controls=\"card-password\"") != std::string::npos &&
           page.find("aria-controls=\"card-password-confirmation\"") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
-  require(count_occurrences(page, "class=\"password-visibility\"") == 2 &&
+  require(count_occurrences(page, "class=\"password-visibility\"") == 3 &&
               page.find("aria-controls=\"card-password\"") !=
                   std::string::npos &&
               page.find("aria-controls=\"card-password-confirmation\"") !=
@@ -491,7 +491,9 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // The card holds two passwords at once, so creating this container drops
   // whichever third one was recorded. That has to be acknowledged, and the
   // acknowledgement reads the same under either login.
-  require(page.find("创建这个容器会重写安全卡记录") != std::string::npos &&
+  require(page.find("我已知悉诱饵密码不一致可能带来的永久性后果") != std::string::npos &&
+              page.find("id=\"hidden-create-review\"") != std::string::npos &&
+              page.find("创建这个容器会重写安全卡记录") == std::string::npos &&
               script.find("containerBAcknowledge.checked") !=
                   std::string::npos,
           "the card record rewrite is committed without an acknowledgement");

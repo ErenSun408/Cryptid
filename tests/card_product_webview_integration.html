@@ -217,7 +217,6 @@
       <p id="create-container-b-error" hidden></p>
       <input id="create-container-b-second" type="password">
       <input id="create-container-b-second-confirmation" type="password">
-      <input id="create-container-b-acknowledge" type="checkbox">
     </div>
     <output id="create-volume-status"></output>
     <button id="create-volume-cancel" type="button">
@@ -225,6 +224,13 @@
       <span id="create-volume-cancel-label">取消</span>
     </button>
     <button id="create-volume-continue" type="button">下一步</button>
+  </div>
+  <div id="hidden-create-review" hidden>
+    <input id="hidden-create-review-password" type="password" readonly>
+    <button id="hidden-create-review-visibility" type="button"></button>
+    <input id="create-container-b-acknowledge" type="checkbox">
+    <button id="hidden-create-review-cancel" type="button"></button>
+    <button id="hidden-create-review-confirm" type="button" disabled></button>
   </div>
   <script src="card_session.js?v=p2-17g-card-reset"></script>
   <script src="card_product_webview_integration.js?v=p2-17g-card-reset"></script>

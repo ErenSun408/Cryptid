@@ -66,6 +66,40 @@
     document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 8 }));
     check(order(home) === "1,3,2", "Row body does not start a reorder");
 
+    $('[data-create-container]').click();
+    $('[data-create-kind="hidden"]').click();
+    $('#create-volume-continue').click();
+    const enterCreationValue = (id, value) => {
+      $(id).value = value;
+      $(id).dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    enterCreationValue('#create-container-b-name', 'review-test');
+    enterCreationValue('#create-container-b-directory', 'D:\\Containers');
+    enterCreationValue('#create-container-b-second', 'test-decoy-password');
+    enterCreationValue('#create-container-b-second-confirmation', 'test-decoy-password');
+    $('#create-volume-continue').click();
+    const review = $('#hidden-create-review');
+    const reviewPassword = $('#hidden-create-review-password');
+    const reviewConfirm = $('#hidden-create-review-confirm');
+    check(!review.hidden && reviewConfirm.disabled && !window.navigationFixture.hiddenCreateCalls,
+      "Hidden container creation opens acknowledgement before any native call");
+    check(reviewPassword.type === "password" && reviewPassword.value === 'test-decoy-password',
+      "Review shows the current decoy password masked by default");
+    $('#hidden-create-review-visibility').click();
+    check(reviewPassword.type === "text", "Review eye reveals the current password");
+    $('#hidden-create-review-cancel').click();
+    check(review.hidden && reviewPassword.value === "" && reviewPassword.type === "password",
+      "Returning to edit clears and remasks the review password");
+    $('#create-volume-continue').click();
+    check(reviewConfirm.disabled, "Reopening review requires fresh acknowledgement");
+    $('#create-container-b-acknowledge').click();
+    reviewConfirm.click();
+    await wait(() => window.navigationFixture.hiddenCreateCalls === 1 &&
+      !$('#create-volume-close').disabled);
+    check(review.hidden && reviewPassword.value === "" && $('#create-container-b-second').value === "" &&
+      $('#create-container-b-second-confirmation').value === "",
+      "Confirmed creation calls native once and clears passwords even on failure");
+    $('#create-volume-close').click();
     $("[data-section=backup]").click();
     $("[data-section=settings]").click();
     const sizeSelect = $("#settings-window-size");

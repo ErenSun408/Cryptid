@@ -532,6 +532,12 @@
 
     /* ================= 系统设置 ================= */
     .settings-group { max-width: 34rem; }
+    .creation-capacity-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; margin-top: .9rem; }
+    .creation-capacity-pair .capacity-field input { min-width: 0; }
+    #hidden-create-review .password-field { position: relative; margin-top: .5rem; }
+    #hidden-create-review-password { width: 100%; padding-right: 3rem; }
+    #hidden-create-review-password::-ms-reveal { display: none; }
+    #hidden-create-review .password-visibility { border: 0; background: transparent; }
     #settings-window-size { color-scheme: dark; }
     #settings-window-size option { background-color: var(--ink-800); color: var(--text); }
     .settings-group + .settings-group { margin-top: 1.5rem; }
@@ -1228,7 +1234,8 @@
             </button>
           </div>
           <p id="create-container-b-directory-error" class="creation-error" hidden></p>
-          <label for="create-container-b-capacity" style="margin-top:.9rem">总容量</label>
+          <div class="creation-capacity-pair"><div>
+          <label for="create-container-b-capacity">总容量</label>
           <div class="capacity-field">
             <input id="create-container-b-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="128">
       <div class="unit-picker">
@@ -1244,12 +1251,14 @@
         </div>
       </div>
           </div>
-          <label for="create-container-b-hidden-capacity" style="margin-top:.9rem">内层容量</label>
+          </div><div>
+          <label for="create-container-b-hidden-capacity">内层容量</label>
           <div class="capacity-field">
             <input id="create-container-b-hidden-capacity" type="number" inputmode="numeric" min="1" max="1048575" step="1" value="96">
             <span id="create-container-b-unit-echo" class="capacity-unit">MiB</span>
           </div>
-          <p class="creation-hint">内层卷至多占总容量的 3/4，其余留给外层放置可以交出的内容。</p>
+          </div></div>
+          <p class="creation-hint">内层卷至多占总容量的 3/4。</p>
           <p id="create-container-b-error" class="creation-error" hidden></p>
           <label for="create-container-b-second" style="margin-top:.9rem">为该容器设置诱饵密码</label>
           <input id="create-container-b-second" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -1260,10 +1269,6 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
             <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。</span>
           </div>
-          <label class="creation-check" for="create-container-b-acknowledge">
-            <input id="create-container-b-acknowledge" type="checkbox">
-            <span>创建这个容器会重写安全卡记录。卡上同时只能保留两个密码：这里设置的诱饵密码，以及当前登录使用的密码。原先记录的第三个密码将不再能打开这张卡。</span>
-          </label>
         </div>
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
       </div>
@@ -1277,6 +1282,29 @@
     </div>
   </div>
 
+  <div id="hidden-create-review" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="hidden-create-review-title" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="hidden-create-review-title">重要提醒</h3></div>
+      <div class="modal-body">
+        <p>若您曾用本卡创建过含隐藏卷的容器，请务必确保当前诱饵密码与先前诱饵密码一致。诱饵密码不一致可能使本卡原有密码失效，导致此前容器中的数据永久无法访问。请务必确认后再继续。</p>
+        <label for="hidden-create-review-password">当前诱饵密码</label>
+        <div class="password-field">
+          <input id="hidden-create-review-password" class="creation-password" type="password" readonly autocomplete="off" spellcheck="false">
+          <button id="hidden-create-review-visibility" class="password-visibility" type="button" aria-label="显示当前诱饵密码" aria-controls="hidden-create-review-password" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle><path class="visibility-slash" d="M3 3l18 18"></path></svg>
+          </button>
+        </div>
+        <label class="creation-check" for="create-container-b-acknowledge">
+          <input id="create-container-b-acknowledge" type="checkbox">
+          <span>我已知悉诱饵密码不一致可能带来的永久性后果。</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button id="hidden-create-review-cancel" class="modal-button" type="button">返回修改</button>
+        <button id="hidden-create-review-confirm" class="modal-button primary" type="button" disabled>创建容器</button>
+      </div>
+    </div>
+  </div>
   <div id="file-context-menu" class="file-context-menu" role="menu" aria-label="文件操作" hidden>
     <button id="file-context-rename" type="button" role="menuitem">重命名</button>
   </div>

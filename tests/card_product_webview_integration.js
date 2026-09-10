@@ -480,7 +480,9 @@ chrome.webview.postMessage("driver-loaded");
   // The acknowledgement is the last gate: without it nothing is submitted.
   hiddenAcknowledge.checked = false;
   hiddenAcknowledge.dispatchEvent(new Event("change", { bubbles: true }));
-  if (!creationContinue.disabled) {
+  creationContinue.click();
+  const hiddenReviewConfirm = document.getElementById("hidden-create-review-confirm");
+  if (!hiddenReviewConfirm.disabled || document.getElementById("hidden-create-review").hidden) {
     request("fail-hidden-acknowledgement");
     return;
   }
@@ -490,7 +492,7 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-hidden-creation");
     return;
   }
-  creationContinue.click();
+  hiddenReviewConfirm.click();
   if (!await waitFor(() => surface.dataset.busy === "false" &&
       dashboardContainerCount.textContent === "2" &&
       containerRows().length === 2 && hiddenSecond.value === "" &&
