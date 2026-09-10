@@ -532,6 +532,8 @@
 
     /* ================= 系统设置 ================= */
     .settings-group { max-width: 34rem; }
+    #settings-window-size { color-scheme: dark; }
+    #settings-window-size option { background-color: var(--ink-800); color: var(--text); }
     .settings-group + .settings-group { margin-top: 1.5rem; }
     .settings-group h3 { margin: 0 0 .7rem; font-size: .85rem; font-weight: 600; }
     .settings-card { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
@@ -1003,6 +1005,21 @@
                       aria-label="拔出安全卡时立即卸载全部卷"></span>
               </div>
             </div>
+          </div>
+          <div class="settings-group">
+            <h3>窗口</h3>
+            <div class="settings-card">
+              <div class="settings-row">
+                <label class="settings-copy" for="settings-window-size"><b>窗口尺寸</b></label>
+                <select id="settings-window-size" class="shell-button">
+                  <option value="3">紧凑 · 720 × 640</option>
+                  <option value="0">标准 · 1120 × 760</option>
+                  <option value="1" selected>宽敞 · 1400 × 860</option>
+                  <option value="2">最大化</option>
+                </select>
+              </div>
+            </div>
+            <output id="settings-window-size-status" class="creation-status" aria-live="polite"></output>
           </div>
           <div class="settings-group danger">
             <h3>安全卡</h3>

@@ -8,6 +8,8 @@ window.navigationFixture = {
   failUnmount: false,
   chosenLocation: "D:\\Export",
   pickerCalls: 0,
+  windowSizes: [],
+  failWindowSize: false,
   containers: [
     { id: 1, name: "工作资料", mounted: true, size: 65536, drive: "X:" },
     { id: 2, name: "影像存档", mounted: false, size: 0, drive: "" },
@@ -29,6 +31,10 @@ window.navigationFixture = {
     getContainerSizeMib: (i) => fixture.containers[i].size,
     getContainerDriveLetter: (i) => fixture.containers[i].drive,
     getOperationCount: () => 0,
+    setWindowSize: (preset) => {
+      if (fixture.failWindowSize) throw new Error("simulated resize failure");
+      fixture.windowSizes.push(preset);
+    },
     chooseContainerDirectory: () => {
       fixture.pickerCalls += 1;
       return fixture.chosenLocation;

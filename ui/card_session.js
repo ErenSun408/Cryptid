@@ -43,6 +43,24 @@
     document.getElementById("dashboard-container-count");
   const navContainerCount = document.getElementById("nav-container-count");
   const dashboardStatus = document.getElementById("dashboard-status");
+  const windowSizeSelect = document.getElementById("settings-window-size");
+  const windowSizeStatus = document.getElementById("settings-window-size-status");
+  let appliedWindowSize = "1";
+  if (windowSizeSelect !== null) windowSizeSelect.addEventListener("change", async () => {
+    const value = windowSizeSelect.value;
+    if (!["0", "1", "2", "3"].includes(value)) return;
+    windowSizeSelect.disabled = true;
+    windowSizeStatus.textContent = "";
+    try {
+      await bridge.setWindowSize(Number(value));
+      appliedWindowSize = value;
+    } catch (_) {
+      windowSizeSelect.value = appliedWindowSize;
+      windowSizeStatus.textContent = "无法调整窗口尺寸，请重试。";
+    } finally {
+      windowSizeSelect.disabled = false;
+    }
+  });
   const containerLists =
     Array.from(document.querySelectorAll("[data-container-list]"));
   const mountExistingButtons =

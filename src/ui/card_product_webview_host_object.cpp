@@ -96,6 +96,7 @@ constexpr DISPID kMoveContainerEntryId = 40;
 constexpr DISPID kCopyContainerEntryId = 41;
 constexpr DISPID kExportContainerEntryId = 42;
 constexpr DISPID kExportContainerFileId = 43;
+constexpr DISPID kSetWindowSizeId = 44;
 
 constexpr wchar_t kListContainerDirectoryName[] = L"listContainerDirectory";
 constexpr wchar_t kDeleteContainerEntryName[] = L"deleteContainerEntry";
@@ -281,8 +282,10 @@ class CardProductWebViewHostObject final : public IDispatch {
  public:
   CardProductWebViewHostObject(
       CardProductUiSessionController& controller,
-      IUiCloseRequestSink* const close_sink) noexcept
-      : controller_(controller), close_sink_(close_sink) {}
+      IUiCloseRequestSink* const close_sink,
+      IUiWindowSizeSink* const window_size_sink) noexcept
+      : controller_(controller), close_sink_(close_sink),
+        window_size_sink_(window_size_sink) {}
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                            void** result) noexcept override {
@@ -323,6 +326,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (name_count != 1 || names[0] == nullptr) {
       if (name_count > 0) ids[0] = DISPID_UNKNOWN;
       return DISP_E_UNKNOWNNAME;
+    }
+    if (matches(names[0], L"setWindowSize")) {
+      ids[0] = kSetWindowSizeId;
+      return S_OK;
     }
     if (matches(names[0], kSubmitLoginPasswordBytesName)) {
       ids[0] = kSubmitLoginPasswordBytesId;
@@ -492,6 +499,20 @@ class CardProductWebViewHostObject final : public IDispatch {
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
 
     switch (member) {
+      case kSetWindowSizeId: {
+        if (parameters == nullptr || parameters->cArgs != 1 ||
+            parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+          return DISP_E_BADPARAMCOUNT;
+        }
+        std::uint32_t preset = 0;
+        if (!exact_uint32(parameters->rgvarg[0], preset) || preset > 3) {
+          if (argument_error != nullptr) *argument_error = 0;
+          return DISP_E_TYPEMISMATCH;
+        }
+        return window_size_sink_ != nullptr &&
+                       window_size_sink_->set_window_size(preset)
+                   ? S_OK : E_FAIL;
+      }
       case kGetSessionStateId:
         return invoke_state(parameters, result);
       case kHasActiveSessionId:
@@ -1419,6 +1440,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::atomic<ULONG> references_{1};
   CardProductUiSessionController& controller_;
   IUiCloseRequestSink* close_sink_{};
+  IUiWindowSizeSink* window_size_sink_{};
 };
 
 }  // namespace
@@ -1426,11 +1448,13 @@ class CardProductWebViewHostObject final : public IDispatch {
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* const close_sink,
-    IDispatch** const result) noexcept {
+    IDispatch** const result,
+    IUiWindowSizeSink* const window_size_sink) noexcept {
   if (result == nullptr) return E_POINTER;
   *result = nullptr;
   auto* const object =
-      new (std::nothrow) CardProductWebViewHostObject(controller, close_sink);
+      new (std::nothrow) CardProductWebViewHostObject(controller, close_sink,
+                                                   window_size_sink);
   if (object == nullptr) return E_OUTOFMEMORY;
   *result = object;
   return S_OK;

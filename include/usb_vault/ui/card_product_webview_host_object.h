@@ -6,6 +6,13 @@
 
 namespace usb_vault::ui {
 
+class IUiWindowSizeSink {
+ public:
+  virtual ~IUiWindowSizeSink() noexcept = default;
+  // Fixed presentation presets only: standard, spacious, maximized, compact.
+  virtual bool set_window_size(unsigned int preset) noexcept = 0;
+};
+
 // Asks the host window to close. A card returned to the provisioning marker
 // cannot be re-routed inside the running process: the insertion's route is
 // fixed for its lifetime, so a fresh start is the only place the new state is
@@ -34,6 +41,7 @@ class IUiCloseRequestSink {
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,
-    IDispatch** result) noexcept;
+    IDispatch** result,
+    IUiWindowSizeSink* window_size_sink = nullptr) noexcept;
 
 }  // namespace usb_vault::ui

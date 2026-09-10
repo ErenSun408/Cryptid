@@ -67,6 +67,28 @@
     check(order(home) === "1,3,2", "Row body does not start a reorder");
 
     $("[data-section=backup]").click();
+    $("[data-section=settings]").click();
+    const sizeSelect = $("#settings-window-size");
+    check(sizeSelect.value === "1", "Spacious is the default window preset");
+    sizeSelect.value = "3";
+    sizeSelect.dispatchEvent(new Event("change"));
+    await tick();
+    check(window.navigationFixture.windowSizes.at(-1) === 3,
+      "Compact window preset reaches the native sink");
+    sizeSelect.value = "1";
+    sizeSelect.dispatchEvent(new Event("change"));
+    check(sizeSelect.disabled, "Window preset disables during resize");
+    await tick();
+    check(window.navigationFixture.windowSizes.at(-1) === 1 && !sizeSelect.disabled,
+      "Window size selection reaches the native preset sink");
+    window.navigationFixture.failWindowSize = true;
+    sizeSelect.value = "2";
+    sizeSelect.dispatchEvent(new Event("change"));
+    await tick();
+    check(sizeSelect.value === "1" && $("#settings-window-size-status").textContent,
+      "Failed resize restores the last applied preset and reports failure");
+    window.navigationFixture.failWindowSize = false;
+    $("[data-section=backup]").click();
     const selectAll = (id) => $(`[data-export-select-all="${id}"]`);
     selectAll(1).click();
     await wait(() => selectAll(1).classList.contains("on"));

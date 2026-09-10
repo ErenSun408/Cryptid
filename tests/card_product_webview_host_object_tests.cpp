@@ -1045,6 +1045,45 @@ RecordingCloseSink g_close_sink;
   return adopted;
 }
 
+void test_window_size_presets_are_bounded() {
+  class SizeSink final : public usb_vault::ui::IUiWindowSizeSink {
+   public:
+    bool set_window_size(unsigned int preset) noexcept override {
+      selected = preset;
+      ++calls;
+      return succeeds;
+    }
+    unsigned int selected{};
+    int calls{};
+    bool succeeds{true};
+  } sink;
+  Fixture fixture;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, nullptr, &host, &sink)), "size host creation failed");
+  for (int preset = 0; preset < 4; ++preset) {
+    require(SUCCEEDED(invoke_with_number(*host.Get(), L"setWindowSize",
+        preset, nullptr, nullptr)) && sink.selected == static_cast<unsigned int>(preset),
+        "valid size preset was not applied");
+  }
+  for (const double invalid : {-1.0, 4.0, 0.5, 4294967296.0}) {
+    VARIANTARG argument{};
+    argument.vt = VT_R8;
+    argument.dblVal = invalid;
+    DISPPARAMS parameters{&argument, nullptr, 1, 0};
+    require(host->Invoke(member_id(*host.Get(), L"setWindowSize"), IID_NULL,
+        LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr, nullptr,
+        nullptr) == DISP_E_TYPEMISMATCH, "invalid size accepted");
+  }
+  require(sink.calls == 4, "invalid size reached window sink");
+  sink.succeeds = false;
+  require(FAILED(invoke_with_number(*host.Get(), L"setWindowSize", 0,
+      nullptr, nullptr)), "window failure was hidden");
+  host = make_host(fixture.controller);
+  require(FAILED(invoke_with_number(*host.Get(), L"setWindowSize", 0,
+      nullptr, nullptr)), "missing size sink claimed success");
+}
+
 void test_surface_and_state_projection_are_fixed() {
   Fixture fixture;
   ComPtr<IDispatch> host = make_host(fixture.controller);
@@ -2010,6 +2049,7 @@ void test_the_export_bridge_checks_its_shapes() {
 int main() {
   try {
     test_surface_and_state_projection_are_fixed();
+    test_window_size_presets_are_bounded();
     test_login_consumes_and_wipes_one_array();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();

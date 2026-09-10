@@ -22,6 +22,7 @@
 #include "usb_vault/volume/volume_provider.h"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <stdexcept>
@@ -41,6 +42,40 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 HWND g_main_window{};
+
+// Presets are client-area dimensions in 96-DPI units. Never place a preset
+// outside the current monitor's work area, including its title bar/borders.
+bool apply_window_size(const HWND window, const unsigned int preset) noexcept {
+  if (window == nullptr || preset > 3) return false;
+  if (preset == 2) {
+    ::ShowWindow(window, SW_MAXIMIZE);
+    return true;
+  }
+  MONITORINFO monitor{sizeof(monitor)};
+  if (!::GetMonitorInfoW(::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                         &monitor)) return false;
+  const int dpi = static_cast<int>(::GetDpiForWindow(window));
+  RECT size{0, 0, ::MulDiv(preset == 3 ? 720 : (preset == 0 ? 1120 : 1400), dpi, 96),
+                  ::MulDiv(preset == 3 ? 640 : (preset == 0 ? 760 : 860), dpi, 96)};
+  if (!::AdjustWindowRectExForDpi(&size, WS_OVERLAPPEDWINDOW, FALSE, 0,
+                                 static_cast<UINT>(dpi))) return false;
+  const RECT work = monitor.rcWork;
+  const int width = (std::min)(size.right - size.left, work.right - work.left);
+  const int height = (std::min)(size.bottom - size.top, work.bottom - work.top);
+  if (::IsZoomed(window) || ::IsIconic(window)) ::ShowWindow(window, SW_RESTORE);
+  return ::SetWindowPos(window, nullptr,
+      work.left + (work.right - work.left - width) / 2,
+      work.top + (work.bottom - work.top - height) / 2, width, height,
+      SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
+}
+
+class MainWindowSizeSink final : public usb_vault::ui::IUiWindowSizeSink {
+ public:
+  bool set_window_size(const unsigned int preset) noexcept override {
+    return apply_window_size(g_main_window, preset);
+  }
+};
+MainWindowSizeSink g_window_size_sink;
 
 // Posted rather than sent: the reset returns through the WebView2 dispatch
 // first, so the window is destroyed after the call that asked for it has
@@ -373,7 +408,8 @@ void initialize_webview(const HWND window) {
                       ComPtr<IDispatch> host_object;
                       current = usb_vault::ui::
                           create_card_product_webview_host_object(
-                              *g_ui_session, &g_close_sink, &host_object);
+                              *g_ui_session, &g_close_sink, &host_object,
+                              &g_window_size_sink);
                       if (FAILED(current)) {
                         return current;
                       }
@@ -527,6 +563,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     ::CoUninitialize();
     return 1;
   }
+
+  static_cast<void>(apply_window_size(window, 1));
 
   try {
     initialize_application_session(window);
