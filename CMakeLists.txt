@@ -708,6 +708,7 @@ if(USB_VAULT_BUILD_UI)
   target_sources(usb_vault_vikey_development_credentials_config PRIVATE
     "${p2_config_header}"
     tools/vikey_development_credentials_config/diagnostics.cpp
+    tools/vikey_development_credentials_config/installers.cpp
     src/card/vikey/vikey_hid_probe.cpp)
   target_include_directories(usb_vault_vikey_development_credentials_config PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
@@ -717,7 +718,7 @@ if(USB_VAULT_BUILD_UI)
   target_link_libraries(usb_vault_vikey_development_credentials_config PRIVATE
     usb_vault_verified_local_artifact usb_vault_vikey_helper_card_record_backend
     "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-    Ole32 Setupapi Hid)
+    Ole32 Setupapi Hid Shell32 Wintrust)
   add_custom_target(usb_vault_p2_development_package_binaries)
   add_dependencies(usb_vault_p2_development_package_binaries
     usb_vault_vikey_p2_development_app

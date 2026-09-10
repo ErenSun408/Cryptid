@@ -12,6 +12,7 @@
 #include <utility>
 #ifdef USB_VAULT_CONFIG_DIAGNOSTICS
 #include "diagnostics.h"
+#include "installers.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -44,6 +45,8 @@ constexpr int kSaveButtonId = 1004;
 #ifdef USB_VAULT_CONFIG_DIAGNOSTICS
 constexpr int kCheckButtonId = 1005;
 constexpr int kLaunchButtonId = 1006;
+constexpr int kInstallButtonId = 1007;
+constexpr int kWebviewButtonId = 1008;
 #endif
 
 struct UiState final {
@@ -58,6 +61,9 @@ struct UiState final {
   HWND check{};
   HWND launch{};
   HWND results{};
+  HWND install{};
+  HWND webview{};
+  bool installing{};
   std::thread worker;
   std::atomic<bool> checking{false};
   std::mutex mutex;
@@ -196,6 +202,8 @@ void check_environment(UiState& state) noexcept {
   ::EnableWindow(state.launch, FALSE);
   ::EnableWindow(state.check, FALSE);
   ::EnableWindow(state.save, FALSE);
+  ::EnableWindow(state.install, FALSE);
+  ::EnableWindow(state.webview, FALSE);
   for (const HWND field : {state.user_sn, state.api_key, state.user_pin}) ::EnableWindow(field, FALSE);
   ::SetWindowTextW(state.status, L"检测运行中，请等待；开发版安全卡访问可能联网。检测不改写卡。");
   state.checking.store(true);
@@ -228,6 +236,39 @@ void check_environment(UiState& state) noexcept {
       state.checking.store(false);
     });
   } catch (...) {
+    state.checking.store(false);
+  }
+}
+
+void install_driver(UiState& state) noexcept {
+  if (state.checking.load()) return;
+  if (state.worker.joinable()) state.worker.join();
+  state.ready = false;
+  state.installing = true;
+  for (const HWND control : {state.check, state.launch, state.save, state.install,
+                            state.webview, state.user_sn, state.api_key, state.user_pin})
+    ::EnableWindow(control, FALSE);
+  ::SetWindowTextW(state.status, L"正在校验安装器，随后将出现管理员授权和安装窗口。");
+  ::SetWindowTextW(state.results, L"请在安装器中选择 Install。若要求重启，请先重启 Windows；完成后重新运行检测。");
+  state.checking.store(true);
+  try {
+    state.worker = std::thread([&state] {
+      const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+      std::wstring result;
+      try {
+        if (FAILED(com)) throw std::runtime_error("COM unavailable");
+        result = configuration::install_veracrypt(configuration::executable_directory())
+            ? L"安装器已退出。请按安装器提示完成操作，必要时重启 Windows，然后重新运行检测。"
+            : L"已取消管理员授权。未启动安装器，可稍后重试。";
+      } catch (...) {
+        result = L"无法校验或启动安装器。请确认 prerequisites 中有原版安装器，系统时间及证书验证网络正常，或重新获取完整测试包。";
+      }
+      if (SUCCEEDED(com)) ::CoUninitialize();
+      { const std::lock_guard lock(state.mutex); state.report = std::move(result); }
+      state.checking.store(false);
+    });
+  } catch (...) {
+    { const std::lock_guard lock(state.mutex); state.report = L"无法启动安装任务，请稍后重试。"; }
     state.checking.store(false);
   }
 }
@@ -281,10 +322,14 @@ void initialize_controls(const HWND window, UiState& state,
   state.launch = create_control(0, L"BUTTON", L"启动 USB Vault", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
       424, 340, 170, 32, window, kLaunchButtonId, instance);
   state.results = create_control(WS_EX_CLIENTEDGE, L"EDIT",
-      L"已配置过的用户可直接运行检测。需要更新配置时，请先填写并保存全部三项。\r\n检测只读；缺失依赖请按随包测试须知安装。",
+      L"已配置过的用户可直接运行检测。需要更新配置时，请先填写并保存全部三项。\r\n缺失依赖可使用安装入口处理，完成后重新检测。",
       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
-      24, 386, 570, 252, window, 0, instance);
-  for (const HWND control : {state.check, state.launch, state.results}) set_control_font(control, state.font);
+      24, 430, 570, 208, window, 0, instance);
+  state.install = create_control(0, L"BUTTON", L"安装 VeraCrypt（管理员）", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      24, 386, 275, 32, window, kInstallButtonId, instance);
+  state.webview = create_control(0, L"BUTTON", L"获取 WebView2（微软官网）", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      309, 386, 285, 32, window, kWebviewButtonId, instance);
+  for (const HWND control : {state.check, state.launch, state.results, state.install, state.webview}) set_control_font(control, state.font);
   ::EnableWindow(state.launch, FALSE);
   if (::SetTimer(window, 1, 150, nullptr) == 0) fail_windows("create diagnostic timer");
 #endif
@@ -335,10 +380,12 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
         }
         if (!state->checking.load() && !::IsWindowEnabled(state->check)) {
           if (state->worker.joinable()) state->worker.join();
-          for (const HWND field : {state->user_sn, state->api_key, state->user_pin, state->check}) ::EnableWindow(field, TRUE);
+          for (const HWND field : {state->user_sn, state->api_key, state->user_pin, state->check, state->install, state->webview}) ::EnableWindow(field, TRUE);
           update_save_button(*state);
           ::EnableWindow(state->launch, state->ready ? TRUE : FALSE);
-          ::SetWindowTextW(state->status, state->ready ? L"检测通过，可以启动主程序。" : L"请处理未通过的项目，然后重新检测。");
+          ::SetWindowTextW(state->status, state->installing ? L"安装任务已结束，请查看结果并重新检测。" :
+              state->ready ? L"检测通过，可以启动主程序。" : L"请处理未通过的项目，然后重新检测。");
+          state->installing = false;
         }
         return 0;
       }
@@ -358,6 +405,18 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
       if (state == nullptr) break;
 #ifdef USB_VAULT_CONFIG_DIAGNOSTICS
       if (state->checking.load()) return 0;
+      if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kInstallButtonId) {
+        install_driver(*state); return 0;
+      }
+      if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kWebviewButtonId) {
+        state->ready = false;
+        ::EnableWindow(state->launch, FALSE);
+        try {
+          configuration::open_webview_download();
+          ::SetWindowTextW(state->status, L"请在微软官网下载安装 WebView2 Runtime，完成后重新检测。");
+        } catch (...) { ::SetWindowTextW(state->status, L"无法打开浏览器，请按测试须知中的微软官网链接下载。"); }
+        return 0;
+      }
       if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kCheckButtonId) {
         check_environment(*state); return 0;
       }
@@ -389,7 +448,7 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
     case WM_CLOSE:
 #ifdef USB_VAULT_CONFIG_DIAGNOSTICS
       if (state && state->checking.load()) {
-        ::SetWindowTextW(state->status, L"检测正在访问安全卡，请等待检测结束后关闭。");
+        ::SetWindowTextW(state->status, state->installing ? L"安装任务进行中，请先完成或退出安装器。" : L"检测正在访问安全卡，请等待检测结束后关闭。");
         return 0;
       }
 #endif

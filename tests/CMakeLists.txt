@@ -543,6 +543,15 @@ usb_vault_configure_target(vikey_development_app_config_tests)
 add_test(NAME vikey_development_app_config_tests
   COMMAND vikey_development_app_config_tests)
 
+add_executable(configuration_installer_tests
+  configuration_installer_tests.cpp
+  ${PROJECT_SOURCE_DIR}/tools/vikey_development_credentials_config/installers.cpp)
+target_include_directories(configuration_installer_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(configuration_installer_tests PRIVATE
+  usb_vault_vikey_development_credentials usb_vault_verified_local_artifact Shell32 Wintrust)
+usb_vault_configure_target(configuration_installer_tests)
+add_test(NAME configuration_installer_tests COMMAND configuration_installer_tests)
+
 add_executable(vikey_module_tests
   vikey_module_tests.cpp
 )
