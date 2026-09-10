@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Per-monitor DPI awareness, declared here rather than called from wWinMain.
+
+    A process that does not say it understands DPI is rendered by Windows at
+    96 DPI and then bitmap-stretched to the display's real scale. On a 125%
+    display that is a 1.25x non-integer upscale of the whole window, which is
+    what makes text look soft: nothing is drawn wrong, it is drawn small and
+    then enlarged. Most laptops ship scaled, so this is the common case rather
+    than the exception.
+
+    It is a manifest and not a SetProcessDpiAwarenessContext call because the
+    declaration has to take effect before the process creates any window or
+    device context. A manifest is read before the first instruction runs; a
+    call has to stay the first thing wWinMain does, and nothing enforces that
+    for whoever edits it next.
+
+    PerMonitorV2 is the setting WebView2 expects: it scales its own content by
+    the host window's DPI, and V2 is what makes the non-client area and the
+    WM_DPICHANGED notification behave for a window moved between displays.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!-- Read by Windows 8.1 and 10 before the 2016 key existed. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+    </windowsSettings>
+  </application>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11. Without this the OS reports an older version and
+           applies compatibility shims this product has no use for. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>

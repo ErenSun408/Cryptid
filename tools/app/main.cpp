@@ -455,6 +455,21 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     case WM_SIZE:
       resize_webview(window);
       return 0;
+    // Moved to a display scaled differently. Windows hands over the rectangle
+    // the window should take at the new scale; taking it keeps the window the
+    // same physical size across the move, and WM_SIZE then re-lays the WebView
+    // out. WebView2 rescales its own content from the window's DPI.
+    case WM_DPICHANGED: {
+      const RECT* const suggested = reinterpret_cast<const RECT*>(lparam);
+      if (suggested != nullptr) {
+        static_cast<void>(::SetWindowPos(
+            window, nullptr, suggested->left, suggested->top,
+            suggested->right - suggested->left,
+            suggested->bottom - suggested->top,
+            SWP_NOZORDER | SWP_NOACTIVATE));
+      }
+      return 0;
+    }
     case WM_CLOSE:
       if (g_ui_session != nullptr &&
           !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
@@ -496,9 +511,16 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
+  // The manifest makes this process per-monitor DPI aware, so these are real
+  // pixels rather than 96-DPI ones Windows would afterwards stretch. Scaling
+  // them keeps the window the size it used to look, instead of shrinking it by
+  // whatever the display is scaled to.
+  const UINT startup_dpi = ::GetDpiForSystem();
   const HWND window = ::CreateWindowExW(
       0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-      CW_USEDEFAULT, 900, 640, nullptr, nullptr, instance, nullptr);
+      CW_USEDEFAULT, ::MulDiv(900, static_cast<int>(startup_dpi), 96),
+      ::MulDiv(640, static_cast<int>(startup_dpi), 96), nullptr, nullptr,
+      instance, nullptr);
   g_main_window = window;
   if (window == nullptr) {
     show_failure(L"窗口创建失败。");

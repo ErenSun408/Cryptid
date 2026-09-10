@@ -605,8 +605,12 @@ if(USB_VAULT_BUILD_UI)
   # Separate opt-in P2 application. It reuses the development credential and
   # network-enabled helper deployment boundary, but composes only the formal
   # 216-byte Card Record entry/login chain and the five-state product page.
+  # The manifest is a source, not a resource: MSVC hands a .manifest listed
+  # here to mt.exe, so the DPI declaration is embedded in the executable and
+  # takes effect before the process runs its first instruction.
   add_executable(usb_vault_vikey_p2_development_app WIN32 EXCLUDE_FROM_ALL
     tools/app/main.cpp
+    tools/app/usb_vault_app.manifest
   )
   target_include_directories(usb_vault_vikey_p2_development_app PRIVATE
     "${webview2_sdk_SOURCE_DIR}/build/native/include"
