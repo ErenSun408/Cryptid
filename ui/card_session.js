@@ -1151,8 +1151,8 @@
   };
 
   const kBoxPaths = Object.freeze([
-    "M5.5 6.5A1.5 1.5 0 017 5h10a1.5 1.5 0 011.5 1.5v11a1.5 1.5 0" +
-      " 01-1.5 1.5H7a1.5 1.5 0 01-1.5-1.5z",
+    "M12 3 3 7.5v9L12 21l9-4.5v-9L12 3z",
+    "m3 7.5 9 4.5 9-4.5M12 12v9M7.5 5.25l9 4.5",
   ]);
   const kCheckPaths = Object.freeze(["M6 12.5l4 4 8-9"]);
   // Six dots, drawn as circles so the handle reads as a grip rather than a
@@ -1454,11 +1454,12 @@
         : null;
       const every = roots !== null && roots.length !== 0 && roots.every(
         (entry) => exportSelection.has(exportKey(container.id, "", entry.name)));
-      const tail = checkBox(every || (roots === null && picked.length !== 0));
+      const checked = every || (roots === null && picked.length !== 0);
+      const tail = checkBox(checked);
       tail.dataset.exportSelectAll = String(container.id);
       tail.addEventListener("click", (event) => {
         event.stopPropagation();
-        void toggleExportContainerAll(container.id, !every);
+        void toggleExportContainerAll(container.id, !checked);
       });
       const head = exportRow(container, tail, () => {
         void toggleExportContainer(container.id);
@@ -1559,6 +1560,7 @@
       exportLocation === "" ? "选择一个位置…" : exportLocation;
     backupExportLocation.classList.toggle("ph", exportLocation === "");
     backupExportBrowse.disabled = busy;
+    backupExportLocation.disabled = busy;
     backupExportConfirm.disabled =
       busy || exportSelection.size === 0 || exportLocation === "";
     backupExportConfirm.textContent = exportSelection.size === 0
@@ -1576,6 +1578,7 @@
       migrateLocation === "" ? "选择一个位置…" : migrateLocation;
     backupMigrateLocation.classList.toggle("ph", migrateLocation === "");
     backupMigrateBrowse.disabled = busy;
+    backupMigrateLocation.disabled = busy;
     backupMigrateConfirm.disabled =
       busy || !migrateReady || migrateLocation === "";
   };
@@ -3035,6 +3038,7 @@
   });
   window.addEventListener("resize", closeFileContextMenu);
   document.addEventListener("scroll", closeFileContextMenu, true);
+  backupExportLocation.addEventListener("click", () => { backupExportBrowse.click(); });
   backupExportBrowse.addEventListener("click", async () => {
     if (busy || bridge === null) return;
     const chosen = await bridge.chooseContainerDirectory();
@@ -3068,6 +3072,7 @@
   exportModeMigrate.addEventListener("click", () => {
     chooseExportMode("migrate");
   });
+  backupMigrateLocation.addEventListener("click", () => { backupMigrateBrowse.click(); });
   backupMigrateBrowse.addEventListener("click", async () => {
     if (busy || bridge === null) return;
     const chosen = await bridge.chooseContainerDirectory();

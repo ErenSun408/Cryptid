@@ -66,6 +66,40 @@
     document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 8 }));
     check(order(home) === "1,3,2", "Row body does not start a reorder");
 
+    $("[data-section=backup]").click();
+    const selectAll = (id) => $(`[data-export-select-all="${id}"]`);
+    selectAll(1).click();
+    await wait(() => selectAll(1).classList.contains("on"));
+    selectAll(3).click();
+    await wait(() => selectAll(3).classList.contains("on"));
+    selectAll(1).click();
+    check(!selectAll(1).classList.contains("on") && selectAll(3).classList.contains("on"),
+      "Collapsed select-all can clear only its own container");
+    selectAll(1).click();
+    await wait(() => selectAll(1).classList.contains("on"));
+    $('[data-export-toggle="1"] .xrow-open').click();
+    await wait(() => all("#export-container-list .xfile").length === 2);
+    check(all("#export-container-list .xfile .cbx.on").length === 2,
+      "Selecting again while collapsed selects all files");
+    selectAll(1).click();
+    check(!all("#export-container-list .xfile .cbx.on").length,
+      "Expanded select-all still clears the file selection");
+    $("#backup-export-location").click();
+    await tick();
+    check($("#backup-export-location").textContent === "D:\\Export" && window.navigationFixture.pickerCalls === 1,
+      "Plain export location opens the directory picker");
+    window.navigationFixture.chosenLocation = "";
+    $("#backup-export-browse").click();
+    await tick();
+    check($("#backup-export-location").textContent === "D:\\Export",
+      "Cancelling the picker preserves the selected location");
+    $("#export-mode-migrate").click();
+    window.navigationFixture.chosenLocation = "D:\\Migration";
+    $("#backup-migrate-location").click();
+    await tick();
+    check($("#backup-migrate-location").textContent === "D:\\Migration" &&
+      $("#backup-export-location").textContent === "D:\\Export" && window.navigationFixture.pickerCalls === 3,
+      "Migration location uses the picker and stays separate from plain export");
     $("[data-section=files]").click();
     check(!$(manager).hidden && $("#management-files").hidden, "Management navigation starts at containers");
     $(manager + ' [data-row-container="1"] .container-name').click();

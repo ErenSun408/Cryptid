@@ -6,6 +6,8 @@ window.navigationFixture = {
   delayListing: false,
   listingSuffix: "",
   failUnmount: false,
+  chosenLocation: "D:\\Export",
+  pickerCalls: 0,
   containers: [
     { id: 1, name: "工作资料", mounted: true, size: 65536, drive: "X:" },
     { id: 2, name: "影像存档", mounted: false, size: 0, drive: "" },
@@ -27,6 +29,10 @@ window.navigationFixture = {
     getContainerSizeMib: (i) => fixture.containers[i].size,
     getContainerDriveLetter: (i) => fixture.containers[i].drive,
     getOperationCount: () => 0,
+    chooseContainerDirectory: () => {
+      fixture.pickerCalls += 1;
+      return fixture.chosenLocation;
+    },
     mountAdoptedContainer: (id) => {
       const container = fixture.containers.find((item) => item.id === id);
       container.mounted = true;

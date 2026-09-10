@@ -335,7 +335,7 @@
     /* 行体的可点区域：图标、名称、盘符。手柄与行尾按钮在它之外，
        因为按钮不能嵌套在按钮里。 */
     .xrow-open {
-      display: flex; align-items: center; gap: .875rem; flex: 0 1 76%; min-width: 0;
+      display: flex; align-items: center; gap: .875rem; flex: 1 1 auto; min-width: 0;
       margin: -.875rem 0; padding: .875rem 0;
       border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
     }
@@ -363,7 +363,7 @@
     .xrow-lift .grab { color: var(--gold); cursor: grabbing; }
     .xrow-ghost { opacity: .35; }
     .xins { height: 2px; margin: 0 1.125rem; border-radius: 2px; background: var(--gold); }
-    .xrow .ops { display: flex; align-items: center; gap: .75rem; flex: 1 1 auto; min-width: 0; }
+    .xrow .ops { display: flex; align-items: center; gap: 1.75rem; flex: 0 0 auto; min-width: 0; }
     /* 勾选框永远贴着行的最右边，与文件行的那一列对齐。 */
     .xrow .ops > .cbx { margin-left: auto; }
     .fact { min-width: 4rem; }
@@ -402,6 +402,8 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .xinp.ph { color: var(--text-3); }
+    button.xinp { text-align: left; cursor: pointer; }
+    button.xinp:disabled { cursor: default; opacity: .5; }
     .xacts { display: flex; gap: .5rem; margin-top: 1.125rem; }
 
     .content { min-width: 0; padding: 1.5rem 1.75rem; overflow-y: auto; max-height: calc(100vh - 3.25rem); }
@@ -916,7 +918,7 @@
               <p>把容器里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p>
             </button>
             <button id="export-mode-migrate" class="pick" type="button" aria-pressed="false">
-              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 6.5A1.5 1.5 0 017 5h10a1.5 1.5 0 011.5 1.5v11a1.5 1.5 0 01-1.5 1.5H7a1.5 1.5 0 01-1.5-1.5z"></path></svg></span>
+              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"></path></svg></span>
               <h4>密文迁移</h4>
               <p>原样复制容器文件本身，用于换机或备份。仍需原卡与原密码才能打开。</p>
             </button>
@@ -927,7 +929,7 @@
             <div class="xfield">
               <label for="backup-export-browse">目标位置</label>
               <div class="line">
-                <span id="backup-export-location" class="xinp ph">选择一个位置…</span>
+                <button id="backup-export-location" class="xinp ph" type="button" aria-label="选择明文导出目标位置">选择一个位置…</button>
                 <button id="backup-export-browse" class="shell-button" type="button">浏览</button>
               </div>
             </div>
@@ -942,7 +944,7 @@
             <div class="xfield">
               <label for="backup-migrate-browse">目标位置</label>
               <div class="line">
-                <span id="backup-migrate-location" class="xinp ph">选择一个位置…</span>
+                <button id="backup-migrate-location" class="xinp ph" type="button" aria-label="选择密文迁移目标位置">选择一个位置…</button>
                 <button id="backup-migrate-browse" class="shell-button" type="button">浏览</button>
               </div>
             </div>
