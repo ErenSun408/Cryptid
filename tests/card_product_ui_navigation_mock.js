@@ -13,6 +13,7 @@ window.navigationFixture = {
   loggingEnabled: true,
   failLogging: false,
   hiddenCreateCalls: 0,
+  pendingCreation: null,
   containers: [
     { id: 1, name: "工作资料", mounted: true, size: 65536, drive: "X:" },
     { id: 2, name: "影像存档", mounted: false, size: 0, drive: "" },
@@ -36,8 +37,13 @@ window.navigationFixture = {
     getOperationCount: () => 0,
     createContainerBMib: () => {
       fixture.hiddenCreateCalls += 1;
-      throw new Error("simulated creation failure");
+      return new Promise((resolve, reject) => {
+        fixture.pendingCreation = { resolve, reject };
+      });
     },
+    createContainerMib: () => new Promise((resolve, reject) => {
+      fixture.pendingCreation = { resolve, reject };
+    }),
     getOperationLoggingEnabled: () => fixture.loggingEnabled,
     setOperationLoggingEnabled: (enabled) => {
       if (fixture.failLogging) throw new Error("simulated preference failure");

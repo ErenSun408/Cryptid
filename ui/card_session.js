@@ -170,6 +170,78 @@
     document.getElementById("create-container-capacity");
   const containerError = document.getElementById("create-container-error");
   const creationStatus = document.getElementById("create-volume-status");
+  const creationProgress = document.getElementById("creation-progress");
+  const creationProgressTime = document.getElementById("creation-progress-time");
+  const creationProgressWork = document.getElementById("creation-progress-work");
+  const creationProgressCheck = document.getElementById("creation-progress-check");
+  let creationRunning = false;
+  let creationResult = "";
+  let creationProgressTimer = null;
+  const stopCreationProgress = () => {
+    if (creationProgressTimer !== null) clearInterval(creationProgressTimer);
+    creationProgressTimer = null;
+    creationRunning = false;
+    creationResult = "";
+    creationProgress.hidden = true;
+    creationProgress.removeAttribute("data-result");
+    creationProgress.querySelector("[role=progressbar]")?.removeAttribute("aria-valuenow");
+    creationDialog.dataset.running = "false";
+    creationProgressTime.textContent = "";
+  };
+  const startCreationProgress = () => {
+    stopCreationProgress();
+    creationRunning = true;
+    creationProgress.hidden = false;
+    creationDialog.dataset.running = "true";
+    creationTitle.textContent = "正在创建容器";
+    creationProgressWork.className = "current";
+    creationProgressWork.querySelector(".step-tail").textContent = "处理中";
+    creationProgressCheck.className = "";
+    creationProgressCheck.querySelector(".step-tail").textContent = "等待中";
+    creationProgressWork.removeAttribute("aria-current");
+    creationProgressCheck.removeAttribute("aria-current");
+    creationProgressWork.setAttribute("aria-current", "step");
+    const started = performance.now();
+    const updateTime = () => {
+      const seconds = Math.floor((performance.now() - started) / 1000);
+      creationProgressTime.textContent = `已用时 ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+    };
+    updateTime();
+    creationProgressTimer = setInterval(updateTime, 1000);
+    updateCreationAvailability();
+  };
+  const confirmCreationResult = () => {
+    creationProgressWork.className = "done";
+    creationProgressWork.querySelector(".step-tail").textContent = "已完成";
+    creationProgressWork.removeAttribute("aria-current");
+    creationProgressCheck.className = "current";
+    creationProgressCheck.setAttribute("aria-current", "step");
+    creationProgressCheck.querySelector(".step-tail").textContent = "确认中";
+  };
+  const finishCreationProgress = () => {
+    if (creationDialog.hidden || !creationRunning) return;
+    if (creationProgressTimer !== null) clearInterval(creationProgressTimer);
+    creationProgressTimer = null;
+    creationRunning = false;
+    const succeeded = creationStatus.dataset.tone === "success";
+    creationResult = succeeded ? "success" : "error";
+    creationProgress.dataset.result = creationResult;
+    creationDialog.dataset.running = "false";
+    creationTitle.textContent = succeeded ? "容器已创建并挂载" : "创建未完成";
+    setCreationDescription("");
+    creationProgressWork.removeAttribute("aria-current");
+    creationProgressCheck.removeAttribute("aria-current");
+    const created = creationProgressWork.className === "done";
+    creationProgressWork.className = succeeded || created ? "done" : "failed";
+    creationProgressWork.querySelector(".step-tail").textContent = succeeded || created ? "已完成" : "未完成";
+    creationProgressCheck.className = succeeded ? "done" : "failed";
+    creationProgressCheck.querySelector(".step-tail").textContent = succeeded ? "挂载成功" : "未确认";
+    if (succeeded) creationProgress.querySelector("[role=progressbar]")?.setAttribute("aria-valuenow", "100");
+  };
+  // Let the renderer paint the execution view before entering the native call.
+  const paintCreationProgress = () => new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
   const creationTypeNote = document.getElementById("create-type-note");
   const containerBForm = document.getElementById("create-container-b-form");
   const containerBName = document.getElementById("create-container-b-name");
@@ -521,8 +593,8 @@
         : hiddenVolume && containerBInputReady();
     creationDialog.dataset.step = creationStep;
     creationTypeStep.hidden = !choosing;
-    containerForm.hidden = choosing || !encrypted;
-    containerBForm.hidden = choosing || !hiddenVolume;
+    containerForm.hidden = creationRunning || creationResult !== "" || choosing || !encrypted;
+    containerBForm.hidden = creationRunning || creationResult !== "" || choosing || !hiddenVolume;
     // 8.7.2: both shapes are offered on every visit, in the same order and
     // with the same weight. Neither entry is ever withheld.
     for (const button of creationTypeButtons) {
@@ -574,10 +646,11 @@
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
     creationContinueButton.textContent = choosing ? "下一步" : "创建容器";
-    creationCancelLabel.textContent = creationCompleted
+    creationContinueButton.hidden = creationResult !== "";
+    creationCancelLabel.textContent = creationResult === "error" ? "关闭" : creationCompleted
       ? "完成"
       : choosing ? "取消" : "上一步";
-    creationBackIcon.hidden = choosing || creationCompleted;
+    creationBackIcon.hidden = choosing || creationCompleted || creationResult !== "";
   };
 
   const kCreationTypeLead =
@@ -606,6 +679,7 @@
   // Leaving a parameter step discards what was typed on it: a decoy password
   // must not outlive the step that asked for it.
   const resetCreationInputs = () => {
+    stopCreationProgress();
     closeHiddenReview();
     applyCapacityUnit(containerUnit, "mib");
     applyCapacityUnit(containerBUnit, "mib");
@@ -2914,9 +2988,12 @@
         // page: the session holds it. The location does, and it is passed in
         // exactly the same shape as a standard container's, so the two calls
         // stay word-for-word parallel (8.7.2).
+        startCreationProgress();
+        await paintCreationProgress();
         await bridge.createContainerBMib(name, directory, sizes.outer,
                                          sizes.hidden, secondBytes,
                                          confirmationBytes);
+        confirmCreationResult();
       } finally {
         wipe(secondBytes);
         wipe(confirmationBytes);
@@ -2948,6 +3025,8 @@
     } finally {
       wipe(secondBytes);
       wipe(confirmationBytes);
+      finishCreationProgress();
+      updateCreationAvailability();
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }
@@ -2976,7 +3055,10 @@
       const directory = containerDirectory.value;
       containerName.value = "";
       containerDirectory.value = "";
+      startCreationProgress();
+      await paintCreationProgress();
       await bridge.createContainerMib(name, directory, sizeMib);
+      confirmCreationResult();
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
@@ -3003,6 +3085,8 @@
         updateCreationAvailability();
       }
     } finally {
+      finishCreationProgress();
+      updateCreationAvailability();
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }
@@ -3354,7 +3438,7 @@
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => {
     if (busy) return;
-    if (creationStep === "params" && !creationCompleted) {
+    if (creationStep === "params" && !creationCompleted && creationResult === "") {
       returnToCreationTypes();
       return;
     }

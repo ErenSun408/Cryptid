@@ -10,7 +10,7 @@ const errors = [];
 const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (error) => errors.push(error.message));
 const dom = new JSDOM(fs.readFileSync(path.join(root, "ui/card_session.html"), "utf8"), {
-  runScripts: "outside-only", virtualConsole,
+  runScripts: "outside-only", virtualConsole, pretendToBeVisual: true,
 });
 const window = dom.window;
 window.TextEncoder = TextEncoder;

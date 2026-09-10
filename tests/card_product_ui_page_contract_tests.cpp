@@ -520,7 +520,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // ended on a dialog that no longer opens, and a sentence kept on one shape
   // only would be exactly the visible difference 8.7.2 forbids.
   require(script.find("接着会让你选择保存位置") == std::string::npos &&
-              count_occurrences(script, "setCreationDescription(\"\")") == 1,
+              count_occurrences(script, "setCreationDescription(\"\")") == 2,
           "a creation parameter step still describes a location dialog");
   // Nothing about a location survives the call that carried it, on either
   // flow, so a failure asks for the fields again rather than keeping them.

@@ -94,11 +94,43 @@
     check(reviewConfirm.disabled, "Reopening review requires fresh acknowledgement");
     $('#create-container-b-acknowledge').click();
     reviewConfirm.click();
+    await wait(() => window.navigationFixture.pendingCreation);
+    check(!$('#creation-progress').hidden && $('#create-container-b-form').hidden &&
+      $('#create-volume-dialog').dataset.running === "true",
+      "Hidden creation replaces parameters with a running view");
+    const initialElapsed = $('#creation-progress-time').textContent;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    check($('#creation-progress-time').textContent !== initialElapsed,
+      "Creation elapsed time updates while native creation is pending");
+    window.navigationFixture.pendingCreation.reject(new Error("simulated creation failure"));
+    window.navigationFixture.pendingCreation = null;
     await wait(() => window.navigationFixture.hiddenCreateCalls === 1 &&
       !$('#create-volume-close').disabled);
     check(review.hidden && reviewPassword.value === "" && $('#create-container-b-second').value === "" &&
       $('#create-container-b-second-confirmation').value === "",
       "Confirmed creation calls native once and clears passwords even on failure");
+    check(!$('#creation-progress').hidden && $('#creation-progress').dataset.result === "error" &&
+      $('#create-container-b-form').hidden && $('#create-volume-continue').hidden,
+      "Failed creation keeps its result on the execution page");
+    $('#create-volume-cancel').click();
+    check($('#creation-progress').hidden && $('#creation-progress-time').textContent === "",
+      "Failed creation stops and clears the running view");
+    $('[data-create-container]').click();
+    $('[data-create-kind="encrypted"]').click();
+    $('#create-volume-continue').click();
+    enterCreationValue('#create-container-name', 'standard-review');
+    enterCreationValue('#create-container-directory', 'D:\\Containers');
+    $('#create-volume-continue').click();
+    await wait(() => window.navigationFixture.pendingCreation);
+    check(!$('#creation-progress').hidden && $('#create-container-form').hidden,
+      "Standard creation uses the same running view");
+    window.navigationFixture.pendingCreation.resolve();
+    window.navigationFixture.pendingCreation = null;
+    await wait(() => $('#create-volume-status').dataset.tone === "success");
+    check(!$('#creation-progress').hidden && $('#creation-progress').dataset.result === "success" &&
+      $('#create-volume-dialog').dataset.running === "false" && $('#create-container-form').hidden &&
+      $('#creation-progress-check .step-tail').textContent === "挂载成功" && $('#create-volume-continue').hidden,
+      "Successful creation keeps mount results on the execution page");
     $('#create-volume-close').click();
     $("[data-section=backup]").click();
     $("[data-section=settings]").click();

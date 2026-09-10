@@ -533,6 +533,27 @@
     /* ================= 系统设置 ================= */
     .settings-group { max-width: 34rem; }
     .creation-capacity-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; margin-top: .9rem; }
+    .creation-progress-steps { display: grid; gap: 1rem; margin: 0 0 1.3rem; padding: 0; list-style: none; }
+    .creation-progress-steps li { display: flex; align-items: center; gap: .75rem; color: var(--text-3); font-size: .82rem; }
+    .creation-progress-steps .step-mark { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-2); border-radius: 50%; }
+    .creation-progress-steps .done { color: var(--ok); }
+    .creation-progress-steps .failed { color: var(--danger); }
+    #creation-progress[data-result] .creation-hint { display: none; }
+    #creation-progress[data-result="success"] .creation-progress-bar::after { width: 100%; animation: none; transform: none; background: var(--ok); }
+    #creation-progress[data-result="error"] .creation-progress-bar { display: none; }
+    .creation-progress-steps .current { color: var(--gold-2); }
+    .creation-progress-steps .current .step-mark { border-top-color: var(--gold); animation: creation-spin 1s linear infinite; font-size: 0; }
+    .creation-progress-steps .step-tail { margin-left: auto; font-size: .72rem; }
+    .creation-progress-bar { height: .3rem; border-radius: 1rem; background: var(--line); overflow: hidden; }
+    .creation-progress-bar::after { content: ""; display: block; height: 100%; width: 35%; background: var(--gold); border-radius: inherit; animation: creation-sweep 1.6s ease-in-out infinite; }
+    .creation-progress-time { color: var(--text-3); font: .75rem var(--mono); text-align: right; margin-top: .65rem; }
+    @keyframes creation-spin { to { transform: rotate(360deg); } }
+    @keyframes creation-sweep { from { transform: translateX(-100%); } to { transform: translateX(390%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .creation-progress-bar::after, .creation-progress-steps .current .step-mark { animation: none; }
+    }
+    #create-volume-dialog[data-running="true"] .modal-footer,
+    #create-volume-dialog[data-running="true"] #create-volume-close { display: none; }
     .creation-capacity-pair .capacity-field input { min-width: 0; }
     #hidden-create-review .password-field { position: relative; margin-top: .5rem; }
     #hidden-create-review-password { width: 100%; padding-right: 3rem; }
@@ -1269,6 +1290,16 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
             <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。</span>
           </div>
+        </div>
+        <div id="creation-progress" hidden>
+          <ol class="creation-progress-steps">
+            <li class="done"><span class="step-mark">✓</span><span>准备创建</span><span class="step-tail">已就绪</span></li>
+            <li id="creation-progress-work" class="current"><span class="step-mark">2</span><span>创建容器并挂载</span><span class="step-tail">处理中</span></li>
+            <li id="creation-progress-check"><span class="step-mark">3</span><span>确认结果</span><span class="step-tail">等待中</span></li>
+          </ol>
+          <div class="creation-progress-bar" role="progressbar" aria-label="容器创建处理中"></div>
+          <div id="creation-progress-time" class="creation-progress-time">已用时 00:00</div>
+          <p class="creation-hint">请留意系统管理员授权提示。大容量容器需要较长时间，请保持安全卡连接并等待完成。</p>
         </div>
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
       </div>
