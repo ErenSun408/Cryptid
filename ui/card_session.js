@@ -57,7 +57,8 @@
     document.getElementById("operation-history-body");
   const operationHistoryClear =
     document.getElementById("operation-history-clear");
-  const fileContainerSelect = document.getElementById("file-container-select");
+  const managementContainers = document.getElementById("management-containers");
+  const managementFiles = document.getElementById("management-files");
   const fileBreadcrumb = document.getElementById("file-breadcrumb");
   const fileListBody = document.getElementById("file-list-body");
   const fileListStatus = document.getElementById("file-list-status");
@@ -662,6 +663,7 @@
   let fileContainerId = 0;
   let filePath = [];
   let fileEntries = [];
+  let fileListingRevision = 0;
 
   // One call brings a whole directory back: records separated by U+001E,
   // fields by U+001F. Neither can occur in a Windows file name, so there is
@@ -730,29 +732,26 @@
     fileListStatus.hidden = message === "";
   };
 
-  const renderFileContainerOptions = () => {
+  const renderManagementView = () => {
     // Browsing stays where it was as long as that container is still listed.
     let known = false;
     for (const container of containers) {
       if (container.id === fileContainerId) known = true;
     }
     if (!known) {
-      fileContainerId = containers.length === 0 ? 0 : containers[0].id;
+      const departed = fileContainerId !== 0;
+      fileContainerId = 0;
       filePath = [];
+      fileEntries = [];
+      if (departed) {
+        fileListingRevision += 1;
+        renderFileBreadcrumb();
+        renderFileList();
+        renderFileDropTargets();
+      }
     }
-    while (fileContainerSelect.firstChild !== null) {
-      fileContainerSelect.removeChild(fileContainerSelect.firstChild);
-    }
-    for (const container of containers) {
-      const option = document.createElement("option");
-      option.value = String(container.id);
-      option.textContent = container.mounted
-        ? `${container.name} · ${container.drive}`
-        : `${container.name}（未挂载）`;
-      option.selected = container.id === fileContainerId;
-      fileContainerSelect.appendChild(option);
-    }
-    fileContainerSelect.disabled = busy || containers.length === 0;
+    managementContainers.hidden = fileContainerId !== 0;
+    managementFiles.hidden = fileContainerId === 0;
   };
 
   const renderFileBreadcrumb = () => {
@@ -760,14 +759,19 @@
       fileBreadcrumb.removeChild(fileBreadcrumb.firstChild);
     }
     const container = selectedFileContainer();
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "file-crumb";
+    back.textContent = "容器管理";
+    back.dataset.fileBack = "";
+    back.disabled = busy;
+    fileBreadcrumb.appendChild(back);
     const crumbs = [container === null ? "容器" : container.name, ...filePath];
     for (let index = 0; index < crumbs.length; index += 1) {
-      if (index !== 0) {
-        const separator = document.createElement("span");
-        separator.className = "file-crumb-separator";
-        separator.textContent = "/";
-        fileBreadcrumb.appendChild(separator);
-      }
+      const separator = document.createElement("span");
+      separator.className = "file-crumb-separator";
+      separator.textContent = "/";
+      fileBreadcrumb.appendChild(separator);
       const crumb = document.createElement("button");
       crumb.className = "file-crumb";
       crumb.type = "button";
@@ -803,7 +807,7 @@
       return;
     }
     if (!container.mounted) {
-      appendFileNotice("这个容器没有挂载。到「容器」里挂载它，才能看到里面的文件。");
+      appendFileNotice("这个容器没有挂载。返回「容器管理」列表挂载它，才能看到里面的文件。");
       return;
     }
     if (fileEntries.length === 0) {
@@ -1219,7 +1223,7 @@
     const ops = document.createElement("span");
     ops.className = "ops";
     const mount = document.createElement("button");
-    mount.className = "shell-button";
+    mount.className = container.mounted ? "shell-button danger" : "shell-button";
     mount.type = "button";
     mount.disabled = busy;
     mount.dataset.rowMount = String(container.id);
@@ -1245,16 +1249,16 @@
   let reorderState = null;
 
   const rowsAround = (list) =>
-    [...list.querySelectorAll(":scope > .xrow, :scope > div > .xrow")];
+    [...list.querySelectorAll(":scope > .xrow, :scope > div > .xrow, :scope > .container-group > .container-row")];
 
   const beginContainerReorder = (event, row, id) => {
-    if (busy || reorderState !== null) return;
-    const list = row.closest(".xlist");
+    if (busy || reorderState !== null || event.button !== 0) return;
+    const list = row.closest(".xlist, [data-container-list]");
     if (list === null) return;
     event.preventDefault();
     const marker = document.createElement("div");
     marker.className = "xins";
-    reorderState = { list, row, id, marker, index: null };
+    reorderState = { list, row, id, marker, index: null, pointerId: event.pointerId };
     row.classList.add("xrow-ghost");
     try {
       event.target.setPointerCapture(event.pointerId);
@@ -1268,7 +1272,7 @@
   };
 
   const moveContainerReorder = (event) => {
-    if (reorderState === null) return;
+    if (reorderState === null || event.pointerId !== reorderState.pointerId) return;
     const rows = rowsAround(reorderState.list);
     let index = rows.length;
     for (let at = 0; at < rows.length; at += 1) {
@@ -1300,14 +1304,16 @@
     }
   };
 
-  const cancelContainerReorder = () => {
+  const cancelContainerReorder = (event) => {
+    if (event && reorderState !== null && event.pointerId !== reorderState.pointerId) return;
     finishContainerReorder();
     reorderState = null;
+    renderContainers();
     renderBackupCentre();
   };
 
-  const endContainerReorder = () => {
-    if (reorderState === null) return;
+  const endContainerReorder = (event) => {
+    if (reorderState === null || event.pointerId !== reorderState.pointerId) return;
     const { id, index } = reorderState;
     finishContainerReorder();
     reorderState = null;
@@ -1321,6 +1327,7 @@
         rememberContainerOrder(ordered);
       }
     }
+    renderContainers();
     renderBackupCentre();
   };
 
@@ -1778,7 +1785,8 @@
   };
 
   const refreshFileManager = async () => {
-    renderFileContainerOptions();
+    const revision = ++fileListingRevision;
+    renderManagementView();
     renderFileBreadcrumb();
     renderFileDropTargets();
     const container = selectedFileContainer();
@@ -1788,15 +1796,20 @@
       renderFileList();
       return;
     }
+    const requestedId = container.id;
+    const requestedPath = filePath.join("/");
     try {
       const packed = await bridge.listContainerDirectory(
         container.id, filePath.join("/"));
+      if (revision !== fileListingRevision || fileContainerId !== requestedId || filePath.join("/") !== requestedPath ||
+          currentState !== nativeState.authenticated) return;
       const listing = parseDirectoryListing(packed);
       fileEntries = listing.entries;
       setFileStatus(listing.truncated
         ? "这个文件夹里的条目太多，只显示了其中一部分。"
         : "");
     } catch (_) {
+      if (revision !== fileListingRevision || fileContainerId !== requestedId || filePath.join("/") !== requestedPath) return;
       // The root is the one place that always has somewhere to land, so a
       // folder that cannot be read does not strand the page inside it.
       fileEntries = [];
@@ -1805,6 +1818,14 @@
       setFileStatus("无法读取这个文件夹，它可能已经不在这个容器里了。", "error");
     }
     renderFileList();
+  };
+
+  const browseContainer = (id) => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    fileContainerId = id;
+    filePath = [];
+    fileEntries = [];
+    showDashboardSection("files");
   };
 
   const showDashboardSection = (sectionName) => {
@@ -1908,11 +1929,61 @@
 
   // The name comes from a file the user picked, so it is only ever written as
   // text. Nothing on this row is built from markup.
-  const containerRow = (container) => {
+  let expandedContainerId = 0;
+
+  const containerActionButton = (container, action, label, disabled = false) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action === "unmount" ? "shell-button danger" : "shell-button";
+    button.textContent = label;
+    button.disabled = busy || disabled;
+    button.dataset.containerId = String(container.id);
+    button.dataset.containerName = container.name;
+    button.dataset.containerAction = action;
+    return button;
+  };
+
+  const containerRow = (container, showOpenButton) => {
+    const group = document.createElement("div");
+    group.className = "container-group";
     const row = document.createElement("div");
+    row.dataset.rowContainer = String(container.id);
     row.className = container.mounted
       ? "container-row mounted"
       : "container-row";
+    row.dataset.busy = String(busy);
+    row.addEventListener("click", (event) => {
+      if (busy || !(event.target instanceof Element) ||
+          event.target.closest("button") !== null) return;
+      // The arrow is also the keyboard-accessible disclosure control. Row
+      // clicks use that same action; buttons and the drag grip keep theirs.
+      row.querySelector("[data-container-action=details]").click();
+    });
+
+    const grab = document.createElement("button");
+    grab.type = "button";
+    grab.className = "grab container-grab";
+    grab.disabled = busy;
+    grab.setAttribute("aria-label", `调整 ${container.name} 的顺序`);
+    grab.title = "拖动排序；也可按 Alt + 上下方向键";
+    grab.appendChild(gripGlyph());
+    grab.addEventListener("pointerdown", (event) => {
+      beginContainerReorder(event, row, container.id);
+    });
+    grab.addEventListener("keydown", (event) => {
+      if (busy || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      const ordered = orderedContainers();
+      const from = ordered.findIndex((item) => item.id === container.id);
+      const to = from + (event.key === "ArrowUp" ? -1 : 1);
+      if (from < 0 || to < 0 || to >= ordered.length) return;
+      const list = row.closest("[data-container-list]");
+      [ordered[from], ordered[to]] = [ordered[to], ordered[from]];
+      rememberContainerOrder(ordered);
+      renderContainers();
+      renderBackupCentre();
+      list.querySelector(`[data-row-container="${container.id}"] .container-grab`).focus();
+    });
 
     const mark = document.createElement("span");
     mark.className = "container-mark";
@@ -1945,35 +2016,68 @@
 
     const actions = document.createElement("div");
     actions.className = "container-actions";
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "shell-button";
-    toggle.textContent = container.mounted ? "卸载" : "挂载";
-    toggle.disabled = busy;
-    toggle.dataset.containerId = String(container.id);
-    toggle.dataset.containerAction = container.mounted ? "unmount" : "mount";
-    actions.appendChild(toggle);
-
-    // Offered only while the container is unmounted. The session refuses to
-    // drop one that still holds a drive letter, so the button is not there to
-    // be refused.
-    if (!container.mounted) {
-      const forget = document.createElement("button");
-      forget.type = "button";
-      forget.className = "shell-button ghost";
-      forget.textContent = "从列表移除";
-      forget.disabled = busy;
-      forget.dataset.containerId = String(container.id);
-      forget.dataset.containerName = container.name;
-      forget.dataset.containerAction = "forget";
-      actions.appendChild(forget);
+    if (container.mounted && showOpenButton) {
+      actions.appendChild(containerActionButton(container, "browse", "打开"));
     }
+    actions.appendChild(containerActionButton(container,
+      container.mounted ? "unmount" : "mount", container.mounted ? "卸载" : "挂载"));
+    const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
+    if (container.mounted) remove.title = "请先卸载容器";
+    actions.appendChild(remove);
+    const expanded = expandedContainerId === container.id;
+    const details = containerActionButton(container, "details", "");
+    details.className = "container-details-toggle";
+    details.setAttribute("aria-label", `${expanded ? "收起" : "展开"} ${container.name} 的详情`);
+    details.setAttribute("aria-expanded", String(expanded));
+    details.appendChild(exportGlyph(["M6 9l6 6 6-6"]));
+    row.append(grab, mark, identity, facts, actions, details);
+    group.appendChild(row);
 
-    row.append(mark, identity, facts, actions);
-    return row;
+    if (expanded) {
+      const panel = document.createElement("div");
+      panel.className = "container-details";
+      const grid = document.createElement("div");
+      grid.className = "container-details-grid";
+      grid.append(
+        containerFact("名称", container.name),
+        containerFact("状态", container.mounted ? "已挂载" : "未挂载"),
+        containerFact("盘符", container.mounted ? container.drive : "—"),
+        containerFact("容量", container.mounted && container.sizeMib > 0 ? containerSizeText(container) : "—"),
+        containerFact("加密", "AES-256-XTS"),
+        containerFact("派生", "Argon2id 512M·2·1"));
+      const operations = document.createElement("div");
+      operations.className = "container-detail-actions";
+      operations.appendChild(containerActionButton(container, "browse", "浏览文件"));
+      operations.appendChild(containerActionButton(container, "export", "导出与迁移"));
+      const forget = containerActionButton(container, "forget", "从列表移除", container.mounted);
+      forget.classList.add("container-forget");
+      if (container.mounted) forget.title = "请先卸载容器";
+      operations.appendChild(forget);
+      panel.append(grid, operations);
+      group.appendChild(panel);
+    }
+    return group;
   };
 
   const renderContainers = () => {
+    if (reorderState !== null) {
+      finishContainerReorder();
+      reorderState = null;
+    }
+    if (currentState !== nativeState.authenticated) {
+      fileListingRevision += 1;
+      expandedContainerId = 0;
+      containerOrder = [];
+      fileContainerId = 0;
+      filePath = [];
+      fileEntries = [];
+      renderFileBreadcrumb();
+      renderFileList();
+      renderFileDropTargets();
+    }
+    if (!containers.some((container) => container.id === expandedContainerId)) {
+      expandedContainerId = 0;
+    }
     for (const list of containerLists) {
       while (list.firstChild !== null) list.removeChild(list.firstChild);
       if (containers.length === 0) {
@@ -1985,14 +2089,14 @@
         list.appendChild(empty);
         continue;
       }
-      for (const container of containers) {
-        list.appendChild(containerRow(container));
+      for (const container of orderedContainers()) {
+        list.appendChild(containerRow(container, list === managementContainers));
       }
     }
-    // The picker follows the container list at no cost. The listing is not
+    // The management view follows the container list at no cost. The listing is not
     // re-read here: exactly one place owns that, so a message set after an
     // action cannot race a refresh a re-render fired off.
-    renderFileContainerOptions();
+    renderManagementView();
   };
 
   const twoDigits = (value) => String(value).padStart(2, "0");
@@ -2110,6 +2214,8 @@
     confirmationVisibilityButton.disabled = busy || !showConfirmation;
     updateActionAvailability();
 
+    actionButton.classList.toggle("danger",
+      currentState === nativeState.authenticated || currentState === nativeState.unavailable);
     switch (currentState) {
       case nativeState.noCard:
         stateTitle.textContent = "请插入安全卡";
@@ -2776,18 +2882,24 @@
   for (const item of dashboardNavigation) {
     item.addEventListener("click", () => {
       if (!busy && currentState === nativeState.authenticated) {
+        if (item.dataset.section === "files") {
+          fileContainerId = 0;
+          filePath = [];
+          fileEntries = [];
+        }
         showDashboardSection(item.dataset.section);
       }
     });
   }
-  fileContainerSelect.addEventListener("change", () => {
-    const chosen = Number(fileContainerSelect.value);
-    if (!Number.isInteger(chosen) || chosen <= 0) return;
-    fileContainerId = chosen;
-    filePath = [];
-    void refreshFileManager();
-  });
   fileBreadcrumb.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("[data-file-back]")) {
+      if (busy) return;
+      fileContainerId = 0;
+      filePath = [];
+      fileEntries = [];
+      void refreshFileManager();
+      return;
+    }
     const crumb = event.target instanceof Element
       ? event.target.closest("[data-file-depth]")
       : null;
@@ -3125,7 +3237,7 @@
       const target = event.target instanceof Element
         ? event.target.closest("[data-container-action]")
         : null;
-      if (target === null || busy ||
+      if (target === null || target.disabled || busy ||
           currentState !== nativeState.authenticated) {
         return;
       }
@@ -3135,8 +3247,16 @@
         openForgetFlow(id, target.dataset.containerName ?? "");
       } else if (target.dataset.containerAction === "unmount") {
         await unmountAdoptedContainer(id);
-      } else {
+      } else if (target.dataset.containerAction === "mount") {
         await mountAdoptedContainer(id);
+      } else if (target.dataset.containerAction === "browse") {
+        browseContainer(id);
+      } else if (target.dataset.containerAction === "details") {
+        expandedContainerId = expandedContainerId === id ? 0 : id;
+        renderContainers();
+        list.querySelector(`[data-row-container="${id}"] [data-container-action="details"]`).focus();
+      } else if (target.dataset.containerAction === "export") {
+        showDashboardSection("backup");
       }
     });
   }

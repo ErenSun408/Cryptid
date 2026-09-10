@@ -134,9 +134,13 @@ void test_authenticated_dashboard_is_real_state_only() {
               std::string::npos &&
               page.find("id=\"dashboard-section-dashboard\"") !=
                   std::string::npos &&
-              page.find("id=\"dashboard-section-containers\"") !=
+              page.find("id=\"dashboard-section-files\"") !=
                   std::string::npos,
           "authenticated dashboard shell is incomplete");
+  require(page.find("data-section=\"containers\"") == std::string::npos &&
+              page.find("id=\"dashboard-section-containers\"") == std::string::npos &&
+              page.find("id=\"file-container-select\"") == std::string::npos,
+          "the old container route or duplicate container picker remains");
   // 8.7.5 forbids presenting containers by volume type, so there is one list
   // and one management view, each reached from one creation entry. The two
   // shapes are offered inside that entry instead, both always present: 8.7
@@ -156,7 +160,7 @@ void test_authenticated_dashboard_is_real_state_only() {
   require(
       count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 0 &&
           count_occurrences(page, "data-tooltip=\"正在开发中\"") == 0 &&
-          page.find("文件管理") != std::string::npos &&
+          page.find("容器管理") != std::string::npos &&
           page.find("导出与迁移") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
                     " data-section=\"files\">") != std::string::npos &&
@@ -833,11 +837,12 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   const std::string section = dashboard_section(page, "files");
 
-  require(section.find("id=\"file-container-select\"") != std::string::npos &&
+  require(section.find("id=\"management-containers\"") != std::string::npos &&
+              section.find("id=\"management-files\"") != std::string::npos &&
               section.find("id=\"file-breadcrumb\"") != std::string::npos &&
               section.find("id=\"file-list-body\"") != std::string::npos &&
               section.find("id=\"file-list-status\"") != std::string::npos,
-          "the browse view is missing the picker, the breadcrumb, the list, "
+          "the management view is missing a level, the breadcrumb, the list, "
           "or its status line");
 
   // 🔴 The boundary this whole stage is drawn around: taking a file out of the

@@ -50,10 +50,7 @@
       <button class="dashboard-nav active" type="button"
               data-section="dashboard" aria-current="page">仪表盘</button>
       <button class="dashboard-nav" type="button"
-              data-section="containers">容器<span
-              id="nav-container-count">0</span></button>
-      <button class="dashboard-nav" type="button"
-              data-section="files">文件管理</button>
+              data-section="files">容器管理<span id="nav-container-count">0</span></button>
       <button class="dashboard-nav" type="button"
               data-section="backup">导出与迁移</button>
       <button class="dashboard-nav" type="button"
@@ -66,18 +63,17 @@
       <button type="button" data-mount-existing>导入</button>
       <div class="container-list" data-container-list></div>
     </section>
-    <section id="dashboard-section-containers" class="dashboard-section">
+    <section id="dashboard-section-files" class="dashboard-section">
       <button type="button" data-create-container>新建容器</button>
       <button type="button" data-mount-existing>导入容器</button>
-      <div class="container-list" data-container-list></div>
-    </section>
-    <section id="dashboard-section-files" class="dashboard-section">
-      <select id="file-container-select"></select>
+      <div id="management-containers" class="container-list" data-container-list></div>
+      <div id="management-files" hidden>
       <nav id="file-breadcrumb"></nav>
       <table><tbody id="file-list-body"></tbody></table>
       <output id="file-list-status" data-tone="" hidden></output>
       <button id="file-create-directory" type="button">新建文件夹</button>
       <div id="file-drop-targets"></div>
+      </div>
     </section>
     <section id="dashboard-section-backup" class="dashboard-section">
       <button id="export-mode-plain" type="button" aria-pressed="true">明文导出</button>

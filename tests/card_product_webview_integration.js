@@ -24,9 +24,9 @@ chrome.webview.postMessage("driver-loaded");
   const dashboardContainerCount =
     document.getElementById("dashboard-container-count");
   const containersNavigation =
-    document.querySelector('[data-section="containers"]');
+    document.querySelector('[data-section="files"]');
   const containersSection =
-    document.getElementById("dashboard-section-containers");
+    document.getElementById("dashboard-section-files");
   const containersCreate = containersSection.querySelector(
     "[data-create-container]");
   const containersList = containersSection.querySelector(
