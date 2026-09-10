@@ -39,6 +39,8 @@ enum class CreationStage : std::uint32_t {
   formatting_outer = 2,
   scanning_tail_space = 3,
   formatting_hidden = 4,
+  authorized = 5,
+  allocated = 6,
 };
 
 struct CreationProgress final {

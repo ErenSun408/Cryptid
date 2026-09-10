@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -16,6 +17,10 @@
 #include <vector>
 
 namespace usb_vault::application {
+
+// Presentation-only stages: authorization, allocation, formatting, mounting.
+// No container shape, password role or path is carried across this boundary.
+using CreationFeedback = std::function<void(unsigned int, unsigned int, wchar_t)>;
 
 class CardAuthenticationSession;
 
@@ -325,6 +330,7 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // Nothing is persisted, and opening a new session replaces the old history.
   [[nodiscard]] virtual std::vector<OperationEvent> operation_history() = 0;
   virtual void clear_operation_history() noexcept = 0;
+  virtual void set_creation_feedback(CreationFeedback) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
   virtual void set_operation_logging_enabled(bool) {
     throw std::runtime_error("operation logging preference is unavailable");
@@ -411,6 +417,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;
   void clear_operation_history() noexcept override;
+  void set_creation_feedback(CreationFeedback feedback) override;
   [[nodiscard]] bool operation_logging_enabled() override;
   void set_operation_logging_enabled(bool enabled) override;
   void release_session_secrets() noexcept override;

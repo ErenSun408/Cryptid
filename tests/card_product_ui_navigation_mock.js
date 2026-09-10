@@ -14,6 +14,7 @@ window.navigationFixture = {
   failLogging: false,
   hiddenCreateCalls: 0,
   pendingCreation: null,
+  creationProgress: "1,0,0,0,0",
   containers: [
     { id: 1, name: "工作资料", mounted: true, size: 65536, drive: "X:" },
     { id: 2, name: "影像存档", mounted: false, size: 0, drive: "" },
@@ -35,15 +36,22 @@ window.navigationFixture = {
     getContainerSizeMib: (i) => fixture.containers[i].size,
     getContainerDriveLetter: (i) => fixture.containers[i].drive,
     getOperationCount: () => 0,
-    createContainerBMib: () => {
+    beginCreateContainerBMib: () => {
       fixture.hiddenCreateCalls += 1;
-      return new Promise((resolve, reject) => {
-        fixture.pendingCreation = { resolve, reject };
-      });
+      fixture.creationProgress = "1,0,0,0,0";
+      fixture.pendingCreation = {
+        resolve: () => { fixture.creationProgress = "2,5,100,90,3"; },
+        reject: () => { fixture.creationProgress = "3,3,41,0,3"; },
+      };
     },
-    createContainerMib: () => new Promise((resolve, reject) => {
-      fixture.pendingCreation = { resolve, reject };
-    }),
+    beginCreateContainerMib: () => {
+      fixture.creationProgress = "1,0,0,0,0";
+      fixture.pendingCreation = {
+        resolve: () => { fixture.creationProgress = "2,5,100,90,3"; },
+        reject: () => { fixture.creationProgress = "3,3,41,0,3"; },
+      };
+    },
+    getCreationProgress: () => fixture.creationProgress,
     getOperationLoggingEnabled: () => fixture.loggingEnabled,
     setOperationLoggingEnabled: (enabled) => {
       if (fixture.failLogging) throw new Error("simulated preference failure");

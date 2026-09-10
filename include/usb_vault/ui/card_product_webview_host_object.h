@@ -3,8 +3,14 @@
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
 #include <oaidl.h>
+#include <atomic>
 
 namespace usb_vault::ui {
+
+struct CreationWorkState final {
+  std::atomic<bool> running{false};
+  std::atomic<bool> interrupted{false};
+};
 
 class IUiWindowSizeSink {
  public:
@@ -42,6 +48,7 @@ HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,
     IDispatch** result,
-    IUiWindowSizeSink* window_size_sink = nullptr) noexcept;
+    IUiWindowSizeSink* window_size_sink = nullptr,
+    CreationWorkState* creation_work = nullptr) noexcept;
 
 }  // namespace usb_vault::ui

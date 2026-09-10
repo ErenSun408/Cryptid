@@ -197,6 +197,11 @@ class DeviceInformation final {
 
 }  // namespace
 
+std::optional<bool> inspect_target_card_event(
+    WPARAM event, LPARAM payload, HidDeviceIdentity identity) noexcept {
+  return target_card_arrival(event, payload, identity);
+}
+
 bool matches_hid_device_path(const std::wstring_view path,
                              const HidDeviceIdentity identity) noexcept {
   return has_identifier_token(path, L"vid_", identity.vendor_id) &&

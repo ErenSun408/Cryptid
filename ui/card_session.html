@@ -535,22 +535,26 @@
     .creation-capacity-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; margin-top: .9rem; }
     .creation-progress-steps { display: grid; gap: 1rem; margin: 0 0 1.3rem; padding: 0; list-style: none; }
     .creation-progress-steps li { display: flex; align-items: center; gap: .75rem; color: var(--text-3); font-size: .82rem; }
-    .creation-progress-steps .step-mark { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-2); border-radius: 50%; }
-    .creation-progress-steps .done { color: var(--ok); }
+    .creation-progress-steps .step-mark { position: relative; display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-2); border-radius: 50%; }
+    .creation-progress-steps .done { color: var(--text-2); }
+    .creation-progress-steps .done .step-tail { color: var(--text-3); }
+    .creation-progress-steps .done .step-mark { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); font-size: 0; animation: none; transform: none; }
+    .creation-progress-steps .done .step-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: .45rem; height: .25rem; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translate(-50%, -65%) rotate(-45deg); }
     .creation-progress-steps .failed { color: var(--danger); }
     #creation-progress[data-result] .creation-hint { display: none; }
     #creation-progress[data-result="success"] .creation-progress-bar::after { width: 100%; animation: none; transform: none; background: var(--ok); }
     #creation-progress[data-result="error"] .creation-progress-bar { display: none; }
     .creation-progress-steps .current { color: var(--gold-2); }
-    .creation-progress-steps .current .step-mark { border-top-color: var(--gold); animation: creation-spin 1s linear infinite; font-size: 0; }
+    .creation-progress-steps .current:not(.done) .step-mark { border-top-color: var(--gold); animation: creation-spin 1s linear infinite; font-size: 0; }
     .creation-progress-steps .step-tail { margin-left: auto; font-size: .72rem; }
     .creation-progress-bar { height: .3rem; border-radius: 1rem; background: var(--line); overflow: hidden; }
     .creation-progress-bar::after { content: ""; display: block; height: 100%; width: 35%; background: var(--gold); border-radius: inherit; animation: creation-sweep 1.6s ease-in-out infinite; }
+    .creation-progress-bar[aria-valuenow]::after { width: var(--creation-percent, 0%); animation: none; transform: none; transition: width .2s linear; }
     .creation-progress-time { color: var(--text-3); font: .75rem var(--mono); text-align: right; margin-top: .65rem; }
     @keyframes creation-spin { to { transform: rotate(360deg); } }
     @keyframes creation-sweep { from { transform: translateX(-100%); } to { transform: translateX(390%); } }
     @media (prefers-reduced-motion: reduce) {
-      .creation-progress-bar::after, .creation-progress-steps .current .step-mark { animation: none; }
+      .creation-progress-bar::after, .creation-progress-steps .current:not(.done) .step-mark { animation: none; }
     }
     #create-volume-dialog[data-running="true"] .modal-footer,
     #create-volume-dialog[data-running="true"] #create-volume-close { display: none; }
@@ -1293,9 +1297,10 @@
         </div>
         <div id="creation-progress" hidden>
           <ol class="creation-progress-steps">
-            <li class="done"><span class="step-mark">✓</span><span>准备创建</span><span class="step-tail">已就绪</span></li>
-            <li id="creation-progress-work" class="current"><span class="step-mark">2</span><span>创建容器并挂载</span><span class="step-tail">处理中</span></li>
-            <li id="creation-progress-check"><span class="step-mark">3</span><span>确认结果</span><span class="step-tail">等待中</span></li>
+            <li id="creation-progress-authorize"><span class="step-mark">1</span><span>确认管理员权限</span><span class="step-tail">等待中</span></li>
+            <li id="creation-progress-allocate"><span class="step-mark">2</span><span>分配容器文件</span><span class="step-tail">等待中</span></li>
+            <li id="creation-progress-work"><span class="step-mark">3</span><span>格式化容器</span><span class="step-tail">等待中</span></li>
+            <li id="creation-progress-check"><span class="step-mark">4</span><span>挂载并分配盘符</span><span class="step-tail">等待中</span></li>
           </ol>
           <div class="creation-progress-bar" role="progressbar" aria-label="容器创建处理中"></div>
           <div id="creation-progress-time" class="creation-progress-time">已用时 00:00</div>

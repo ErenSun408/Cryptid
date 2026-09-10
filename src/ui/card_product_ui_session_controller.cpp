@@ -627,6 +627,10 @@ void CardProductUiSessionController::clear_operation_history() {
   volume_session_.clear_operation_history();
 }
 
+void CardProductUiSessionController::set_creation_feedback(application::CreationFeedback feedback) {
+  volume_session_.set_creation_feedback(std::move(feedback));
+}
+
 bool CardProductUiSessionController::operation_logging_enabled() {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("operation logging preference requires authentication");

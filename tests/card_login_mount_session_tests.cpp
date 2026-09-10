@@ -1533,6 +1533,24 @@ void test_unmount_active_releases_every_adopted_container() {
           "unmount_active dropped the adopted containers");
 }
 
+void test_creation_feedback_prevents_mount_after_interruption() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  std::vector<unsigned int> stages;
+  runtime.creation_feedback = [&](unsigned int stage, unsigned int, wchar_t) {
+    stages.push_back(stage);
+    if (stage == 4) throw std::runtime_error("simulated card removal");
+  };
+  bool rejected = false;
+  try { static_cast<void>(session.create_container(L"C:\\vault\\interrupted.hc", 64ULL * 1024ULL * 1024ULL)); }
+  catch (...) { rejected = true; }
+  require(rejected && !session.mounted() && runtime.other_staging.empty() &&
+      runtime.other_existing.empty() && std::find(stages.begin(), stages.end(), 4U) != stages.end(),
+      "interrupted creation published or mounted a container or retained staging");
+}
+
 void test_operation_logging_can_pause_without_affecting_volume_actions() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -2607,6 +2625,7 @@ int main() {
     test_unmount_active_releases_every_adopted_container();
     test_operation_history_records_only_committed_session_facts();
     test_operation_logging_can_pause_without_affecting_volume_actions();
+    test_creation_feedback_prevents_mount_after_interruption();
     test_operation_history_distinguishes_publish_from_mount_failure();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();

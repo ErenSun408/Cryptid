@@ -334,7 +334,7 @@ void test_bridge_calls_are_narrow_and_route_specific() {
   require(script.find("await bridge.unmount();") != std::string::npos,
           "product page lacks unified cleanup");
   require(script.find(
-              "await bridge.createContainerMib(name, directory, sizeMib);") !=
+              "await bridge.beginCreateContainerMib(name, directory, sizeMib);") !=
               std::string::npos,
           "authenticated creation does not name the container and location");
   require(script.find("await bridge.chooseContainerDirectory();") !=
@@ -499,9 +499,9 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
           "the card record rewrite is committed without an acknowledgement");
   // Six arguments and no more: the name, the location, the two capacities and
   // the new password twice. The login input is still not among them.
-  require(script.find("await bridge.createContainerBMib(name, directory, "
+  require(script.find("await bridge.beginCreateContainerBMib(name, directory, "
                       "sizes.outer,") != std::string::npos &&
-              count_occurrences(script, "bridge.createContainerBMib(") ==
+              count_occurrences(script, "bridge.beginCreateContainerBMib(") ==
                   1 &&
               script.find("secondBytes,") != std::string::npos &&
               script.find("confirmationBytes);") != std::string::npos,

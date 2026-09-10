@@ -20,6 +20,7 @@ namespace usb_vault::application::detail {
 
 class CardLoginMountSessionRuntime {
  public:
+  CreationFeedback creation_feedback;
   virtual ~CardLoginMountSessionRuntime() noexcept = default;
 
   [[nodiscard]] virtual MountSessionResult mount_authenticated(

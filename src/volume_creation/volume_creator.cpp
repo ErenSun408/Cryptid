@@ -260,6 +260,7 @@ void invoke(const std::filesystem::path& helper_path,
   const Handle process =
       launch_elevated_helper(helper_path, suffix, hex_nonce(nonce));
   const Handle pipe = connect_to_helper(pipe_name, process.get());
+  if (progress) progress({.stage = CreationStage::authorized, .percent = 100});
 
   detail::RequestHeader header{
       .operation = operation,

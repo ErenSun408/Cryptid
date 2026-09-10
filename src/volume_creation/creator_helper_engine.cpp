@@ -136,6 +136,8 @@ class FormatBackend final {
               const std::uint64_t hidden_volume_host_size,
               const CreationStage stage) {
     stage_ = stage;
+    target_path_ = path;
+    expected_size_ = hidden_volume ? hidden_volume_host_size : size;
     format_abi::Options options{
         .path = path.c_str(),
         .is_device = FALSE,
@@ -180,6 +182,17 @@ class FormatBackend final {
   static BOOL CALLBACK progress(const int percent, void* const user_data) {
     auto& self = *static_cast<FormatBackend*>(user_data);
     try {
+      if (!self.allocated_) {
+        WIN32_FILE_ATTRIBUTE_DATA attributes{};
+        if (::GetFileAttributesExW(self.target_path_.c_str(), GetFileExInfoStandard, &attributes)) {
+          const std::uint64_t length = (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32) | attributes.nFileSizeLow;
+          if (length >= self.expected_size_) {
+            write_response(self.pipe_, Response{.type = MessageType::progress,
+                .stage = CreationStage::allocated, .percent = 100});
+            self.allocated_ = true;
+          }
+        }
+      }
       write_response(self.pipe_, Response{
                                      .type = MessageType::progress,
                                      .stage = self.stage_,
@@ -198,6 +211,9 @@ class FormatBackend final {
   format_abi::Shutdown shutdown_{};
   format_abi::FormatBinary format_binary_{};
   CreationStage stage_{CreationStage::formatting};
+  std::wstring target_path_;
+  std::uint64_t expected_size_{};
+  bool allocated_{false};
   bool initialized_{false};
 };
 

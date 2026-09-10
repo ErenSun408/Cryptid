@@ -20,6 +20,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 namespace {
 
@@ -68,6 +70,12 @@ void require(const bool condition, const char* const message) {
 
 class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
  public:
+  usb_vault::application::CreationFeedback creation_feedback;
+  std::atomic<bool> pause_creation{false};
+  std::atomic<bool> creation_entered{false};
+  void set_creation_feedback(usb_vault::application::CreationFeedback feedback) override {
+    creation_feedback = std::move(feedback);
+  }
   bool logging_enabled{true};
   bool operation_logging_enabled() override { return logging_enabled; }
   void set_operation_logging_enabled(bool enabled) override { logging_enabled = enabled; }
@@ -86,6 +94,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   std::uint32_t create_container(const std::wstring_view path,
                                  const std::uint64_t size_bytes) override {
+    if (creation_feedback) { creation_feedback(1, 100, 0); creation_feedback(2, 100, 0); creation_feedback(3, 41, 0); }
+    creation_entered.store(true);
+    for (int i = 0; pause_creation.load() && i < 2000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     ++create_calls;
     created_path.assign(path);
     created_size_bytes = size_bytes;
@@ -890,14 +901,14 @@ RecordingCloseSink g_close_sink;
 [[nodiscard]] HRESULT invoke_create_container(
     IDispatch& host, const std::wstring& name, const std::wstring& directory,
     const std::uint32_t size_mib, VARIANT* const result,
-    UINT* const argument_error) {
+    UINT* const argument_error, bool background = false) {
   std::array<VARIANTARG, 3> values{};
   values[2] = text_argument(name);
   values[1] = text_argument(directory);
   values[0] = number_argument(size_mib);
   DISPPARAMS parameters{values.data(), nullptr, 3, 0};
   const HRESULT status =
-      host.Invoke(member_id(host, L"createContainerMib"), IID_NULL,
+      host.Invoke(member_id(host, background ? L"beginCreateContainerMib" : L"createContainerMib"), IID_NULL,
                   LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, result,
                   nullptr, argument_error);
   for (VARIANTARG& value : values) {
@@ -1046,6 +1057,38 @@ RecordingCloseSink g_close_sink;
   const bool adopted = result.boolVal == VARIANT_TRUE;
   static_cast<void>(::VariantClear(&result));
   return adopted;
+}
+
+void test_background_creation_reports_progress_and_excludes_concurrent_calls() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.pause_creation.store(true);
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, nullptr, &host, nullptr, &work)), "background host creation failed");
+  const HRESULT begun = invoke_create_container(*host.Get(), L"background", fixture.directory.wide(),
+      64, nullptr, nullptr, true);
+  for (int i = 0; !fixture.volume.creation_entered.load() && i < 1000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  DISPPARAMS no_arguments{};
+  VARIANT snapshot{};
+  const HRESULT progress_result = host->Invoke(member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr, nullptr);
+  const bool live = SUCCEEDED(progress_result) && snapshot.vt == VT_BSTR &&
+      std::wstring_view(snapshot.bstrVal) == L"1,3,41,0,3";
+  ::VariantClear(&snapshot);
+  const HRESULT blocked = host->Invoke(member_id(*host.Get(), L"getSessionState"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr, nullptr);
+  fixture.volume.pause_creation.store(false);
+  for (int i = 0; work.running.load() && i < 2000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  require(SUCCEEDED(begun) && live && blocked == E_PENDING && !work.running.load(),
+      "background operation did not report live progress or exclude concurrent access");
+  require(fixture.volume.create_calls == 1, "background creation ran more than once");
+  require(invoke_state(*host.Get()) == 3, "completed job did not release the session");
+  fixture.authentication.clear_authentication();
+  require(host->Invoke(member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr, nullptr) == E_ACCESSDENIED,
+      "completed progress leaked after authentication ended");
 }
 
 void test_operation_logging_setting_is_authenticated_and_boolean() {
@@ -1582,7 +1625,7 @@ void fill_container_b_arguments(std::array<VARIANTARG, 6>& values,
   values[5] = text_argument(name);
 }
 
-void test_container_b_creation_consumes_six_reversed_arguments() {
+void test_container_b_creation_consumes_six_reversed_arguments(bool background = false) {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   ComPtr<IDispatch> host = make_host(fixture.controller);
@@ -1597,13 +1640,27 @@ void test_container_b_creation_consumes_six_reversed_arguments() {
   VARIANT created{};
   ::VariantInit(&created);
   const HRESULT result =
-      host->Invoke(member_id(*host.Get(), L"createContainerBMib"), IID_NULL,
+      host->Invoke(member_id(*host.Get(), background ? L"beginCreateContainerBMib" : L"createContainerBMib"), IID_NULL,
                    LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, &created,
                    nullptr, nullptr);
   require(result == S_OK && created.vt == VT_BOOL &&
               created.boolVal == VARIANT_TRUE,
           "container B creation was refused");
   static_cast<void>(::VariantClear(&created));
+  if (background) {
+    bool completed = false;
+    for (int i = 0; i < 2000; ++i) {
+      DISPPARAMS empty{};
+      VARIANT progress{};
+      const HRESULT read = host->Invoke(member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
+          LOCALE_INVARIANT, DISPATCH_METHOD, &empty, &progress, nullptr, nullptr);
+      completed = SUCCEEDED(read) && progress.vt == VT_BSTR && std::wstring_view(progress.bstrVal).starts_with(L"2,");
+      ::VariantClear(&progress);
+      if (completed) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(completed, "background hidden creation did not complete");
+  }
   require(fixture.chooser.directory_calls == 0 &&
               fixture.volume.created_b_path ==
                   fixture.directory.target(L"handover"),
@@ -2070,6 +2127,7 @@ int main() {
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();
     test_operation_logging_setting_is_authenticated_and_boolean();
+    test_background_creation_reports_progress_and_excludes_concurrent_calls();
     test_login_consumes_and_wipes_one_array();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();
@@ -2082,6 +2140,7 @@ int main() {
     test_the_remember_switch_crosses_the_bridge_as_a_boolean();
     test_the_import_switch_crosses_the_bridge_as_a_boolean();
     test_container_b_creation_consumes_six_reversed_arguments();
+    test_container_b_creation_consumes_six_reversed_arguments(true);
     test_container_query_failure_does_not_invent_facts();
     test_operation_history_is_read_only_typed_and_clearable();
     test_operation_history_query_failures_do_not_invent_facts();

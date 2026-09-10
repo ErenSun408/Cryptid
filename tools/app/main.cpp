@@ -42,6 +42,9 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 HWND g_main_window{};
+usb_vault::ui::CreationWorkState g_creation_work;
+bool g_deferred_removal = false;
+bool g_deferred_arrival = false;
 
 // Presets are client-area dimensions in 96-DPI units. Never place a preset
 // outside the current monitor's work area, including its title bar/borders.
@@ -409,7 +412,7 @@ void initialize_webview(const HWND window) {
                       current = usb_vault::ui::
                           create_card_product_webview_host_object(
                               *g_ui_session, &g_close_sink, &host_object,
-                              &g_window_size_sink);
+                              &g_window_size_sink, &g_creation_work);
                       if (FAILED(current)) {
                         return current;
                       }
@@ -464,6 +467,15 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
     case WM_DEVICECHANGE:
+      if (g_creation_work.running.load() || g_deferred_removal || g_deferred_arrival) {
+        const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
+            wparam, lparam, kDevelopmentCardIdentity);
+        if (arrival.has_value()) {
+          if (!*arrival) { g_deferred_removal = true; g_creation_work.interrupted.store(true); }
+          g_deferred_arrival = *arrival;
+        }
+        return 0;
+      }
       if (g_card_device_notifications != nullptr &&
           g_card_lifecycle_controller != nullptr) {
         const auto transition =
@@ -488,6 +500,28 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         }
       }
       return 0;
+    case WM_TIMER:
+      if (wparam == 1 && !g_creation_work.running.load() && g_card_lifecycle_controller) {
+        const bool changed = g_deferred_removal || g_deferred_arrival;
+        if (g_deferred_removal) {
+          const auto transition = g_card_lifecycle_controller->handle_removal();
+          using Transition = usb_vault::application::CardPresenceTransition;
+          if (transition.presence == Transition::active_session_force_unmounted) {
+            show_warning(L"安全卡已拔出，磁盘正在被占用，已强制卸载。未写入磁盘的数据可能已丢失。");
+          }
+          if (transition.presence == Transition::active_session_remains) {
+            show_failure(L"安全卡已拔出，强制卸载仍然失败。请关闭占用磁盘的程序并重试安全卸载。");
+          }
+          g_deferred_removal = false;
+        }
+        if (g_deferred_arrival) {
+          static_cast<void>(g_card_lifecycle_controller->handle_arrival());
+          g_deferred_arrival = false;
+        }
+        g_creation_work.interrupted.store(false);
+        if (changed) notify_webview_session_changed();
+      }
+      return 0;
     case WM_SIZE:
       resize_webview(window);
       return 0;
@@ -507,6 +541,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     }
     case WM_CLOSE:
+      if (g_creation_work.running.load()) {
+        show_warning(L"容器正在创建，请等待完成后再关闭应用。");
+        return 0;
+      }
       if (g_ui_session != nullptr &&
           !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
         show_failure(L"无法安全卸载当前磁盘，请关闭占用文件后重试。");
@@ -569,6 +607,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   try {
     initialize_application_session(window);
     initialize_webview(window);
+    if (::SetTimer(window, 1, 100, nullptr) == 0) throw std::runtime_error("cannot schedule deferred card events");
   } catch (...) {
     show_failure(L"本地界面初始化失败。");
     ::DestroyWindow(window);

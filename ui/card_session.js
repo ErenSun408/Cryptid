@@ -174,6 +174,9 @@
   const creationProgressTime = document.getElementById("creation-progress-time");
   const creationProgressWork = document.getElementById("creation-progress-work");
   const creationProgressCheck = document.getElementById("creation-progress-check");
+  const creationProgressAuthorize = document.getElementById("creation-progress-authorize");
+  const creationProgressAllocate = document.getElementById("creation-progress-allocate");
+  let creationDrive = "";
   let creationRunning = false;
   let creationResult = "";
   let creationProgressTimer = null;
@@ -187,6 +190,7 @@
     creationProgress.querySelector("[role=progressbar]")?.removeAttribute("aria-valuenow");
     creationDialog.dataset.running = "false";
     creationProgressTime.textContent = "";
+    creationDrive = "";
   };
   const startCreationProgress = () => {
     stopCreationProgress();
@@ -194,13 +198,18 @@
     creationProgress.hidden = false;
     creationDialog.dataset.running = "true";
     creationTitle.textContent = "正在创建容器";
-    creationProgressWork.className = "current";
-    creationProgressWork.querySelector(".step-tail").textContent = "处理中";
+    for (const step of [creationProgressAuthorize, creationProgressAllocate, creationProgressWork]) {
+      step.className = "";
+      step.removeAttribute("aria-current");
+      step.querySelector(".step-tail").textContent = "等待中";
+    }
+    creationProgressAuthorize.className = "current";
+    creationProgressAuthorize.querySelector(".step-tail").textContent = "准备中";
     creationProgressCheck.className = "";
     creationProgressCheck.querySelector(".step-tail").textContent = "等待中";
     creationProgressWork.removeAttribute("aria-current");
     creationProgressCheck.removeAttribute("aria-current");
-    creationProgressWork.setAttribute("aria-current", "step");
+    creationProgressAuthorize.setAttribute("aria-current", "step");
     const started = performance.now();
     const updateTime = () => {
       const seconds = Math.floor((performance.now() - started) / 1000);
@@ -235,13 +244,50 @@
     creationProgressWork.className = succeeded || created ? "done" : "failed";
     creationProgressWork.querySelector(".step-tail").textContent = succeeded || created ? "已完成" : "未完成";
     creationProgressCheck.className = succeeded ? "done" : "failed";
-    creationProgressCheck.querySelector(".step-tail").textContent = succeeded ? "挂载成功" : "未确认";
+    creationProgressCheck.querySelector(".step-tail").textContent = succeeded ? (creationDrive || "挂载成功") : "未确认";
+    for (const step of [creationProgressAuthorize, creationProgressAllocate]) {
+      if (step.classList.contains("current")) {
+        step.className = succeeded ? "done" : "failed";
+        step.querySelector(".step-tail").textContent = succeeded ? "已完成" : "未完成";
+      }
+      step.removeAttribute("aria-current");
+    }
     if (succeeded) creationProgress.querySelector("[role=progressbar]")?.setAttribute("aria-valuenow", "100");
   };
   // Let the renderer paint the execution view before entering the native call.
   const paintCreationProgress = () => new Promise((resolve) => {
     requestAnimationFrame(() => setTimeout(resolve, 0));
   });
+  const waitForCreation = async () => {
+    for (;;) {
+      const packed = await bridge.getCreationProgress();
+      if (typeof packed !== "string" || !/^\d+,\d+,\d+,\d+,\d+$/.test(packed)) throw new Error("invalid creation progress");
+      const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
+      if (status < 1 || status > 3 || stage > 5 || percent > 100 || flags > 3 ||
+          (drive !== 0 && (drive < 65 || drive > 90))) throw new Error("invalid creation progress range");
+      const setStep = (step, state, text) => {
+        step.className = state;
+        step.querySelector(".step-tail").textContent = text;
+        step.removeAttribute("aria-current");
+        if (state === "current") step.setAttribute("aria-current", "step");
+      };
+      setStep(creationProgressAuthorize, flags & 1 ? "done" : "current", flags & 1 ? "已授权" : "准备／等待授权");
+      setStep(creationProgressAllocate, flags & 2 ? "done" : stage >= 1 ? "current" : "", flags & 2 ? "已分配" : stage >= 1 ? "分配中" : "等待中");
+      setStep(creationProgressWork, stage >= 4 ? "done" : stage === 3 ? "current" : "", stage >= 4 ? "已完成" : stage === 3 ? `${percent}%` : "等待中");
+      setStep(creationProgressCheck, stage === 5 ? "done" : stage === 4 ? "current" : "", stage === 5 ? "挂载成功" : stage === 4 ? "挂载中" : "等待中");
+      if (drive) creationDrive = `${String.fromCharCode(drive)}:`;
+      const bar = creationProgress.querySelector("[role=progressbar]");
+      if (stage >= 3) {
+        const progress = stage >= 4 ? 100 : percent;
+        bar?.setAttribute("aria-valuenow", String(progress));
+        bar?.style.setProperty("--creation-percent", `${progress}%`);
+        bar?.setAttribute("aria-label", "格式化进度");
+      }
+      if (status === 2) return;
+      if (status === 3) throw new Error("native creation failed");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  };
   const creationTypeNote = document.getElementById("create-type-note");
   const containerBForm = document.getElementById("create-container-b-form");
   const containerBName = document.getElementById("create-container-b-name");
@@ -2990,14 +3036,15 @@
         // stay word-for-word parallel (8.7.2).
         startCreationProgress();
         await paintCreationProgress();
-        await bridge.createContainerBMib(name, directory, sizes.outer,
+        await bridge.beginCreateContainerBMib(name, directory, sizes.outer,
                                          sizes.hidden, secondBytes,
                                          confirmationBytes);
-        confirmCreationResult();
       } finally {
         wipe(secondBytes);
         wipe(confirmationBytes);
       }
+      await waitForCreation();
+      confirmCreationResult();
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
@@ -3057,7 +3104,8 @@
       containerDirectory.value = "";
       startCreationProgress();
       await paintCreationProgress();
-      await bridge.createContainerMib(name, directory, sizeMib);
+      await bridge.beginCreateContainerMib(name, directory, sizeMib);
+      await waitForCreation();
       confirmCreationResult();
       await refreshNativeState();
       busy = false;

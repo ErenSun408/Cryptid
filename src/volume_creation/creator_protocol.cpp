@@ -28,7 +28,8 @@ namespace {
   return stage == CreationStage::formatting ||
          stage == CreationStage::formatting_outer ||
          stage == CreationStage::scanning_tail_space ||
-         stage == CreationStage::formatting_hidden;
+         stage == CreationStage::formatting_hidden ||
+         stage == CreationStage::authorized || stage == CreationStage::allocated;
 }
 
 }  // namespace

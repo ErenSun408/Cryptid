@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <thread>
 
 namespace usb_vault::ui {
 namespace {
@@ -97,6 +98,9 @@ constexpr DISPID kCopyContainerEntryId = 41;
 constexpr DISPID kExportContainerEntryId = 42;
 constexpr DISPID kExportContainerFileId = 43;
 constexpr DISPID kSetWindowSizeId = 44;
+constexpr DISPID kBeginCreateId = 47;
+constexpr DISPID kBeginCreateBId = 48;
+constexpr DISPID kCreationProgressId = 49;
 constexpr DISPID kGetOperationLoggingEnabledId = 45;
 constexpr DISPID kSetOperationLoggingEnabledId = 46;
 
@@ -285,9 +289,15 @@ class CardProductWebViewHostObject final : public IDispatch {
   CardProductWebViewHostObject(
       CardProductUiSessionController& controller,
       IUiCloseRequestSink* const close_sink,
-      IUiWindowSizeSink* const window_size_sink) noexcept
+      IUiWindowSizeSink* const window_size_sink,
+      CreationWorkState* const creation_work) noexcept
       : controller_(controller), close_sink_(close_sink),
-        window_size_sink_(window_size_sink) {}
+        window_size_sink_(window_size_sink),
+        creation_work_(creation_work ? creation_work : &local_creation_work_) {}
+
+  ~CardProductWebViewHostObject() {
+    if (creation_thread_.joinable()) creation_thread_.join();
+  }
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                            void** result) noexcept override {
@@ -333,6 +343,9 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kSetWindowSizeId;
       return S_OK;
     }
+    if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
+    if (matches(names[0], L"beginCreateContainerBMib")) { ids[0] = kBeginCreateBId; return S_OK; }
+    if (matches(names[0], L"getCreationProgress")) { ids[0] = kCreationProgressId; return S_OK; }
     if (matches(names[0], L"getOperationLoggingEnabled")) {
       ids[0] = kGetOperationLoggingEnabledId;
       return S_OK;
@@ -507,8 +520,34 @@ class CardProductWebViewHostObject final : public IDispatch {
       override {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
+    if (creation_work_->running.load() && member != kCreationProgressId) {
+      DispatchTextWiper text_wiper(parameters);
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return E_PENDING;
+    }
 
     switch (member) {
+      case kBeginCreateId: return invoke_create_container(parameters, result, argument_error, true);
+      case kBeginCreateBId: return invoke_create_container_b(parameters, result, argument_error, true);
+      case kCreationProgressId: {
+        if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        try {
+          const auto status = creation_work_->running.load() ? 1U : creation_status_.load();
+          if (status != 1 && controller_.state() != CardProductUiState::authenticated) {
+            creation_progress_.store(0);
+            creation_flags_.store(0);
+            creation_status_.store(0);
+            return E_ACCESSDENIED;
+          }
+          const auto value = creation_progress_.load();
+          const std::wstring packed = std::to_wstring(status) + L"," +
+              std::to_wstring(value >> 32) + L"," + std::to_wstring((value >> 16) & 65535) + L"," + std::to_wstring(value & 65535) + L"," + std::to_wstring(creation_flags_.load());
+          ::VariantInit(result); result->vt = VT_BSTR;
+          result->bstrVal = ::SysAllocStringLen(packed.data(), static_cast<UINT>(packed.size()));
+          return result->bstrVal ? S_OK : E_OUTOFMEMORY;
+        } catch (...) { return E_FAIL; }
+      }
       case kGetOperationLoggingEnabledId:
       case kSetOperationLoggingEnabledId: {
         const bool write = member == kSetOperationLoggingEnabledId;
@@ -630,6 +669,41 @@ class CardProductWebViewHostObject final : public IDispatch {
   }
 
  private:
+  template <typename Operation>
+  HRESULT begin_creation(Operation operation, VARIANT* result) {
+    if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated) return E_FAIL;
+    if (creation_thread_.joinable()) creation_thread_.join();
+    creation_progress_.store(0);
+    creation_flags_.store(0);
+    creation_status_.store(1);
+    creation_work_->running.store(true);
+    try {
+      creation_thread_ = std::thread([this, operation = std::move(operation)]() mutable {
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        unsigned int status = 3;
+        try {
+          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          controller_.set_creation_feedback([this](unsigned int stage, unsigned int percent, wchar_t drive) {
+            if (stage == 4 && creation_work_->interrupted.load()) throw std::runtime_error("card removed during creation");
+            if (stage == 1 || stage == 2) creation_flags_.fetch_or(1U << (stage - 1));
+            creation_progress_.store((static_cast<std::uint64_t>(stage) << 32) |
+                (static_cast<std::uint64_t>(percent) << 16) | static_cast<unsigned int>(drive));
+          });
+          operation();
+          status = 2;
+        } catch (...) {}
+        try { controller_.set_creation_feedback({}); } catch (...) {}
+        if (SUCCEEDED(com)) ::CoUninitialize();
+        creation_status_.store(status);
+        creation_work_->running.store(false);
+      });
+    } catch (...) {
+      creation_status_.store(3);
+      creation_work_->running.store(false);
+      return E_FAIL;
+    }
+    return complete_selection(true, result);
+  }
   [[nodiscard]] static bool matches(const wchar_t* const actual,
                                     const wchar_t* const expected) noexcept {
     return ::CompareStringOrdinal(actual, -1, expected, -1, FALSE) ==
@@ -746,7 +820,8 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   HRESULT invoke_create_container(DISPPARAMS* const parameters,
                                   VARIANT* const result,
-                                  UINT* const argument_error) noexcept {
+                                  UINT* const argument_error,
+                                  bool background = false) noexcept {
     if (parameters == nullptr || parameters->cArgs != 3 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       return DISP_E_BADPARAMCOUNT;
@@ -763,6 +838,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       return DISP_E_TYPEMISMATCH;
     }
     try {
+      if (background) return begin_creation([this, name = std::wstring(name), directory = std::wstring(directory), size_mib]() mutable {
+        LocationStringWiper name_wiper(name);
+        LocationStringWiper directory_wiper(directory);
+        controller_.create_container(name, directory, size_mib);
+      }, result);
       controller_.create_container(name, directory, size_mib);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
@@ -783,7 +863,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   // path.
   HRESULT invoke_create_container_b(
       DISPPARAMS* const parameters, VARIANT* const result,
-      UINT* const argument_error) noexcept {
+      UINT* const argument_error, bool background = false) noexcept {
     if (parameters == nullptr || parameters->cArgs != 6 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       wipe_available_arguments(parameters, 6);
@@ -825,6 +905,13 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     try {
+      if (background) return begin_creation([this, name = std::wstring(name), directory = std::wstring(directory),
+          outer_size_mib, hidden_size_mib, second = std::move(second), confirmation = std::move(confirmation)]() mutable {
+        LocationStringWiper name_wiper(name);
+        LocationStringWiper directory_wiper(directory);
+        controller_.create_container_b(name, directory, outer_size_mib, hidden_size_mib,
+                                        second.bytes(), confirmation.bytes());
+      }, result);
       controller_.create_container_b(name, directory, outer_size_mib,
                                      hidden_size_mib, second.bytes(),
                                      confirmation.bytes());
@@ -1476,6 +1563,12 @@ class CardProductWebViewHostObject final : public IDispatch {
   CardProductUiSessionController& controller_;
   IUiCloseRequestSink* close_sink_{};
   IUiWindowSizeSink* window_size_sink_{};
+  CreationWorkState local_creation_work_;
+  CreationWorkState* creation_work_;
+  std::thread creation_thread_;
+  std::atomic<unsigned int> creation_status_{0};
+  std::atomic<std::uint64_t> creation_progress_{0};
+  std::atomic<unsigned int> creation_flags_{0};
 };
 
 }  // namespace
@@ -1484,12 +1577,13 @@ HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* const close_sink,
     IDispatch** const result,
-    IUiWindowSizeSink* const window_size_sink) noexcept {
+    IUiWindowSizeSink* const window_size_sink,
+    CreationWorkState* const creation_work) noexcept {
   if (result == nullptr) return E_POINTER;
   *result = nullptr;
   auto* const object =
       new (std::nothrow) CardProductWebViewHostObject(controller, close_sink,
-                                                   window_size_sink);
+                                                   window_size_sink, creation_work);
   if (object == nullptr) return E_OUTOFMEMORY;
   *result = object;
   return S_OK;

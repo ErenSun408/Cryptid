@@ -109,7 +109,10 @@ class ProductionCardLoginMountSessionRuntime final
   void create_standard(
       const std::wstring_view target_path, const std::uint64_t size_bytes,
       const security::SecureBuffer& volume_password) override {
-    creator_.create_standard(target_path, size_bytes, volume_password);
+    creator_.create_standard(target_path, size_bytes, volume_password,
+        [this](const volume_creation::CreationProgress& progress) {
+          report_creation(progress, 0, 0);
+        });
   }
 
   void create_with_hidden(
@@ -120,7 +123,10 @@ class ProductionCardLoginMountSessionRuntime final
       const security::SecureBuffer& hidden_password) override {
     creator_.create_with_hidden(target_path, outer_size_bytes,
                                 hidden_size_bytes, outer_password,
-                                hidden_password);
+                                hidden_password,
+        [this, outer_size_bytes, hidden_size_bytes](const volume_creation::CreationProgress& progress) {
+          report_creation(progress, outer_size_bytes, hidden_size_bytes);
+        });
   }
 
   void publish_created(const std::wstring_view staging_path,
@@ -231,6 +237,21 @@ class ProductionCardLoginMountSessionRuntime final
   }
 
  private:
+  void report_creation(const volume_creation::CreationProgress& progress,
+                       std::uint64_t outer, std::uint64_t inner) {
+    if (!creation_feedback) return;
+    using Stage = volume_creation::CreationStage;
+    if (progress.stage == Stage::authorized) { creation_feedback(1, 100, 0); return; }
+    if (progress.stage == Stage::allocated) { creation_feedback(2, 100, 0); return; }
+    unsigned int percent = progress.percent;
+    if (outer != 0 && inner != 0) {
+      const auto total = outer + inner;
+      if (progress.stage == Stage::formatting_outer) percent = static_cast<unsigned int>(outer * progress.percent / total);
+      if (progress.stage == Stage::scanning_tail_space) percent = static_cast<unsigned int>(outer * 100 / total);
+      if (progress.stage == Stage::formatting_hidden) percent = static_cast<unsigned int>((outer * 100 + inner * progress.percent) / total);
+    }
+    creation_feedback(3, percent, 0);
+  }
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
 };
@@ -281,6 +302,10 @@ CardLoginMountSession::CardLoginMountSession(
                                    login_mount_policy)) {}
 
 CardLoginMountSession::~CardLoginMountSession() noexcept = default;
+
+void CardLoginMountSession::set_creation_feedback(CreationFeedback feedback) {
+  impl_->runtime.creation_feedback = std::move(feedback);
+}
 
 void CardLoginMountSession::consume_authenticated_login(
     security::SecureBuffer root_secret,
@@ -896,6 +921,8 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     volume_password = derive_standard_password();
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
+    if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == size_bytes) runtime_.creation_feedback(2, 100, 0);
+    if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     runtime_.publish_created(staging_path, path);
     published = true;
     record_operation(OperationKind::container_created,
@@ -915,6 +942,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                      OperationOutcome::succeeded,
                      container_name,
                      drive_letter);
+    if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
     const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
     volume_password.clear();
     remember_container_path(path);
@@ -1000,6 +1028,8 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                                 outer_password,
                                 hidden_password);
     staging_owned = true;
+    if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == outer_size_bytes) runtime_.creation_feedback(2, 100, 0);
+    if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     runtime_.publish_created(staging_path, path);
     published = true;
     record_operation(OperationKind::container_created,
@@ -1019,6 +1049,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                      OperationOutcome::succeeded,
                      container_name,
                      drive_letter);
+    if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
     const std::uint32_t id = adopt(state_, path, drive_letter, true, true).id;
     outer_password.clear();
     remember_container_path(path);

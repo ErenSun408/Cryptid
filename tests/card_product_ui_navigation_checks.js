@@ -99,6 +99,14 @@
       $('#create-volume-dialog').dataset.running === "true",
       "Hidden creation replaces parameters with a running view");
     const initialElapsed = $('#creation-progress-time').textContent;
+    check(!$('#creation-progress-authorize').classList.contains("done"),
+      "Authorization is not marked complete before native confirmation");
+    window.navigationFixture.creationProgress = "1,3,41,0,3";
+    await wait(() => $('#creation-progress-work .step-tail').textContent === "41%");
+    check($('#creation-progress-authorize').classList.contains("done") &&
+      $('#creation-progress-allocate').classList.contains("done") &&
+      $('#creation-progress [role=progressbar]').getAttribute("aria-valuenow") === "41",
+      "Native authorization allocation and format percentage drive the steps");
     await new Promise((resolve) => setTimeout(resolve, 1100));
     check($('#creation-progress-time').textContent !== initialElapsed,
       "Creation elapsed time updates while native creation is pending");
@@ -124,12 +132,22 @@
     await wait(() => window.navigationFixture.pendingCreation);
     check(!$('#creation-progress').hidden && $('#create-container-form').hidden,
       "Standard creation uses the same running view");
+    window.navigationFixture.creationProgress = "1,4,0,0,3";
+    await wait(() => $('#creation-progress-check .step-tail').textContent === "挂载中");
+    check(['authorize', 'allocate', 'work'].every((name) => {
+      const step = $('#creation-progress-' + name);
+      return step.className === "done" && !step.hasAttribute("aria-current") &&
+        getComputedStyle(step.querySelector('.step-mark')).animation === "none";
+    }) && $('#creation-progress-allocate .step-tail').textContent === "已分配" &&
+      $('#creation-progress-work .step-tail').textContent === "已完成" &&
+      $('#creation-progress-check').className === "current",
+      "Fast creation skips directly to mounting with completed non-spinning prior steps");
     window.navigationFixture.pendingCreation.resolve();
     window.navigationFixture.pendingCreation = null;
     await wait(() => $('#create-volume-status').dataset.tone === "success");
     check(!$('#creation-progress').hidden && $('#creation-progress').dataset.result === "success" &&
       $('#create-volume-dialog').dataset.running === "false" && $('#create-container-form').hidden &&
-      $('#creation-progress-check .step-tail').textContent === "挂载成功" && $('#create-volume-continue').hidden,
+      $('#creation-progress-check .step-tail').textContent === "Z:" && $('#create-volume-continue').hidden,
       "Successful creation keeps mount results on the execution page");
     $('#create-volume-close').click();
     $("[data-section=backup]").click();

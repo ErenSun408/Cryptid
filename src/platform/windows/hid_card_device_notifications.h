@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <optional>
 
 namespace usb_vault::platform::windows {
 
@@ -18,6 +19,8 @@ struct HidDeviceIdentity final {
 
 [[nodiscard]] bool matches_hid_device_path(
     std::wstring_view path, HidDeviceIdentity identity) noexcept;
+[[nodiscard]] std::optional<bool> inspect_target_card_event(
+    WPARAM event, LPARAM payload, HidDeviceIdentity identity) noexcept;
 
 // Owns one window-scoped HID interface notification registration. Registration
 // happens before startup enumeration so a transition cannot be silently lost
