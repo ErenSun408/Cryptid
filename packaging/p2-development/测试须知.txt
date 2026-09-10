@@ -14,7 +14,8 @@
 3. 执行下面的“VeraCrypt 驱动验证”，确认 STATE 为 RUNNING。
 4. 执行下面的“WebView2 Runtime 验证”，确认至少输出一个大于 0.0.0.0 的版本号。
 5. 双击 usb_vault_vikey_development_credentials_config.exe，录入供应方提供的开发凭据。
-6. 插入安全卡，双击 usb_vault_vikey_p2_development_app.exe；无需启动脚本。请保留完整包目录结构，并解压到本机固定磁盘。
+6. 插入安全卡，在配置器点击“运行检测”，处理未通过项目后重新检测；全部通过可点击“启动 USB Vault”。检测只读，可能联网，不初始化卡或操作容器。
+7. 后续可双击 usb_vault_vikey_p2_development_app.exe；无需启动脚本。请保留完整包目录结构，并解压到本机固定磁盘。
 
 ## VeraCrypt 安装程序验证（PowerShell）
 

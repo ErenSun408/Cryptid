@@ -2,6 +2,7 @@
 #include "card/vikey/vikey_session.h"
 
 #include <Windows.h>
+#include <objbase.h>
 
 #include <cstddef>
 #include <exception>
@@ -9,6 +10,12 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+#include "diagnostics.h"
+#include <atomic>
+#include <mutex>
+#include <thread>
+#endif
 
 namespace {
 
@@ -24,12 +31,20 @@ using usb_vault::security::SecureBuffer;
 constexpr wchar_t kWindowClass[] =
     L"UsbVaultVikeyDevelopmentCredentialsConfig";
 constexpr wchar_t kWindowTitle[] =
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+    L"USB Vault - 配置与检测（开发版）";
+#else
     L"USB Vault - ViKey 开发凭据配置";
+#endif
 
 constexpr int kUserSnEditId = 1001;
 constexpr int kApiKeyEditId = 1002;
 constexpr int kUserPinEditId = 1003;
 constexpr int kSaveButtonId = 1004;
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+constexpr int kCheckButtonId = 1005;
+constexpr int kLaunchButtonId = 1006;
+#endif
 
 struct UiState final {
   HWND user_sn{};
@@ -39,6 +54,17 @@ struct UiState final {
   HWND status{};
   HFONT font{};
   bool saving{};
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+  HWND check{};
+  HWND launch{};
+  HWND results{};
+  std::thread worker;
+  std::atomic<bool> checking{false};
+  std::mutex mutex;
+  std::wstring report;
+  bool ready{};
+  ~UiState() { if (worker.joinable()) worker.join(); }
+#endif
 };
 
 [[noreturn]] void fail_windows(const char* const context) {
@@ -137,7 +163,11 @@ void save(UiState& state) noexcept {
     clear_fields(state);
     static_cast<void>(::SetWindowTextW(
         state.status,
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+        L"已保存并复读验证。请插卡并运行检测。"));
+#else
         L"已保存并复读验证。现在可以启动 USB Vault 开发程序。"));
+#endif
   } catch (const std::system_error& error) {
     const std::wstring message =
         L"保存失败（Windows 错误 " +
@@ -152,6 +182,56 @@ void save(UiState& state) noexcept {
   state.saving = false;
   update_save_button(state);
 }
+
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+void check_environment(UiState& state) noexcept {
+  if (state.checking.load()) return;
+  if (::GetWindowTextLengthW(state.user_sn) || ::GetWindowTextLengthW(state.api_key) ||
+      ::GetWindowTextLengthW(state.user_pin)) {
+    ::SetWindowTextW(state.status, L"请先保存填写的凭据；检测使用当前用户已保存的配置。");
+    return;
+  }
+  if (state.worker.joinable()) state.worker.join();
+  state.ready = false;
+  ::EnableWindow(state.launch, FALSE);
+  ::EnableWindow(state.check, FALSE);
+  ::EnableWindow(state.save, FALSE);
+  for (const HWND field : {state.user_sn, state.api_key, state.user_pin}) ::EnableWindow(field, FALSE);
+  ::SetWindowTextW(state.status, L"检测运行中，请等待；开发版安全卡访问可能联网。检测不改写卡。");
+  state.checking.store(true);
+  try {
+    state.worker = std::thread([&state] {
+      const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+      try {
+        if (FAILED(com)) throw std::runtime_error("COM unavailable");
+        std::array<configuration::Result, configuration::count> results{};
+        state.ready = configuration::diagnose([&](unsigned int index, const configuration::Result& result) {
+          results[index] = result;
+          constexpr const wchar_t* names[] = {L"系统架构", L"运行组件", L"WebView2", L"VeraCrypt 驱动", L"已保存凭据", L"安全卡连接", L"安全卡访问"};
+          std::wstring text;
+          for (unsigned int item = 0; item < configuration::count; ++item) {
+            const auto& entry = results[item];
+            const wchar_t* mark = entry.state == configuration::State::passed ? L"[通过] " :
+                entry.state == configuration::State::failed ? L"[未通过] " :
+                entry.state == configuration::State::running ? L"[检测中] " :
+                entry.state == configuration::State::skipped ? L"[跳过] " : L"[等待] ";
+            text += std::wstring(mark) + names[item] + L"：" + entry.detail + L"\r\n\r\n";
+          }
+          const std::lock_guard lock(state.mutex);
+          state.report = std::move(text);
+        });
+      } catch (...) {
+        const std::lock_guard lock(state.mutex);
+        state.report = L"检测无法完成，请检查环境后重试。";
+      }
+      if (SUCCEEDED(com)) ::CoUninitialize();
+      state.checking.store(false);
+    });
+  } catch (...) {
+    state.checking.store(false);
+  }
+}
+#endif
 
 void initialize_controls(const HWND window, UiState& state,
                          const HINSTANCE instance) {
@@ -195,6 +275,19 @@ void initialize_controls(const HWND window, UiState& state,
   state.status = create_control(
       0, L"STATIC", L"请填写全部三项；格式正确后才可保存。",
       WS_CHILD | WS_VISIBLE, 24, 286, 405, 44, window, 0, instance);
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+  state.check = create_control(0, L"BUTTON", L"运行检测", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      24, 340, 150, 32, window, kCheckButtonId, instance);
+  state.launch = create_control(0, L"BUTTON", L"启动 USB Vault", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      424, 340, 170, 32, window, kLaunchButtonId, instance);
+  state.results = create_control(WS_EX_CLIENTEDGE, L"EDIT",
+      L"已配置过的用户可直接运行检测。需要更新配置时，请先填写并保存全部三项。\r\n检测只读；缺失依赖请按随包测试须知安装。",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
+      24, 386, 570, 252, window, 0, instance);
+  for (const HWND control : {state.check, state.launch, state.results}) set_control_font(control, state.font);
+  ::EnableWindow(state.launch, FALSE);
+  if (::SetTimer(window, 1, 150, nullptr) == 0) fail_windows("create diagnostic timer");
+#endif
 
   for (const HWND control :
        {heading, warning, user_sn_label, state.user_sn, api_key_label,
@@ -230,6 +323,27 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
       ::GetWindowLongPtrW(window, GWLP_USERDATA));
 
   switch (message) {
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+    case WM_TIMER:
+      if (state && w_param == 1) {
+        {
+          const std::lock_guard lock(state->mutex);
+          if (!state->report.empty()) {
+            ::SetWindowTextW(state->results, state->report.c_str());
+            state->report.clear();
+          }
+        }
+        if (!state->checking.load() && !::IsWindowEnabled(state->check)) {
+          if (state->worker.joinable()) state->worker.join();
+          for (const HWND field : {state->user_sn, state->api_key, state->user_pin, state->check}) ::EnableWindow(field, TRUE);
+          update_save_button(*state);
+          ::EnableWindow(state->launch, state->ready ? TRUE : FALSE);
+          ::SetWindowTextW(state->status, state->ready ? L"检测通过，可以启动主程序。" : L"请处理未通过的项目，然后重新检测。");
+        }
+        return 0;
+      }
+      break;
+#endif
     case WM_CREATE:
       try {
         const auto* const create =
@@ -242,11 +356,27 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
 
     case WM_COMMAND:
       if (state == nullptr) break;
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+      if (state->checking.load()) return 0;
+      if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kCheckButtonId) {
+        check_environment(*state); return 0;
+      }
+      if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kLaunchButtonId) {
+        if (!state->ready) return 0;
+        try { configuration::launch_application(); }
+        catch (...) { ::SetWindowTextW(state->status, L"启动失败，请重新检测或重新解压完整测试包。"); }
+        return 0;
+      }
+#endif
       if (HIWORD(w_param) == EN_CHANGE &&
           (LOWORD(w_param) == kUserSnEditId ||
            LOWORD(w_param) == kApiKeyEditId ||
            LOWORD(w_param) == kUserPinEditId)) {
         update_save_button(*state);
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+        state->ready = false;
+        ::EnableWindow(state->launch, FALSE);
+#endif
         return 0;
       }
       if (LOWORD(w_param) == kSaveButtonId &&
@@ -257,6 +387,12 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
       break;
 
     case WM_CLOSE:
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+      if (state && state->checking.load()) {
+        ::SetWindowTextW(state->status, L"检测正在访问安全卡，请等待检测结束后关闭。");
+        return 0;
+      }
+#endif
       if (state != nullptr) clear_fields(*state);
       static_cast<void>(::DestroyWindow(window));
       return 0;
@@ -296,6 +432,9 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
                       WS_MINIMIZEBOX;
   RECT window_rectangle{0, 0, 620, 350};
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+  window_rectangle.bottom = 660;
+#endif
   if (::AdjustWindowRectEx(&window_rectangle, style, FALSE, 0) == FALSE) {
     return 1;
   }

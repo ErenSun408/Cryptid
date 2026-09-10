@@ -19,9 +19,10 @@ USB Vault P2 内部开发测试包
 
 1. 双击 usb_vault_vikey_development_credentials_config.exe。
 2. 输入供应方提供的 32 位十六进制 UserSN、128 位十六进制 API Key 和 8 位字母数字用户 PIN。
-3. 出现“已保存并复读验证”后关闭配置器。凭据只写入当前 Windows 用户、当前机器的凭据管理器。
-4. 插入安全卡。
-5. 双击 usb_vault_vikey_p2_development_app.exe，无需命令行参数或启动脚本。新建容器时 Windows 会显示 UAC 提示，这是当前建卷 helper 的正常行为。
+3. 出现“已保存并复读验证”后插入安全卡。凭据只写入当前 Windows 用户、当前机器的凭据管理器。
+4. 在配置器点击“运行检测”，检查架构、组件完整性、WebView2、驱动、已保存凭据和安全卡访问。检测期间可能联网，但不会初始化或改写卡；不创建、挂载或卸载容器。已有配置可直接运行检测，无须重新输入。
+5. 全部通过后点击“启动 USB Vault”。后续可直接双击 usb_vault_vikey_p2_development_app.exe，无需命令行参数或启动脚本。新建容器时 Windows 会显示 UAC 提示，这是当前建卷 helper 的正常行为。
+6. 若检测未通过，请按结果处理后重新检测。配置器本轮不自动安装依赖；依赖安装步骤见“测试须知.txt”。
 
 重要限制
 --------
@@ -40,7 +41,7 @@ USB Vault P2 内部开发测试包
 - 测试须知.txt：最短安装流程、所需条件及 VeraCrypt/WebView2 验证指令。
 - prerequisites\VeraCrypt Setup 1.26.29.exe：未经修改的 VeraCrypt 官方安装程序。
 - usb_vault_vikey_p2_development_app.exe：可直接双击的 P2 开发主程序；以 EXE 所在目录定位组件，按构建时嵌入的 SHA-256 校验 helper、建卷后端、厂商 DLL 及页面。仍为允许厂商运行库联网的开发模式。
-- usb_vault_vikey_development_credentials_config.exe：开发凭据配置器。
+- usb_vault_vikey_development_credentials_config.exe：开发凭据配置与只读检测器，检测结果仅在窗口内显示，不保存诊断报告。
 - usb_vault_vikey_helper.exe：隔离访问 ViKey 的 helper。
 - usb_vault_volume_creator.exe：需要 UAC 的建卷 helper。
 - VeraCryptFormat.dll：已审计补丁构建的建卷后端。

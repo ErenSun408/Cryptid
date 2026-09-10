@@ -691,6 +691,33 @@ if(USB_VAULT_BUILD_UI)
   # Explicit aggregation point for the internal P2 development package. The
   # staging script copies only these reviewed runtime outputs and never walks a
   # build directory for arbitrary DLLs or debug artifacts.
+  set(p2_config_header "${CMAKE_CURRENT_BINARY_DIR}/generated/p2_config_deployment.h")
+  add_custom_command(OUTPUT "${p2_config_header}"
+    COMMAND ${CMAKE_COMMAND}
+      "-Dhelper=$<TARGET_FILE:usb_vault_vikey_helper>"
+      "-Dcreator=$<TARGET_FILE:usb_vault_volume_creator>"
+      "-Dapp=$<TARGET_FILE:usb_vault_vikey_p2_development_app>"
+      "-Dhtml=${CMAKE_SOURCE_DIR}/ui/card_session.html"
+      "-Djs=${CMAKE_SOURCE_DIR}/ui/card_session.js"
+      "-Doutput=${p2_config_header}"
+      -P "${CMAKE_SOURCE_DIR}/tools/generate-p2-deployment.cmake"
+    DEPENDS usb_vault_vikey_p2_development_app
+      "${p2_deployment_header}"
+      "${CMAKE_SOURCE_DIR}/tools/generate-p2-deployment.cmake"
+    VERBATIM)
+  target_sources(usb_vault_vikey_development_credentials_config PRIVATE
+    "${p2_config_header}"
+    tools/vikey_development_credentials_config/diagnostics.cpp
+    src/card/vikey/vikey_hid_probe.cpp)
+  target_include_directories(usb_vault_vikey_development_credentials_config PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    "${webview2_sdk_SOURCE_DIR}/build/native/include")
+  target_compile_definitions(usb_vault_vikey_development_credentials_config PRIVATE
+    USB_VAULT_CONFIG_DIAGNOSTICS)
+  target_link_libraries(usb_vault_vikey_development_credentials_config PRIVATE
+    usb_vault_verified_local_artifact usb_vault_vikey_helper_card_record_backend
+    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+    Ole32 Setupapi Hid)
   add_custom_target(usb_vault_p2_development_package_binaries)
   add_dependencies(usb_vault_p2_development_package_binaries
     usb_vault_vikey_p2_development_app

@@ -1,4 +1,5 @@
 #include "card/vikey/vikey_development_app_config.h"
+#include "../tools/vikey_development_credentials_config/checks.h"
 
 #include <array>
 #include <cstddef>
@@ -68,6 +69,38 @@ void test_packaged_config() {
                  "packaged directory must be absolute");
   expect_invalid([&] { static_cast<void>(packaged_app_config(L"C:\\app", L"bad", kVendorDigest)); },
                  "invalid compiled digest accepted");
+}
+
+void test_diagnostic_gates() {
+  using namespace configuration;
+  for (const unsigned int failed : {1U, 4U, 5U, count}) {
+    Probes probes;
+    unsigned int calls = 0;
+    bool card_called = false;
+    for (unsigned int index = 0; index < count; ++index) {
+      probes[index] = [&, index] {
+        ++calls;
+        if (index == 6) card_called = true;
+        return Result{index == failed ? State::failed : State::passed, L"test"};
+      };
+    }
+    State last{};
+    const bool passed = run_checks(probes, [&](unsigned int index, const Result& result) {
+      if (index == 6) last = result.state;
+    });
+    expect(passed == (failed == count), "diagnostic success ignored prerequisite failure");
+    expect(card_called == passed && calls == (passed ? count : count - 1),
+           "card probe ran without prerequisites");
+    expect(last == (passed ? State::passed : State::skipped), "incorrect card result");
+  }
+  Probes probes;
+  for (auto& probe : probes) probe = [] { return Result{State::passed, L"test"}; };
+  probes[3] = []() -> Result { throw std::runtime_error("private diagnostic detail"); };
+  bool sanitized = false;
+  expect(!run_checks(probes, [&](unsigned int index, const Result& result) {
+    if (index == 3 && result.state == State::failed)
+      sanitized = result.detail.find(L"private") == std::wstring::npos;
+  }) && sanitized, "diagnostic error was not sanitized");
 }
 
 void test_acknowledgement_is_mandatory() {
@@ -145,6 +178,7 @@ int main() {
   try {
     test_valid_config();
     test_packaged_config();
+    test_diagnostic_gates();
     test_acknowledgement_is_mandatory();
     test_paths_must_be_absolute();
     test_digests_and_argument_count_fail_closed();
