@@ -47,8 +47,8 @@
       all(`${home} .container-details-grid .container-fact`).length === 6, "Details contain six allowed facts");
     check(!$(".container-details [data-container-action=unavailable]") &&
       !$(home + " .container-row [data-container-action=browse]") &&
-      $(manager + " .container-row [data-container-action=browse]"),
-      "Removed detail actions stay absent and row opening belongs to management");
+      !$(manager + " [data-container-action=details]") && !$(manager + " [data-container-action=forget]"),
+      "Management has no disclosure or removal actions");
     action(home, 2, "details").click();
     check(!$(home + " .container-details"), "Details collapse");
 
@@ -68,22 +68,69 @@
 
     $("[data-section=files]").click();
     check(!$(manager).hidden && $("#management-files").hidden, "Management navigation starts at containers");
-    action(manager, 1, "browse").click();
+    $(manager + ' [data-row-container="1"] .container-name').click();
     await wait(() => $("[data-file-enter]"));
     check($(manager).hidden && !$("#management-files").hidden, "Open enters the file level");
+    check($("#file-breadcrumb").closest(".section-header") &&
+      $("#file-breadcrumb h2 [data-file-back]") &&
+      !$("[data-file-depth='0']").disabled, "Title and clickable path share the header");
+    check(all("#file-list-body [data-file-action]").every((button) =>
+      ["export", "delete"].includes(button.dataset.fileAction) && button.textContent === "" &&
+      button.getAttribute("aria-label") && button.querySelector("svg")), "File actions are accessible export and delete icons only");
+    check($("#file-list-body .file-glyph.directory") && $("#file-list-body .file-glyph:not(.directory)"), "Folder and file icons appear beside names");
+    const fileRow = $('#file-list-body [data-file-drag="报告.xlsx"]');
+    fileRow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 20, clientY: 20 }));
+    check(!$("#file-context-menu").hidden && all("#file-context-menu [role=menuitem]").length === 1, "Right click opens a rename-only menu");
+    $("#file-context-rename").click();
+    check(!$("#file-name-dialog").hidden && $("#file-name-input").value === "报告.xlsx", "Context rename targets the selected file");
+    $("#file-name-cancel").click();
+    fileRow.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "F10", shiftKey: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    check($("#file-context-menu").hidden && document.activeElement === fileRow, "Keyboard menu dismisses and restores row focus");
+    fileRow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
     $("[data-file-enter]").click();
     await tick();
     check(window.navigationFixture.calls.some(([id, dir]) => id === 1 && dir === "文档"), "Nested browsing uses container ID and relative directory");
+    check($("#file-context-menu").hidden && !$("[data-file-depth='1']").disabled, "Navigation closes the menu and keeps every path segment clickable");
+    window.navigationFixture.listingSuffix = "\u001e外部新增.txt\u001f0\u001f0\u001f10\u001f0";
+    $("#file-refresh").click();
+    check($("#file-refresh").disabled && $("#file-refresh").getAttribute("aria-busy") === "true", "Refresh is disabled while the directory is loading");
+    await wait(() => $('#file-list-body [data-file-drag="外部新增.txt"]'));
+    check(JSON.stringify(window.navigationFixture.calls.at(-1)) === '[1,"文档"]' &&
+      $("#file-breadcrumb").textContent.endsWith(">文档"), "Manual refresh reads external changes in the current directory");
+    window.navigationFixture.listingSuffix = "";
+    $("#file-refresh").click();
+    await wait(() => !$('#file-list-body [data-file-drag="外部新增.txt"]'));
+    check(!$("#file-refresh").disabled, "Refresh removes externally deleted entries and becomes available again");
+    $("[data-file-depth='0']").click();
+    await wait(() => $("[data-file-enter]"));
+    check($("#file-breadcrumb").textContent === "容器管理>工作资料", "Container breadcrumb returns to the root");
     $("[data-file-back]").click();
     check(!$(manager).hidden && $("#management-files").hidden, "Breadcrumb returns to container list");
-    action(manager, 2, "details").click();
-    action(manager, 2, "browse").click();
+    $(manager + ' [data-row-container="2"]').click();
     await tick();
     check($("#file-list-body").textContent.includes("这个容器没有挂载"), "Unmounted containers remain reachable");
+    check($("#file-mount-toggle").textContent === "挂载" && $("#file-create-directory").disabled,
+      "Unmounted file view offers mounting and disables file creation");
+    $("#file-mount-toggle").click();
+    check($("#file-mount-toggle").disabled, "Mount controls disable while the action is running");
+    await wait(() => $("[data-file-enter]") && $("#file-mount-toggle").textContent === "卸载");
+    check(window.navigationFixture.containers[1].mounted && $("#file-mount-toggle").classList.contains("danger") &&
+      !$("#management-files").hidden, "Toolbar mounts the current container and stays in its file view");
+    window.navigationFixture.failUnmount = true;
+    $("#file-mount-toggle").click();
+    await wait(() => !$("#file-mount-toggle").disabled);
+    check($("#file-mount-toggle").textContent === "卸载" && window.navigationFixture.containers[1].mounted,
+      "Refused unmount keeps the actual mounted state");
+    window.navigationFixture.failUnmount = false;
+    $("#file-mount-toggle").click();
+    await wait(() => $("#file-mount-toggle").textContent === "挂载" && !$("[data-file-enter]"));
+    check(!window.navigationFixture.containers[1].mounted && window.navigationFixture.containers[0].mounted &&
+      $("#file-refresh").disabled && !$("#management-files").hidden, "Toolbar unmounts only the current container and clears its listing");
     $("[data-file-back]").click();
 
     window.navigationFixture.delayListing = true;
-    action(manager, 1, "browse").click();
+    $(manager + ' [data-row-container="1"]').click();
     await wait(() => window.navigationFixture.pending);
     $("[data-file-back]").click();
     window.navigationFixture.pending("0\u001e迟到文件\u001f0\u001f0\u001f1\u001f0");

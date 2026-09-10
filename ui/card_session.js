@@ -60,10 +60,14 @@
   const managementContainers = document.getElementById("management-containers");
   const managementFiles = document.getElementById("management-files");
   const fileBreadcrumb = document.getElementById("file-breadcrumb");
+  const fileContextMenu = document.getElementById("file-context-menu");
+  const fileContextRename = document.getElementById("file-context-rename");
   const fileListBody = document.getElementById("file-list-body");
   const fileListStatus = document.getElementById("file-list-status");
   const fileCreateDirectoryButton =
     document.getElementById("file-create-directory");
+  const fileRefreshButton = document.getElementById("file-refresh");
+  const fileMountToggle = document.getElementById("file-mount-toggle");
   const fileNameDialog = document.getElementById("file-name-dialog");
   const fileNameTitle = document.getElementById("file-name-title");
   const fileNameInput = document.getElementById("file-name-input");
@@ -664,6 +668,7 @@
   let filePath = [];
   let fileEntries = [];
   let fileListingRevision = 0;
+  let fileRefreshPendingRevision = 0;
 
   // One call brings a whole directory back: records separated by U+001E,
   // fields by U+001F. Neither can occur in a Windows file name, so there is
@@ -733,6 +738,7 @@
   };
 
   const renderManagementView = () => {
+    closeFileContextMenu();
     // Browsing stays where it was as long as that container is still listed.
     let known = false;
     for (const container of containers) {
@@ -752,6 +758,22 @@
     }
     managementContainers.hidden = fileContainerId !== 0;
     managementFiles.hidden = fileContainerId === 0;
+    const container = selectedFileContainer();
+    const mounted = container !== null && container.mounted;
+    fileMountToggle.textContent = mounted ? "卸载" : "挂载";
+    fileMountToggle.classList.toggle("danger", mounted);
+    fileMountToggle.disabled = busy || container === null || currentState !== nativeState.authenticated;
+    fileCreateDirectoryButton.disabled = busy || !mounted;
+    renderFileBreadcrumb();
+    updateFileRefreshAvailability();
+  };
+
+  const updateFileRefreshAvailability = () => {
+    const container = selectedFileContainer();
+    const loading = fileRefreshPendingRevision !== 0 &&
+      fileRefreshPendingRevision === fileListingRevision;
+    fileRefreshButton.disabled = busy || loading || container === null || !container.mounted;
+    fileRefreshButton.setAttribute("aria-busy", String(loading));
   };
 
   const renderFileBreadcrumb = () => {
@@ -765,12 +787,15 @@
     back.textContent = "容器管理";
     back.dataset.fileBack = "";
     back.disabled = busy;
-    fileBreadcrumb.appendChild(back);
-    const crumbs = [container === null ? "容器" : container.name, ...filePath];
+    const heading = document.createElement("h2");
+    heading.id = "files-title";
+    heading.appendChild(back);
+    fileBreadcrumb.appendChild(heading);
+    const crumbs = container === null ? [] : [container.name, ...filePath];
     for (let index = 0; index < crumbs.length; index += 1) {
       const separator = document.createElement("span");
       separator.className = "file-crumb-separator";
-      separator.textContent = "/";
+      separator.textContent = ">";
       fileBreadcrumb.appendChild(separator);
       const crumb = document.createElement("button");
       crumb.className = "file-crumb";
@@ -778,11 +803,9 @@
       crumb.textContent = crumbs[index];
       if (index === crumbs.length - 1) {
         crumb.setAttribute("aria-current", "page");
-        crumb.disabled = true;
-      } else {
-        crumb.dataset.fileDepth = String(index);
-        crumb.disabled = busy;
       }
+      crumb.dataset.fileDepth = String(index);
+      crumb.disabled = busy;
       fileBreadcrumb.appendChild(crumb);
     }
   };
@@ -807,7 +830,7 @@
       return;
     }
     if (!container.mounted) {
-      appendFileNotice("这个容器没有挂载。返回「容器管理」列表挂载它，才能看到里面的文件。");
+      appendFileNotice("这个容器没有挂载。点击工具栏右侧的「挂载」，即可查看文件。");
       return;
     }
     if (fileEntries.length === 0) {
@@ -816,6 +839,7 @@
     }
     for (const entry of fileEntries) {
       const row = document.createElement("tr");
+      row.tabIndex = 0;
       // Dragging carries nothing but a marker: the page never hands the shell
       // a file, so a drag out of the window cannot become an export by
       // accident. Where it may land is decided below, in this page only.
@@ -825,6 +849,10 @@
         row.dataset.fileDropDirectory = entry.name;
       }
       const name = document.createElement("td");
+      const identity = document.createElement("div");
+      identity.className = "file-identity";
+      identity.appendChild(exportGlyph(entry.isDirectory ? kFolderPaths : kFilePaths,
+        entry.isDirectory ? "file-glyph directory" : "file-glyph"));
       if (entry.isDirectory) {
         const open = document.createElement("button");
         open.className = "file-name-button";
@@ -832,9 +860,12 @@
         open.textContent = entry.name;
         open.dataset.fileEnter = entry.name;
         open.disabled = busy;
-        name.appendChild(open);
+        identity.appendChild(open);
       } else {
-        name.textContent = entry.name;
+        const label = document.createElement("span");
+        label.className = "file-name";
+        label.textContent = entry.name;
+        identity.appendChild(label);
       }
       if (entry.isLink) {
         // Shown rather than hidden: a manager that silently omits what the
@@ -842,30 +873,58 @@
         const mark = document.createElement("span");
         mark.className = "file-entry-link";
         mark.textContent = "链接";
-        name.appendChild(mark);
+        identity.appendChild(mark);
       }
+      name.appendChild(identity);
       const size = document.createElement("td");
+      size.className = "file-size";
       size.textContent = formatEntrySize(entry);
       const modified = document.createElement("td");
-      modified.textContent = formatOperationTime(entry.modifiedUnixMs);
+      modified.className = "file-modified";
+      modified.textContent = formatOperationTime(entry.modifiedUnixMs).slice(0, 16);
       const actions = document.createElement("td");
-      actions.className = "file-actions";
+      const buttons = document.createElement("div");
+      buttons.className = "file-actions";
       for (const [action, label, danger] of [
-        ["export", "导出", false], ["rename", "重命名", false],
+        ["export", "导出", false],
         ["delete", "删除", true],
       ]) {
         const button = document.createElement("button");
-        button.className = danger ? "shell-button danger" : "shell-button";
+        button.className = danger ? "file-icon-button danger" : "file-icon-button";
         button.type = "button";
-        button.textContent = label;
+        button.setAttribute("aria-label", `${label} ${entry.name}`);
+        button.title = danger ? "永久删除，不进回收站" : label;
+        button.appendChild(exportGlyph(danger
+          ? ["M4 7h16", "M9 7V4h6v3", "M6 7l1 13h10l1-13", "M10 10v7M14 10v7"]
+          : ["M4 12h12", "M12 8l4 4-4 4", "M20 5v14"]));
         button.disabled = busy;
         button.dataset.fileAction = action;
         button.dataset.fileName = entry.name;
-        actions.appendChild(button);
+        buttons.appendChild(button);
       }
+      actions.appendChild(buttons);
       row.append(name, size, modified, actions);
       fileListBody.appendChild(row);
     }
+  };
+
+  let fileContextTarget = null;
+  const closeFileContextMenu = () => {
+    fileContextTarget = null;
+    fileContextMenu.hidden = true;
+  };
+
+  const openFileContextMenu = (row, x, y) => {
+    const container = selectedFileContainer();
+    if (busy || currentState !== nativeState.authenticated ||
+        container === null || !container.mounted ||
+        !fileEntries.some((entry) => entry.name === row.dataset.fileDrag)) return;
+    fileContextTarget = { id: container.id, directory: filePath.join("/"), name: row.dataset.fileDrag };
+    fileContextMenu.hidden = false;
+    const bounds = fileContextMenu.getBoundingClientRect();
+    fileContextMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - bounds.width - 4))}px`;
+    fileContextMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - bounds.height - 4))}px`;
+    fileContextRename.focus();
   };
 
   // What the open name dialog is for, and about which entry. An empty mode
@@ -1009,6 +1068,7 @@
   };
 
   const renderFileDropTargets = () => {
+    fileDropTargets.hidden = fileDragName === "";
     while (fileDropTargets.firstChild !== null) {
       fileDropTargets.removeChild(fileDropTargets.firstChild);
     }
@@ -1786,6 +1846,7 @@
 
   const refreshFileManager = async () => {
     const revision = ++fileListingRevision;
+    fileRefreshPendingRevision = revision;
     renderManagementView();
     renderFileBreadcrumb();
     renderFileDropTargets();
@@ -1794,6 +1855,8 @@
       fileEntries = [];
       setFileStatus("");
       renderFileList();
+      fileRefreshPendingRevision = 0;
+      updateFileRefreshAvailability();
       return;
     }
     const requestedId = container.id;
@@ -1816,6 +1879,9 @@
       filePath = [];
       renderFileBreadcrumb();
       setFileStatus("无法读取这个文件夹，它可能已经不在这个容器里了。", "error");
+    } finally {
+      if (fileRefreshPendingRevision === revision) fileRefreshPendingRevision = 0;
+      updateFileRefreshAvailability();
     }
     renderFileList();
   };
@@ -1829,6 +1895,7 @@
   };
 
   const showDashboardSection = (sectionName) => {
+    closeFileContextMenu();
     activeSection = sectionName;
     for (const item of dashboardNavigation) {
       const selected = item.dataset.section === sectionName;
@@ -1943,7 +2010,7 @@
     return button;
   };
 
-  const containerRow = (container, showOpenButton) => {
+  const containerRow = (container, management) => {
     const group = document.createElement("div");
     group.className = "container-group";
     const row = document.createElement("div");
@@ -1952,12 +2019,23 @@
       ? "container-row mounted"
       : "container-row";
     row.dataset.busy = String(busy);
+    if (management) {
+      row.classList.add("management-row");
+      row.tabIndex = 0;
+      row.setAttribute("aria-label", `打开容器 ${container.name}`);
+      row.addEventListener("keydown", (event) => {
+        if (event.target !== row || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        browseContainer(container.id);
+      });
+    }
     row.addEventListener("click", (event) => {
       if (busy || !(event.target instanceof Element) ||
           event.target.closest("button") !== null) return;
       // The arrow is also the keyboard-accessible disclosure control. Row
       // clicks use that same action; buttons and the drag grip keep theirs.
-      row.querySelector("[data-container-action=details]").click();
+      if (management) browseContainer(container.id);
+      else row.querySelector("[data-container-action=details]").click();
     });
 
     const grab = document.createElement("button");
@@ -2016,21 +2094,21 @@
 
     const actions = document.createElement("div");
     actions.className = "container-actions";
-    if (container.mounted && showOpenButton) {
-      actions.appendChild(containerActionButton(container, "browse", "打开"));
-    }
     actions.appendChild(containerActionButton(container,
       container.mounted ? "unmount" : "mount", container.mounted ? "卸载" : "挂载"));
-    const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
-    if (container.mounted) remove.title = "请先卸载容器";
-    actions.appendChild(remove);
-    const expanded = expandedContainerId === container.id;
+    if (!management) {
+      const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
+      if (container.mounted) remove.title = "请先卸载容器";
+      actions.appendChild(remove);
+    }
+    const expanded = !management && expandedContainerId === container.id;
     const details = containerActionButton(container, "details", "");
     details.className = "container-details-toggle";
     details.setAttribute("aria-label", `${expanded ? "收起" : "展开"} ${container.name} 的详情`);
     details.setAttribute("aria-expanded", String(expanded));
     details.appendChild(exportGlyph(["M6 9l6 6 6-6"]));
-    row.append(grab, mark, identity, facts, actions, details);
+    row.append(grab, mark, identity, facts, actions);
+    if (!management) row.appendChild(details);
     group.appendChild(row);
 
     if (expanded) {
@@ -2931,6 +3009,32 @@
     }
     openFileNameFlow("rename", act.dataset.fileName);
   });
+  fileListBody.addEventListener("contextmenu", (event) => {
+    const row = event.target instanceof Element ? event.target.closest("[data-file-drag]") : null;
+    if (row === null) return;
+    event.preventDefault();
+    openFileContextMenu(row, event.clientX, event.clientY);
+  });
+  fileListBody.addEventListener("keydown", (event) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    const row = event.target instanceof Element ? event.target.closest("[data-file-drag]") : null;
+    if (row === null) return;
+    event.preventDefault();
+    const bounds = row.getBoundingClientRect();
+    openFileContextMenu(row, bounds.left + 24, bounds.top + 24);
+  });
+  fileContextRename.addEventListener("click", () => {
+    const target = fileContextTarget;
+    closeFileContextMenu();
+    if (target === null || target.id !== fileContainerId || target.directory !== filePath.join("/") ||
+        !fileEntries.some((entry) => entry.name === target.name)) return;
+    openFileNameFlow("rename", target.name);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!fileContextMenu.contains(event.target)) closeFileContextMenu();
+  });
+  window.addEventListener("resize", closeFileContextMenu);
+  document.addEventListener("scroll", closeFileContextMenu, true);
   backupExportBrowse.addEventListener("click", async () => {
     if (busy || bridge === null) return;
     const chosen = await bridge.chooseContainerDirectory();
@@ -2984,6 +3088,8 @@
       return;
     }
     fileDragName = row.dataset.fileDrag;
+    closeFileContextMenu();
+    renderFileDropTargets();
     fileDropHandled = false;
     row.classList.add("file-row-dragging");
     // Only a marker. No file, no path, and no name goes onto the drag, so
@@ -3000,6 +3106,7 @@
     const dropped = fileDropHandled;
     fileDragName = "";
     fileDropHandled = false;
+    renderFileDropTargets();
     if (!dropped) reportFileDropRefused();
   });
 
@@ -3088,6 +3195,18 @@
 
   fileCreateDirectoryButton.addEventListener(
     "click", () => openFileNameFlow("create", ""));
+  fileRefreshButton.addEventListener("click", () => {
+    if (fileRefreshButton.disabled || currentState !== nativeState.authenticated) return;
+    void refreshFileManager();
+  });
+  fileMountToggle.addEventListener("click", async () => {
+    const container = selectedFileContainer();
+    if (busy || currentState !== nativeState.authenticated || container === null) return;
+    // A pending listing belongs to the mount state before this action.
+    fileListingRevision += 1;
+    if (container.mounted) await unmountAdoptedContainer(container.id);
+    else await mountAdoptedContainer(container.id);
+  });
   fileNameCloseButton.addEventListener("click", () => closeFileNameFlow());
   fileNameCancelButton.addEventListener("click", () => closeFileNameFlow());
   fileNameDialog.addEventListener("click", (event) => {
@@ -3298,6 +3417,15 @@
     }
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !fileContextMenu.hidden) {
+      const target = fileContextTarget;
+      closeFileContextMenu();
+      for (const row of fileListBody.querySelectorAll("[data-file-drag]")) {
+        if (target !== null && row.dataset.fileDrag === target.name) row.focus();
+      }
+      event.preventDefault();
+      return;
+    }
     if (event.key === "Escape" && !exportConfirmDialog.hidden) {
       closeExportConfirm();
       return;

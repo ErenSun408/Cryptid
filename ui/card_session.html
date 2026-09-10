@@ -236,7 +236,10 @@
       border: 1px solid var(--line-2); background: rgba(255, 255, 255, .04);
       color: var(--text-1); font: inherit;
     }
-    .file-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem; margin: 0 0 .75rem; }
+    .file-breadcrumb { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; margin: 0; min-width: 0; font-size: .875rem; }
+    .file-breadcrumb h2 { flex: 0 0 auto; }
+    .file-breadcrumb h2 .file-crumb { padding: 0; color: var(--text); font: inherit; letter-spacing: inherit; }
+    .file-breadcrumb > .file-crumb { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-crumb {
       padding: .15rem .35rem; border: 0; border-radius: .3rem; background: none;
       color: var(--text-2); font: inherit; cursor: pointer;
@@ -257,8 +260,31 @@
     .file-empty { padding: 1.4rem 0; color: var(--text-3); text-align: center; }
     .file-status[data-tone="error"] { color: var(--danger); border-color: var(--danger); }
     .file-actions { display: flex; gap: .35rem; justify-content: flex-end; }
-    .file-actions .shell-button { padding: .18rem .5rem; font-size: .7rem; }
+    .file-actions .file-icon-button { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; padding: 0; border: 0; background: none; color: var(--text-2); cursor: pointer; }
+    .file-actions .file-icon-button:hover:not(:disabled) { color: var(--text); }
+    .file-actions .file-icon-button:disabled { opacity: .45; cursor: default; }
+    .file-actions [data-file-action="export"] svg { transform: rotate(-90deg); }
+    .file-actions .file-icon-button.danger { color: var(--danger); }
+    .file-actions .file-icon-button.danger:hover:not(:disabled) { color: #f08a81; }
     .file-actions .danger { color: var(--danger); border-color: rgba(224, 123, 114, .45); }
+    .files-card { padding: .3rem .35rem; border: 1px solid var(--line); border-radius: .9rem; background: var(--ink-850); overflow-x: auto; }
+    .files-table { width: 100%; min-width: 34rem; border-collapse: collapse; table-layout: fixed; font-size: .85rem; }
+    .files-table th { padding: .65rem .85rem; text-align: left; color: var(--text-3); font-size: .65rem; letter-spacing: .12em; font-weight: 600; }
+    .files-table th:nth-child(1) { width: 27%; }
+    .files-table th:nth-child(2) { width: 12%; }
+    .files-table th:nth-child(3) { width: 35%; }
+    .files-table th:last-child { text-align: right; }
+    .files-table td { height: 3.3rem; padding: .65rem .85rem; border-top: 1px solid var(--line); vertical-align: middle; color: var(--text-2); }
+    .files-table tr:hover td { background: rgba(255,255,255,.015); }
+    .files-table td.file-size, .files-table td.file-modified { color: var(--text-3); font-family: var(--mono); font-size: .75rem; white-space: nowrap; }
+    .file-identity { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+    .file-glyph { width: 1rem; height: 1rem; flex: 0 0 auto; color: var(--text-3); }
+    .file-glyph.directory { color: var(--gold); }
+    .file-identity .file-name, .file-identity .file-name-button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .file-entry-link { flex: 0 0 auto; }
+    .file-context-menu { position: fixed; z-index: 100; min-width: 9rem; padding: .25rem; border: 1px solid var(--line-2); border-radius: .5rem; background: var(--ink-800); box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.35); }
+    .file-context-menu button { display: block; width: 100%; padding: .5rem .75rem; border: 0; border-radius: .3rem; background: none; color: var(--text); font: inherit; font-size: .8rem; text-align: left; cursor: pointer; }
+    .file-context-menu button:hover, .file-context-menu button:focus-visible { background: rgba(255,255,255,.06); }
     .file-drop-targets:not(:empty) {
       display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
       margin: 0 0 .7rem; padding: .5rem .6rem;
@@ -428,6 +454,7 @@
     .container-row { border-top: 0; position: relative; padding-right: 3rem; cursor: pointer; }
     .container-row:hover { background: rgba(255,255,255,.025); }
     .container-row[data-busy="true"] { cursor: default; }
+    .container-row.management-row { padding-right: 1rem; }
     .container-grab { border: 0; background: none; touch-action: none; }
     .container-grab svg { fill: currentColor; stroke: none; }
     .container-grab:disabled { cursor: default; opacity: .4; }
@@ -448,7 +475,9 @@
     .container-details-grid .container-fact-value { overflow-wrap: anywhere; }
     .container-detail-actions { display: flex; gap: .5rem; margin-top: .875rem; flex-wrap: wrap; }
     .container-forget { margin-left: auto; }
-    .management-toolbar { display: flex; justify-content: flex-end; margin-bottom: .6rem; }
+    .management-toolbar { display: flex; align-items: center; gap: .75rem; justify-content: flex-start; margin-bottom: .6rem; }
+    #file-mount-toggle { margin-left: auto; }
+    #file-refresh { width: 2.25rem; padding: 0; }
     @media (max-width: 850px) {
       .container-facts { gap: .5rem; }
       .container-row { gap: .5rem; padding: .8rem 3rem .8rem .8rem; flex-wrap: wrap; }
@@ -844,7 +873,7 @@
 
         <section id="dashboard-section-files" class="dashboard-section" aria-labelledby="files-title">
           <div class="section-header">
-            <div><h2 id="files-title">容器管理</h2><p>选择容器，浏览和管理其中的文件</p></div>
+            <nav id="file-breadcrumb" class="file-breadcrumb" aria-label="当前位置"><h2 id="files-title">容器管理</h2></nav>
             <div class="overview-actions">
               <button class="shell-button" type="button" data-mount-existing>导入容器</button>
               <button class="create-button" type="button" data-create-container>新建容器</button>
@@ -855,25 +884,20 @@
           <div class="management-toolbar">
             <div class="file-toolbar">
               <button id="file-create-directory" class="shell-button" type="button">新建文件夹</button>
+              <button id="file-refresh" class="shell-button" type="button" aria-label="刷新当前目录" title="刷新" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 0 0 8"></path><path d="M20 3v5h-5"></path></svg>
+              </button>
             </div>
+            <button id="file-mount-toggle" class="shell-button" type="button" disabled>挂载</button>
           </div>
-          <nav id="file-breadcrumb" class="file-breadcrumb" aria-label="当前位置"></nav>
-          <div id="file-drop-targets" class="file-drop-targets"></div>
-          <div class="operation-card">
-            <table class="operation-table">
+          <div id="file-drop-targets" class="file-drop-targets" hidden></div>
+          <div class="files-card">
+            <table class="files-table">
               <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
               <tbody id="file-list-body"></tbody>
             </table>
           </div>
           <output id="file-list-status" class="section-note file-status" aria-live="polite" data-tone="" hidden></output>
-          <p class="section-note">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
-            <span><b>删除是永久删除</b>，不进回收站，点下去就没有第二次询问 —— 与系统文件管理器同标准。</span>
-          </p>
-          <p class="section-note">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 11v5.5"></path><path d="M12 8h.01"></path></svg>
-            <span>这里只管容器内部。把文件移出加密卷就是明文导出 —— 点行末的「导出」会带你去「导出与迁移」，那件事在那里做。</span>
-          </p>
           </div>
         </section>
 
@@ -1099,10 +1123,6 @@
           <input id="file-name-input" class="file-name-text" type="text"
                  autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="255">
         </div>
-        <div class="creation-note">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 11v5.5"></path><path d="M12 8h.01"></path></svg>
-          <span>只能是一个名字，不能带路径分隔符或冒号，也不能以空格或点结尾。名字不合规会被原生侧拒绝。</span>
-        </div>
         <output id="file-name-status" class="creation-status" aria-live="polite"></output>
       </div>
       <div class="modal-footer">
@@ -1233,6 +1253,9 @@
     </div>
   </div>
 
+  <div id="file-context-menu" class="file-context-menu" role="menu" aria-label="文件操作" hidden>
+    <button id="file-context-rename" type="button" role="menuitem">重命名</button>
+  </div>
   <script src="card_session.js?v=p2-20-create-form"></script>
 </body>
 </html>

@@ -64,14 +64,16 @@
       <div class="container-list" data-container-list></div>
     </section>
     <section id="dashboard-section-files" class="dashboard-section">
+      <nav id="file-breadcrumb"></nav>
       <button type="button" data-create-container>新建容器</button>
       <button type="button" data-mount-existing>导入容器</button>
       <div id="management-containers" class="container-list" data-container-list></div>
       <div id="management-files" hidden>
-      <nav id="file-breadcrumb"></nav>
       <table><tbody id="file-list-body"></tbody></table>
       <output id="file-list-status" data-tone="" hidden></output>
       <button id="file-create-directory" type="button">新建文件夹</button>
+      <button id="file-refresh" type="button" aria-label="刷新当前目录" disabled>刷新</button>
+      <button id="file-mount-toggle" type="button" disabled>挂载</button>
       <div id="file-drop-targets"></div>
       </div>
     </section>
@@ -124,6 +126,9 @@
     <output id="reset-card-status"></output>
     <button id="reset-card-cancel" type="button">取消</button>
     <button id="reset-card-confirm" type="button" disabled>重新初始化</button>
+  </div>
+  <div id="file-context-menu" role="menu" hidden>
+    <button id="file-context-rename" type="button" role="menuitem">重命名</button>
   </div>
   <div id="export-confirm-dialog" hidden>
     <strong id="export-confirm-count"></strong>

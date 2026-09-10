@@ -845,13 +845,10 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
           "the management view is missing a level, the breadcrumb, the list, "
           "or its status line");
 
-  // 🔴 The boundary this whole stage is drawn around: taking a file out of the
-  // volume is a plaintext export, so the page says where that lives instead of
-  // doing it here. Q-04's confirmation surface is then built once, in one
-  // place, rather than twice.
-  require(section.find("把文件移出加密卷就是明文导出") != std::string::npos &&
-              section.find("导出与迁移") != std::string::npos,
-          "the browse view does not send a way out to the export section");
+  // The compact file view routes exports through the existing export centre;
+  // removing its standing explanatory copy must not add an export shortcut.
+  require(script.find("offerEntryForExport(act.dataset.fileName);") != std::string::npos,
+          "the browse view does not hand exports to the export section");
 
   // The page names a container and a directory inside it. A drive letter would
   // let it name any volume on the machine, so it is never given one.
@@ -899,14 +896,11 @@ void test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name() {
               section.find("id=\"file-create-directory\"") != std::string::npos,
           "the browse view has nowhere to act on an entry from");
 
-  // 🔴 Deleting is permanent and there is no second question: the product
-  // decided that on 2026-09-08, to the same standard as the system file
-  // manager. A standing notice is not a second question, and it is the only
-  // thing standing between the button and the loss, so the page must carry it.
-  require(section.find("删除是永久删除") != std::string::npos &&
-              section.find("不进回收站") != std::string::npos &&
-              section.find("没有第二次询问") != std::string::npos,
-          "the page does not say that deleting is permanent and unasked");
+  // The user's compact table revision removes the standing notice. Preserve
+  // the permanent-delete explanation on the icon and the existing semantics.
+  require(script.find("永久删除，不进回收站") != std::string::npos &&
+              page.find("id=\"file-context-rename\"") != std::string::npos,
+          "the compact file actions lost their deletion hint or rename menu");
   require(page.find("id=\"file-delete-dialog\"") == std::string::npos,
           "a delete confirmation appeared without the decision being revisited");
   require(script.find("() => bridge.deleteContainerEntry(") !=
