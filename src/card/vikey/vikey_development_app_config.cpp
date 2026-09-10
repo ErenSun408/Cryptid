@@ -56,6 +56,21 @@ namespace {
 
 }  // namespace
 
+Sha256Digest parse_deployment_digest(const std::wstring_view value) {
+  return parse_digest(value);
+}
+
+VikeyHelperBackendConfig packaged_app_config(
+    const std::filesystem::path& executable_directory,
+    const std::wstring_view helper_digest,
+    const std::wstring_view vendor_digest) {
+  const auto directory = require_absolute_path(executable_directory.native(), false);
+  return {.helper_path = directory / L"usb_vault_vikey_helper.exe",
+          .helper_digest = parse_digest(helper_digest),
+          .vendor_directory = directory / L"vendor",
+          .vendor_digest = parse_digest(vendor_digest)};
+}
+
 VikeyHelperBackendConfig parse_app_config(
     const std::span<const std::wstring_view> arguments) {
   if (arguments.size() != 6 || arguments[0].empty() ||

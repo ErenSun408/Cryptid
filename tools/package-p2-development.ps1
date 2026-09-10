@@ -177,8 +177,7 @@ Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'third_party\veracrypt_format\
 Copy-Item -LiteralPath $VeraCryptLicense -Destination (Join-Path $VeraCryptLicenseDirectory.FullName 'License.txt')
 Copy-Item -LiteralPath $VeraCryptNotice -Destination (Join-Path $VeraCryptLicenseDirectory.FullName 'NOTICE')
 
-$LauncherTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'packaging\p2-development\Start USB Vault.cmd.in') -Raw
-$Launcher = $LauncherTemplate.Replace('@HELPER_SHA256@', $HelperSha256).Replace('@FORMAT_SHA256@', $FormatSha256).Replace('@VENDOR_SHA256@', $VendorSha256)
+$Launcher = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'packaging\p2-development\Start USB Vault.cmd.in') -Raw
 Set-Content -LiteralPath (Join-Path $PackageDirectory 'Start USB Vault.cmd') -Value $Launcher -Encoding ASCII
 
 $RevisionText = @(

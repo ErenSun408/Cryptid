@@ -612,11 +612,29 @@ if(USB_VAULT_BUILD_UI)
     tools/app/main.cpp
     tools/app/usb_vault_app.manifest
   )
+  set(p2_deployment_header "${CMAKE_CURRENT_BINARY_DIR}/generated/p2_deployment.h")
+  add_custom_command(OUTPUT "${p2_deployment_header}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND ${CMAKE_COMMAND}
+      "-Dhelper=$<TARGET_FILE:usb_vault_vikey_helper>"
+      "-Dcreator=$<TARGET_FILE:usb_vault_volume_creator>"
+      "-Dhtml=${CMAKE_SOURCE_DIR}/ui/card_session.html"
+      "-Djs=${CMAKE_SOURCE_DIR}/ui/card_session.js"
+      "-Doutput=${p2_deployment_header}"
+      -P "${CMAKE_SOURCE_DIR}/tools/generate-p2-deployment.cmake"
+    DEPENDS usb_vault_vikey_helper usb_vault_volume_creator
+      "${CMAKE_SOURCE_DIR}/ui/card_session.html"
+      "${CMAKE_SOURCE_DIR}/ui/card_session.js"
+      "${CMAKE_SOURCE_DIR}/tools/generate-p2-deployment.cmake"
+    VERBATIM)
+  target_sources(usb_vault_vikey_p2_development_app PRIVATE "${p2_deployment_header}")
   target_include_directories(usb_vault_vikey_p2_development_app PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${webview2_sdk_SOURCE_DIR}/build/native/include"
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   target_link_libraries(usb_vault_vikey_p2_development_app PRIVATE
+    usb_vault_verified_local_artifact
     usb_vault_core
     usb_vault_vikey_development_credentials
     usb_vault_vikey_helper_card_record_backend

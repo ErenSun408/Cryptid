@@ -5,6 +5,8 @@
 #include <shellapi.h>
 
 #include "card/vikey/vikey_development_app_config.h"
+#include "card/verified_local_artifact.h"
+#include "p2_deployment.h"
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
@@ -42,6 +44,11 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 HWND g_main_window{};
+std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
+class DeploymentFailure final : public std::runtime_error {
+ public:
+  DeploymentFailure() : std::runtime_error("invalid development deployment") {}
+};
 usb_vault::ui::CreationWorkState g_creation_work;
 bool g_deferred_removal = false;
 bool g_deferred_arrival = false;
@@ -239,11 +246,34 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
       std::make_unique<usb_vault::volume::VolumeProvider>();
   const LocalArguments arguments;
   const std::vector<std::wstring_view> views = arguments.views();
+  namespace development = usb_vault::card::vikey::development;
+  auto config = views.size() == 1
+      ? development::packaged_app_config(directory, p2_deployment::helper,
+                                         p2_deployment::vendor)
+      : development::parse_app_config(views);
+  if (views.size() == 1) {
+    try {
+      const auto pin = [&](const wchar_t* name, const wchar_t* digest) {
+        g_deployment_artifacts.push_back(usb_vault::card::verify_local_artifact(
+            child_path(directory, name), development::parse_deployment_digest(digest),
+            128ULL * 1024 * 1024));
+      };
+      pin(L"usb_vault_vikey_helper.exe", p2_deployment::helper);
+      pin(L"usb_vault_volume_creator.exe", p2_deployment::creator);
+      pin(L"VeraCryptFormat.dll", p2_deployment::format);
+      pin(L"vendor\\ViKey.dll", p2_deployment::vendor);
+      pin(L"card_session.html", p2_deployment::html);
+      pin(L"card_session.js", p2_deployment::js);
+    } catch (...) {
+      g_deployment_artifacts.clear();
+      throw DeploymentFailure();
+    }
+  }
   auto credential_provider = std::make_unique<
       usb_vault::card::vikey::development::WindowsCredentialProvider>();
   auto enrollment = std::make_unique<
       usb_vault::card::vikey::VikeyHelperCardEnrollment>(
-          usb_vault::card::vikey::development::parse_app_config(views),
+          std::move(config),
           *credential_provider);
   auto entry = std::make_unique<
       usb_vault::application::CardEntryContextController>(*enrollment);
@@ -608,6 +638,12 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     initialize_application_session(window);
     initialize_webview(window);
     if (::SetTimer(window, 1, 100, nullptr) == 0) throw std::runtime_error("cannot schedule deferred card events");
+  } catch (const DeploymentFailure&) {
+    show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请将完整测试包解压到本机磁盘后重试，不要仅复制主 EXE。首次使用请先运行凭据配置应用。");
+    ::DestroyWindow(window);
+    clear_application_session();
+    ::CoUninitialize();
+    return 1;
   } catch (...) {
     show_failure(L"本地界面初始化失败。");
     ::DestroyWindow(window);

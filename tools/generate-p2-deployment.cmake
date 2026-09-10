@@ -1,0 +1,13 @@
+# Hash built helpers and source UI only at build time. No mutable manifest is
+# trusted by the running application. copy_if_different avoids needless links.
+set(text "#pragma once\nnamespace p2_deployment {\n")
+foreach(name IN ITEMS helper creator html js)
+  file(SHA256 "${${name}}" digest)
+  string(APPEND text "inline constexpr wchar_t ${name}[] = L\"${digest}\";\n")
+endforeach()
+string(APPEND text "inline constexpr wchar_t vendor[] = L\"735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E\";\n")
+string(APPEND text "inline constexpr wchar_t format[] = L\"E411BB9552ACA94B1285570E45C3D77D44652519309B7D33EC0A4EF99AF28AB3\";\n}\n")
+file(WRITE "${output}.tmp" "${text}")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${output}.tmp" "${output}"
+                COMMAND_ERROR_IS_FATAL ANY)
+file(REMOVE "${output}.tmp")

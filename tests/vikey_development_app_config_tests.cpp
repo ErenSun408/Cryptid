@@ -55,6 +55,21 @@ void test_valid_config() {
   }
 }
 
+void test_packaged_config() {
+  using usb_vault::card::vikey::development::packaged_app_config;
+  const auto config = packaged_app_config(L"C:\\测试 包\\app", kHelperDigest, kVendorDigest);
+  expect(config.helper_path == L"C:\\测试 包\\app\\usb_vault_vikey_helper.exe",
+         "packaged helper must be relative to executable directory");
+  expect(config.vendor_directory == L"C:\\测试 包\\app\\vendor",
+         "packaged vendor must stay beside executable");
+  expect(config.helper_digest[31] == std::byte{31} &&
+         config.vendor_digest[0] == std::byte{0xff}, "packaged digests changed");
+  expect_invalid([&] { static_cast<void>(packaged_app_config(L"relative", kHelperDigest, kVendorDigest)); },
+                 "packaged directory must be absolute");
+  expect_invalid([&] { static_cast<void>(packaged_app_config(L"C:\\app", L"bad", kVendorDigest)); },
+                 "invalid compiled digest accepted");
+}
+
 void test_acknowledgement_is_mandatory() {
   constexpr std::array arguments{
       std::wstring_view{L"C:\\vault\\app.exe"},
@@ -129,6 +144,7 @@ void test_digests_and_argument_count_fail_closed() {
 int main() {
   try {
     test_valid_config();
+    test_packaged_config();
     test_acknowledgement_is_mandatory();
     test_paths_must_be_absolute();
     test_digests_and_argument_count_fail_closed();
