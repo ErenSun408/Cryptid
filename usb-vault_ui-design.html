@@ -219,6 +219,20 @@ svg{display:block;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:
 .fact .fk{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:600}
 .fact .fv{font-size:12.5px;margin-top:2px;font-family:var(--mono)}
 .row .ops{display:flex;gap:6px;flex:0 0 auto}
+
+/* 拖拽排序手柄。只有从这里按下才进入排序 —— 拖行体的其余部分仍是它原来的含义。 */
+.grab{flex:0 0 auto;margin:-14px 0 -14px -6px;padding:14px 2px;display:grid;place-items:center;color:var(--text-3);cursor:grab}
+.grab:hover{color:var(--text-2)}
+.grab svg{width:16px;height:16px}
+.grip circle{fill:currentColor;stroke:none}
+.row.lift{background:var(--ink-750);border-radius:var(--r);border-bottom-color:transparent;
+  box-shadow:0 14px 30px -12px rgba(0,0,0,.75),0 0 0 1px var(--line-2) inset;position:relative;z-index:2}
+.row.lift .grab{color:var(--gold);cursor:grabbing}
+.row.ghost{opacity:.35}
+/* 插入位。落点画在两行之间，而不是高亮某一行 —— 高亮行会读成"放进这一行"。 */
+.ins{height:2px;margin:0 18px;border-radius:2px;background:var(--gold);position:relative}
+.ins::before{content:'';position:absolute;left:-5px;top:-3px;width:8px;height:8px;border-radius:50%;
+  border:2px solid var(--gold);background:var(--ink-850)}
 .tag{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:5px;border:1px solid var(--line-2);color:var(--text-2);background:rgba(255,255,255,.04)}
 .tag.gold{color:var(--gold);border-color:rgba(200,169,106,.28);background:rgba(200,169,106,.1)}
 .tag.ok{color:var(--ok);border-color:rgba(104,190,149,.26);background:rgba(104,190,149,.09)}
@@ -280,6 +294,35 @@ table.log td.t{font-family:var(--mono);font-size:11.5px;color:var(--text-3);whit
 table.log td.o{font-family:var(--mono);font-size:11.5px}
 table.log tr:hover td{background:rgba(255,255,255,.015)}
 
+/* 文件管理器 —— 只管容器内部，构件与操作日志同源，多一列图标与一条面包屑 */
+.fbar{display:flex;align-items:center;gap:10px;margin:0 0 12px}
+.fbar .lab{font-size:11.5px;color:var(--text-3)}
+.fsel{display:inline-flex;align-items:center;gap:10px;min-width:210px;padding:7px 11px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:rgba(255,255,255,.04);font-size:12.5px}
+.fsel svg{width:13px;height:13px;color:var(--text-3);margin-left:auto}
+.fsel .dv{font-family:var(--mono);font-size:11.5px;color:var(--text-3)}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin:0 0 12px;font-size:12.5px}
+.crumb{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:var(--r-sm);color:var(--text-2)}
+.crumb svg{width:12px;height:12px}
+.crumb.on{color:var(--text);background:rgba(255,255,255,.05)}
+.csep{color:var(--text-3)}
+table.files{width:100%;border-collapse:collapse;font-size:12.5px}
+table.files th{text-align:left;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600;padding:0 14px 10px}
+table.files td{padding:10px 14px;border-top:1px solid var(--line);color:var(--text-2);vertical-align:middle}
+table.files tr:hover td{background:rgba(255,255,255,.015)}
+table.files td.sz,table.files td.mt{font-family:var(--mono);font-size:11.5px;color:var(--text-3);white-space:nowrap}
+.fn{display:flex;align-items:center;gap:9px;min-width:0}
+.fn svg{width:15px;height:15px;flex:0 0 auto;color:var(--text-3)}
+.fn svg.dir{color:var(--gold)}
+.fn .nmt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.flink{flex:0 0 auto;padding:1px 6px;border:1px solid var(--line-2);border-radius:4px;color:var(--text-3);font-family:var(--mono);font-size:10px}
+.fops{display:flex;gap:6px;justify-content:flex-end}
+.drop{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:11px 14px;margin:0 0 12px;border:1px dashed var(--line-2);border-radius:var(--r);background:rgba(255,255,255,.02)}
+.drop .dh{font-size:11.5px;color:var(--text-3)}
+.dtgt{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--line-2);border-radius:99px;background:rgba(255,255,255,.04);font-size:12px;color:var(--text-2)}
+.dtgt svg{width:13px;height:13px}
+.dtgt.hot{color:var(--gold);border-color:rgba(200,169,106,.4);background:rgba(200,169,106,.1)}
+.dtgt.no{color:var(--danger);border-color:rgba(217,107,98,.4);background:rgba(217,107,98,.08)}
+
 .set-grp{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-850);overflow:hidden;margin-bottom:14px}
 .set-grp > h4{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600;padding:14px 18px 10px}
 .set-r{display:flex;align-items:center;gap:16px;padding:14px 18px;border-top:1px solid var(--line)}
@@ -300,7 +343,7 @@ table.log tr:hover td{background:rgba(255,255,255,.015)}
 .sw span{font-size:10.5px;color:var(--text-3);font-family:var(--mono)}
 .tscale > div{border-bottom:1px solid var(--line);padding:9px 0;display:flex;align-items:baseline;gap:14px}
 .tscale small{font-family:var(--mono);font-size:10.5px;color:var(--text-3);min-width:88px}
-.flowmap{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:6px}
+.flowmap{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:6px}
 .fm{border:1px solid var(--line);border-radius:var(--r);background:var(--ink-850);padding:14px}
 .fm h5{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);font-weight:600;margin-bottom:10px}
 .fm ol{list-style:none;display:grid;gap:7px}
@@ -362,6 +405,11 @@ const P = {
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   card:'<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M2.5 10h19"/><path d="M6.5 14.5h3"/>',
   min:'<path d="M5 12h14"/>', max:'<rect x="6" y="6" width="12" height="12" rx="1.5"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
+  /* 六点手柄。全局 svg 规则是 fill:none + stroke:currentColor，实心点要靠 .grip 那条
+     规则把 fill 换回来，否则画出来是六个空心圈。 */
+  grip:'<circle cx="9" cy="6" r="1.35"/><circle cx="15" cy="6" r="1.35"/>' +
+       '<circle cx="9" cy="12" r="1.35"/><circle cx="15" cy="12" r="1.35"/>' +
+       '<circle cx="9" cy="18" r="1.35"/><circle cx="15" cy="18" r="1.35"/>',
   folder:'<path d="M3 7.5A1.5 1.5 0 014.5 6h4l2 2.4h9A1.5 1.5 0 0121 10v7.5A1.5 1.5 0 0119.5 19h-15A1.5 1.5 0 013 17.5v-10z"/>',
   refresh:'<path d="M20 12a8 8 0 10-2.6 5.9"/><path d="M20 6.5V12h-5.5"/>',
   disk:'<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.6"/>',
@@ -389,8 +437,10 @@ const gate = o => `
     <div class="gate-foot"><span class="pulse ${o.footTone || ''}"></span><span>${o.foot}</span></div>
   </div>`;
 
+/* 「容器」与「文件管理」于 2026-09-10 并为一页「容器管理」：
+   先是容器列表，点进一个容器才是它内部的文件列表。 */
 const NAVS = [
-  ['dash', 'dash', '仪表盘'], ['box', 'box', '容器'],
+  ['dash', 'dash', '仪表盘'], ['box', 'box', '容器管理'],
   ['send', 'send', '导出与迁移'], ['clock', 'clock', '操作日志'], ['gear', 'gear', '设置']
 ];
 const app = o => `
@@ -479,24 +529,28 @@ add({
 add({
   g: '设计基线', t: '全流程地图', path: 'flow-map', st: 'spec', w: 1180, h: 620,
   body: `<div class="dl" style="flex:1">
-    <h3>四段主流程 · 26 屏</h3>
+    <h3>五段主流程 · 33 屏</h3>
     <div class="flowmap">
       <div class="fm"><h5>一 · 会话入口</h5><ol>
         <li><em>02</em>连接安全组件</li><li><em>03</em>未插入安全卡</li><li><em>04</em>初始化安全卡</li>
         <li><em>05</em>打开安全会话</li><li><em>06</em>认证失败</li><li><em>07</em>组件不可用</li></ol></div>
       <div class="fm"><h5>二 · 主界面</h5><ol>
-        <li><em>08</em>仪表盘 · 空</li><li><em>09</em>仪表盘 · 有容器</li><li><em>10</em>容器详情</li>
-        <li><em>11</em>挂载中</li><li><em>12</em>无法打开的容器</li><li><em>13</em>拔卡即卸载</li></ol></div>
+        <li><em>08</em>仪表盘 · 空</li><li><em>09</em>仪表盘 · 有容器</li><li><em>10</em>仪表盘 · 容器概览</li>
+        <li><em>11</em>仪表盘 · 拖拽排序</li><li><em>12</em>挂载中</li><li><em>13</em>无法打开的容器</li>
+        <li><em>14</em>拔卡即卸载</li></ol></div>
       <div class="fm"><h5>三 · 创建容器</h5><ol>
-        <li><em>14</em>选择容器类型</li><li><em>15</em>标准容器参数</li><li><em>16</em>隐藏容器 · 第二密码</li>
-        <li><em>17</em>风险确认</li><li><em>18</em>创建执行</li><li><em>19</em>诱饵填充引导</li></ol></div>
+        <li><em>15</em>选择容器类型</li><li><em>16</em>标准容器参数</li><li><em>17</em>隐藏容器 · 第二密码</li>
+        <li><em>18</em>风险确认</li><li><em>19</em>创建执行</li><li><em>20</em>诱饵填充引导</li></ol></div>
       <div class="fm"><h5>四 · 维护与数据</h5><ol>
-        <li><em>20</em>更新诱饵</li><li><em>21</em>完整性告警</li><li><em>22</em>明文导出</li>
-        <li><em>23</em>密文迁移</li><li><em>24</em>操作日志</li><li><em>25</em>设置</li></ol></div>
+        <li><em>21</em>更新诱饵</li><li><em>22</em>完整性告警</li><li><em>23</em>明文导出</li>
+        <li><em>24</em>密文迁移</li><li><em>25</em>操作日志</li><li><em>26</em>设置</li></ol></div>
+      <div class="fm"><h5>五 · 容器管理</h5><ol>
+        <li><em>27</em>第一级 · 容器列表</li><li><em>28</em>第二级 · 容器内文件</li><li><em>29</em>三种空态</li>
+        <li><em>30</em>新建与重命名</li><li><em>31</em>跨容器拖放</li><li><em>32</em>拖出即拒</li></ol></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px">
-      <div class="note"><span class="ni">${ic('info')}</span><span><b>与旧原型的三处结构性差异：</b>① 删除"注册／忘记密码"（认证锚点在卡上，且忘记密码不实现）；② 侧栏不再按"加密盘／隐藏盘"分类，改为统一的<b>容器</b>视图；③ 应用内文件管理器于 2026-09-08 经用户决定提前回 v1（原议降级 v1.1），侧栏「文件管理」是真入口，只管容器内部。</span></div>
-      <div class="note warn"><span class="ni">${ic('alert')}</span><span><b>贯穿全流程的红线：</b>界面在任何密码下都必须逐字一致 —— 入口恒显、文案固定、不作第二密码校验、不留导出痕迹。屏 14／16／22 是三处最容易做错的地方。</span></div>
+      <div class="note"><span class="ni">${ic('info')}</span><span><b>与旧原型的三处结构性差异：</b>① 删除"注册／忘记密码"（认证锚点在卡上，且忘记密码不实现）；② 侧栏不再按"加密盘／隐藏盘"分类，改为统一的<b>容器</b>视图；③ 应用内文件管理器于 2026-09-08 经用户决定提前回 v1（原议降级 v1.1）—— 并已于 2026-09-10 与「容器」页合并为<b>「容器管理」</b>：第一级容器列表、第二级容器内文件，见<b>第五段（屏 27～32）</b>。</span></div>
+      <div class="note warn"><span class="ni">${ic('alert')}</span><span><b>贯穿全流程的红线：</b>界面在任何密码下都必须逐字一致 —— 入口恒显、文案固定、不作第二密码校验、不留导出痕迹。屏 15／17／23 是三处最容易做错的地方。</span></div>
     </div>
   </div>`,
   bare: true,
@@ -529,13 +583,12 @@ add({
 add({
   g: '一 · 会话入口', t: '未插入安全卡', path: 'state:no-card', st: 'done', w: GW, h: GH,
   body: gate({
-    mark: 'card', markCls: 'muted', title: '请插入安全卡', sub: '插入安全卡后将自动继续。软件不会在无卡状态下保留任何会话。',
-    form: `<div class="note" style="margin-top:6px"><span class="ni">${ic('info')}</span><span>插卡后<b>不会自动登录</b>，仍需手动输入密码 —— 自动挂载与否认性不可兼得。</span></div>`,
+    mark: 'card', markCls: 'muted', title: '请插入安全卡', sub: '插入安全卡后将自动继续登录流程',
     foot: '等待安全卡', footTone: 'off'
   }),
   notes: [
     '空状态用中性灰而非红色：未插卡是常态，不是错误。红色留给真正的危险动作。',
-    '此处顺带说明"插卡不自动登录"，把 Q-07 的取舍前置告知，避免用户以为是故障。',
+    '副标题只说"会自动继续登录流程"，<b>不在这一屏解释"为什么不自动登录"</b>：等待插卡是个一秒钟就过去的过渡态，把 Q-07 的取舍摆在这里读不完，也没人会读。该取舍仍然成立，只是不在此处告知。',
     '拔卡回到本屏时，全部卷已在后台卸载完成（见屏 13）。'
   ],
   refs: ['Q-07', 'A-02', 'P1.7 插拔监听']
@@ -544,22 +597,23 @@ add({
 add({
   g: '一 · 会话入口', t: '初始化安全卡', path: 'state:initialization-required', st: 'done', w: GW, h: GH,
   body: gate({
-    mark: 'key', title: '初始化安全卡', sub: '为这张卡设置日常密码。密码只存在于你的记忆里，卡上与本机都不保存明文。',
+    mark: 'key', title: '初始化安全卡', sub: '请输入并确认日常密码，至少12字符。',
     form: `
       <div class="field"><label>设置日常密码</label>
         <div class="inp focus"><span class="val">•••••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
-        <div class="meter lv3"><span class="segs"><i></i><i></i><i></i></span><span class="txt">较强</span></div>
+        <div class="meter lv3"><span class="segs"><i></i><i></i><i></i></span><span class="txt">密码强度：较强</span></div>
       </div>
       <div class="field"><label>确认密码</label>
         <div class="inp"><span class="val">•••••••••••••••</span><span class="eye">${ic('eyeOff')}</span></div>
-        <p class="hint">12 至 128 个字符。<b style="color:var(--text-2)">密码遗忘无法找回</b>，卡与密码任缺其一，数据都将永久不可读。</p>
       </div>
       <span class="btn pri block" style="margin-top:4px">${ic('shield')}初始化安全卡</span>`,
     foot: '空白卡 · 尚未初始化', footTone: 'warn'
   }),
   notes: [
-    '三格强度条只反映长度区间（<12 不可用 / 12–17 可接受 / 18–128 较强），<b>不作字典或泄露库校验</b>——已决定暂缓。',
-    '"无法找回"必须写在初始化这一屏，而不是藏进帮助文档：这是 Q-02 客户已接受的代价，用户须在设置密码前知情。',
+    '🔵 <b>本屏文案已按实现逐字对齐（2026-09-10）</b>：副标题即 <code style="font-family:var(--mono)">messageForCurrentState()</code> 的状态行"请输入并确认日常密码，至少12字符。"，标签"设置日常密码"、按钮"初始化安全卡"、强度文案"密码强度：较强"均取自 <code style="font-family:var(--mono)">card_session.js</code>。执行中按钮改为"正在初始化安全卡"。',
+    '三格强度条只反映长度区间（&lt;12 未达到最低要求 / 12–17 可接受 / 18–128 较强），<b>不作字典或泄露库校验</b>——已决定暂缓。超过 128 字符时提示"密码长度超过 128 个字符"。',
+    '两次密码不一致时的错误文案是"初始化失败，两次密码不一致。"，其余失败一律"初始化失败，请重试。"—— 不透露卡侧原因。',
+    '⚠️ <b>设计稿原有的"密码遗忘无法找回"提示当前实现里没有。</b>它是 Q-02 客户已接受的代价，本应在设置密码前告知；本次按"文案对齐实现"去掉，<b>但这条告知的缺失需要单独决定</b>是补进实现还是确认不要。',
     '一次性流程：卡记录只在此写入一次，产品不提供改密与重置入口。'
   ],
   refs: ['P2.12c 12–128 码点', 'P2.15f 三格强度', 'Q-02', 'N-06']
@@ -568,17 +622,17 @@ add({
 add({
   g: '一 · 会话入口', t: '打开安全会话', path: 'state:login-required', st: 'done', w: GW, h: GH,
   body: gate({
-    mark: 'unlock', title: '打开安全会话', sub: '输入密码以解封安全卡记录。',
+    mark: 'unlock', title: '打开安全会话', sub: '请输入密码。',
     form: `
       <div class="field"><label>密码</label>
         <div class="inp focus"><span class="val">••••••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
       </div>
-      <span class="btn pri block" style="margin-top:4px">${ic('unlock')}打开安全会话</span>
-      <p class="hint" style="text-align:center;margin-top:14px">没有账号、没有注册、没有找回密码 —— 认证锚点就是这张卡。</p>`,
+      <span class="btn pri block" style="margin-top:4px">${ic('unlock')}打开安全会话</span>`,
     foot: '安全卡已就绪 · VK·7C2A'
   }),
   notes: [
-    '<b>只有一个输入框。</b>旧原型的用户名、注册、忘记密码三个页签全部删除：产品没有账号体系，注册已取消，忘记密码不实现。',
+    '🔵 <b>本屏文案已按实现逐字对齐（2026-09-10）</b>：副标题即状态行"请输入密码。"，标签"密码"，按钮"打开安全会话"，执行中改为"正在验证安全卡"。设计稿原有的"没有账号、没有注册、没有找回密码"一句实现里没有，已移到下面的设计说明保留其意图。',
+    '<b>只有一个输入框。</b>旧原型的用户名、注册、忘记密码三个页签全部删除：产品没有账号体系，注册已取消，忘记密码不实现 —— 认证锚点就是这张卡。',
     '不论输入哪一个密码，界面、耗时与提示<b>逐字一致</b>：两个等长信封恒定各认证一次，主信封成功也不提前返回。',
     '登录成功后<b>默认不自动挂载任何卷</b>，因此本屏不出现"正在挂载 3 个卷"之类的进度 —— 五秒预算只约束用户手动挂载的单个卷。'
   ],
@@ -588,19 +642,19 @@ add({
 add({
   g: '一 · 会话入口', t: '认证失败', path: 'state:login-required · error', st: 'done', w: GW, h: GH,
   body: gate({
-    mark: 'unlock', title: '打开安全会话', sub: '输入密码以解封安全卡记录。',
+    mark: 'unlock', title: '打开安全会话', sub: '请输入密码。',
     form: `
       <div class="field"><label>密码</label>
         <div class="inp err"><span class="val">••••••••<span class="caret"></span></span><span class="eye">${ic('eye')}</span></div>
-        <p class="hint err">密码不正确。</p>
       </div>
       <span class="btn pri block" style="margin-top:4px">${ic('unlock')}打开安全会话</span>
-      <p class="hint" style="text-align:center;margin-top:14px">连续失败不会锁卡，也不会留下记录。</p>`,
+      <p class="hint err" style="text-align:center;margin-top:14px">无法打开安全会话，请检查密码后重试。</p>`,
     foot: '安全卡已就绪 · VK·7C2A', footTone: 'warn'
   }),
   notes: [
-    '错误文案固定为"密码不正确"一句，<b>不区分是哪一个信封失败</b>，也不提示剩余次数 —— 任何差异化反馈都在告诉对手"另一个密码存在"。',
-    '失败不写日志、不计数、不锁定：计数器本身就是一条本地痕迹。',
+    '🔵 <b>本屏文案已按实现逐字对齐（2026-09-10）</b>：错误行是"无法打开安全会话，请检查密码后重试。"（<code style="font-family:var(--mono)">card_session.js:1847</code>），不是设计稿原写的"密码不正确"；状态行仍为"请输入密码。"。错误显示在<b>整屏底部的错误行</b>，不是输入框下方。',
+    '错误文案固定为一句，<b>不区分是哪一个信封失败</b>，也不提示剩余次数 —— 任何差异化反馈都在告诉对手"另一个密码存在"。',
+    '失败不写日志、不计数、不锁定：计数器本身就是一条本地痕迹，因此也没有"连续失败会锁卡"这回事。',
     '输入框错误态用 1px 红边 + 极浅外光，不抖动、不弹窗 —— 抖动动画在胁迫场景下会被旁观者看见。'
   ],
   refs: ['8.4 本地状态层', '8.7.3 不得验证', 'N-06']
@@ -628,7 +682,8 @@ const AW = 1180, AH = 760;
 const newBtn = `<span class="btn pri sm">${ic('plus')}新建容器</span>`;
 
 const rowC = o => `
-  <div class="row">
+  <div class="row${o.cls ? ' ' + o.cls : ''}">
+    <span class="grab">${ic('grip', 'grip')}</span>
     <span class="ic ${o.tone || ''}">${ic(o.icon || 'box')}</span>
     <span class="nm">
       <span class="t">${o.name}${o.tags || ''}</span>
@@ -642,9 +697,12 @@ const rowC = o => `
     <span class="ops">${o.ops}</span>
   </div>`;
 
+/* 图标颜色即挂载状态：金色=已挂载，中性灰=未挂载。
+   刻意不表示卷类型 —— ContainerStatus 不含卷类型事实（见 card_login_mount_session.h:38），
+   页面拿不到，也不该拿到：UI 差异即档位。 */
 const CONTAINERS = [
   rowC({
-    name: '工作资料', tags: ` <span class="tag ok">${ic('check')}标准卷</span>`, icon: 'box', tone: 'on',
+    name: '工作资料', icon: 'box', tone: 'on',
     path: 'D:\\Vault\\work.vc', size: '64 GiB', drive: 'X:', state: '已挂载', stColor: 'var(--ok)',
     ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
   }),
@@ -653,7 +711,7 @@ const CONTAINERS = [
     ops: `<span class="btn sm">${ic('unlock')}挂载</span><span class="btn sm ghost">${ic('chevron')}</span>`
   }),
   rowC({
-    name: '归档 2019', tags: ` <span class="tag gold">${ic('layers')}隐藏卷</span>`, icon: 'box', tone: 'on',
+    name: '归档 2019', icon: 'box', tone: 'on',
     path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
     ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
   })
@@ -664,6 +722,34 @@ const TILES = (mounted, total) => `
     <div class="tile"><div class="k">安全卡</div><div class="v"><span class="ic">${ic('shield')}</span>已认证</div><div class="s">VK·7C2A · 拔出即卸载</div></div>
     <div class="tile"><div class="k">已挂载卷</div><div class="v">${mounted} <small>/ ${total} 个容器</small></div><div class="s">卸载后盘符与驱动记录一并清除</div></div>
     <div class="tile"><div class="k">登录后自动挂载</div><div class="v">已关闭</div><div class="s">可在设置中开启 · 默认关闭</div></div>
+  </div>`;
+
+/* 容器页 = 标题 + 同一份列表。定义提到此处（原在"三 · 创建容器"段首），
+   因为屏 10「容器 · 列表」在它之前就要用到它。 */
+const dashBg = (sub, count) => app({
+  nav: 'box', title: '容器管理', sub: sub, acts: newBtn, count: count,
+  body: `<div class="sec-title"><h3>容器</h3></div><div class="list">${CONTAINERS}</div>`
+});
+
+/* 容器行展开后的详情。只用过得了应用边界的四个事实 —— 名称、挂载、容量、盘符
+   （ContainerStatus 的全部字段），外加两条与容器无关的产品常量。
+   容器路径、卷类型、文件系统一律不在此出现：前两者刻意不过边界，后者拿不到。 */
+const DETAIL = `
+  <div style="padding:2px 18px 18px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.012)">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden">
+      ${[['名称', '归档 2019'], ['状态', '已挂载'], ['盘符', 'Y:'],
+         ['容量', '128 GiB'], ['加密', 'AES-256-XTS'], ['派生', 'Argon2id 512M·2·1']]
+        .map(([k, v]) => `<div style="background:var(--ink-850);padding:13px 15px"><div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:600">${k}</div><div style="font-family:var(--mono);font-size:12.5px;margin-top:4px">${v}</div></div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <span class="btn sm">${ic('folder')}浏览文件</span>
+      <span class="btn sm">${ic('disk')}在资源管理器中打开</span>
+      <span class="btn sm">${ic('layers')}更新诱饵内容</span>
+      <span class="btn sm">${ic('send')}导出与迁移</span>
+      <span class="btn sm">${ic('eject')}卸载</span>
+      <span style="flex:1"></span>
+      <span class="btn sm ghost">${ic('trash')}从列表移除</span>
+    </div>
   </div>`;
 
 add({
@@ -691,60 +777,107 @@ add({
   body: app({
     nav: 'dash', title: '仪表盘', sub: '会话已打开 · 3 个容器 · 2 个已挂载', acts: `<span class="btn sm">${ic('eject')}全部卸载</span>${newBtn}`, count: '3',
     body: `${TILES(2, 3)}
-      <div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div>
-      <div class="list">${CONTAINERS}</div>
-      <div class="note warn" style="margin-top:16px"><span class="ni">${ic('alert')}</span><span>
-        <b>所有容器共用同一对密码。</b>分开存放只带来容量与分类上的便利，<b>不构成安全隔离</b> —— 一个密码泄露，用它能打开的全部容器同时暴露。</span></div>`
+      <div class="sec-title"><h3>容器</h3></div>
+      <div class="list">${CONTAINERS}</div>`
   }),
   notes: [
-    '"隐藏卷"标签只在<b>挂载成功后</b>由驱动返回的卷类型渲染，不落盘、不缓存；用另一个密码登录时挂出的是外层卷，自然没有该标签，逻辑天然自洽。',
-    '密码共用的代价必须写在主界面而不是帮助里：这是与 VeraCrypt「每容器一套密码」相比实际付出的代价，不能让用户形成"分开放就分开保护"的错觉。',
+    '🔴 <b>不表示卷类型（2026-09-10 改）。</b>原设计给每行挂"标准卷／隐藏卷"标签，但 <code style="font-family:var(--mono)">ContainerStatus</code> 刻意不含卷类型事实（<code style="font-family:var(--mono)">card_login_mount_session.h:38</code>：连完整路径、盐、口令、档位与卷类型都不过边界），页面<b>拿不到也不该拿到</b> —— UI 差异即档位。该标签从此不做。',
+    '<b>图标颜色即挂载状态</b>：金色=已挂载、中性灰=未挂载。这是页面确实拿得到的事实（<code style="font-family:var(--mono)">ContainerStatus::mounted</code>），也是用户真正要一眼看出的那一件事。',
+    '🔵 <b>"所有容器共用同一对密码"那条常驻告警已去掉（2026-09-10 改）。</b>它每次打开仪表盘都出现一次，而它陈述的是一个不会变的产品事实，不是当下的状态 —— 常驻告警会被当作背景噪声，反而稀释了真正需要注意的告警。该事实仍成立，去处待定（用户手册或首次使用引导）。',
     '行式列表取代旧原型的大卡片网格：路径、容量、盘符用等宽字对齐，可直接扫读核对。'
   ],
-  refs: ['8.7.1 密码模型', '8.7.5 隐藏卷标识', 'volume_provider.h:19']
+  refs: ['8.7.1 密码模型', '8.7.2 UI 差异即档位', 'card_login_mount_session.h:38']
 });
 
 add({
-  g: '二 · 主界面', t: '容器详情（只读）', path: 'containers · detail', st: 'todo', w: AW, h: AH,
+  g: '二 · 主界面', t: '仪表盘 · 容器概览', path: 'dashboard · container expanded', st: 'todo', w: AW, h: AH,
   body: app({
-    nav: 'box', title: '容器', sub: '3 个容器 · 只读状态视图', acts: newBtn, count: '3',
-    body: `
-      <div class="list" style="margin-bottom:16px">${rowC({
-        name: '归档 2019', tags: ` <span class="tag gold">${ic('layers')}隐藏卷</span>`, icon: 'box', tone: 'on',
-        path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
-        ops: `<span class="btn sm">${ic('down')}</span>`
-      })}
-      <div style="padding:4px 18px 18px">
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden">
-          ${[['容器路径', 'D:\\Vault\\archive.vc'], ['容量', '128 GiB'], ['卷类型', '隐藏卷'], ['盘符', 'Y:'],
-             ['文件系统', 'NTFS'], ['加密', 'AES-256-XTS'], ['派生', 'Argon2id 512M·2·1'], ['挂载于', '本次会话']]
-            .map(([k, v]) => `<div style="background:var(--ink-850);padding:13px 15px"><div class="fk" style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:600">${k}</div><div style="font-family:var(--mono);font-size:12.5px;margin-top:4px">${v}</div></div>`).join('')}
-        </div>
-        <div style="display:flex;gap:8px;margin-top:16px">
-          <span class="btn sm">${ic('folder')}在资源管理器中打开</span>
-          <span class="btn sm">${ic('layers')}更新诱饵内容</span>
-          <span class="btn sm">${ic('send')}导出与迁移</span>
-          <span class="btn sm">${ic('eject')}卸载</span>
-          <span style="flex:1"></span>
-          <span class="btn sm ghost">${ic('trash')}从列表移除</span>
-        </div>
-        <div class="note" style="margin-top:14px"><span class="ni">${ic('info')}</span><span>
-          <b>应用内置文件管理器，只管容器内部。</b>卷挂载后同时也是一个普通盘符，资源管理器那条路照旧可走。但把文件移出加密卷是明文导出，那条路在「备份中心」，文件管理器会拒绝并指路。原文所担心的"最近打开"痕迹面已于 2026-09-07 自行推翻：那个列表是我们自己写的，不写即可。</span></div>
-      </div></div>`
+    nav: 'dash', title: '仪表盘', sub: '会话已打开 · 3 个容器 · 2 个已挂载', acts: `<span class="btn sm">${ic('eject')}全部卸载</span>${newBtn}`, count: '3',
+    body: `${TILES(2, 3)}
+      <div class="sec-title"><h3>容器</h3></div>
+      <div class="list">
+        ${rowC({
+          name: '工作资料', icon: 'box', tone: 'on',
+          path: 'D:\\Vault\\work.vc', size: '64 GiB', drive: 'X:', state: '已挂载', stColor: 'var(--ok)',
+          ops: `<span class="btn sm ghost">${ic('down')}</span>`
+        })}
+        ${rowC({
+          name: '影像存档', icon: 'box', path: 'E:\\Media\\photos.vc', size: '256 GiB', drive: '—', state: '未挂载',
+          ops: `<span class="btn sm ghost">${ic('down')}</span>`
+        })}
+        ${rowC({
+          name: '归档 2019', icon: 'box', tone: 'on',
+          path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
+          ops: `<span class="btn sm ghost"><span style="display:block;transform:rotate(180deg)">${ic('down')}</span></span>`
+        })}
+        ${DETAIL}
+      </div>`
   }),
   notes: [
-    'v1 只做<b>只读状态展示</b>：路径来源、容量、卷类型、盘符。应用内浏览/删改/移动降级为 v1.1。',
-    '"更新诱饵内容"按钮<b>对每个容器恒显</b>，不因当前登录的是哪一个密码而增减 —— 按钮的有无本身就是档位。',
-    '"从列表移除"只删记录不删文件，且需二次确认；容器路径列表加密存放在标准容器内，本地磁盘零痕迹。'
+    '<b>详情不再是一个单独的页面，而是列表行就地展开。</b>看容器详情本来就是"看这一行的更多"，跳出去再跳回来会丢掉正在扫读的上下文；展开也让"同时比较两个容器"成为可能。',
+    '🔴 <b>六个字段全部是过得了应用边界的事实</b>：名称、状态、盘符、容量来自 <code style="font-family:var(--mono)">ContainerStatus</code> 的四个字段，加密与派生是与容器无关的产品常量。<b>容器路径、卷类型、文件系统一律不出现</b> —— 前两者刻意不过边界（<code style="font-family:var(--mono)">card_login_mount_session.h:38</code>），后者页面根本拿不到。',
+    '"更新诱饵内容"<b>对每个容器恒显</b>，不因当前登录的是哪一个密码而增减 —— 按钮的有无本身就是档位。它对标准容器点下去会得到一个统一的拒绝，而不是消失。',
+    '"从列表移除"只删记录不删文件，需二次确认。它删的是 8.7.4 那份加密路径索引里的一条，不动容器文件本身。',
+    '⚠️ <b>一次只展开一个。</b>同时展开多行会把列表撑成一屏放不下的长条，且"当前在看哪一个"变得不明确。'
   ],
-  refs: ['8.7.5 降级 v1.1', '8.7.4 路径列表分层', '8.7.2 入口恒显']
+  refs: ['8.7.2 入口恒显', '8.7.4 路径索引', 'ContainerStatus', 'P2.17 仪表盘']
+});
+
+
+add({
+  g: '二 · 主界面', t: '仪表盘 · 拖拽排序', path: 'dashboard · reorder', st: 'todo', w: AW, h: AH,
+  body: app({
+    nav: 'dash', title: '仪表盘', sub: '正在调整顺序 · 归档 2019', acts: `<span class="btn sm">${ic('eject')}全部卸载</span>${newBtn}`, count: '3',
+    body: `${TILES(2, 3)}
+      <div class="sec-title"><h3>容器</h3></div>
+      <div style="position:relative">
+        <div class="list">
+          ${rowC({
+            name: '工作资料', icon: 'box', tone: 'on',
+            path: 'D:\\Vault\\work.vc', size: '64 GiB', drive: 'X:', state: '已挂载', stColor: 'var(--ok)',
+            ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
+          })}
+          <div class="ins"></div>
+          ${rowC({
+            name: '影像存档', icon: 'box', path: 'E:\\Media\\photos.vc', size: '256 GiB', drive: '—', state: '未挂载',
+            ops: `<span class="btn sm">${ic('unlock')}挂载</span>`
+          })}
+          ${rowC({
+            name: '归档 2019', icon: 'box', tone: 'on', cls: 'ghost',
+            path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
+            ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
+          })}
+        </div>
+        <div style="position:absolute;left:10px;right:120px;top:58px;pointer-events:none">
+          ${rowC({
+            name: '归档 2019', icon: 'box', tone: 'on', cls: 'lift',
+            path: 'D:\\Vault\\archive.vc', size: '128 GiB', drive: 'Y:', state: '已挂载', stColor: 'var(--ok)',
+            ops: `<span class="btn sm">${ic('folder')}打开</span><span class="btn sm">${ic('eject')}卸载</span>`
+          })}
+        </div>
+      </div>
+      <div class="note" style="margin-top:16px"><span class="ni">${ic('info')}</span><span>
+        顺序只影响这台机器上的显示。它不改变容器文件，也不随容器迁移到另一台机器。</span></div>`
+  }),
+  notes: [
+    '🔵 <b>排序演示放在仪表盘（2026-09-10 改）。</b>原先画在独立的「容器」页上，但那一页已并入「容器管理」。仪表盘与容器管理第一级<b>渲染的是同一份容器列表构件</b>，所以两处都能拖、拖的是同一个顺序 —— 演示画一处即可，不必两处各画一屏。',
+    '🔴 <b>只有从六点手柄按下才进入排序。</b>拖行体的其余部分保持它原来的含义。手势按<b>起点</b>区分，不靠落点差几像素去猜 —— 这条同样适用于日后给文件列表加排序：文件行的行体已经是"移动到另一个容器"，只有手柄能安全地再挂一个含义上去。',
+    '<b>用 pointer 事件实现，不要用 HTML5 拖放。</b><code style="font-family:var(--mono)">draggable</code> 一按即走，给不出"长按才接管"的门槛，也很难在两行之间画插入线。文件列表用 HTML5 DnD 是因为它要跨容器交接，两处各用各合适的。',
+    '<b>落点画在两行之间，不高亮某一行</b> —— 高亮一整行会被读成"放进这一行"，而那正是文件列表里拖拽的含义，两者不能长得像。',
+    '🔴 <b>顺序存在索引槽里，不新增任何文件。</b>出一版 v2 条目：同一个 768 字节槽、同样的文件总大小、仍无明文头。<code style="font-family:var(--mono)">container_index_v1.h:43</code> 写明了预留区就是为此留的 —— "the sealed area is deliberately larger than v1 needs, so a later version can carry more without changing the size of the file"。',
+    '🔴 <b>排序键要稀疏，不能用 0..N-1 连续下标。</b>连续下标每拖一次要重写一大片槽位，而每次重写都是一次重新密封（换 nonce、重算 GCM）。改成宽排序键 + 插入时取相邻两者中点，<b>一次拖拽只重写一个槽</b>；键挤到无中点可取时才整体重排，概率极低。216 字节预留放得下很宽的键。',
+    '<b>不按挂载状态分组，未挂载的容器可以排到任意位置。</b>否则挂载一个容器列表就会跳，顺序这件事等于被状态牵着走；入口恒显也要求列表不因状态而重排。',
+    '🔵 <b>顺序说不出档位，因此可以存。</b>判据用的是 Q-04 边界那节的同一条 —— "这条记录说不说得出档位"。索引全部条目封在同一把共享钥匙下（今天两个密码都开得了每个容器），所以顺序在两个视图里必然一致。与路径本身是同一条论证。',
+    '⚠️ <b>本屏推翻了"行式列表取代旧原型大卡片网格"里的一半。</b>列表仍是行式、仍保持等宽列对齐可扫读，但每行现在是一个可抓取的独立对象。推翻的是"行不可操作"这一点，不是"不要大卡片网格"—— 后者的理由（500 项扫不动、列对齐才可比较）依然成立，文件列表因此不跟着改。'
+  ],
+  refs: ['container_index_v1.h:43', '8.7.4 路径索引', '8.4 本层的边界', 'Q-04 边界判据']
 });
 
 add({
   g: '二 · 主界面', t: '正在挂载', path: 'mount · in progress', st: 'part', w: AW, h: AH,
   body: app({
     nav: 'dash', title: '仪表盘', sub: '会话已打开 · 3 个容器 · 1 个已挂载', acts: newBtn, count: '3',
-    body: `${TILES(1, 3)}<div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div><div class="list">${CONTAINERS}</div>`
+    body: `${TILES(1, 3)}<div class="sec-title"><h3>容器</h3></div><div class="list">${CONTAINERS}</div>`
   }),
   overlay: `<div class="scrim"><div class="dlg">
     <div class="dlg-h"><h3>正在挂载 · 影像存档</h3></div>
@@ -772,7 +905,7 @@ add({
   body: app({
     nav: 'dash', title: '仪表盘', sub: '会话已打开 · 4 个容器 · 2 个已挂载', acts: newBtn, count: '4',
     body: `${TILES(2, 4)}
-      <div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div>
+      <div class="sec-title"><h3>容器</h3></div>
       <div class="list">${CONTAINERS}${rowC({
         name: '未命名容器', icon: 'alert', tone: 'bad', path: 'D:\\Vault\\tmp_5f2c.vc',
         size: '32 GiB', drive: '—', state: '无法打开', stColor: 'var(--danger)',
@@ -813,11 +946,6 @@ add({
 });
 
 /* ===== 三 · 创建容器 ===== */
-const dashBg = (sub, count) => app({
-  nav: 'box', title: '容器', sub: sub, acts: newBtn, count: count,
-  body: `<div class="sec-title"><h3>容器</h3><span class="m">按当前密码可打开的容器</span></div><div class="list">${CONTAINERS}</div>`
-});
-
 add({
   g: '三 · 创建容器', t: '选择容器类型', path: 'create · choose type', st: 'part', w: AW, h: AH,
   body: dashBg('3 个容器 · 2 个已挂载', '3'),
@@ -925,7 +1053,7 @@ add({
 add({
   g: '三 · 创建容器', t: '风险确认', path: 'create · risk gate', st: 'todo', w: AW, h: AH,
   body: app({
-    nav: 'box', title: '容器', sub: '本机尚无任何容器', acts: newBtn, count: '0',
+    nav: 'box', title: '容器管理', sub: '本机尚无任何容器', acts: newBtn, count: '0',
     body: `<div class="empty"><div class="ic">${ic('box')}</div><h4>还没有容器</h4><p>容器是一个加密文件，挂载后在系统里显示为一个普通磁盘。</p></div>`
   }),
   overlay: `<div class="scrim"><div class="dlg">
@@ -980,7 +1108,7 @@ add({
 add({
   g: '三 · 创建容器', t: '诱饵填充引导', path: 'create · fill outer', st: 'todo', w: AW, h: AH,
   body: app({
-    nav: 'box', title: '容器', sub: '归档 2019 · 已创建', acts: '', count: '4',
+    nav: 'box', title: '容器管理', sub: '归档 2019 · 已创建', acts: '', count: '4',
     body: `
       <div class="note gold" style="margin-bottom:18px"><span class="ni">${ic('check')}</span><span>
         <b>容器已创建并挂载为 Z:</b> 现在请向它放入一些"看起来重要、但你并不介意被看到"的资料。</span></div>
@@ -1196,6 +1324,197 @@ add({
     '不提供改密与找回：与 Q-02 的客户口径一致，也避免诱饵密码持有者借重置探测日常信封。'
   ],
   refs: ['8.7.5 可落盘', 'P-002', 'Q-02', 'Q-07']
+});
+
+/* ===== 五 · 容器管理 =====
+   边界：文件管理器只管容器内部。两端都按容器 id 寻址，结构上出不了卷；
+   把文件移出加密卷即明文导出，那条路在「导出与迁移」，此处只拒绝并指路。 */
+
+const FOPS = `<span class="btn sm">${ic('send')}导出</span><span class="btn sm">重命名</span><span class="btn sm danger">${ic('trash')}删除</span>`;
+
+const fRow = o => `
+  <tr>
+    <td><span class="fn">${ic(o.dir ? 'folder' : 'file', o.dir ? 'dir' : '')}<span class="nmt">${o.name}</span>${o.link ? '<span class="flink">链接</span>' : ''}</span></td>
+    <td class="sz">${o.size}</td>
+    <td class="mt">${o.time}</td>
+    <td>${o.ops === undefined ? `<span class="fops">${FOPS}</span>` : o.ops}</td>
+  </tr>`;
+
+const FILES = [
+  fRow({ name: '家庭照片', dir: true, size: '—', time: '2026-09-04 21:12' }),
+  fRow({ name: '外部盘', dir: true, link: true, size: '—', time: '2026-09-10 07:58' }),
+  fRow({ name: '2026年度报表.xlsx', size: '184 KB', time: '2026-09-08 10:47' }),
+  fRow({ name: '购房合同扫描件.pdf', size: '3.1 MB', time: '2026-08-30 16:03' }),
+  fRow({ name: '谈话录音.m4a', size: '26.4 MB', time: '2026-09-01 19:40' }),
+  fRow({ name: '旧机迁移.vc', size: '2.00 GB', time: '2026-09-09 23:51' })
+].join('');
+
+/* 两级结构：第一级是容器列表，点进一个容器才是它内部的文件。
+   因此这里不需要"选哪个容器"的下拉 —— 是走进来的，退出去也走面包屑第一段。 */
+const fToolbar = `
+  <div class="fbar">
+    <span class="btn sm">${ic('plus')}新建文件夹</span>
+    <span style="flex:1"></span>
+    <span class="lab">工作资料 · X: · 已挂载</span>
+  </div>`;
+
+const fCrumbs = `
+  <div class="crumbs">
+    <span class="crumb">${ic('back')}容器管理</span><span class="csep">/</span>
+    <span class="crumb">工作资料</span><span class="csep">/</span>
+    <span class="crumb">归档</span><span class="csep">/</span>
+    <span class="crumb on">2026</span>
+  </div>`;
+
+const fTable = rows => `
+  <div class="list" style="padding:14px 4px 4px">
+    <table class="files">
+      <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th style="text-align:right">操作</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+
+add({
+  g: '五 · 容器管理', t: '第一级 · 容器列表', path: 'vault · containers', st: 'todo', w: AW, h: AH,
+  body: dashBg('3 个容器 · 2 个已挂载 · 点击容器查看其中的文件', '3'),
+  notes: [
+    '🔵 <b>「容器」与「文件管理」两页于 2026-09-10 并为本页。</b>原来是两个平级入口，但它们是同一件事的两级 —— 容器是文件的容身之处，先选容器再看文件本就是唯一的顺序。分成两页的代价是：用户在「容器」页选中一个容器后，还要去另一页再选一次同一个容器。',
+    '<b>第一级就是原来的容器列表，一字未改</b>：同一份 <code style="font-family:var(--mono)">rowC</code> 构件、同样的六点手柄、同样的行内展开。仪表盘上的容器区块与这里渲染的是同一份东西。',
+    '进入第二级的方式是<b>点击容器行本身</b>，不是某个"打开"按钮 —— 行的主要含义就是"进去看看"。行尾那两个按钮（挂载／卸载）是就地操作，点它们不进入。',
+    '<b>未挂载的容器照样点得进去</b>，进去看到的是"这个容器没有挂载"那一屏，而不是点不动。点不动的行没法告诉用户为什么点不动。'
+  ],
+  refs: ['8.7.2 入口恒显', 'P3.7', '2026-09-10 两页合并']
+});
+
+add({
+  g: '五 · 容器管理', t: '第二级 · 容器内的文件', path: 'vault · files', st: 'done', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器管理', sub: '工作资料 · X: · 已挂载', acts: newBtn, count: '3',
+    body: `${fToolbar}${fCrumbs}${fTable(FILES)}
+      <div class="note" style="margin-top:16px"><span class="ni">${ic('info')}</span><span>
+        <b>本页只管容器内部。</b>要把文件拿出加密卷，那是明文导出，请到「导出与迁移」做 —— 从这里往窗口外拖会被拒绝并指路。</span></div>`
+  }),
+  notes: [
+    '<b>寻址按容器 id，不按盘符</b>：两端都是容器内相对路径，结构上就出不了卷。盘符只用于显示。',
+    '目录列表<b>一次调用回一个打包串</b>，不沿用逐项 accessor —— 500 个文件按老模式是 2000 次串行异步 IPC，页面会肉眼可见地卡。',
+    '<b>删除是永久删除且不设二次确认</b>，按用户指定的"和系统文件管理器同标准"。留档：Explorer 的 Shift+Delete 实际是有确认弹窗的，故本产品比 Explorer 更利落；补确认屏是一处局部改动，随时可加。',
+    '<b>不进卷内回收站</b>：<code style="font-family:var(--mono)">$Recycle.Bin</code> 会在容器里默默占空间且用户看不见，又要走 shell 的 undo 栈，多一块痕迹面。',
+    '重解析点（junction / 符号链接）<b>标出而不隐藏</b>：一个悄悄少显示东西的管理器比一个标出来的更糟。递归删只摘链接不下钻，不会清空链接目标。',
+    '🔴 <b>图标为自绘内联 SVG，按扩展名分类</b>，完全不碰 shell —— thumbcache 注入面为零，P4 的逐字节比对少一个变量。8.7.5 那句"可以正常使用 shell 组件"是允许，不是要求。'
+  ],
+  refs: ['8.7.5', 'P3.7 浏览主视图', 'P3.2 目录枚举', 'ui/card_session.js: renderFileList']
+});
+
+add({
+  g: '五 · 容器管理', t: '三种空态', path: 'files · empty states', st: 'done', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器管理', sub: '三种"看不到东西"的原因各有各的说法', acts: newBtn, count: '3',
+    body: `
+      <div style="display:grid;gap:14px">
+        <div class="empty" style="padding:30px 40px">
+          <div class="ic">${ic('box')}</div>
+          <h4>还没有容器</h4>
+          <p>先新建或导入一个容器，再回到这里。</p>
+          <div class="crumbs" style="justify-content:center;margin:14px 0 0"><span class="crumb on">第一级 · 容器列表</span></div>
+        </div>
+        <div class="empty" style="padding:30px 40px">
+          <div class="ic">${ic('lock')}</div>
+          <h4>这个容器没有挂载</h4>
+          <p>回到上一级挂载它，才能看到里面的文件。</p>
+          <div class="crumbs" style="justify-content:center;margin:14px 0 0"><span class="crumb on">第二级 · 点进一个未挂载的容器</span></div>
+        </div>
+        <div class="empty" style="padding:30px 40px">
+          <div class="ic">${ic('folder')}</div>
+          <h4>这个文件夹是空的</h4>
+          <p>它确实存在，只是里面还没有东西。</p>
+          <div class="crumbs" style="justify-content:center;margin:14px 0 0"><span class="crumb on">第二级 · 容器内的空目录</span></div>
+        </div>
+      </div>`
+  }),
+  notes: [
+    '🔴 <b>三句话必须彼此不同</b>，这是实机验证清单专门要核对的一条。"没有容器""容器没挂载""文件夹是空的"是三种完全不同的处境，用同一句话打发会让用户以为数据丢了。',
+    '🔴 <b>两页合并后，这三句分属两级</b>：第一句在容器列表那一级，后两句在容器内部那一级。三句仍要彼此不同，但它们不再出现在同一个视图里。',
+    '🔴 <b>实现里的一句文案因本次合并而作废</b>：<code style="font-family:var(--mono)">card_session.js:793</code> 现在写的是"这个容器没有挂载。<b>到「容器」里挂载它</b>，才能看到里面的文件。"—— 「容器」这一页已经不存在了。设计稿已改为"回到上一级挂载它"，<b>复刻时须同步改实现</b>，否则会指向一个没有的页面。',
+    '未挂载态<b>指路回上一级</b>而不是就地给一个挂载按钮：挂载是容器列表那一级的职责，在两个地方都能挂会让"当前挂了什么"变成两处状态。',
+    '空态一律不显示技术原因（路径、错误码、卷标），它们既帮不上个人用户，又都是可能泄露结构的细节。',
+    '未挂载的容器<b>仍以未挂载身份出现在下拉里</b>，不隐藏 —— 入口恒显是 8.7.2 的要求，隐藏本身即档位信号。'
+  ],
+  refs: ['8.7.2 入口恒显', 'P3.7', 'P3 实机验证清单 第 2 步']
+});
+
+add({
+  g: '五 · 容器管理', t: '新建文件夹与重命名', path: 'files · name dialog', st: 'done', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器管理', sub: '工作资料 · X: · 已挂载', acts: newBtn, count: '3',
+    body: `${fToolbar}${fCrumbs}${fTable(FILES)}`
+  }),
+  overlay: `<div class="scrim"><div class="dlg">
+    <div class="dlg-h"><h3>重命名</h3><span class="x">${ic('close')}</span></div>
+    <div class="dlg-b">
+      <div class="field">
+        <label>新名称</label>
+        <div class="inp focus"><span class="val">2026年度报表.xlsx<span class="caret"></span></span></div>
+        <p class="hint">只改这一层的名字，不移动位置。名称里不能有 <code style="font-family:var(--mono)">\\ / : * ? " &lt; &gt; |</code>，也不能用系统保留名。</p>
+      </div>
+      <div class="note" style="margin-top:4px"><span class="ni">${ic('info')}</span><span>
+        同名文件已存在时会直接告诉你，<b>不会静默覆盖</b>。</span></div>
+    </div>
+    <div class="dlg-f"><span class="btn sm">取消</span><span class="btn pri sm">${ic('check')}确定</span></div>
+  </div></div>`,
+  notes: [
+    '新建文件夹与重命名<b>共用同一个对话框</b>，只换标题与初值 —— 两者都是"给一个卷内名字"，分成两套控件只会多一份要维护的校验。',
+    '名称校验发生在<b>页面与存储层两处</b>：页面拦住明显非法的字符给出即时反馈，存储层再拦一次真正的越界（<code style="font-family:var(--mono)">..</code>、绝对路径、UNC、设备命名空间、ADS 冒号、保留设备名）。页面那道是体验，存储层那道才是安全边界。',
+    '<b>绝不静默覆盖</b>：目标已存在就报错返回，不做"自动重命名为 (2)"。个人用户看不见的自动行为在加密盘里代价太高。',
+    '对话框不显示完整路径，只显示这一层的名字 —— 完整路径是可能泄露结构的细节。'
+  ],
+  refs: ['P3.8 删除与重命名', 'P3.1 卷内路径解析', 'volume_entry_path.h']
+});
+
+add({
+  g: '五 · 容器管理', t: '跨容器拖放', path: 'files · drag', st: 'done', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器管理', sub: '正在拖动 · 购房合同扫描件.pdf', acts: newBtn, count: '3',
+    body: `${fToolbar}${fCrumbs}
+      <div class="drop">
+        <span class="dh">拖到这里放进另一个容器（按住 Ctrl 拖为复制）：</span>
+        <span class="dtgt hot">${ic('box')}影像存档 <span style="color:var(--text-3);font-family:var(--mono);font-size:11px">Y:</span></span>
+        <span class="dtgt">${ic('folder')}归档</span>
+        <span class="dtgt">${ic('back')}工作资料</span>
+      </div>
+      ${fTable(FILES)}
+      <div class="note warn" style="margin-top:16px"><span class="ni">${ic('alert')}</span><span>
+        <b>跨容器移动目前是同步调用，界面会冻住。</b>存储层已备好取消回调，但会话层传的是空 —— 页面没有第二个线程放这件事，也就产生不出有意义的取消。异步与取消待排期。</span></div>`
+  }),
+  notes: [
+    '拖动<b>只携带一个标记，不交给 shell 任何文件</b>：页面从不把卷内文件递给系统，所以一次拖出窗口在结构上就不可能变成一次意外的明文导出。落到哪里完全由本页决定。',
+    '跨容器移动<b>不留半个文件</b>：先预走查、查空间，失败则回滚；目标已存在直接拒绝。四种情况（失败／空间不足／目标已存在／取消）都要有确定结局。',
+    '<b>Ctrl + 拖 = 复制</b>，与系统文件管理器同习惯，不另发明手势。',
+    '面包屑祖先也是合法投放目标 —— 往上一层挪是最常见的动作，不该逼用户先退出去再拖回来。',
+    '🔴 <b>已知缺口</b>：跨容器移动与整容器迁移会冻住界面。自动化测试造不出两个真实盘符（<code style="font-family:var(--mono)">subst</code> 盘的最终路径落在原盘，正好会被越界检查拒掉），因此真实两容器之间的复制与移动<b>留到实机验证</b>。'
+  ],
+  refs: ['P3.9 移动与拖放', 'P3.4 跨容器复制', 'TransferCancellation', 'P3 实机验证清单 第 5 步']
+});
+
+add({
+  g: '五 · 容器管理', t: '拖出窗口即拒', path: 'files · refuse export', st: 'done', w: AW, h: AH,
+  body: app({
+    nav: 'box', title: '容器管理', sub: '工作资料 · X: · 已挂载', acts: newBtn, count: '3',
+    body: `${fToolbar}${fCrumbs}
+      <div class="drop">
+        <span class="dh">正在拖动 · 购房合同扫描件.pdf</span>
+        <span class="dtgt no">${ic('alert')}窗口之外 · 不接受</span>
+      </div>
+      ${fTable(FILES)}
+      <div class="note danger" style="margin-top:16px"><span class="ni">${ic('alert')}</span><span>
+        要把文件拿出加密卷，那是明文导出，请到「导出与迁移」做。</span></div>`
+  }),
+  notes: [
+    '<b>这一屏是两个功能的分界线。</b>把文件拖出加密卷就是明文导出 —— 与「导出与迁移」里那个动作是同一件事，受同一套 Q-04 约束。让它在文件管理器里"顺手"发生，等于绕开那条路上的全部说明。',
+    '页面<b>拒绝并指路</b>，而不是静默失败，也不是就地弹一个导出对话框：前者让用户以为产品坏了，后者等于在这里又做了一遍导出。',
+    '这样安排的收益是<b>Q-04 的那套说明只在导出那一轮出现一次</b>，不必先在文件管理器里做一遍再抽出来。',
+    '实机验证时要专门确认这句话真的会出现 —— 它是"文件管理器出不了卷"这条边界唯一对用户可见的证据。'
+  ],
+  refs: ['Q-04', 'P3.9', 'P3 实机验证清单 第 7 步']
 });
 
 /* ---------- 渲染 ---------- */
