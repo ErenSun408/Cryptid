@@ -19,10 +19,18 @@ int wmain(int argc, wchar_t** argv) {
       try { static_cast<void>(configuration::verify_veracrypt_installer(fixture)); }
       catch (...) { rejected = true; }
       if (!rejected) throw std::runtime_error("untrusted or missing installer accepted");
+      rejected = false;
+      try { static_cast<void>(configuration::verify_webview_installer(fixture)); }
+      catch (...) { rejected = true; }
+      if (!rejected) throw std::runtime_error("untrusted WebView2 installer accepted");
     }
-    if (argc == 2) {
+    if (argc >= 2) {
       const auto verified = configuration::verify_veracrypt_installer(argv[1]);
       std::cout << "Reviewed installer hash and Authenticode verified (not executed)\n";
+    }
+    if (argc == 3) {
+      const auto verified = configuration::verify_webview_installer(argv[2]);
+      std::cout << "WebView2 installer hash and Authenticode verified (not executed)\n";
     }
     std::filesystem::remove(directory / L"untrusted.exe");
     std::filesystem::remove(directory);

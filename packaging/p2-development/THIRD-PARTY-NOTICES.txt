@@ -31,6 +31,7 @@ until the supplier provides written redistribution permission.
 
 Microsoft Edge WebView2 Runtime
 -------------------------------
-This system runtime remains a prerequisite and is not included in this package.
-Obtain it from Microsoft if the target Windows installation does not already
-provide it.
+The package includes the unmodified Microsoft x64 Evergreen Standalone Installer.
+Its reviewed SHA-256 and Microsoft Authenticode signature are checked before
+packaging and launch. Installation is subject to Microsoft's installer terms.
+Source: https://go.microsoft.com/fwlink/p/?LinkId=2124701

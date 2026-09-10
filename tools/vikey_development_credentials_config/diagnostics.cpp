@@ -61,13 +61,13 @@ bool diagnose(const Report& report) {
       const bool available = SUCCEEDED(result) && version && *version;
       ::CoTaskMemFree(version);
       return available ? pass(L"已安装 WebView2 Runtime。")
-          : fail(L"未找到 WebView2 Runtime；请按测试须知安装后重试。");
+          : fail(L"未找到 WebView2 Runtime；请点击“安装 WebView2（离线）”后重新检测。");
     },
     [] {
       try {
         return usb_vault::volume::VolumeProvider{}.driver_version() == 0x126
             ? pass(L"VeraCrypt 驱动可访问，接口版本兼容。")
-            : fail(L"驱动接口不兼容；请按测试须知安装随包提供的 VeraCrypt。");
+            : fail(L"驱动接口不兼容；请点击“安装 VeraCrypt（管理员）”后重新检测。");
       } catch (...) { return fail(L"驱动未加载或不可访问；请安装并启动 VeraCrypt 后重试。"); }
     },
     [&] {

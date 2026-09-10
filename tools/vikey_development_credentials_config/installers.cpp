@@ -8,12 +8,12 @@
 #include <system_error>
 
 namespace configuration {
-usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(
-    const std::filesystem::path& path) {
+static usb_vault::card::VerifiedLocalArtifact verify_installer(
+    const std::filesystem::path& path, const wchar_t* digest) {
   auto artifact = usb_vault::card::verify_local_artifact(path,
       usb_vault::card::vikey::development::parse_deployment_digest(
-          L"DCA9DDEC7934FC0B1C25AC8984DB7D504BFE9F37C21861AC91C67A98ECD3964B"),
-      128ULL * 1024 * 1024);
+          digest),
+      512ULL * 1024 * 1024);
   WINTRUST_FILE_INFO file{};
   file.cbStruct = sizeof(file);
   file.pcwszFilePath = artifact.path().c_str();
@@ -32,9 +32,7 @@ usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(
   return artifact;
 }
 
-bool install_veracrypt(const std::filesystem::path& directory) {
-  const auto installer = verify_veracrypt_installer(
-      directory / L"prerequisites" / L"VeraCrypt Setup 1.26.29.exe");
+static bool run_installer(const usb_vault::card::VerifiedLocalArtifact& installer) {
   const auto parent = installer.path().parent_path();
   SHELLEXECUTEINFOW execute{};
   execute.cbSize = sizeof(execute);
@@ -55,10 +53,18 @@ bool install_veracrypt(const std::filesystem::path& directory) {
   return true;
 }
 
-void open_webview_download() {
-  const auto result = reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open",
-      L"https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section",
-      nullptr, nullptr, SW_SHOWNORMAL));
-  if (result <= 32) throw std::runtime_error("cannot open official download page");
+usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(const std::filesystem::path& path) {
+  return verify_installer(path, L"DCA9DDEC7934FC0B1C25AC8984DB7D504BFE9F37C21861AC91C67A98ECD3964B");
+}
+usb_vault::card::VerifiedLocalArtifact verify_webview_installer(const std::filesystem::path& path) {
+  return verify_installer(path, kWebViewInstallerDigest);
+}
+bool install_veracrypt(const std::filesystem::path& directory) {
+  const auto installer = verify_veracrypt_installer(directory / L"prerequisites" / L"VeraCrypt Setup 1.26.29.exe");
+  return run_installer(installer);
+}
+bool install_webview(const std::filesystem::path& directory) {
+  const auto installer = verify_webview_installer(directory / L"prerequisites" / L"MicrosoftEdgeWebView2RuntimeInstallerX64.exe");
+  return run_installer(installer);
 }
 }

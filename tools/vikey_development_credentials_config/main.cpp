@@ -240,7 +240,7 @@ void check_environment(UiState& state) noexcept {
   }
 }
 
-void install_driver(UiState& state) noexcept {
+void install_driver(UiState& state, const bool webview = false) noexcept {
   if (state.checking.load()) return;
   if (state.worker.joinable()) state.worker.join();
   state.ready = false;
@@ -249,15 +249,16 @@ void install_driver(UiState& state) noexcept {
                             state.webview, state.user_sn, state.api_key, state.user_pin})
     ::EnableWindow(control, FALSE);
   ::SetWindowTextW(state.status, L"正在校验安装器，随后将出现管理员授权和安装窗口。");
-  ::SetWindowTextW(state.results, L"请在安装器中选择 Install。若要求重启，请先重启 Windows；完成后重新运行检测。");
+  ::SetWindowTextW(state.results, webview ? L"即将运行随包 WebView2 离线安装器。完成后重新运行检测。" : L"请在安装器中选择 Install。若要求重启，请先重启 Windows；完成后重新运行检测。");
   state.checking.store(true);
   try {
-    state.worker = std::thread([&state] {
+    state.worker = std::thread([&state, webview] {
       const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
       std::wstring result;
       try {
         if (FAILED(com)) throw std::runtime_error("COM unavailable");
-        result = configuration::install_veracrypt(configuration::executable_directory())
+        result = (webview ? configuration::install_webview(configuration::executable_directory())
+                          : configuration::install_veracrypt(configuration::executable_directory()))
             ? L"安装器已退出。请按安装器提示完成操作，必要时重启 Windows，然后重新运行检测。"
             : L"已取消管理员授权。未启动安装器，可稍后重试。";
       } catch (...) {
@@ -327,7 +328,7 @@ void initialize_controls(const HWND window, UiState& state,
       24, 430, 570, 208, window, 0, instance);
   state.install = create_control(0, L"BUTTON", L"安装 VeraCrypt（管理员）", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
       24, 386, 275, 32, window, kInstallButtonId, instance);
-  state.webview = create_control(0, L"BUTTON", L"获取 WebView2（微软官网）", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  state.webview = create_control(0, L"BUTTON", L"安装 WebView2（离线）", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
       309, 386, 285, 32, window, kWebviewButtonId, instance);
   for (const HWND control : {state.check, state.launch, state.results, state.install, state.webview}) set_control_font(control, state.font);
   ::EnableWindow(state.launch, FALSE);
@@ -409,12 +410,7 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
         install_driver(*state); return 0;
       }
       if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kWebviewButtonId) {
-        state->ready = false;
-        ::EnableWindow(state->launch, FALSE);
-        try {
-          configuration::open_webview_download();
-          ::SetWindowTextW(state->status, L"请在微软官网下载安装 WebView2 Runtime，完成后重新检测。");
-        } catch (...) { ::SetWindowTextW(state->status, L"无法打开浏览器，请按测试须知中的微软官网链接下载。"); }
+        install_driver(*state, true);
         return 0;
       }
       if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kCheckButtonId) {

@@ -10,7 +10,7 @@ USB Vault P2 内部开发测试包
 2. 已安装 VeraCrypt 1.26.29，并确保其驱动已加载。官方安装程序已放在
    prerequisites\VeraCrypt Setup 1.26.29.exe；安装前请按“测试须知.txt”核验摘要和签名。
    安装时选择 Install，不要选择 Extract。如果挂载时报驱动不可用，可先启动一次 VeraCrypt。
-3. 已安装 Microsoft Edge WebView2 Runtime。Windows 11 通常已自带。
+3. 已安装 Microsoft Edge WebView2 Runtime；本包附带 x64 离线安装器，可由配置器启动。
 4. 一张与本开发版本匹配的 ViKeyPRO 安全卡。
 5. 开发模式允许厂商运行库联网；防火墙不得静默替换或拦截厂商 DLL。
 
@@ -22,7 +22,7 @@ USB Vault P2 内部开发测试包
 3. 出现“已保存并复读验证”后插入安全卡。凭据只写入当前 Windows 用户、当前机器的凭据管理器。
 4. 在配置器点击“运行检测”，检查架构、组件完整性、WebView2、驱动、已保存凭据和安全卡访问。检测期间可能联网，但不会初始化或改写卡；不创建、挂载或卸载容器。已有配置可直接运行检测，无须重新输入。
 5. 全部通过后点击“启动 USB Vault”。后续可直接双击 usb_vault_vikey_p2_development_app.exe，无需命令行参数或启动脚本。新建容器时 Windows 会显示 UAC 提示，这是当前建卷 helper 的正常行为。
-6. 若驱动未安装，点击“安装 VeraCrypt（管理员）”：配置器校验随包安装器的固定摘要和可信签名后，显示 Windows 授权及官方安装界面，请选择 Install。若缺少 WebView2，点击“获取 WebView2（微软官网）”下载安装 Runtime。完成后重新检测；要求重启时先重启 Windows。更多指引见“测试须知.txt”。
+6. 若驱动未安装，点击“安装 VeraCrypt（管理员）”：配置器校验随包安装器的固定摘要和可信签名后，显示 Windows 授权及官方安装界面，请选择 Install。若缺少 WebView2，点击“安装 WebView2（离线）”运行随包安装器。完成后重新检测；要求重启时先重启 Windows。更多指引见“测试须知.txt”。
 
 重要限制
 --------
@@ -48,3 +48,5 @@ USB Vault P2 内部开发测试包
 - vendor\ViKey.dll：供应商 x64 运行库。
 - SHA256SUMS.txt：本包逐文件摘要。
 - licenses\：第三方许可、补丁和来源说明。
+
+完整包包含主程序、配置器、运行组件、VeraCrypt 和 WebView2 两套安装器及说明。无需另行下载运行组件，但签名验证与开发卡访问仍可能需要联网。供应方提供的凭据不包含在压缩包中，请通过配置器单独输入。
