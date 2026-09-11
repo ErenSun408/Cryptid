@@ -1005,7 +1005,7 @@
       const name = document.createElement("td");
       const identity = document.createElement("div");
       identity.className = "file-identity";
-      identity.appendChild(exportGlyph(entry.isDirectory ? kFolderPaths : kFilePaths,
+      identity.appendChild(exportGlyph(fileTypePaths(entry),
         entry.isDirectory ? "file-glyph directory" : "file-glyph"));
       if (entry.isDirectory) {
         const open = document.createElement("button");
@@ -1335,6 +1335,110 @@
     "M13.5 3.5V8.5h5",
   ]);
 
+  // The eleven file kinds the list can tell apart. The page and the fold are
+  // taken from kFilePaths rather than redrawn, so the document family never
+  // grows a second kind of paper; the rest carry their own geometry in the
+  // same 24-unit grid every other glyph here uses. None of them sets a
+  // colour: an icon says what a file is, and must not also read as a state.
+  const kFileTypeIcons = Object.freeze([
+    Object.freeze({
+      suffixes: Object.freeze([".txt", ".md", ".rtf", ".doc", ".docx", ".log"]),
+      paths: Object.freeze([
+        ...kFilePaths,
+        "M8.5 9.5h2.5M8.5 12.5h7M8.5 15.5h7",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([".xls", ".xlsx", ".csv"]),
+      paths: Object.freeze([
+        ...kFilePaths,
+        "M8 12.5h8M8 16.5h8",
+        "M12 12.5v6",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([".pdf"]),
+      paths: Object.freeze([
+        ...kFilePaths,
+        "M8.5 14.5h7a1 1 0 011 1v2a1 1 0 01-1 1h-7a1 1 0 01-1-1v-2a1 1" +
+          " 0 011-1z",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico",
+      ]),
+      paths: Object.freeze([
+        "M4.5 6.5A1.5 1.5 0 016 5h12a1.5 1.5 0 011.5 1.5v11a1.5 1.5 0" +
+          " 01-1.5 1.5H6a1.5 1.5 0 01-1.5-1.5z",
+        "M9.25 11.25a1.25 1.25 0 100-2.5 1.25 1.25 0 000 2.5z",
+        "M5.5 17.5l4-4 3 3 3.5-3.5 3 3",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([
+        ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg",
+      ]),
+      paths: Object.freeze([
+        "M10 17.5V7.5l7-1.5v10",
+        "M10 17.5a1.5 1.5 0 10-3 0 1.5 1.5 0 003 0z",
+        "M17 16a1.5 1.5 0 10-3 0 1.5 1.5 0 003 0z",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm",
+      ]),
+      paths: Object.freeze([
+        "M4.5 7.5A1.5 1.5 0 016 6h12a1.5 1.5 0 011.5 1.5v9a1.5 1.5 0" +
+          " 01-1.5 1.5H6a1.5 1.5 0 01-1.5-1.5z",
+        "M10.5 9.5l4.5 2.5-4.5 2.5z",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([".zip", ".rar", ".7z", ".tar", ".gz"]),
+      paths: Object.freeze([
+        "M5.5 6.5A1.5 1.5 0 017 5h10a1.5 1.5 0 011.5 1.5v11a1.5 1.5 0" +
+          " 01-1.5 1.5H7a1.5 1.5 0 01-1.5-1.5z",
+        "M12 5v2.5m0 2v2.5m0 2v2.5m0 2V19",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([".exe", ".msi", ".dll", ".bat", ".cmd", ".ps1"]),
+      paths: Object.freeze([
+        "M9.5 8.5h5a1 1 0 011 1v5a1 1 0 01-1 1h-5a1 1 0 01-1-1v-5a1 1 0 011-1z",
+        "M12 5.5v3M12 15.5v3",
+        "M5.5 12h3M15.5 12h3",
+      ]),
+    }),
+    Object.freeze({
+      suffixes: Object.freeze([".vc", ".hc"]),
+      paths: Object.freeze([
+        "M5.5 7c0-1.38 2.91-2.5 6.5-2.5S18.5 5.62 18.5 7s-2.91 2.5-6.5" +
+          " 2.5S5.5 8.38 5.5 7z",
+        "M5.5 7v10c0 1.38 2.91 2.5 6.5 2.5s6.5-1.12 6.5-2.5V7",
+      ]),
+    }),
+  ]);
+
+  // Which icon a row gets is decided here and nowhere else. The suffix is
+  // already on screen in the name, so reading it costs the bridge nothing: no
+  // listing field, no native call, no second walk of the volume. A name that
+  // is nothing but a suffix is a name, not a kind, so it falls through to the
+  // plain page along with everything unrecognised.
+  const fileTypePaths = (entry) => {
+    if (entry.isDirectory) return kFolderPaths;
+    const name = entry.name.toLowerCase();
+    for (const icon of kFileTypeIcons) {
+      for (const suffix of icon.suffixes) {
+        if (name.length > suffix.length && name.endsWith(suffix)) {
+          return icon.paths;
+        }
+      }
+    }
+    return kFilePaths;
+  };
+
   const checkBox = (on) => {
     const box = document.createElement("span");
     box.className = on ? "cbx on" : "cbx";
@@ -1561,8 +1665,7 @@
     row.disabled = busy;
     row.dataset.exportPick = entry.name;
     row.addEventListener("click", onToggle);
-    row.appendChild(exportGlyph(
-      entry.isDirectory ? kFolderPaths : kFilePaths,
+    row.appendChild(exportGlyph(fileTypePaths(entry),
       entry.isDirectory ? "g dir" : "g"));
     const name = document.createElement("span");
     name.className = "n";

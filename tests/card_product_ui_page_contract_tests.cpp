@@ -890,6 +890,43 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
           "a truncated listing would be presented as a whole one");
 }
 
+void test_every_file_row_carries_one_icon_the_page_drew_itself() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+
+  // One icon per row, and one classifier behind both lists that show entries:
+  // the browse view and the export picker cannot drift into drawing the same
+  // file two different ways.
+  require(count_occurrences(script, "exportGlyph(fileTypePaths(entry)") == 2,
+          "a file row is drawn without the shared type classifier");
+
+  // A directory is a directory before it is an extension. A folder named
+  // "backup.zip" is still a folder.
+  require(script.find("    if (entry.isDirectory) return kFolderPaths;") !=
+              std::string::npos,
+          "a directory could be drawn as whatever its name ends with");
+
+  // Everything unrecognised lands on the plain page rather than on whichever
+  // kind happens to look closest.
+  require(script.find("    return kFilePaths;\n  };") != std::string::npos,
+          "an unknown extension has no fallback icon");
+
+  // The suffix is read off the name the list already shows, so classifying
+  // costs the bridge nothing. A kind that had to be asked for would be a
+  // second walk of a mounted volume.
+  require(script.find("const name = entry.name.toLowerCase();") !=
+              std::string::npos &&
+              count_occurrences(script, "bridge.listContainerDirectory") == 2,
+          "the page asks the native side what kind of file it is holding");
+
+  // Every glyph is drawn by the page. An icon taken from the shell or from a
+  // file on disk would put artwork, and a cache of it, outside the container.
+  require(page.find("<img") == std::string::npos &&
+              page.find("url(") == std::string::npos &&
+              script.find("<img") == std::string::npos,
+          "the page loads artwork instead of drawing it");
+}
+
 void test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
@@ -1174,6 +1211,7 @@ int main() {
     test_visibility_controls_persist_until_sensitive_inputs_are_cleared();
     test_actions_are_serialized_and_external_changes_coalesce();
     test_the_file_manager_browses_a_container_without_naming_a_volume();
+    test_every_file_row_carries_one_icon_the_page_drew_itself();
     test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name();
     test_a_drag_stays_inside_the_containers_and_says_where_out_lives();
     test_the_backup_centre_owns_the_plaintext_export();
