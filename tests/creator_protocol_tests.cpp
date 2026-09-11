@@ -104,6 +104,57 @@ void test_binary_password_round_trip() {
   expect(std::memcmp(decoded.second_password.data(), second.data(),
                      second.size()) == 0,
          "binary second password changed");
+  expect(decoded.nonce == nonce, "the request nonce did not round-trip");
+}
+
+void test_cancel_request_round_trip() {
+  const Pipe pipe = make_pipe();
+  std::array<std::byte, kNonceSize> nonce{};
+  nonce[3] = std::byte{0x7c};
+  // Nothing has been sent, so nothing is pending. The helper asks this on
+  // every progress tick from inside the format backend, so an empty pipe has
+  // to answer immediately rather than wait for a cancel that may never come.
+  expect(!cancel_requested(pipe.read.get(), nonce),
+         "an empty pipe reported a pending cancel");
+  write_cancel_request(pipe.write.get(), nonce);
+  expect(cancel_requested(pipe.read.get(), nonce),
+         "a written cancel was not seen");
+  expect(!cancel_requested(pipe.read.get(), nonce),
+         "the same cancel was reported twice");
+}
+
+void test_cancel_request_rejects_another_nonce() {
+  const Pipe pipe = make_pipe();
+  std::array<std::byte, kNonceSize> mine{};
+  mine[0] = std::byte{0x11};
+  std::array<std::byte, kNonceSize> other{};
+  other[0] = std::byte{0x22};
+  write_cancel_request(pipe.write.get(), other);
+  bool rejected = false;
+  try {
+    static_cast<void>(cancel_requested(pipe.read.get(), mine));
+  } catch (const std::system_error& error) {
+    rejected = error.code() == make_error_code(CreationError::protocol_error);
+  }
+  expect(rejected, "a cancel carrying another nonce was accepted");
+}
+
+void test_partial_cancel_request_is_not_a_cancel() {
+  const Pipe pipe = make_pipe();
+  std::array<std::byte, kNonceSize> nonce{};
+  nonce[5] = std::byte{0x5a};
+  CancelRequest request{};
+  request.nonce = nonce;
+  const std::size_t half = sizeof(request) / 2;
+  const auto* const bytes = reinterpret_cast<const std::byte*>(&request);
+  write_exact(pipe.write.get(), bytes, half);
+  // Reading half a message would mean blocking inside the format backend
+  // until the rest arrived, which is exactly what must never happen here.
+  expect(!cancel_requested(pipe.read.get(), nonce),
+         "a half-written cancel was treated as one");
+  write_exact(pipe.write.get(), bytes + half, sizeof(request) - half);
+  expect(cancel_requested(pipe.read.get(), nonce),
+         "the completed cancel was not seen");
 }
 
 void test_header_validation() {
@@ -280,6 +331,9 @@ void test_pipe_dacl_names_system_and_token_user_explicitly() {
 int main() {
   try {
     test_binary_password_round_trip();
+    test_cancel_request_round_trip();
+    test_cancel_request_rejects_another_nonce();
+    test_partial_cancel_request_is_not_a_cancel();
     test_header_validation();
     test_nonce_mismatch_is_rejected();
     test_response_round_trip();

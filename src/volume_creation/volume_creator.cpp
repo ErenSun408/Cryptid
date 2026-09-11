@@ -22,6 +22,13 @@ namespace usb_vault::volume_creation {
 namespace {
 
 constexpr std::chrono::seconds kHelperConnectionTimeout{60};
+// How long the caller waits for the helper to be gone before going on to
+// remove the incomplete container. The helper holds the container file open
+// through the format backend, so deleting it while the helper is still alive
+// fails with a sharing violation; waiting here is what turns a cancel into a
+// clean one. It is a bound, not an expectation: a helper that outstays it
+// leaves the delete to fail loudly rather than hanging the session forever.
+constexpr std::chrono::seconds kHelperExitTimeout{30};
 
 class CreationErrorCategory final : public std::error_category {
  public:
@@ -71,6 +78,28 @@ class CreationErrorCategory final : public std::error_category {
         return "unknown volume-creation error";
     }
   }
+};
+
+// Waits for the helper to be gone. Declared before the pipe at the call site
+// so the pipe is closed first: a helper still inside the format backend
+// notices the closed pipe on its next progress tick and leaves.
+class HelperExitWait final {
+ public:
+  explicit HelperExitWait(const HANDLE process) noexcept : process_(process) {}
+  ~HelperExitWait() noexcept {
+    if (process_ != nullptr && process_ != INVALID_HANDLE_VALUE) {
+      static_cast<void>(::WaitForSingleObject(
+          process_,
+          static_cast<DWORD>(std::chrono::milliseconds(kHelperExitTimeout)
+                                 .count())));
+    }
+  }
+
+  HelperExitWait(const HelperExitWait&) = delete;
+  HelperExitWait& operator=(const HelperExitWait&) = delete;
+
+ private:
+  HANDLE process_;
 };
 
 class Handle final {
@@ -242,7 +271,8 @@ void invoke(const std::filesystem::path& helper_path,
             const std::uint64_t hidden_size,
             const security::SecureBuffer& first_password,
             const security::SecureBuffer& second_password,
-            const ProgressCallback& progress) {
+            const ProgressCallback& progress,
+            const CancellationQuery& cancelled) {
   const std::wstring normalized_path = validated_target_path(path);
   if (outer_size == 0 || outer_size % 512ULL != 0 ||
       first_password.empty() ||
@@ -259,6 +289,7 @@ void invoke(const std::filesystem::path& helper_path,
   const std::wstring pipe_name = L"\\\\.\\pipe\\usb-vault-create-" + suffix;
   const Handle process =
       launch_elevated_helper(helper_path, suffix, hex_nonce(nonce));
+  const HelperExitWait helper_exit(process.get());
   const Handle pipe = connect_to_helper(pipe_name, process.get());
   if (progress) progress({.stage = CreationStage::authorized, .percent = 100});
 
@@ -276,11 +307,20 @@ void invoke(const std::filesystem::path& helper_path,
   detail::write_request(pipe.get(), header, normalized_path, first_password,
                         second_password);
 
+  bool cancel_sent = false;
   for (;;) {
     const detail::Response response = detail::read_response(pipe.get());
     if (response.type == detail::MessageType::progress) {
       if (progress) {
         progress({.stage = response.stage, .percent = response.percent});
+      }
+      // Asked after the report rather than before it, so the page has seen
+      // where the creation got to before it is told it stopped. The request
+      // goes out once and the loop keeps reading: the helper answers it with
+      // a result of its own, after it has removed the container it started.
+      if (!cancel_sent && cancelled && cancelled()) {
+        detail::write_cancel_request(pipe.get(), nonce);
+        cancel_sent = true;
       }
       continue;
     }
@@ -313,9 +353,11 @@ VolumeCreator::VolumeCreator(std::filesystem::path helper_path)
 void VolumeCreator::create_standard(
     const std::wstring_view target_path, const std::uint64_t size_bytes,
     const security::SecureBuffer& volume_password,
-    const ProgressCallback& progress) const {
+    const ProgressCallback& progress,
+    const CancellationQuery& cancelled) const {
   invoke(helper_path_, detail::Operation::create_standard, target_path,
-         size_bytes, 0, volume_password, security::SecureBuffer{}, progress);
+         size_bytes, 0, volume_password, security::SecureBuffer{}, progress,
+         cancelled);
 }
 
 void VolumeCreator::create_with_hidden(
@@ -324,10 +366,11 @@ void VolumeCreator::create_with_hidden(
     const std::uint64_t requested_hidden_bytes,
     const security::SecureBuffer& outer_password,
     const security::SecureBuffer& hidden_password,
-    const ProgressCallback& progress) const {
+    const ProgressCallback& progress,
+    const CancellationQuery& cancelled) const {
   invoke(helper_path_, detail::Operation::create_with_hidden, target_path,
          outer_size_bytes, requested_hidden_bytes, outer_password,
-         hidden_password, progress);
+         hidden_password, progress, cancelled);
 }
 
 }  // namespace usb_vault::volume_creation

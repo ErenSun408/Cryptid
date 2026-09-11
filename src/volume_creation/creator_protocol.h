@@ -53,10 +53,22 @@ struct Response final {
   std::int32_t error{};
   std::uint32_t native_error{};
 };
+
+// The one message that travels from caller to helper after the request. It is
+// sent at most once per creation, is fixed size, and carries the same nonce as
+// the request, so the helper can tell a cancel from a stray write with a
+// single peek rather than by parsing whatever arrives mid-format.
+struct CancelRequest final {
+  std::uint32_t magic{kProtocolMagic};
+  std::uint16_t version{kProtocolVersion};
+  std::uint16_t size{sizeof(CancelRequest)};
+  std::array<std::byte, kNonceSize> nonce{};
+};
 #pragma pack(pop)
 
 static_assert(sizeof(RequestHeader) == 60);
 static_assert(sizeof(Response) == 28);
+static_assert(sizeof(CancelRequest) == 24);
 
 struct Request final {
   Operation operation{Operation::create_standard};
@@ -65,6 +77,8 @@ struct Request final {
   std::wstring target_path;
   security::SecureBuffer first_password;
   security::SecureBuffer second_password;
+  // Kept so the helper can recognise this caller's cancel while formatting.
+  std::array<std::byte, kNonceSize> nonce{};
 };
 
 [[nodiscard]] bool valid_request_header(const RequestHeader& header) noexcept;
@@ -83,5 +97,19 @@ void write_request(HANDLE pipe, const RequestHeader& header,
 
 void write_response(HANDLE pipe, const Response& response);
 [[nodiscard]] Response read_response(HANDLE pipe);
+
+[[nodiscard]] bool valid_cancel_request(
+    const CancelRequest& request,
+    const std::array<std::byte, kNonceSize>& expected_nonce) noexcept;
+
+void write_cancel_request(HANDLE pipe,
+                          const std::array<std::byte, kNonceSize>& nonce);
+
+// Answers whether this caller has asked for the creation to be abandoned, and
+// never waits for one: the helper calls it from inside the format backend's
+// progress callback, where blocking would stall the very format it is being
+// asked about.
+[[nodiscard]] bool cancel_requested(
+    HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce);
 
 }  // namespace usb_vault::volume_creation::detail

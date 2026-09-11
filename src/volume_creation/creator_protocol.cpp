@@ -137,6 +137,7 @@ Request read_request(
       .first_password = security::SecureBuffer(header.first_password_bytes),
       .second_password =
           security::SecureBuffer(header.second_password_bytes),
+      .nonce = header.nonce,
   };
   read_exact(pipe, request.target_path.data(),
              request.target_path.size() * sizeof(wchar_t));
@@ -164,6 +165,44 @@ Response read_response(const HANDLE pipe) {
     throw_protocol_error("invalid volume-creation response");
   }
   return response;
+}
+
+bool valid_cancel_request(
+    const CancelRequest& request,
+    const std::array<std::byte, kNonceSize>& expected_nonce) noexcept {
+  return request.magic == kProtocolMagic &&
+         request.version == kProtocolVersion &&
+         request.size == sizeof(CancelRequest) &&
+         request.nonce == expected_nonce;
+}
+
+void write_cancel_request(const HANDLE pipe,
+                          const std::array<std::byte, kNonceSize>& nonce) {
+  CancelRequest request{};
+  request.nonce = nonce;
+  write_exact(pipe, &request, sizeof(request));
+}
+
+bool cancel_requested(
+    const HANDLE pipe,
+    const std::array<std::byte, kNonceSize>& expected_nonce) {
+  DWORD available = 0;
+  if (::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) ==
+      FALSE) {
+    throw_last_error("peek volume-creation IPC");
+  }
+  // A partial message means the caller is still writing one. Reading it now
+  // would block inside the format backend, so the next progress tick asks
+  // again; nothing else is ever sent in this direction after the request.
+  if (available < sizeof(CancelRequest)) {
+    return false;
+  }
+  CancelRequest request{};
+  read_exact(pipe, &request, sizeof(request));
+  if (!valid_cancel_request(request, expected_nonce)) {
+    throw_protocol_error("invalid volume-creation cancel request");
+  }
+  return true;
 }
 
 }  // namespace usb_vault::volume_creation::detail

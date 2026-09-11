@@ -100,8 +100,10 @@ class Module final {
 
 class FormatBackend final {
  public:
-  explicit FormatBackend(const HANDLE pipe)
+  FormatBackend(const HANDLE pipe,
+                const std::array<std::byte, kNonceSize>& nonce)
       : pipe_(pipe),
+        nonce_(nonce),
         module_(::LoadLibraryExW(
             (executable_directory() / L"VeraCryptFormat.dll").c_str(), nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)) {
@@ -182,6 +184,13 @@ class FormatBackend final {
   static BOOL CALLBACK progress(const int percent, void* const user_data) {
     auto& self = *static_cast<FormatBackend*>(user_data);
     try {
+      // Asked first, and on every tick: answering FALSE here is the only way
+      // to stop the format from inside, and it leaves the unwinding to the
+      // caller below, which still holds a live pipe and can therefore delete
+      // the half-written container as the user who asked for it.
+      if (cancel_requested(self.pipe_, self.nonce_)) {
+        return FALSE;
+      }
       if (!self.allocated_) {
         WIN32_FILE_ATTRIBUTE_DATA attributes{};
         if (::GetFileAttributesExW(self.target_path_.c_str(), GetFileExInfoStandard, &attributes)) {
@@ -206,6 +215,7 @@ class FormatBackend final {
   }
 
   HANDLE pipe_;
+  std::array<std::byte, kNonceSize> nonce_{};
   Module module_;
   format_abi::Initialize initialize_{};
   format_abi::Shutdown shutdown_{};
@@ -508,7 +518,7 @@ void create_with_hidden(const HANDLE pipe, Request& request,
 
 void execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
-  FormatBackend backend(pipe);
+  FormatBackend backend(pipe, request.nonce);
   if (request.operation == Operation::create_standard) {
     create_standard(pipe, request, backend);
   } else {

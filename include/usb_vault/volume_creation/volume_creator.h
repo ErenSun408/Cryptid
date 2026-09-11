@@ -50,6 +50,14 @@ struct CreationProgress final {
 
 using ProgressCallback = std::function<void(const CreationProgress&)>;
 
+// An empty function means the creation cannot be cancelled. It is asked on the
+// thread that started the creation, once per progress report, and must not
+// throw: the helper is inside the format backend when the answer is acted on,
+// and it needs this pipe alive afterwards to delete the half-written container
+// as the user who asked for it. Answering true is a request, not a guarantee:
+// a creation that has already finished stays finished.
+using CancellationQuery = std::function<bool()>;
+
 // Launches the separately distributed volume-creation helper through the UAC
 // consent path. Passwords are sent only through a local, per-invocation named
 // pipe and are never placed in command-line arguments or environment variables.
@@ -60,7 +68,8 @@ class VolumeCreator final {
   void create_standard(std::wstring_view target_path,
                        std::uint64_t size_bytes,
                        const security::SecureBuffer& volume_password,
-                       const ProgressCallback& progress = {}) const;
+                       const ProgressCallback& progress = {},
+                       const CancellationQuery& cancelled = {}) const;
 
   // Creates one self-contained outer+hidden container. requested_hidden_bytes
   // may be zero to use the largest safe tail-aligned size determined from the
@@ -71,7 +80,8 @@ class VolumeCreator final {
       std::uint64_t requested_hidden_bytes,
       const security::SecureBuffer& outer_password,
       const security::SecureBuffer& hidden_password,
-      const ProgressCallback& progress = {}) const;
+      const ProgressCallback& progress = {},
+      const CancellationQuery& cancelled = {}) const;
 
  private:
   std::filesystem::path helper_path_;
