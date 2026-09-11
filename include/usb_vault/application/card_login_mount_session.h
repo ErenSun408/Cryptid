@@ -22,6 +22,13 @@ namespace usb_vault::application {
 // No container shape, password role or path is carried across this boundary.
 using CreationFeedback = std::function<void(unsigned int, unsigned int, wchar_t)>;
 
+// Whether the creation in progress has been called off. Asked on the thread
+// running the creation, and answered without reference to anything the page
+// holds; an empty function means this session cannot be cancelled. A cancel
+// that arrives after the container is written still wins: the file is removed
+// rather than published, so asking always means no container.
+using CreationCancellation = std::function<bool()>;
+
 class CardAuthenticationSession;
 
 // Whether a successful login also mounts the containers that already exist.
@@ -331,6 +338,7 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   [[nodiscard]] virtual std::vector<OperationEvent> operation_history() = 0;
   virtual void clear_operation_history() noexcept = 0;
   virtual void set_creation_feedback(CreationFeedback) {}
+  virtual void set_creation_cancellation(CreationCancellation) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
   virtual void set_operation_logging_enabled(bool) {
     throw std::runtime_error("operation logging preference is unavailable");
@@ -418,6 +426,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;
   void clear_operation_history() noexcept override;
   void set_creation_feedback(CreationFeedback feedback) override;
+  void set_creation_cancellation(CreationCancellation cancelled) override;
   [[nodiscard]] bool operation_logging_enabled() override;
   void set_operation_logging_enabled(bool enabled) override;
   void release_session_secrets() noexcept override;

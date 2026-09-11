@@ -544,6 +544,11 @@
     #creation-progress[data-result] .creation-hint { display: none; }
     #creation-progress[data-result="success"] .creation-progress-bar::after { width: 100%; animation: none; transform: none; background: var(--ok); }
     #creation-progress[data-result="error"] .creation-progress-bar { display: none; }
+    #creation-progress[data-result="cancelled"] .creation-progress-bar { display: none; }
+    /* The one control that stays live while a creation runs; it leaves with
+       the run, so a finished dialog never offers to stop what already ended. */
+    .creation-cancel-work { display: block; margin: .9rem auto 0; }
+    #creation-progress[data-result] .creation-cancel-work { display: none; }
     .creation-progress-steps .current { color: var(--gold-2); }
     .creation-progress-steps .current:not(.done) .step-mark { border-top-color: var(--gold); animation: creation-spin 1s linear infinite; font-size: 0; }
     .creation-progress-steps .step-tail { margin-left: auto; font-size: .72rem; }
@@ -740,6 +745,9 @@
     .creation-status { display: block; min-height: 1.25rem; margin-top: .9rem; font-size: .78rem; color: var(--text-3); }
     .creation-status[data-tone="success"] { color: var(--ok); }
     .creation-status[data-tone="error"] { color: var(--danger); }
+    /* Cancelled is neither of the two: nothing went wrong and nothing was
+       made, so it reads as a caution rather than a failure. */
+    .creation-status[data-tone="cancelled"] { color: var(--warn); }
     .modal-footer { justify-content: flex-end; gap: .5rem; border-top: 1px solid var(--line); background: rgba(255, 255, 255, .015); }
     .modal-button:disabled { cursor: not-allowed; opacity: .45; }
     .modal-button.primary {
@@ -1305,6 +1313,7 @@
           <div class="creation-progress-bar" role="progressbar" aria-label="容器创建处理中"></div>
           <div id="creation-progress-time" class="creation-progress-time">已用时 00:00</div>
           <p class="creation-hint">请留意系统管理员授权提示。大容量容器需要较长时间，请保持安全卡连接并等待完成。</p>
+          <button id="creation-cancel-work" class="modal-button creation-cancel-work" type="button">取消创建</button>
         </div>
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
       </div>

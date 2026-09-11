@@ -631,6 +631,11 @@ void CardProductUiSessionController::set_creation_feedback(application::Creation
   volume_session_.set_creation_feedback(std::move(feedback));
 }
 
+void CardProductUiSessionController::set_creation_cancellation(
+    application::CreationCancellation cancelled) {
+  volume_session_.set_creation_cancellation(std::move(cancelled));
+}
+
 bool CardProductUiSessionController::operation_logging_enabled() {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("operation logging preference requires authentication");

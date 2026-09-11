@@ -10,6 +10,11 @@ namespace usb_vault::ui {
 struct CreationWorkState final {
   std::atomic<bool> running{false};
   std::atomic<bool> interrupted{false};
+  // Set by the page, or by the window asking to close, and cleared when the
+  // next creation starts. It is a request rather than a switch: the creation
+  // stops at the next point it can, which may be after the container was
+  // written, and in that case the file is removed instead of published.
+  std::atomic<bool> cancelled{false};
 };
 
 class IUiWindowSizeSink {

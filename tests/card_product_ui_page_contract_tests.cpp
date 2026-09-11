@@ -927,6 +927,37 @@ void test_every_file_row_carries_one_icon_the_page_drew_itself() {
           "the page loads artwork instead of drawing it");
 }
 
+void test_a_running_creation_can_be_called_off_from_the_page() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string fixture =
+      read_source(USB_VAULT_CARD_PRODUCT_UI_FIXTURE_PAGE);
+
+  // One control, inside the progress view, and it leaves with the run: a
+  // finished dialog never offers to stop what has already ended.
+  require(page.find("id=\"creation-cancel-work\"") != std::string::npos &&
+              page.find("#creation-progress[data-result] .creation-cancel-work")
+                  != std::string::npos,
+          "the page offers no cancel for a running creation, or still offers "
+          "it after one");
+  require(fixture.find("id=\"creation-cancel-work\"") != std::string::npos,
+          "the integration fixture is missing the creation cancel control");
+
+  // Exactly one way to ask, and it reports nothing of its own: what came of
+  // it arrives through the progress the page is already polling.
+  require(count_occurrences(script, "bridge.cancelContainerCreation()") == 1,
+          "the page asks to cancel from more than one place, or not at all");
+
+  // Cancelled is a third outcome. Reporting it as a failure would say
+  // something went wrong to the one person who knows nothing did.
+  require(script.find("if (status === 4) throw new Error(kCreationCancelled);")
+              != std::string::npos &&
+              count_occurrences(script, "error.message === kCreationCancelled")
+                  == 2 &&
+              script.find("已取消创建") != std::string::npos,
+          "a cancelled creation is not told apart from a failed one");
+}
+
 void test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
@@ -1212,6 +1243,7 @@ int main() {
     test_actions_are_serialized_and_external_changes_coalesce();
     test_the_file_manager_browses_a_container_without_naming_a_volume();
     test_every_file_row_carries_one_icon_the_page_drew_itself();
+    test_a_running_creation_can_be_called_off_from_the_page();
     test_deleting_is_permanent_and_asked_once_and_renaming_is_one_name();
     test_a_drag_stays_inside_the_containers_and_says_where_out_lives();
     test_the_backup_centre_owns_the_plaintext_export();

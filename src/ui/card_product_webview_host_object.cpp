@@ -101,6 +101,7 @@ constexpr DISPID kSetWindowSizeId = 44;
 constexpr DISPID kBeginCreateId = 47;
 constexpr DISPID kBeginCreateBId = 48;
 constexpr DISPID kCreationProgressId = 49;
+constexpr DISPID kCancelCreationId = 50;
 constexpr DISPID kGetOperationLoggingEnabledId = 45;
 constexpr DISPID kSetOperationLoggingEnabledId = 46;
 
@@ -346,6 +347,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerBMib")) { ids[0] = kBeginCreateBId; return S_OK; }
     if (matches(names[0], L"getCreationProgress")) { ids[0] = kCreationProgressId; return S_OK; }
+    if (matches(names[0], L"cancelContainerCreation")) { ids[0] = kCancelCreationId; return S_OK; }
     if (matches(names[0], L"getOperationLoggingEnabled")) {
       ids[0] = kGetOperationLoggingEnabledId;
       return S_OK;
@@ -520,7 +522,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       override {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
-    if (creation_work_->running.load() && member != kCreationProgressId) {
+    // Reading progress and calling the creation off are the only two things
+    // a creation leaves reachable: everything else would be a second session
+    // action taken while the first is still running.
+    if (creation_work_->running.load() && member != kCreationProgressId &&
+        member != kCancelCreationId) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
@@ -529,6 +535,14 @@ class CardProductWebViewHostObject final : public IDispatch {
     switch (member) {
       case kBeginCreateId: return invoke_create_container(parameters, result, argument_error, true);
       case kBeginCreateBId: return invoke_create_container_b(parameters, result, argument_error, true);
+      case kCancelCreationId: {
+        if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
+        // Answered the same way whether or not anything is running, so the
+        // page never learns timing it could not already see in the progress
+        // it is polling.
+        creation_work_->cancelled.store(true);
+        return S_OK;
+      }
       case kCreationProgressId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
         if (!result) return E_POINTER;
@@ -676,6 +690,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     creation_progress_.store(0);
     creation_flags_.store(0);
     creation_status_.store(1);
+    // Cleared here rather than when the last creation ended: a cancel that
+    // arrived too late to stop that one must not silently kill this one.
+    creation_work_->cancelled.store(false);
     creation_work_->running.store(true);
     try {
       creation_thread_ = std::thread([this, operation = std::move(operation)]() mutable {
@@ -683,6 +700,8 @@ class CardProductWebViewHostObject final : public IDispatch {
         unsigned int status = 3;
         try {
           if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          controller_.set_creation_cancellation(
+              [this]() { return creation_work_->cancelled.load(); });
           controller_.set_creation_feedback([this](unsigned int stage, unsigned int percent, wchar_t drive) {
             if (stage == 4 && creation_work_->interrupted.load()) throw std::runtime_error("card removed during creation");
             if (stage == 1 || stage == 2) creation_flags_.fetch_or(1U << (stage - 1));
@@ -692,7 +711,11 @@ class CardProductWebViewHostObject final : public IDispatch {
           operation();
           status = 2;
         } catch (...) {}
+        // Cancelled is a third outcome, not a kind of failure: the page says
+        // so plainly, and the history already records that nothing was made.
+        if (status != 2 && creation_work_->cancelled.load()) status = 4;
         try { controller_.set_creation_feedback({}); } catch (...) {}
+        try { controller_.set_creation_cancellation({}); } catch (...) {}
         if (SUCCEEDED(com)) ::CoUninitialize();
         creation_status_.store(status);
         creation_work_->running.store(false);

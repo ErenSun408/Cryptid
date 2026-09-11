@@ -1551,6 +1551,25 @@ void test_creation_feedback_prevents_mount_after_interruption() {
       "interrupted creation published or mounted a container or retained staging");
 }
 
+void test_a_cancelled_creation_publishes_nothing_and_keeps_no_staging() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  // The worst case for a cancel: it is still pending when the helper has
+  // already written the whole container. The file is under the staging name
+  // until it is published, so the answer is still no container.
+  runtime.creation_cancelled = [] { return true; };
+  bool rejected = false;
+  try {
+    static_cast<void>(session.create_container(L"C:\\vault\\called-off.hc",
+                                               64ULL * 1024ULL * 1024ULL));
+  } catch (...) { rejected = true; }
+  require(rejected && !session.mounted() && runtime.other_staging.empty() &&
+      runtime.other_existing.empty(),
+      "a cancelled creation published a container or kept its staging file");
+}
+
 void test_operation_logging_can_pause_without_affecting_volume_actions() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -2626,6 +2645,7 @@ int main() {
     test_operation_history_records_only_committed_session_facts();
     test_operation_logging_can_pause_without_affecting_volume_actions();
     test_creation_feedback_prevents_mount_after_interruption();
+    test_a_cancelled_creation_publishes_nothing_and_keeps_no_staging();
     test_operation_history_distinguishes_publish_from_mount_failure();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();

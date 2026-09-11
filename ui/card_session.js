@@ -176,6 +176,10 @@
   const creationProgressCheck = document.getElementById("creation-progress-check");
   const creationProgressAuthorize = document.getElementById("creation-progress-authorize");
   const creationProgressAllocate = document.getElementById("creation-progress-allocate");
+  const creationCancelWork = document.getElementById("creation-cancel-work");
+  // Carried as an error because that is how the creation flow already ends
+  // early; the two callers tell it apart from a failure by this text alone.
+  const kCreationCancelled = "creation-cancelled";
   let creationDrive = "";
   let creationRunning = false;
   let creationResult = "";
@@ -210,6 +214,8 @@
     creationProgressWork.removeAttribute("aria-current");
     creationProgressCheck.removeAttribute("aria-current");
     creationProgressAuthorize.setAttribute("aria-current", "step");
+    creationCancelWork.disabled = false;
+    creationCancelWork.textContent = "取消创建";
     const started = performance.now();
     const updateTime = () => {
       const seconds = Math.floor((performance.now() - started) / 1000);
@@ -233,22 +239,28 @@
     creationProgressTimer = null;
     creationRunning = false;
     const succeeded = creationStatus.dataset.tone === "success";
-    creationResult = succeeded ? "success" : "error";
+    const cancelled = creationStatus.dataset.tone === "cancelled";
+    creationResult = succeeded ? "success" : cancelled ? "cancelled" : "error";
     creationProgress.dataset.result = creationResult;
     creationDialog.dataset.running = "false";
-    creationTitle.textContent = succeeded ? "容器已创建并挂载" : "创建未完成";
+    creationTitle.textContent = succeeded
+      ? "容器已创建并挂载"
+      : cancelled ? "已取消创建" : "创建未完成";
     setCreationDescription("");
     creationProgressWork.removeAttribute("aria-current");
     creationProgressCheck.removeAttribute("aria-current");
     const created = creationProgressWork.className === "done";
     creationProgressWork.className = succeeded || created ? "done" : "failed";
-    creationProgressWork.querySelector(".step-tail").textContent = succeeded || created ? "已完成" : "未完成";
+    creationProgressWork.querySelector(".step-tail").textContent =
+      succeeded || created ? "已完成" : cancelled ? "已取消" : "未完成";
     creationProgressCheck.className = succeeded ? "done" : "failed";
-    creationProgressCheck.querySelector(".step-tail").textContent = succeeded ? (creationDrive || "挂载成功") : "未确认";
+    creationProgressCheck.querySelector(".step-tail").textContent =
+      succeeded ? (creationDrive || "挂载成功") : cancelled ? "已取消" : "未确认";
     for (const step of [creationProgressAuthorize, creationProgressAllocate]) {
       if (step.classList.contains("current")) {
         step.className = succeeded ? "done" : "failed";
-        step.querySelector(".step-tail").textContent = succeeded ? "已完成" : "未完成";
+        step.querySelector(".step-tail").textContent =
+          succeeded ? "已完成" : cancelled ? "已取消" : "未完成";
       }
       step.removeAttribute("aria-current");
     }
@@ -263,7 +275,7 @@
       const packed = await bridge.getCreationProgress();
       if (typeof packed !== "string" || !/^\d+,\d+,\d+,\d+,\d+$/.test(packed)) throw new Error("invalid creation progress");
       const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
-      if (status < 1 || status > 3 || stage > 5 || percent > 100 || flags > 3 ||
+      if (status < 1 || status > 4 || stage > 5 || percent > 100 || flags > 3 ||
           (drive !== 0 && (drive < 65 || drive > 90))) throw new Error("invalid creation progress range");
       const setStep = (step, state, text) => {
         step.className = state;
@@ -284,6 +296,7 @@
         bar?.setAttribute("aria-label", "格式化进度");
       }
       if (status === 2) return;
+      if (status === 4) throw new Error(kCreationCancelled);
       if (status === 3) throw new Error("native creation failed");
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
@@ -693,7 +706,8 @@
       creationCompleted || !ready;
     creationContinueButton.textContent = choosing ? "下一步" : "创建容器";
     creationContinueButton.hidden = creationResult !== "";
-    creationCancelLabel.textContent = creationResult === "error" ? "关闭" : creationCompleted
+    creationCancelLabel.textContent =
+      creationResult === "error" || creationResult === "cancelled" ? "关闭" : creationCompleted
       ? "完成"
       : choosing ? "取消" : "上一步";
     creationBackIcon.hidden = choosing || creationCompleted || creationResult !== "";
@@ -3156,7 +3170,7 @@
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
-    } catch (_) {
+    } catch (error) {
       try {
         await refreshNativeState();
       } catch (_) {
@@ -3167,9 +3181,12 @@
       render(messageForCurrentState());
       if (!creationDialog.hidden &&
           currentState === nativeState.authenticated) {
-        creationStatus.textContent =
-          "创建失败。重试前需要重新填写名称、路径与诱饵密码。";
-        creationStatus.dataset.tone = "error";
+        const cancelled = error instanceof Error &&
+          error.message === kCreationCancelled;
+        creationStatus.textContent = cancelled
+          ? "已取消创建，没有留下容器文件。重试前需要重新填写名称、路径与诱饵密码。"
+          : "创建失败。重试前需要重新填写名称、路径与诱饵密码。";
+        creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
         updateCreationAvailability();
       }
     } finally {
@@ -3218,7 +3235,7 @@
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
-    } catch (_) {
+    } catch (error) {
       try {
         await refreshNativeState();
       } catch (_) {
@@ -3229,10 +3246,13 @@
       render(messageForCurrentState());
       if (!creationDialog.hidden &&
           currentState === nativeState.authenticated) {
-        creationStatus.textContent =
-          "创建失败。重试前需要重新填写名称与路径；" +
-          "若容器已完成但未挂载，请重新插卡后重试。";
-        creationStatus.dataset.tone = "error";
+        const cancelled = error instanceof Error &&
+          error.message === kCreationCancelled;
+        creationStatus.textContent = cancelled
+          ? "已取消创建，没有留下容器文件。重试前需要重新填写名称与路径。"
+          : "创建失败。重试前需要重新填写名称与路径；" +
+            "若容器已完成但未挂载，请重新插卡后重试。";
+        creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
         updateCreationAvailability();
       }
     } finally {
@@ -3585,6 +3605,15 @@
     if (busy || id === 0) return;
     closeForgetFlow();
     await forgetAdoptedContainer(id);
+  });
+  creationCancelWork.addEventListener("click", () => {
+    if (creationCancelWork.disabled) return;
+    creationCancelWork.disabled = true;
+    creationCancelWork.textContent = "正在取消…";
+    // Not awaited, and it reports nothing of its own: what came of it arrives
+    // through the progress this page is already polling, and a creation that
+    // finished first stays finished.
+    void Promise.resolve(bridge.cancelContainerCreation()).catch(() => {});
   });
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => {

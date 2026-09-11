@@ -76,6 +76,11 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   void set_creation_feedback(usb_vault::application::CreationFeedback feedback) override {
     creation_feedback = std::move(feedback);
   }
+  usb_vault::application::CreationCancellation creation_cancelled;
+  void set_creation_cancellation(
+      usb_vault::application::CreationCancellation cancelled) override {
+    creation_cancelled = std::move(cancelled);
+  }
   bool logging_enabled{true};
   bool operation_logging_enabled() override { return logging_enabled; }
   void set_operation_logging_enabled(bool enabled) override { logging_enabled = enabled; }
@@ -100,6 +105,11 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++create_calls;
     created_path.assign(path);
     created_size_bytes = size_bytes;
+    // What the real session does once the helper is done: a cancel still
+    // pending here means the container is dropped rather than published.
+    if (creation_cancelled && creation_cancelled()) {
+      throw std::runtime_error("creation cancelled");
+    }
     if (reject_create) throw std::runtime_error("creation failed");
     return adopt(path, size_bytes);
   }
@@ -1089,6 +1099,49 @@ void test_background_creation_reports_progress_and_excludes_concurrent_calls() {
   require(host->Invoke(member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
       LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr, nullptr) == E_ACCESSDENIED,
       "completed progress leaked after authentication ended");
+}
+
+void test_a_running_creation_can_be_called_off() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.pause_creation.store(true);
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, nullptr, &host, nullptr, &work)),
+      "cancellable host creation failed");
+  const HRESULT begun = invoke_create_container(*host.Get(), L"called-off",
+      fixture.directory.wide(), 64, nullptr, nullptr, true);
+  for (int i = 0; !fixture.volume.creation_entered.load() && i < 1000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  DISPPARAMS no_arguments{};
+  VARIANT ignored{};
+  // Calling a creation off is one of the two things it leaves reachable; the
+  // busy guard would answer E_PENDING to anything else.
+  const HRESULT asked = host->Invoke(
+      member_id(*host.Get(), L"cancelContainerCreation"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &ignored, nullptr,
+      nullptr);
+  ::VariantClear(&ignored);
+  fixture.volume.pause_creation.store(false);
+  for (int i = 0; work.running.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  VARIANT snapshot{};
+  const HRESULT progress_result = host->Invoke(
+      member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr,
+      nullptr);
+  // Status 4 is cancelled: told apart from the failure the page would
+  // otherwise report, because nothing went wrong and nothing was made.
+  const bool says_cancelled = SUCCEEDED(progress_result) &&
+      snapshot.vt == VT_BSTR &&
+      std::wstring_view(snapshot.bstrVal).starts_with(L"4,");
+  ::VariantClear(&snapshot);
+  require(SUCCEEDED(begun) && SUCCEEDED(asked) && work.cancelled.load() &&
+          says_cancelled && !work.running.load(),
+      "a running creation could not be called off, or did not report it");
 }
 
 void test_operation_logging_setting_is_authenticated_and_boolean() {
@@ -2128,6 +2181,7 @@ int main() {
     test_window_size_presets_are_bounded();
     test_operation_logging_setting_is_authenticated_and_boolean();
     test_background_creation_reports_progress_and_excludes_concurrent_calls();
+    test_a_running_creation_can_be_called_off();
     test_login_consumes_and_wipes_one_array();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();

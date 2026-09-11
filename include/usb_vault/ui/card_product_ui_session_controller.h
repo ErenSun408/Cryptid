@@ -234,6 +234,7 @@ class CardProductUiSessionController final {
   [[nodiscard]] std::vector<OperationUiEvent> operation_history();
   void clear_operation_history();
   void set_creation_feedback(application::CreationFeedback feedback);
+  void set_creation_cancellation(application::CreationCancellation cancelled);
   [[nodiscard]] bool operation_logging_enabled();
   void set_operation_logging_enabled(bool enabled);
 

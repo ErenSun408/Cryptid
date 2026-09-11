@@ -112,7 +112,8 @@ class ProductionCardLoginMountSessionRuntime final
     creator_.create_standard(target_path, size_bytes, volume_password,
         [this](const volume_creation::CreationProgress& progress) {
           report_creation(progress, 0, 0);
-        });
+        },
+        creation_cancelled);
   }
 
   void create_with_hidden(
@@ -126,7 +127,8 @@ class ProductionCardLoginMountSessionRuntime final
                                 hidden_password,
         [this, outer_size_bytes, hidden_size_bytes](const volume_creation::CreationProgress& progress) {
           report_creation(progress, outer_size_bytes, hidden_size_bytes);
-        });
+        },
+        creation_cancelled);
   }
 
   void publish_created(const std::wstring_view staging_path,
@@ -305,6 +307,11 @@ CardLoginMountSession::~CardLoginMountSession() noexcept = default;
 
 void CardLoginMountSession::set_creation_feedback(CreationFeedback feedback) {
   impl_->runtime.creation_feedback = std::move(feedback);
+}
+
+void CardLoginMountSession::set_creation_cancellation(
+    CreationCancellation cancelled) {
+  impl_->runtime.creation_cancelled = std::move(cancelled);
 }
 
 void CardLoginMountSession::consume_authenticated_login(
@@ -508,6 +515,20 @@ namespace {
           ? container_path
           : container_path.substr(separator + 1);
   return std::wstring(name);
+}
+
+// A cancel that lands while the helper is finishing still means no container.
+// Everything written so far is under the staging name, so throwing here hands
+// the file to the same cleanup a failure uses: asking to cancel always ends
+// with nothing published, whichever side won the race.
+void throw_if_creation_cancelled(
+    const CardLoginMountSessionRuntime& runtime) {
+  if (runtime.creation_cancelled && runtime.creation_cancelled()) {
+    throw std::system_error(
+        volume_creation::make_error_code(
+            volume_creation::CreationError::operation_cancelled),
+        "container creation was cancelled");
+  }
 }
 
 [[noreturn]] void cleanup_incomplete_container(
@@ -921,6 +942,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     volume_password = derive_standard_password();
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
+    throw_if_creation_cancelled(runtime_);
     if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == size_bytes) runtime_.creation_feedback(2, 100, 0);
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     runtime_.publish_created(staging_path, path);
@@ -1028,6 +1050,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                                 outer_password,
                                 hidden_password);
     staging_owned = true;
+    throw_if_creation_cancelled(runtime_);
     if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == outer_size_bytes) runtime_.creation_feedback(2, 100, 0);
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     runtime_.publish_created(staging_path, path);
