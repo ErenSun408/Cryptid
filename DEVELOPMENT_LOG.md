@@ -8108,3 +8108,14 @@ Q-04 与其后三项决定同属"用户自担风险／范围变更"型，此前�
 - 用户授权生成新包：preview10-diagnostics 完整 ZIP 已生成，15 个文件摘要及四个 EXE 与本次 Release 构建一致性校验通过。SHA-256：566BA3CE2B1571BE20D3342772556622DEFBA32777DC23961289335D3CB86E6E。包含 helper v12 诊断阶段传递、细化反馈和安装退出结果；白屏问题未包含修复。既有八组测试通过，普通桌面完整集成与真卡复验仍待完成，未提交、未推送。
 
 - 用户已批准提交当前工作区：将诊断分类、helper v12 元数据传递、配置器文案与安装结果反馈及相关测试纳入本次提交。沿用八组回归、Release 构建及 preview10 包校验结果，本次差异检查通过；白屏修复尚未实施，完整桌面集成与真卡复验仍待完成。不推送，现有 ZIP 保留打包时的 dirty 构建身份。
+
+### 客户白屏定位与建卷取消（2026-09-11）
+
+- 客户设备上配置器七项全通过、主 EXE 白屏。本机复现定位：`tools/app/main.cpp:174` 用 `UrlCreateFromPathW` 生成页面 URI，非 ASCII 字符原样保留，而 WebView2 在 `NavigationStarting` 回报的是 Chromium 规范化后的百分号编码形式；`:475` 的白名单做字符串全等比较，不等即 `put_Cancel(TRUE)`，把自己的首次导航取消掉，窗口类未设背景画刷因而呈纯白。同一套 preview10 文件在 ASCII 目录正常、在中文目录纯白，Edge headless 打印出两种 URI 形式的差异。另测得 `café` 这类拉丁重音路径被编成 ANSI 的 `%E9`，文件根本加载不到，说明 URI 生成本身也要修，不是只放宽比较。配置器七项均与路径编码无关，因此必然是「全绿 + 白屏」。规避：测试包移到纯 ASCII 短路径。本轮未改代码。
+- 文件类型图标按 P3.18 对照表落地：`ui/card_session.js` 新增十一类 `kFileTypeIcons` 与 `fileTypePaths` 分类器，复用既有 `exportGlyph` 与 `kFilePaths`，文件浏览与导出选择器共用同一分类；契约测试补五条（每行一个图标、目录优先于扩展名、未知扩展名落兜底、分类不向桥多要字段、页面不加载外部图片）。可执行图标按产品真实尺寸渲染后由用户改判为四根引脚，容器类保留。提交：`36e84e2 [ui]draw a type icon for every file in the list`。
+- 建卷取消先查实句柄竞争：`spike/_vcref/src/Common/Format.c:377` 显示格式化期间标准容器以 `dwShareMode = 0` 独占打开，隐藏卷分支也不含 `FILE_SHARE_DELETE`；若父进程靠拆管道取消再删 `.preparing`，必然踩共享冲突。且助手自身的 `delete_target_as_caller` 依赖 `ImpersonateNamedPipeClient`，管道一关就无法模仿，两头都清理不掉，残留的 `.preparing` 又会被建卷前置检查当作 `file_exists`，永久堵死同名容器。故改为带内协作式取消，不拆管道。
+- 协议新增 24 字节 `CancelRequest`（nonce 绑定）：父进程在进度回调里发一次并继续读，助手在 `FormatBackend::progress` 每个进度点 `PeekNamedPipe` 查询，命中即回 `FALSE`，落进它已有的 `catch` 走自清理并回报 `operation_cancelled`；父进程新增助手退出等待（上限 30 秒），先关管道、再等退出、最后才清理。提交：`76c856c [creator]let a running creation be called off`。
+- 会话层与页面：`CreationCancellation` 贯穿 `CardLoginMountSession` 与 UI 会话控制器；桥新增 `cancelContainerCreation`（DISPID 50），忙态守卫对它与进度查询放行；进度面板新增唯一的取消控件，窗口关闭由「不许关」改为询问；取消是第三种结果（status 4），页面显示「已取消创建」而非失败。助手已写完但取消仍未消费时，会话层在 publish 之前抛出，容器被删而不是发布。提交：`4fa4e03 [ui]offer a way out of a running creation`。
+- 验证：协议、页面契约、宿主对象、会话四组目标测试通过，DOM 导航测试通过。WebView2 集成夹具在改动前后同样以 `fail-settings-remember`（退出码 23）失败，属既有问题，与本次无关。真实建卷取消需插卡实机验证，尚未执行；全套测试留待最后一并跑。未推送。
+- 环境记录：本机新链接的 EXE 首次运行会被安全软件挡住数十秒，表现为无输出且主线程停在 `Wait/UserRequest`，重跑即恢复；排查时曾据单次结果误判为回归，后续回归对比一律跑够两次。
+
