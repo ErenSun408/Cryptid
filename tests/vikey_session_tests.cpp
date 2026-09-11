@@ -854,7 +854,7 @@ void test_failures_cleanup_without_spurious_logoff() {
               fake_functions(), credentials.user_sn, credentials.api_key,
               credentials.user_pin));
         },
-        CardError::invalid_configuration,
+        CardError::user_sn_invalid,
         "UserSN failure mapped to the wrong error");
     require_calls(state, {Call::set_user_sn, Call::uninitialization},
                   "UserSN failure cleanup differed");
@@ -886,7 +886,7 @@ void test_failures_cleanup_without_spurious_logoff() {
               fake_functions(), credentials.user_sn, credentials.api_key,
               credentials.user_pin));
         },
-        CardError::invalid_operation,
+        CardError::multiple_devices,
         "multiple ViKey devices were not rejected");
     require_calls(state,
                   {Call::set_user_sn, Call::find_ex,
@@ -903,7 +903,7 @@ void test_failures_cleanup_without_spurious_logoff() {
               fake_functions(), credentials.user_sn, credentials.api_key,
               credentials.user_pin));
         },
-        CardError::invalid_configuration,
+        CardError::api_key_calculation_failed,
         "API-key calculation failure mapped to the wrong error");
     require_calls(state,
                   {Call::set_user_sn, Call::find_ex, Call::set_api_key,

@@ -1038,7 +1038,7 @@ void test_development_stalled_helper_times_out(
     fail("stalled development helper was accepted");
   } catch (const std::system_error& error) {
     expect(error.code() == usb_vault::card::make_error_code(
-                               CardError::communication_failed),
+                               CardError::operation_timed_out),
            "stalled development helper returned the wrong error");
   }
   const auto elapsed = std::chrono::steady_clock::now() - started;
@@ -1108,7 +1108,7 @@ void test_stalled_helper_times_out(const std::filesystem::path& fixture) {
     fail("stalled helper was accepted");
   } catch (const std::system_error& error) {
     expect(error.code() == usb_vault::card::make_error_code(
-                               CardError::communication_failed),
+                               CardError::operation_timed_out),
            "stalled helper returned the wrong error");
   }
   const auto elapsed = std::chrono::steady_clock::now() - started;

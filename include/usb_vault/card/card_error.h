@@ -19,6 +19,15 @@ enum class CardError : std::int32_t {
   communication_failed = 8,
   invalid_operation = 9,
   device_failure = 10,
+  api_key_invalid = 11,
+  api_key_missing = 12,
+  api_key_calculation_failed = 13,
+  api_key_verification_failed = 14,
+  user_sn_invalid = 15,
+  activation_required = 16,
+  multiple_devices = 17,
+  operation_timed_out = 18,
+
 };
 
 [[nodiscard]] const std::error_category& card_error_category() noexcept;

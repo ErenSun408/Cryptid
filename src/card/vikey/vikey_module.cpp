@@ -1,3 +1,4 @@
+#include "card/diagnostic_error.h"
 #include "card/vikey/vikey_module.h"
 
 #include "usb_vault/card/card_error.h"
@@ -26,8 +27,9 @@ void windows_unload(void*, void* const module) noexcept {
   static_cast<void>(::FreeLibrary(static_cast<HMODULE>(module)));
 }
 
-[[noreturn]] void fail(const CardError error, const char* const context) {
-  throw std::system_error(make_error_code(error), context);
+[[noreturn]] void fail(const CardError error, const char* const context,
+    const DiagnosticStage stage = DiagnosticStage::none) {
+  throw DiagnosticError(make_error_code(error), stage, context);
 }
 
 void validate(const DynamicModuleApi& module_api) {
@@ -45,8 +47,10 @@ template <typename Function>
   void* const symbol =
       module_api.resolve(module_api.context, module, symbol_name);
   if (symbol == nullptr) {
-    fail(CardError::backend_unavailable,
-         "ViKey DLL is missing a required export");
+    const bool native = module_api.resolve == &windows_resolve;
+    const auto code = native ? ::GetLastError() : 0;
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::sdk_export,
+        "resolve SDK export", code, native ? NativeCodeKind::win32 : NativeCodeKind::none);
   }
   return reinterpret_cast<Function>(symbol);
 }
@@ -149,13 +153,18 @@ std::error_code map_status(const sdk::Status status) noexcept {
     case sdk::kInvalidAddressOrSize:
       return make_error_code(CardError::invalid_operation);
     case sdk::kApiKey:
+      return make_error_code(CardError::api_key_invalid);
     case sdk::kUserSn:
+      return make_error_code(CardError::user_sn_invalid);
     case sdk::kNotActive:
+      return make_error_code(CardError::activation_required);
     case sdk::kUnsetApiKey:
+      return make_error_code(CardError::api_key_missing);
     case sdk::kApiKeyCalculate1:
     case sdk::kApiKeyCalculate2:
+      return make_error_code(CardError::api_key_calculation_failed);
     case sdk::kCheckApiKey:
-      return make_error_code(CardError::invalid_configuration);
+      return make_error_code(CardError::api_key_verification_failed);
     default:
       return make_error_code(CardError::device_failure);
   }
@@ -183,7 +192,10 @@ VikeyModule VikeyModule::load_from(VerifiedVikeyDll&& verified_dll,
       module_api.load(module_api.context, verified_dll.path().c_str()),
       module_api);
   if (pending.get() == nullptr) {
-    fail(CardError::backend_unavailable, "load ViKey DLL");
+    const bool native = module_api.load == &windows_load;
+    const auto code = native ? ::GetLastError() : 0;
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::sdk_load,
+        "load SDK", code, native ? NativeCodeKind::win32 : NativeCodeKind::none);
   }
 
   sdk::Functions functions = resolve_functions(module_api, pending.get());

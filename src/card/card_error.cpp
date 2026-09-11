@@ -33,6 +33,22 @@ class CardErrorCategory final : public std::error_category {
         return "card operation or data range is invalid";
       case CardError::device_failure:
         return "card device reported an internal failure";
+      case CardError::api_key_invalid:
+        return "API key was rejected";
+      case CardError::api_key_missing:
+        return "API key is not configured";
+      case CardError::api_key_calculation_failed:
+        return "API key calculation failed";
+      case CardError::api_key_verification_failed:
+        return "API key verification failed";
+      case CardError::user_sn_invalid:
+        return "developer identity was rejected";
+      case CardError::activation_required:
+        return "device activation is required";
+      case CardError::multiple_devices:
+        return "more than one card is connected";
+      case CardError::operation_timed_out:
+        return "card helper response timed out";
       default:
         return "unknown card error";
     }

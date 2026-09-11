@@ -10,8 +10,14 @@ usb_vault::card::VerifiedLocalArtifact verify_webview_installer(
 // locked while the caller performs the separately requested installation.
 usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(
     const std::filesystem::path& path);
-// Returns false if the user cancels UAC; true means the installer exited,
-// not that the driver is installed or ready.
-bool install_veracrypt(const std::filesystem::path& directory);
-bool install_webview(const std::filesystem::path& directory);
+enum class InstallState { success, cancelled, reboot_required, failed };
+struct InstallResult { InstallState state; unsigned long exit_code; };
+inline InstallResult classify_installer_exit(unsigned long code) {
+  if (code == 0) return {InstallState::success, code};
+  if (code == 3010 || code == 1641) return {InstallState::reboot_required, code};
+  if (code == 1602 || code == 1223) return {InstallState::cancelled, code};
+  return {InstallState::failed, code};
+}
+InstallResult install_veracrypt(const std::filesystem::path& directory);
+InstallResult install_webview(const std::filesystem::path& directory);
 }

@@ -1,3 +1,4 @@
+#include "card/diagnostic_error.h"
 #include "card/vikey/vikey_helper_protocol.h"
 
 #include "usb_vault/card/card_error.h"
@@ -12,7 +13,7 @@ namespace usb_vault::card::vikey::helper {
 namespace {
 
 [[noreturn]] void throw_protocol(const char* const context) {
-  throw std::system_error(make_error_code(CardError::communication_failed),
+  throw DiagnosticError(make_error_code(CardError::communication_failed), DiagnosticStage::ipc_protocol,
                           context);
 }
 
@@ -108,7 +109,12 @@ bool valid_response(const Response& response,
       (response.security_properties & ~kKnownSecurityProperties) != 0) {
     return false;
   }
+  if (response.diagnostic > static_cast<std::uint32_t>(DiagnosticStage::unexpected) ||
+      response.native_kind > static_cast<std::uint32_t>(NativeCodeKind::process_exit) ||
+      (response.diagnostic == 0 && response.native_kind != 0) ||
+      (response.diagnostic != 0 && response.native_kind == 0 && response.detail != 0)) return false;
   if (response.status == 0) {
+    if (response.diagnostic != 0 || response.native_kind != 0) return false;
     if (response.security_properties == 0) return false;
     std::uint32_t required_payload = 0;
     if (expected_operation == Operation::development_blob_read) {
@@ -142,7 +148,7 @@ bool valid_response(const Response& response,
            response.logical_state == 0;
   }
   const auto first = static_cast<std::int32_t>(CardError::backend_unavailable);
-  const auto last = static_cast<std::int32_t>(CardError::device_failure);
+  const auto last = static_cast<std::int32_t>(CardError::operation_timed_out);
   return response.status >= first && response.status <= last &&
          response.security_properties == 0 && response.payload_bytes == 0 &&
          response.result == 0 && response.logical_state == 0;

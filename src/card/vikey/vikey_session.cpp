@@ -1,3 +1,4 @@
+#include "card/diagnostic_error.h"
 #include "card/vikey/vikey_session.h"
 
 #include "card/vikey/vikey_module.h"
@@ -11,13 +12,17 @@
 namespace usb_vault::card::vikey {
 namespace {
 
-[[noreturn]] void fail(const CardError error, const char* const context) {
-  throw std::system_error(make_error_code(error), context);
+[[noreturn]] void fail(const CardError error, const char* const context,
+    const DiagnosticStage stage = DiagnosticStage::none) {
+  throw DiagnosticError(make_error_code(error), stage, context);
 }
 
-void require_success(const sdk::Status status, const char* const context) {
+void require_success(const sdk::Status status, const char* const context,
+                     DiagnosticStage stage = DiagnosticStage::none) {
   const std::error_code error = map_status(status);
-  if (error) throw std::system_error(error, context);
+  if (status == sdk::kApiKeyCalculate1) stage = DiagnosticStage::sdk_calculation1;
+  if (status == sdk::kApiKeyCalculate2) stage = DiagnosticStage::sdk_calculation2;
+  if (error) throw DiagnosticError(error, stage, context);
 }
 
 [[nodiscard]] bool ascii_hex(const std::byte value) noexcept {
@@ -45,18 +50,15 @@ void validate_credentials(const security::SecureBuffer& user_sn,
                           const security::SecureBuffer& user_pin) {
   if (user_sn.size() != kVikeyUserSnBytes ||
       !std::ranges::all_of(user_sn.bytes(), ascii_hex)) {
-    fail(CardError::invalid_configuration,
-         "ViKey UserSN must contain exactly 32 hexadecimal bytes");
+    fail(CardError::invalid_configuration, "ViKey UserSN must contain exactly 32 hexadecimal bytes", DiagnosticStage::credential_sn);
   }
   if (api_key.size() != kVikeyApiKeyBytes ||
       !std::ranges::all_of(api_key.bytes(), ascii_hex)) {
-    fail(CardError::invalid_configuration,
-         "ViKey API key must contain exactly 128 hexadecimal bytes");
+    fail(CardError::invalid_configuration, "ViKey API key must contain exactly 128 hexadecimal bytes", DiagnosticStage::credential_key);
   }
   if (user_pin.size() != kVikeyUserPinBytes ||
       !std::ranges::all_of(user_pin.bytes(), ascii_alphanumeric)) {
-    fail(CardError::invalid_configuration,
-         "ViKey user PIN must contain exactly 8 alphanumeric bytes");
+    fail(CardError::invalid_configuration, "ViKey user PIN must contain exactly 8 alphanumeric bytes", DiagnosticStage::credential_pin);
   }
 }
 
@@ -79,7 +81,7 @@ void validate_functions(const sdk::Functions& functions) {
     const sdk::Functions& functions, const sdk::Index index) {
   std::uint32_t hardware_id = 0;
   require_success(functions.get_hid(index, &hardware_id),
-                  "read ViKey hardware identity");
+                  "read ViKey hardware identity", DiagnosticStage::sdk_hardware);
   if (hardware_id == 0) {
     fail(CardError::device_failure,
          "ViKey reported an unusable hardware identity");
@@ -98,7 +100,7 @@ void require_blob_capacity(const sdk::Functions& functions,
                            const sdk::Index index) {
   sdk::Length bytes = 0;
   require_success(functions.get_user_data_size(index, &bytes),
-                  "read ViKey user data capacity");
+                  "read ViKey user data capacity", DiagnosticStage::sdk_capacity);
   if (bytes < kVikeyBlobBytes) {
     fail(CardError::invalid_configuration,
          "ViKey user data area is too small for the fixed blob");
@@ -192,16 +194,16 @@ VikeySession VikeySession::open(
     pending.arm();
     require_success(functions.set_user_sn(
                         reinterpret_cast<char*>(user_sn_argument.data())),
-                    "configure ViKey UserSN");
+                    "configure ViKey UserSN", DiagnosticStage::sdk_identity);
   }
 
   std::uint32_t count = 0;
-  require_success(functions.find_ex(&count), "find ViKey device");
+  require_success(functions.find_ex(&count), "find ViKey device", DiagnosticStage::sdk_find);
   if (count == 0) {
     fail(CardError::device_not_found, "find one ViKey device");
   }
   if (count != 1) {
-    fail(CardError::invalid_operation,
+    fail(CardError::multiple_devices,
          "ViKey session requires exactly one connected device");
   }
   constexpr sdk::Index kSelectedIndex = 0;
@@ -218,10 +220,9 @@ VikeySession VikeySession::open(
   sdk::Byte maximum_attempt = 0;
   require_success(functions.get_user_password_attempt(
                       kSelectedIndex, &current_attempt, &maximum_attempt),
-                  "read ViKey user PIN attempts");
+                  "read ViKey user PIN attempts", DiagnosticStage::sdk_attempts);
   if (maximum_attempt != 0 && current_attempt > maximum_attempt) {
-    fail(CardError::device_failure,
-         "ViKey reported inconsistent user PIN attempts");
+    fail(CardError::device_failure, "ViKey reported inconsistent user PIN attempts", DiagnosticStage::input_shape);
   }
   if (maximum_attempt != 0 && current_attempt == 0) {
     fail(CardError::authentication_locked,
@@ -237,7 +238,7 @@ VikeySession VikeySession::open(
 
   sdk::Byte level = 0;
   require_success(functions.get_level(kSelectedIndex, &level),
-                  "verify ViKey user permission level");
+                  "verify ViKey user permission level", DiagnosticStage::sdk_permission);
   constexpr sdk::Byte kUserLevel = 1;
   if (level != kUserLevel) {
     fail(CardError::device_failure,
@@ -289,7 +290,7 @@ security::SecureBuffer VikeySession::read_user_blob() {
           index_, kVikeyBlobAddress,
           static_cast<sdk::Length>(result.size()),
           reinterpret_cast<sdk::Byte*>(result.data())),
-      "read ViKey user blob");
+      "read ViKey user blob", DiagnosticStage::sdk_read);
   return result;
 }
 
@@ -309,7 +310,7 @@ void VikeySession::write_user_blob(
           index_, kVikeyBlobAddress,
           static_cast<sdk::Length>(argument.size()),
           reinterpret_cast<sdk::Byte*>(argument.data())),
-      "write ViKey user blob");
+      "write ViKey user blob", DiagnosticStage::sdk_write);
 }
 
 std::size_t VikeySession::user_data_capacity() {
@@ -317,7 +318,7 @@ std::size_t VikeySession::user_data_capacity() {
   verify_hardware_identity();
   sdk::Length bytes = 0;
   require_success(functions_.get_user_data_size(index_, &bytes),
-                  "read ViKey card journal capacity");
+                  "read ViKey card journal capacity", DiagnosticStage::sdk_capacity);
   return bytes;
 }
 
@@ -337,7 +338,7 @@ security::SecureBuffer VikeySession::read_user_data(
           index_, static_cast<sdk::Address>(offset),
           static_cast<sdk::Length>(length),
           reinterpret_cast<sdk::Byte*>(result.data())),
-      "read ViKey card journal range");
+      "read ViKey card journal range", DiagnosticStage::sdk_read);
   return result;
 }
 
@@ -359,7 +360,7 @@ void VikeySession::write_user_data(
           index_, static_cast<sdk::Address>(offset),
           static_cast<sdk::Length>(argument.size()),
           reinterpret_cast<sdk::Byte*>(argument.data())),
-      "write ViKey card journal range");
+      "write ViKey card journal range", DiagnosticStage::sdk_write);
 }
 
 void VikeySession::verify_hardware_identity() const {

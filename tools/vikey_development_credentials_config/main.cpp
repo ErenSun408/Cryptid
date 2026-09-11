@@ -12,6 +12,7 @@
 #include <utility>
 #ifdef USB_VAULT_CONFIG_DIAGNOSTICS
 #include "diagnostics.h"
+#include "card_failure.h"
 #include "installers.h"
 #include <atomic>
 #include <mutex>
@@ -175,10 +176,14 @@ void save(UiState& state) noexcept {
         L"已保存并复读验证。现在可以启动 USB Vault 开发程序。"));
 #endif
   } catch (const std::system_error& error) {
-    const std::wstring message =
-        L"保存失败（Windows 错误 " +
-        std::to_wstring(error.code().value()) +
-        L"）。部分凭据可能已更新，请重新保存全部三项。";
+    std::wstring message;
+#ifdef USB_VAULT_CONFIG_DIAGNOSTICS
+    if (error.code().category() == usb_vault::card::card_error_category())
+      message = L"保存后校验失败。" + configuration::card_failure(error).detail;
+    else
+#endif
+      message = L"保存失败（Windows 错误 " + std::to_wstring(error.code().value()) +
+          L"）。部分凭据可能已更新，请重新保存全部三项。";
     static_cast<void>(::SetWindowTextW(state.status, message.c_str()));
   } catch (...) {
     static_cast<void>(::SetWindowTextW(
@@ -257,10 +262,16 @@ void install_driver(UiState& state, const bool webview = false) noexcept {
       std::wstring result;
       try {
         if (FAILED(com)) throw std::runtime_error("COM unavailable");
-        result = (webview ? configuration::install_webview(configuration::executable_directory())
-                          : configuration::install_veracrypt(configuration::executable_directory()))
-            ? L"安装器已退出。请按安装器提示完成操作，必要时重启 Windows，然后重新运行检测。"
-            : L"已取消管理员授权。未启动安装器，可稍后重试。";
+        const auto installed = webview ? configuration::install_webview(configuration::executable_directory())
+                                       : configuration::install_veracrypt(configuration::executable_directory());
+        switch (installed.state) {
+          case configuration::InstallState::success: result = L"安装器返回成功，请重新运行检测确认依赖可用。"; break;
+          case configuration::InstallState::cancelled: result = L"安装已取消，可稍后重试。"; break;
+          case configuration::InstallState::reboot_required: result = L"安装器要求重启，请重启 Windows 后重新检测。"; break;
+          case configuration::InstallState::failed: result = L"安装器返回失败，退出码：" + std::to_wstring(installed.exit_code) + L"。请查看安装器提示。"; break;
+        }
+      } catch (const std::system_error& error) {
+        result = std::wstring(webview ? L"WebView2：" : L"VeraCrypt：") + configuration::card_failure(error).detail;
       } catch (...) {
         result = L"无法校验或启动安装器。请确认 prerequisites 中有原版安装器，系统时间及证书验证网络正常，或重新获取完整测试包。";
       }
@@ -419,7 +430,8 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
       if (HIWORD(w_param) == BN_CLICKED && LOWORD(w_param) == kLaunchButtonId) {
         if (!state->ready) return 0;
         try { configuration::launch_application(); }
-        catch (...) { ::SetWindowTextW(state->status, L"启动失败，请重新检测或重新解压完整测试包。"); }
+        catch (const std::system_error& error) { const auto result = configuration::card_failure(error); ::SetWindowTextW(state->status, result.detail.c_str()); }
+        catch (...) { ::SetWindowTextW(state->status, L"[APP-UNKNOWN] 主程序启动异常，请联系支持。"); }
         return 0;
       }
 #endif

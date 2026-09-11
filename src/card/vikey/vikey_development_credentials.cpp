@@ -1,3 +1,4 @@
+#include "card/diagnostic_error.h"
 #include "card/vikey/vikey_development_credentials.h"
 
 #include "card/vikey/vikey_session.h"
@@ -176,13 +177,26 @@ security::SecureBuffer decode_credential_blob(
 }
 
 VikeyCredentialSet WindowsCredentialProvider::load_credentials() {
+  const auto load = [](const wchar_t* target, std::size_t bytes, CredentialField field,
+                       DiagnosticStage stage) {
+    try {
+      auto value = read_credential(target, bytes);
+      if (!valid_credential_value(field, value.bytes()))
+        throw std::invalid_argument("credential format invalid");
+      return value;
+    } catch (const std::system_error& e) {
+      throw DiagnosticError(make_error_code(CardError::backend_unavailable), stage,
+          "read saved credential", static_cast<std::uint32_t>(e.code().value()),
+          NativeCodeKind::win32);
+    } catch (...) {
+      throw DiagnosticError(make_error_code(CardError::invalid_configuration), stage,
+          "saved credential format invalid");
+    }
+  };
   return {
-      .user_sn = read_credential(kUserSnCredentialTarget,
-                                 kVikeyUserSnBytes),
-      .api_key = read_credential(kApiKeyCredentialTarget,
-                                 kVikeyApiKeyBytes),
-      .user_pin = read_credential(kUserPinCredentialTarget,
-                                  kVikeyUserPinBytes),
+    .user_sn = load(kUserSnCredentialTarget, kVikeyUserSnBytes, CredentialField::user_sn, DiagnosticStage::credential_sn),
+    .api_key = load(kApiKeyCredentialTarget, kVikeyApiKeyBytes, CredentialField::api_key, DiagnosticStage::credential_key),
+    .user_pin = load(kUserPinCredentialTarget, kVikeyUserPinBytes, CredentialField::user_pin, DiagnosticStage::credential_pin),
   };
 }
 

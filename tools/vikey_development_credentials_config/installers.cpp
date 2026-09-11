@@ -1,3 +1,5 @@
+#include "card/diagnostic_error.h"
+using namespace usb_vault::card;
 #include <Windows.h>
 #include <shellapi.h>
 #include <wintrust.h>
@@ -28,11 +30,11 @@ static usb_vault::card::VerifiedLocalArtifact verify_installer(
   const LONG result = ::WinVerifyTrust(nullptr, &action, &trust);
   trust.dwStateAction = WTD_STATEACTION_CLOSE;
   static_cast<void>(::WinVerifyTrust(nullptr, &action, &trust));
-  if (result != ERROR_SUCCESS) throw std::runtime_error("installer signature rejected");
+  if (result != ERROR_SUCCESS) throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::installer_signature, "verify installer signature", static_cast<std::uint32_t>(result), NativeCodeKind::hresult);
   return artifact;
 }
 
-static bool run_installer(const usb_vault::card::VerifiedLocalArtifact& installer) {
+static InstallResult run_installer(const usb_vault::card::VerifiedLocalArtifact& installer) {
   const auto parent = installer.path().parent_path();
   SHELLEXECUTEINFOW execute{};
   execute.cbSize = sizeof(execute);
@@ -43,14 +45,17 @@ static bool run_installer(const usb_vault::card::VerifiedLocalArtifact& installe
   execute.nShow = SW_SHOWNORMAL;
   if (!::ShellExecuteExW(&execute)) {
     const DWORD error = ::GetLastError();
-    if (error == ERROR_CANCELLED) return false;
-    throw std::system_error(static_cast<int>(error), std::system_category(), "start installer");
+    if (error == ERROR_CANCELLED) return {InstallState::cancelled, error};
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::installer_start, "start installer", error, NativeCodeKind::win32);
   }
-  if (!execute.hProcess) throw std::runtime_error("installer process unavailable");
+  if (!execute.hProcess) throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::installer_start, "installer process unavailable");
   const DWORD wait = ::WaitForSingleObject(execute.hProcess, INFINITE);
+  DWORD exit_code = 0;
+  const bool finished = wait == WAIT_OBJECT_0 && ::GetExitCodeProcess(execute.hProcess, &exit_code);
+  const DWORD error = finished ? ERROR_SUCCESS : ::GetLastError();
   ::CloseHandle(execute.hProcess);
-  if (wait != WAIT_OBJECT_0) throw std::runtime_error("installer wait failed");
-  return true;
+  if (!finished) throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::installer_wait, "wait installer", error, NativeCodeKind::win32);
+  return classify_installer_exit(exit_code);
 }
 
 usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(const std::filesystem::path& path) {
@@ -59,11 +64,11 @@ usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(const std::fil
 usb_vault::card::VerifiedLocalArtifact verify_webview_installer(const std::filesystem::path& path) {
   return verify_installer(path, kWebViewInstallerDigest);
 }
-bool install_veracrypt(const std::filesystem::path& directory) {
+InstallResult install_veracrypt(const std::filesystem::path& directory) {
   const auto installer = verify_veracrypt_installer(directory / L"prerequisites" / L"VeraCrypt Setup 1.26.29.exe");
   return run_installer(installer);
 }
-bool install_webview(const std::filesystem::path& directory) {
+InstallResult install_webview(const std::filesystem::path& directory) {
   const auto installer = verify_webview_installer(directory / L"prerequisites" / L"MicrosoftEdgeWebView2RuntimeInstallerX64.exe");
   return run_installer(installer);
 }

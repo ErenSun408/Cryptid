@@ -10,6 +10,16 @@ int wmain(int argc, wchar_t** argv) {
       (L"usb-vault-installer-test-" + std::to_wstring(::GetCurrentProcessId()));
   bool owned = false;
   try {
+    using configuration::InstallState;
+    using configuration::classify_installer_exit;
+    if (classify_installer_exit(0).state != InstallState::success ||
+        classify_installer_exit(3010).state != InstallState::reboot_required ||
+        classify_installer_exit(1641).state != InstallState::reboot_required ||
+        classify_installer_exit(1602).state != InstallState::cancelled ||
+        classify_installer_exit(1223).state != InstallState::cancelled ||
+        classify_installer_exit(1603).state != InstallState::failed ||
+        classify_installer_exit(999).exit_code != 999)
+      throw std::runtime_error("installer exit result misclassified");
     if (!std::filesystem::create_directory(directory)) throw std::runtime_error("fixture already exists");
     owned = true;
     for (const bool exists : {false, true}) {

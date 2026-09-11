@@ -1013,3 +1013,9 @@ if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
     RUN_SERIAL TRUE
   )
 endif()
+
+add_executable(configuration_card_failure_tests configuration_card_failure_tests.cpp)
+target_include_directories(configuration_card_failure_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(configuration_card_failure_tests PRIVATE usb_vault_vikey_sdk)
+usb_vault_configure_target(configuration_card_failure_tests)
+add_test(NAME configuration_card_failure_tests COMMAND configuration_card_failure_tests)

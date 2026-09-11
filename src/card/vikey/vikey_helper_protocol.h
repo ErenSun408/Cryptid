@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 11;
+constexpr std::uint16_t kVersion = 12;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -329,11 +329,13 @@ struct Response final {
   // A successful card-media probe returns a validated CardLogicalState only
   // when result is product_evidence. Every other response keeps this zero.
   std::uint32_t logical_state{};
+  std::uint32_t diagnostic{};
+  std::uint32_t native_kind{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 
 static_assert(sizeof(Request) == 32);
-static_assert(sizeof(Response) == 48);
+static_assert(sizeof(Response) == 56);
 
 [[nodiscard]] bool valid_request(const Request& request) noexcept;
 [[nodiscard]] bool valid_response(const Response& response,

@@ -1,3 +1,4 @@
+#include "card/diagnostic_error.h"
 #include "card/vikey/vikey_helper_protocol.h"
 
 #include "usb_vault/card/card_error.h"
@@ -748,9 +749,40 @@ void test_response_validation() {
   expect(!valid_response(response, Operation::probe),
          "downgraded response version was accepted");
   response = Response{};
+  for (int status = 11; status <= 18; ++status) {
+    response.status = status;
+    expect(valid_response(response, Operation::card_media_probe),
+           "specific diagnostic status was lost at helper boundary");
+  }
+  response.status = 19;
+  expect(!valid_response(response, Operation::card_media_probe),
+         "status beyond diagnostic domain was accepted");
   response.status = 999;
   expect(!valid_response(response, Operation::probe),
          "unknown helper error was accepted");
+}
+
+void test_diagnostic_round_trip() {
+  const Pipe pipe = make_pipe();
+  Response sent{};
+  sent.status = static_cast<std::int32_t>(CardError::backend_unavailable);
+  sent.diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::sdk_load);
+  sent.native_kind = static_cast<std::uint32_t>(usb_vault::card::NativeCodeKind::win32);
+  sent.detail = 126;
+  write_response(pipe.write.get(), sent, Operation::card_media_probe);
+  const auto got = read_response(pipe.read.get(), sent.nonce, Operation::card_media_probe);
+  expect(got.diagnostic == sent.diagnostic && got.native_kind == sent.native_kind && got.detail == 126,
+         "diagnostic metadata was lost in helper IPC");
+  sent.status = 0;
+  sent.security_properties = kRequiredSecurityProperties;
+  expect(!valid_response(sent, Operation::probe), "success carried stale diagnostic metadata");
+  sent.status = static_cast<std::int32_t>(CardError::backend_unavailable);
+  sent.security_properties = 0;
+  sent.diagnostic = 999;
+  expect(!valid_response(sent, Operation::probe), "unknown diagnostic stage accepted");
+  sent.diagnostic = 1;
+  sent.native_kind = 999;
+  expect(!valid_response(sent, Operation::probe), "unknown native code kind accepted");
 }
 
 void test_nonce_mismatch_is_rejected() {
@@ -790,6 +822,7 @@ int main() {
     test_card_record_response_round_trip();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
+    test_diagnostic_round_trip();
     std::cout << "vikey_helper_protocol_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

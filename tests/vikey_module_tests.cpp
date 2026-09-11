@@ -205,14 +205,20 @@ void test_vendor_statuses_map_to_generic_card_errors() {
   require(map_status(sdk::kInvalidAddressOrSize) ==
               make_error_code(CardError::invalid_operation),
           "invalid-range status mapping differed");
-  require(map_status(sdk::kApiKey) ==
-              make_error_code(CardError::invalid_configuration),
-          "API-key status mapping differed");
-  require(map_status(sdk::kApiKeyCalculate1) ==
-                  make_error_code(CardError::invalid_configuration) &&
-              map_status(sdk::kApiKeyCalculate2) ==
-                  make_error_code(CardError::invalid_configuration),
-          "API-key calculation status mapping differed");
+  require(map_status(sdk::kApiKey) == make_error_code(CardError::api_key_invalid),
+          "kApiKey diagnostic mapping differed");
+  require(map_status(sdk::kUnsetApiKey) == make_error_code(CardError::api_key_missing),
+          "kUnsetApiKey diagnostic mapping differed");
+  require(map_status(sdk::kApiKeyCalculate1) == make_error_code(CardError::api_key_calculation_failed),
+          "kApiKeyCalculate1 diagnostic mapping differed");
+  require(map_status(sdk::kApiKeyCalculate2) == make_error_code(CardError::api_key_calculation_failed),
+          "kApiKeyCalculate2 diagnostic mapping differed");
+  require(map_status(sdk::kCheckApiKey) == make_error_code(CardError::api_key_verification_failed),
+          "kCheckApiKey diagnostic mapping differed");
+  require(map_status(sdk::kUserSn) == make_error_code(CardError::user_sn_invalid),
+          "kUserSn diagnostic mapping differed");
+  require(map_status(sdk::kNotActive) == make_error_code(CardError::activation_required),
+          "kNotActive diagnostic mapping differed");
   require(map_status(0x81234567U) ==
               make_error_code(CardError::device_failure),
           "unknown vendor status did not fail closed");

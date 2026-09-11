@@ -1,3 +1,7 @@
+#include "card/diagnostic_error.h"
+using usb_vault::card::diagnostic_native;
+using usb_vault::card::diagnostic_stage;
+using usb_vault::card::diagnostic_kind;
 #include "card/vikey/vikey_helper_protocol.h"
 #include "card/vikey/vikey_hid_probe.h"
 #include "card/vikey/vikey_artifact.h"
@@ -150,6 +154,8 @@ struct OperationResult final {
   std::uint32_t detail{};
   std::uint32_t result{};
   std::uint32_t logical_state{};
+  std::uint32_t diagnostic{};
+  std::uint32_t native_kind{};
 };
 
 struct BlobReadResult final {
@@ -239,7 +245,8 @@ struct BlobReadResult final {
     return {.detail = pack_development_session_observation(observation)};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -266,7 +273,8 @@ struct BlobReadResult final {
     return {.detail = hardware_id};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -352,6 +360,9 @@ struct BlobReadResult final {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -368,7 +379,8 @@ struct BlobReadResult final {
     return result;
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -428,6 +440,9 @@ bootstrap_media_state(const CardMediaState state) {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -439,7 +454,8 @@ bootstrap_media_state(const CardMediaState state) {
     return {};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -479,6 +495,9 @@ bootstrap_media_state(const CardMediaState state) {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -490,7 +509,8 @@ bootstrap_media_state(const CardMediaState state) {
     return {};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -521,6 +541,9 @@ bootstrap_media_state(const CardMediaState state) {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -535,7 +558,8 @@ bootstrap_media_state(const CardMediaState state) {
     return result;
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -566,6 +590,9 @@ bootstrap_media_state(const CardMediaState state) {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -583,7 +610,7 @@ bootstrap_media_state(const CardMediaState state) {
     return {.blob = std::move(blob)};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.operation = {.status = error.code().value()}};
+      return {.operation = {.status = error.code().value(), .detail = diagnostic_native(error), .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)}};
     }
     return {.operation = {.status = static_cast<std::int32_t>(
                               CardError::backend_unavailable)}};
@@ -621,7 +648,8 @@ bootstrap_media_state(const CardMediaState state) {
     return {};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -654,6 +682,9 @@ bootstrap_media_state(const CardMediaState state) {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -671,7 +702,7 @@ bootstrap_media_state(const CardMediaState state) {
     return {.blob = std::move(record)};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.operation = {.status = error.code().value()}};
+      return {.operation = {.status = error.code().value(), .detail = diagnostic_native(error), .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)}};
     }
     return {.operation = {.status = static_cast<std::int32_t>(
                               CardError::backend_unavailable)}};
@@ -704,6 +735,9 @@ bootstrap_media_state(const CardMediaState state) {
                           ? error.code().value()
                           : static_cast<std::int32_t>(
                                 CardError::backend_unavailable);
+      result.detail = diagnostic_native(error);
+      result.diagnostic = diagnostic_stage(error);
+      result.native_kind = diagnostic_kind(error);
     } catch (...) {
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
@@ -715,7 +749,8 @@ bootstrap_media_state(const CardMediaState state) {
     return {};
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) {
-      return {.status = error.code().value()};
+      return {.status = error.code().value(), .detail = diagnostic_native(error),
+              .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
                 static_cast<std::int32_t>(CardError::backend_unavailable)};
@@ -895,10 +930,14 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         response.detail = result.detail;
         response.result = result.result;
         response.logical_state = result.logical_state;
+        response.diagnostic = result.diagnostic;
+        response.native_kind = result.native_kind;
       } else {
         response.status =
             static_cast<std::int32_t>(CardError::backend_unavailable);
         response.detail = ERROR_BAD_ENVIRONMENT;
+        response.diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::process_security);
+        response.native_kind = static_cast<std::uint32_t>(usb_vault::card::NativeCodeKind::win32);
       }
       if (response.status == 0) {
         response.security_properties =
@@ -917,6 +956,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       response.security_properties = 0;
       response.payload_bytes = 0;
       response.detail = ERROR_GEN_FAILURE;
+      response.diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::unexpected);
+      response.native_kind = static_cast<std::uint32_t>(usb_vault::card::NativeCodeKind::win32);
       response.result = 0;
       response.logical_state = 0;
     }

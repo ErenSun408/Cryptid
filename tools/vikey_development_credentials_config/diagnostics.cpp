@@ -2,6 +2,7 @@
 #include <objbase.h>
 #include <WebView2.h>
 #include "diagnostics.h"
+#include "card_failure.h"
 #include "p2_config_deployment.h"
 #include "card/verified_local_artifact.h"
 #include "card/vikey/vikey_development_app_config.h"
@@ -44,16 +45,25 @@ bool diagnose(const Report& report) {
           : fail(L"当前测试包需要 Windows x64。请使用匹配的设备。");
     },
     [&] {
+      const wchar_t* component = L"运行组件";
+      const auto check = [&](const wchar_t* name, const wchar_t* digest) {
+        component = name;
+        return pin(root, name, digest);
+      };
       try {
-        artifacts.push_back(pin(root, L"usb_vault_vikey_p2_development_app.exe", p2_deployment::app));
-        artifacts.push_back(pin(root, L"usb_vault_vikey_helper.exe", p2_deployment::helper));
-        artifacts.push_back(pin(root, L"usb_vault_volume_creator.exe", p2_deployment::creator));
-        artifacts.push_back(pin(root, L"VeraCryptFormat.dll", p2_deployment::format));
-        artifacts.push_back(pin(root, L"vendor\\ViKey.dll", p2_deployment::vendor));
-        artifacts.push_back(pin(root, L"card_session.html", p2_deployment::html));
-        artifacts.push_back(pin(root, L"card_session.js", p2_deployment::js));
+        artifacts.push_back(check( L"usb_vault_vikey_p2_development_app.exe", p2_deployment::app));
+        artifacts.push_back(check( L"usb_vault_vikey_helper.exe", p2_deployment::helper));
+        artifacts.push_back(check( L"usb_vault_volume_creator.exe", p2_deployment::creator));
+        artifacts.push_back(check( L"VeraCryptFormat.dll", p2_deployment::format));
+        artifacts.push_back(check( L"vendor\\ViKey.dll", p2_deployment::vendor));
+        artifacts.push_back(check( L"card_session.html", p2_deployment::html));
+        artifacts.push_back(check( L"card_session.js", p2_deployment::js));
         return pass(L"主程序和运行组件完整，版本一致。");
-      } catch (...) { return fail(L"组件缺失、修改或路径不支持；请重新解压完整包到本机固定磁盘。"); }
+      } catch (const std::system_error& error) {
+        auto result = card_failure(error);
+        result.detail = std::wstring(component) + L"：" + result.detail;
+        return result;
+      } catch (...) { return fail(L"[PACKAGE-UNKNOWN] 组件检查异常，请重新解压完整包。"); }
     },
     [] {
       LPWSTR version{};
@@ -72,7 +82,8 @@ bool diagnose(const Report& report) {
     },
     [&] {
       try { static_cast<void>(credentials.load_credentials()); return pass(L"当前用户已保存格式有效的凭据；有效性由安全卡检查确认。"); }
-      catch (...) { return fail(L"凭据缺失或格式无效；请填写并保存全部三项。"); }
+      catch (const std::system_error& error) { return card_failure(error); }
+      catch (...) { return fail(L"[CRED-UNKNOWN] 凭据读取异常，请联系支持。"); }
     },
     [] {
       const auto device = usb_vault::card::vikey::probe_vikey_hid_access();
@@ -90,18 +101,11 @@ bool diagnose(const Report& report) {
         switch (CardEntryRouter::route(*inspection)) {
           case CardEntryRoute::initialization_required: return pass(L"安全卡访问通过；进入主程序后可设置登录密码。");
           case CardEntryRoute::login_required: return pass(L"安全卡访问通过；可进入主程序登录。");
-          default: return fail(L"安全卡当前不可用；本次检测未初始化或改写卡。");
+          default: return fail(L"[CARD-STATE] 卡状态检查未通过。请联系供应方检查卡兼容性或状态；本次未改写卡，不要直接重新初始化。");
         }
       } catch (const std::system_error& error) {
-        using usb_vault::card::CardError;
-        if (error.code() == CardError::authentication_failed)
-          return fail(L"凭据认证失败，请核对供应方提供的配置，不要反复猜测 PIN。");
-        if (error.code() == CardError::authentication_locked)
-          return fail(L"安全卡认证已锁定，请联系供应方处理。");
-        if (error.code() == CardError::device_not_found)
-          return fail(L"检测期间安全卡不可用，请重新插卡后重试。");
-        return fail(L"安全卡访问失败；请核对凭据、网络和卡是否匹配。");
-      } catch (...) { return fail(L"安全卡访问失败；请核对凭据、网络和卡是否匹配。"); }
+        return card_failure(error);
+      } catch (...) { return fail(L"[CARD-UNKNOWN] 卡检查发生未分类异常。请提供此编号及软件版本；不要据此修改 PIN 或重新初始化。"); }
     }
   };
   return run_checks(probes, report);
@@ -115,7 +119,7 @@ void launch_application() {
   PROCESS_INFORMATION process{};
   if (!::CreateProcessW(app.path().c_str(), command.data(), nullptr, nullptr, FALSE,
                         0, nullptr, root.c_str(), &startup, &process))
-    throw std::runtime_error("application launch failed");
+    throw usb_vault::card::DiagnosticError(usb_vault::card::make_error_code(usb_vault::card::CardError::backend_unavailable), usb_vault::card::DiagnosticStage::application_start, "start app", ::GetLastError(), usb_vault::card::NativeCodeKind::win32);
   ::CloseHandle(process.hThread); ::CloseHandle(process.hProcess);
 }
 }

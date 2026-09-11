@@ -1,3 +1,4 @@
+#include "card/diagnostic_error.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 
 #include "usb_vault/card/card_error.h"
@@ -15,9 +16,8 @@ namespace {
     if (error.code().category() == card_error_category()) throw;
   } catch (...) {
   }
-  throw std::system_error(
-      make_error_code(CardError::backend_unavailable),
-      "ViKey credential provider or enrollment helper failed");
+  throw DiagnosticError(make_error_code(CardError::backend_unavailable),
+      DiagnosticStage::unexpected, "credential provider or helper failed");
 }
 
 [[nodiscard]] bool eligible_bootstrap_state(
