@@ -1,6 +1,7 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 
 #include "usb_vault/ui/webview_password_array.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <Windows.h>
 
@@ -710,10 +711,19 @@ class CardProductWebViewHostObject final : public IDispatch {
           });
           operation();
           status = 2;
+        } catch (const application::ContainerCreationCleanupError&) {
+          status = 5;
+        } catch (const std::system_error& error) {
+          // A request alone proves neither cancellation nor successful cleanup.
+          // Only the creator's confirmed outcome may claim cancellation.
+          if (error.code() == volume_creation::make_error_code(
+                  volume_creation::CreationError::operation_cancelled)) {
+            status = 4;
+          } else if (error.code() == volume_creation::make_error_code(
+                         volume_creation::CreationError::cleanup_failed)) {
+            status = 5;
+          }
         } catch (...) {}
-        // Cancelled is a third outcome, not a kind of failure: the page says
-        // so plainly, and the history already records that nothing was made.
-        if (status != 2 && creation_work_->cancelled.load()) status = 4;
         try { controller_.set_creation_feedback({}); } catch (...) {}
         try { controller_.set_creation_cancellation({}); } catch (...) {}
         if (SUCCEEDED(com)) ::CoUninitialize();

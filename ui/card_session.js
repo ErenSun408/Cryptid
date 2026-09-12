@@ -180,6 +180,8 @@
   // Carried as an error because that is how the creation flow already ends
   // early; the two callers tell it apart from a failure by this text alone.
   const kCreationCancelled = "creation-cancelled";
+  const kCreationCleanupFailed = "creation-cleanup-failed";
+  const kCreationCleanupMessage = "创建未完成，未能确认临时文件已清理。请检查保存位置中的残留文件后再重试。";
   let creationDrive = "";
   let creationRunning = false;
   let creationResult = "";
@@ -275,7 +277,7 @@
       const packed = await bridge.getCreationProgress();
       if (typeof packed !== "string" || !/^\d+,\d+,\d+,\d+,\d+$/.test(packed)) throw new Error("invalid creation progress");
       const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
-      if (status < 1 || status > 4 || stage > 5 || percent > 100 || flags > 3 ||
+      if (status < 1 || status > 5 || stage > 5 || percent > 100 || flags > 3 ||
           (drive !== 0 && (drive < 65 || drive > 90))) throw new Error("invalid creation progress range");
       const setStep = (step, state, text) => {
         step.className = state;
@@ -297,6 +299,7 @@
       }
       if (status === 2) return;
       if (status === 4) throw new Error(kCreationCancelled);
+      if (status === 5) throw new Error(kCreationCleanupFailed);
       if (status === 3) throw new Error("native creation failed");
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
@@ -3183,7 +3186,9 @@
           currentState === nativeState.authenticated) {
         const cancelled = error instanceof Error &&
           error.message === kCreationCancelled;
-        creationStatus.textContent = cancelled
+        const cleanupFailed = error instanceof Error &&
+          error.message === kCreationCleanupFailed;
+        creationStatus.textContent = cleanupFailed ? kCreationCleanupMessage : cancelled
           ? "已取消创建，没有留下容器文件。重试前需要重新填写名称、路径与诱饵密码。"
           : "创建失败。重试前需要重新填写名称、路径与诱饵密码。";
         creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
@@ -3248,7 +3253,9 @@
           currentState === nativeState.authenticated) {
         const cancelled = error instanceof Error &&
           error.message === kCreationCancelled;
-        creationStatus.textContent = cancelled
+        const cleanupFailed = error instanceof Error &&
+          error.message === kCreationCleanupFailed;
+        creationStatus.textContent = cleanupFailed ? kCreationCleanupMessage : cancelled
           ? "已取消创建，没有留下容器文件。重试前需要重新填写名称与路径。"
           : "创建失败。重试前需要重新填写名称与路径；" +
             "若容器已完成但未挂载，请重新插卡后重试。";

@@ -3,6 +3,7 @@
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/offline_card_password_policy.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <Windows.h>
 #include <OleAuto.h>
@@ -73,6 +74,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   usb_vault::application::CreationFeedback creation_feedback;
   std::atomic<bool> pause_creation{false};
   std::atomic<bool> creation_entered{false};
+  std::exception_ptr creation_failure;
   void set_creation_feedback(usb_vault::application::CreationFeedback feedback) override {
     creation_feedback = std::move(feedback);
   }
@@ -105,10 +107,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++create_calls;
     created_path.assign(path);
     created_size_bytes = size_bytes;
+    if (creation_failure) std::rethrow_exception(creation_failure);
     // What the real session does once the helper is done: a cancel still
     // pending here means the container is dropped rather than published.
     if (creation_cancelled && creation_cancelled()) {
-      throw std::runtime_error("creation cancelled");
+      throw std::system_error(usb_vault::volume_creation::make_error_code(
+          usb_vault::volume_creation::CreationError::operation_cancelled));
     }
     if (reject_create) throw std::runtime_error("creation failed");
     return adopt(path, size_bytes);
@@ -1101,10 +1105,13 @@ void test_background_creation_reports_progress_and_excludes_concurrent_calls() {
       "completed progress leaked after authentication ended");
 }
 
-void test_a_running_creation_can_be_called_off() {
+void check_background_creation_outcome(const std::exception_ptr& failure,
+                                       const bool request_cancel,
+                                       const std::wstring_view expected_status) {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   fixture.volume.pause_creation.store(true);
+  fixture.volume.creation_failure = failure;
   usb_vault::ui::CreationWorkState work;
   ComPtr<IDispatch> host;
   require(SUCCEEDED(create_card_product_webview_host_object(
@@ -1119,10 +1126,10 @@ void test_a_running_creation_can_be_called_off() {
   VARIANT ignored{};
   // Calling a creation off is one of the two things it leaves reachable; the
   // busy guard would answer E_PENDING to anything else.
-  const HRESULT asked = host->Invoke(
+  const HRESULT asked = request_cancel ? host->Invoke(
       member_id(*host.Get(), L"cancelContainerCreation"), IID_NULL,
       LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &ignored, nullptr,
-      nullptr);
+      nullptr) : S_OK;
   ::VariantClear(&ignored);
   fixture.volume.pause_creation.store(false);
   for (int i = 0; work.running.load() && i < 2000; ++i) {
@@ -1133,15 +1140,39 @@ void test_a_running_creation_can_be_called_off() {
       member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
       LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr,
       nullptr);
-  // Status 4 is cancelled: told apart from the failure the page would
-  // otherwise report, because nothing went wrong and nothing was made.
-  const bool says_cancelled = SUCCEEDED(progress_result) &&
+  const bool expected_outcome = SUCCEEDED(progress_result) &&
       snapshot.vt == VT_BSTR &&
-      std::wstring_view(snapshot.bstrVal).starts_with(L"4,");
+      std::wstring_view(snapshot.bstrVal).starts_with(expected_status);
   ::VariantClear(&snapshot);
-  require(SUCCEEDED(begun) && SUCCEEDED(asked) && work.cancelled.load() &&
-          says_cancelled && !work.running.load(),
-      "a running creation could not be called off, or did not report it");
+  require(SUCCEEDED(begun) && SUCCEEDED(asked) &&
+          work.cancelled.load() == request_cancel &&
+          expected_outcome && !work.running.load(),
+      "background creation misclassified cancellation or cleanup failure");
+}
+
+void test_a_running_creation_can_be_called_off() {
+  using usb_vault::volume_creation::CreationError;
+  using usb_vault::volume_creation::make_error_code;
+  check_background_creation_outcome({}, true, L"4,");
+  const auto cancelled = std::make_exception_ptr(
+      std::system_error(make_error_code(CreationError::operation_cancelled)));
+  const auto cleanup_failed = std::make_exception_ptr(
+      std::system_error(make_error_code(CreationError::cleanup_failed)));
+  const auto combined = std::make_exception_ptr(
+      usb_vault::application::ContainerCreationCleanupError(
+          cancelled, std::make_exception_ptr(std::runtime_error("cleanup failed"))));
+  for (const bool requested : {false, true}) {
+    check_background_creation_outcome(cleanup_failed, requested, L"5,");
+    check_background_creation_outcome(combined, requested, L"5,");
+    check_background_creation_outcome(std::make_exception_ptr(
+        std::runtime_error("unrelated failure")), requested, L"3,");
+    // Same numeric value in another category must not count as cancellation.
+    check_background_creation_outcome(std::make_exception_ptr(
+        std::system_error(std::error_code(
+            static_cast<int>(CreationError::operation_cancelled),
+            std::generic_category()))), requested, L"3,");
+  }
+  check_background_creation_outcome(cancelled, false, L"4,");
 }
 
 void test_operation_logging_setting_is_authenticated_and_boolean() {

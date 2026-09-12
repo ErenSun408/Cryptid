@@ -150,6 +150,35 @@
       $('#creation-progress-check .step-tail').textContent === "Z:" && $('#create-volume-continue').hidden,
       "Successful creation keeps mount results on the execution page");
     $('#create-volume-close').click();
+    for (const kind of ['encrypted', 'hidden']) {
+      for (const status of [3, 4, 5]) {
+        $('[data-create-container]').click();
+        $(`[data-create-kind="${kind}"]`).click();
+        $('#create-volume-continue').click();
+        const prefix = kind === 'hidden' ? '#create-container-b' : '#create-container';
+        enterCreationValue(prefix + '-name', 'outcome-check');
+        enterCreationValue(prefix + '-directory', 'D:\\Containers');
+        if (kind === 'hidden') {
+          enterCreationValue(prefix + '-second', 'test-decoy-password');
+          enterCreationValue(prefix + '-second-confirmation', 'test-decoy-password');
+        }
+        $('#create-volume-continue').click();
+        if (kind === 'hidden') {
+          $('#create-container-b-acknowledge').click();
+          $('#hidden-create-review-confirm').click();
+        }
+        await wait(() => window.navigationFixture.pendingCreation);
+        window.navigationFixture.creationProgress = `${status},3,41,0,3`;
+        window.navigationFixture.pendingCreation = null;
+        await wait(() => !$('#create-volume-close').disabled);
+        const outcome = $('#create-volume-status');
+        check(outcome.dataset.tone === (status === 4 ? 'cancelled' : 'error') &&
+          outcome.textContent.includes('没有留下容器文件') === (status === 4) &&
+          outcome.textContent.includes('未能确认临时文件已清理') === (status === 5),
+          `${kind} creation distinguishes failure, confirmed cancellation and cleanup failure (${status})`);
+        $('#create-volume-close').click();
+      }
+    }
     $("[data-section=backup]").click();
     $("[data-section=settings]").click();
     const sizeSelect = $("#settings-window-size");
