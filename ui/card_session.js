@@ -184,6 +184,7 @@
   const kCreationCleanupMessage = "创建未完成，未能确认临时文件已清理。请检查保存位置中的残留文件后再重试。";
   let creationDrive = "";
   let creationRunning = false;
+  let creationFinalizing = false;
   let creationResult = "";
   let creationProgressTimer = null;
   const stopCreationProgress = () => {
@@ -201,6 +202,7 @@
   const startCreationProgress = () => {
     stopCreationProgress();
     creationRunning = true;
+    creationFinalizing = false;
     creationProgress.hidden = false;
     creationDialog.dataset.running = "true";
     creationTitle.textContent = "正在创建容器";
@@ -279,6 +281,11 @@
       const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
       if (status < 1 || status > 5 || stage > 5 || percent > 100 || flags > 3 ||
           (drive !== 0 && (drive < 65 || drive > 90))) throw new Error("invalid creation progress range");
+      if (stage >= 4) {
+        creationFinalizing = true;
+        creationCancelWork.disabled = true;
+        creationCancelWork.textContent = "正在完成创建，已无法取消";
+      }
       const setStep = (step, state, text) => {
         step.className = state;
         step.querySelector(".step-tail").textContent = text;
@@ -3613,14 +3620,24 @@
     closeForgetFlow();
     await forgetAdoptedContainer(id);
   });
-  creationCancelWork.addEventListener("click", () => {
+  creationCancelWork.addEventListener("click", async () => {
     if (creationCancelWork.disabled) return;
     creationCancelWork.disabled = true;
     creationCancelWork.textContent = "正在取消…";
-    // Not awaited, and it reports nothing of its own: what came of it arrives
-    // through the progress this page is already polling, and a creation that
-    // finished first stays finished.
-    void Promise.resolve(bridge.cancelContainerCreation()).catch(() => {});
+    // The reply only acknowledges the request. The actual outcome still
+    // arrives through progress polling, including cleanup failures.
+    try {
+      const accepted = await bridge.cancelContainerCreation();
+      if (creationRunning && accepted === false) {
+        creationFinalizing = true;
+        creationCancelWork.textContent = "正在完成创建，已无法取消";
+      }
+    } catch (_) {
+      if (creationRunning && !creationFinalizing) {
+        creationCancelWork.disabled = false;
+        creationCancelWork.textContent = "取消请求未确认，点击重试";
+      }
+    }
   });
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => {

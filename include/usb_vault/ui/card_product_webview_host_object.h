@@ -10,11 +10,29 @@ namespace usb_vault::ui {
 struct CreationWorkState final {
   std::atomic<bool> running{false};
   std::atomic<bool> interrupted{false};
-  // Set by the page, or by the window asking to close, and cleared when the
-  // next creation starts. It is a request rather than a switch: the creation
-  // stops at the next point it can, which may be after the container was
-  // written, and in that case the file is removed instead of published.
-  std::atomic<bool> cancelled{false};
+  void begin() noexcept { phase_.store(Phase::cancellable); }
+  void finish() noexcept { phase_.store(Phase::idle); }
+  [[nodiscard]] bool cancellation_requested() const noexcept {
+    return phase_.load() == Phase::cancel_requested;
+  }
+  [[nodiscard]] bool can_cancel() const noexcept {
+    return phase_.load() == Phase::cancellable;
+  }
+  // Shared by the page and window. A request and the publication boundary
+  // compete on one atomic value, so an accepted request cannot be published.
+  [[nodiscard]] bool request_cancel() noexcept {
+    auto expected = Phase::cancellable;
+    return phase_.compare_exchange_strong(expected, Phase::cancel_requested) ||
+           expected == Phase::cancel_requested;
+  }
+  [[nodiscard]] bool begin_finalization() noexcept {
+    auto expected = Phase::cancellable;
+    return phase_.compare_exchange_strong(expected, Phase::finalizing);
+  }
+
+ private:
+  enum class Phase { idle, cancellable, cancel_requested, finalizing };
+  std::atomic<Phase> phase_{Phase::idle};
 };
 
 class IUiWindowSizeSink {

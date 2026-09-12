@@ -20,13 +20,15 @@ namespace usb_vault::application {
 
 // Presentation-only stages: authorization, allocation, formatting, mounting.
 // No container shape, password role or path is carried across this boundary.
+// Stage 4 is emitted before publication, within the staging cleanup scope.
+// Its callback may reject publication (cancellation or session interruption).
 using CreationFeedback = std::function<void(unsigned int, unsigned int, wchar_t)>;
 
 // Whether the creation in progress has been called off. Asked on the thread
 // running the creation, and answered without reference to anything the page
 // holds; an empty function means this session cannot be cancelled. A cancel
-// that arrives after the container is written still wins: the file is removed
-// rather than published, so asking always means no container.
+// accepted before publication removes the staging file even if formatting is
+// already complete. The UI closes its cancellation gate at stage 4.
 using CreationCancellation = std::function<bool()>;
 
 class CardAuthenticationSession;

@@ -538,11 +538,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kBeginCreateBId: return invoke_create_container_b(parameters, result, argument_error, true);
       case kCancelCreationId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
-        // Answered the same way whether or not anything is running, so the
-        // page never learns timing it could not already see in the progress
-        // it is polling.
-        creation_work_->cancelled.store(true);
-        return S_OK;
+        return complete_selection(creation_work_->request_cancel(), result);
       }
       case kCreationProgressId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
@@ -691,9 +687,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     creation_progress_.store(0);
     creation_flags_.store(0);
     creation_status_.store(1);
-    // Cleared here rather than when the last creation ended: a cancel that
-    // arrived too late to stop that one must not silently kill this one.
-    creation_work_->cancelled.store(false);
+    creation_work_->begin();
     creation_work_->running.store(true);
     try {
       creation_thread_ = std::thread([this, operation = std::move(operation)]() mutable {
@@ -702,9 +696,16 @@ class CardProductWebViewHostObject final : public IDispatch {
         try {
           if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
           controller_.set_creation_cancellation(
-              [this]() { return creation_work_->cancelled.load(); });
+              [this]() { return creation_work_->cancellation_requested(); });
           controller_.set_creation_feedback([this](unsigned int stage, unsigned int percent, wchar_t drive) {
             if (stage == 4 && creation_work_->interrupted.load()) throw std::runtime_error("card removed during creation");
+            // Both session creation paths emit stage 4 before publishing,
+            // inside their staging-file cleanup scope. Close the cancel gate
+            // before exposing this stage, and abort if a request won the race.
+            if (stage == 4 && !creation_work_->begin_finalization()) {
+              throw std::system_error(volume_creation::make_error_code(
+                  volume_creation::CreationError::operation_cancelled));
+            }
             if (stage == 1 || stage == 2) creation_flags_.fetch_or(1U << (stage - 1));
             creation_progress_.store((static_cast<std::uint64_t>(stage) << 32) |
                 (static_cast<std::uint64_t>(percent) << 16) | static_cast<unsigned int>(drive));
@@ -728,10 +729,12 @@ class CardProductWebViewHostObject final : public IDispatch {
         try { controller_.set_creation_cancellation({}); } catch (...) {}
         if (SUCCEEDED(com)) ::CoUninitialize();
         creation_status_.store(status);
+        creation_work_->finish();
         creation_work_->running.store(false);
       });
     } catch (...) {
       creation_status_.store(3);
+      creation_work_->finish();
       creation_work_->running.store(false);
       return E_FAIL;
     }

@@ -15,6 +15,8 @@ window.navigationFixture = {
   hiddenCreateCalls: 0,
   pendingCreation: null,
   creationProgress: "1,0,0,0,0",
+  acceptCancellation: true,
+  failCancellation: false,
   containers: [
     { id: 1, name: "工作资料", mounted: true, size: 65536, drive: "X:" },
     { id: 2, name: "影像存档", mounted: false, size: 0, drive: "" },
@@ -52,6 +54,10 @@ window.navigationFixture = {
       };
     },
     getCreationProgress: () => fixture.creationProgress,
+    cancelContainerCreation: () => {
+      if (fixture.failCancellation) throw new Error("simulated cancel request failure");
+      return fixture.acceptCancellation;
+    },
     getOperationLoggingEnabled: () => fixture.loggingEnabled,
     setOperationLoggingEnabled: (enabled) => {
       if (fixture.failLogging) throw new Error("simulated preference failure");

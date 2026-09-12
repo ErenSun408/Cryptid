@@ -572,15 +572,21 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     }
     case WM_CLOSE:
       if (g_creation_work.running.load()) {
-        // Closing during a creation is a question now rather than a refusal.
-        // The window still stays: the creation stops at the next point it
-        // can, and the half-written container goes with it, so there is
-        // nothing to close over until the worker has finished unwinding.
+        if (!g_creation_work.can_cancel()) {
+          ::MessageBoxW(window, g_creation_work.cancellation_requested()
+              ? L"正在取消创建，请等待处理结果后再关闭。"
+              : L"正在完成创建，已无法取消。请等待处理结果后再关闭。",
+              kWindowTitle, MB_OK | MB_ICONINFORMATION);
+          return 0;
+        }
         if (::MessageBoxW(window,
                           L"容器正在创建。要取消创建吗？"
-                          L"取消不会留下容器文件；应用会在创建停止后才能关闭。",
+                          L"应用会等待处理结束，请查看处理结果后再关闭。",
                           kWindowTitle, MB_YESNO | MB_ICONQUESTION) == IDYES) {
-          g_creation_work.cancelled.store(true);
+          if (!g_creation_work.request_cancel()) {
+            ::MessageBoxW(window, L"取消未生效，创建已进入完成阶段或已结束。请查看处理结果后再关闭。",
+                          kWindowTitle, MB_OK | MB_ICONINFORMATION);
+          }
         }
         return 0;
       }

@@ -110,6 +110,18 @@
     await new Promise((resolve) => setTimeout(resolve, 1100));
     check($('#creation-progress-time').textContent !== initialElapsed,
       "Creation elapsed time updates while native creation is pending");
+    window.navigationFixture.failCancellation = true;
+    $('#creation-cancel-work').click();
+    await wait(() => !$('#creation-cancel-work').disabled);
+    check($('#creation-cancel-work').textContent.includes('取消请求未确认'),
+      "An unconfirmed cancel request can be retried without claiming cancellation");
+    window.navigationFixture.failCancellation = false;
+    $('#creation-cancel-work').click();
+    await tick();
+    check($('#creation-cancel-work').disabled &&
+      $('#creation-cancel-work').textContent === '正在取消…' &&
+      $('#create-volume-dialog').dataset.running === 'true',
+      "An accepted cancel request waits for the actual creation outcome");
     window.navigationFixture.pendingCreation.reject(new Error("simulated creation failure"));
     window.navigationFixture.pendingCreation = null;
     await wait(() => window.navigationFixture.hiddenCreateCalls === 1 &&
@@ -132,6 +144,15 @@
     await wait(() => window.navigationFixture.pendingCreation);
     check(!$('#creation-progress').hidden && $('#create-container-form').hidden,
       "Standard creation uses the same running view");
+    check(!$('#creation-cancel-work').disabled,
+      "A new creation restores cancellation after the previous request");
+    window.navigationFixture.acceptCancellation = false;
+    $('#creation-cancel-work').click();
+    await tick();
+    check($('#creation-cancel-work').disabled &&
+      $('#creation-cancel-work').textContent.includes('已无法取消'),
+      "A native rejection closes cancellation even before the next progress poll");
+    window.navigationFixture.acceptCancellation = true;
     window.navigationFixture.creationProgress = "1,4,0,0,3";
     await wait(() => $('#creation-progress-check .step-tail').textContent === "挂载中");
     check(['authorize', 'allocate', 'work'].every((name) => {
@@ -142,6 +163,9 @@
       $('#creation-progress-work .step-tail').textContent === "已完成" &&
       $('#creation-progress-check').className === "current",
       "Fast creation skips directly to mounting with completed non-spinning prior steps");
+    check($('#creation-cancel-work').disabled &&
+      $('#creation-cancel-work').textContent.includes('已无法取消'),
+      "Publication progress keeps cancellation disabled");
     window.navigationFixture.pendingCreation.resolve();
     window.navigationFixture.pendingCreation = null;
     await wait(() => $('#create-volume-status').dataset.tone === "success");

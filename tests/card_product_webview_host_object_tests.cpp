@@ -75,6 +75,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::atomic<bool> pause_creation{false};
   std::atomic<bool> creation_entered{false};
   std::exception_ptr creation_failure;
+  bool skip_cancel_checkpoint{false};
+  std::atomic<bool> pause_finalization{false};
+  std::atomic<bool> finalization_entered{false};
   void set_creation_feedback(usb_vault::application::CreationFeedback feedback) override {
     creation_feedback = std::move(feedback);
   }
@@ -110,11 +113,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     if (creation_failure) std::rethrow_exception(creation_failure);
     // What the real session does once the helper is done: a cancel still
     // pending here means the container is dropped rather than published.
-    if (creation_cancelled && creation_cancelled()) {
+    if (!skip_cancel_checkpoint && creation_cancelled && creation_cancelled()) {
       throw std::system_error(usb_vault::volume_creation::make_error_code(
           usb_vault::volume_creation::CreationError::operation_cancelled));
     }
     if (reject_create) throw std::runtime_error("creation failed");
+    if (creation_feedback) creation_feedback(4, 0, 0);
+    finalization_entered.store(true);
+    for (int i = 0; pause_finalization.load() && i < 2000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     return adopt(path, size_bytes);
   }
 
@@ -1107,11 +1113,13 @@ void test_background_creation_reports_progress_and_excludes_concurrent_calls() {
 
 void check_background_creation_outcome(const std::exception_ptr& failure,
                                        const bool request_cancel,
-                                       const std::wstring_view expected_status) {
+                                       const std::wstring_view expected_status,
+                                       const bool skip_checkpoint = false) {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   fixture.volume.pause_creation.store(true);
   fixture.volume.creation_failure = failure;
+  fixture.volume.skip_cancel_checkpoint = skip_checkpoint;
   usb_vault::ui::CreationWorkState work;
   ComPtr<IDispatch> host;
   require(SUCCEEDED(create_card_product_webview_host_object(
@@ -1130,6 +1138,8 @@ void check_background_creation_outcome(const std::exception_ptr& failure,
       member_id(*host.Get(), L"cancelContainerCreation"), IID_NULL,
       LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &ignored, nullptr,
       nullptr) : S_OK;
+  const bool accepted = !request_cancel ||
+      (ignored.vt == VT_BOOL && ignored.boolVal == VARIANT_TRUE);
   ::VariantClear(&ignored);
   fixture.volume.pause_creation.store(false);
   for (int i = 0; work.running.load() && i < 2000; ++i) {
@@ -1145,7 +1155,7 @@ void check_background_creation_outcome(const std::exception_ptr& failure,
       std::wstring_view(snapshot.bstrVal).starts_with(expected_status);
   ::VariantClear(&snapshot);
   require(SUCCEEDED(begun) && SUCCEEDED(asked) &&
-          work.cancelled.load() == request_cancel &&
+          accepted && !work.cancellation_requested() &&
           expected_outcome && !work.running.load(),
       "background creation misclassified cancellation or cleanup failure");
 }
@@ -1154,6 +1164,9 @@ void test_a_running_creation_can_be_called_off() {
   using usb_vault::volume_creation::CreationError;
   using usb_vault::volume_creation::make_error_code;
   check_background_creation_outcome({}, true, L"4,");
+  // Cancellation arrived after the session's last query but before its
+  // publication feedback. The atomic gate must still stop publication.
+  check_background_creation_outcome({}, true, L"4,", true);
   const auto cancelled = std::make_exception_ptr(
       std::system_error(make_error_code(CreationError::operation_cancelled)));
   const auto cleanup_failed = std::make_exception_ptr(
@@ -1173,6 +1186,42 @@ void test_a_running_creation_can_be_called_off() {
             std::generic_category()))), requested, L"3,");
   }
   check_background_creation_outcome(cancelled, false, L"4,");
+}
+
+void test_creation_finalization_rejects_late_cancellation() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.pause_finalization.store(true);
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, nullptr, &host, nullptr, &work)), "host creation failed");
+  const HRESULT begun = invoke_create_container(*host.Get(), L"finalizing",
+      fixture.directory.wide(), 64, nullptr, nullptr, true);
+  for (int i = 0; !fixture.volume.finalization_entered.load() && i < 1000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  DISPPARAMS args{};
+  VARIANT answer{};
+  const HRESULT asked = host->Invoke(member_id(*host.Get(), L"cancelContainerCreation"),
+      IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &args, &answer, nullptr, nullptr);
+  const bool rejected = SUCCEEDED(asked) && answer.vt == VT_BOOL &&
+      answer.boolVal == VARIANT_FALSE;
+  ::VariantClear(&answer);
+  // Window closure uses the same gate, even while its question was open.
+  const bool window_rejected = !work.can_cancel() && !work.request_cancel();
+  fixture.volume.pause_finalization.store(false);
+  for (int i = 0; work.running.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const HRESULT progress = host->Invoke(member_id(*host.Get(), L"getCreationProgress"),
+      IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &args, &answer, nullptr, nullptr);
+  const bool succeeded = SUCCEEDED(progress) && answer.vt == VT_BSTR &&
+      std::wstring_view(answer.bstrVal).starts_with(L"2,");
+  ::VariantClear(&answer);
+  require(SUCCEEDED(begun) && fixture.volume.finalization_entered.load() &&
+      rejected && window_rejected && succeeded && !work.running.load() &&
+      !work.request_cancel(), "late cancellation was accepted or changed the outcome");
 }
 
 void test_operation_logging_setting_is_authenticated_and_boolean() {
@@ -2213,6 +2262,7 @@ int main() {
     test_operation_logging_setting_is_authenticated_and_boolean();
     test_background_creation_reports_progress_and_excludes_concurrent_calls();
     test_a_running_creation_can_be_called_off();
+    test_creation_finalization_rejects_late_cancellation();
     test_login_consumes_and_wipes_one_array();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();
