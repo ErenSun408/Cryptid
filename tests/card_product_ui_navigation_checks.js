@@ -175,7 +175,9 @@
       "Successful creation keeps mount results on the execution page");
     $('#create-volume-close').click();
     for (const kind of ['encrypted', 'hidden']) {
-      for (const status of [3, 4, 5]) {
+      // Reuse the same name and authenticated page; success immediately
+      // after cancellation must not inherit its terminal state or controls.
+      for (const status of [3, 4, 2, 5]) {
         $('[data-create-container]').click();
         $(`[data-create-kind="${kind}"]`).click();
         $('#create-volume-continue').click();
@@ -192,14 +194,20 @@
           $('#hidden-create-review-confirm').click();
         }
         await wait(() => window.navigationFixture.pendingCreation);
-        window.navigationFixture.creationProgress = `${status},3,41,0,3`;
+        window.navigationFixture.creationProgress = status === 2
+          ? "2,5,100,90,3" : `${status},3,41,0,3`;
         window.navigationFixture.pendingCreation = null;
         await wait(() => !$('#create-volume-close').disabled);
         const outcome = $('#create-volume-status');
-        check(outcome.dataset.tone === (status === 4 ? 'cancelled' : 'error') &&
+        check(outcome.dataset.tone === (status === 2 ? 'success' : status === 4 ? 'cancelled' : 'error') &&
           outcome.textContent.includes('没有留下容器文件') === (status === 4) &&
           outcome.textContent.includes('未能确认临时文件已清理') === (status === 5),
           `${kind} creation distinguishes failure, confirmed cancellation and cleanup failure (${status})`);
+        if (status === 2) {
+          check($('#creation-progress').dataset.result === 'success' &&
+            $('#creation-progress-check .step-tail').textContent === 'Z:',
+            `${kind} same-name retry after cancellation shows a fresh successful mount`);
+        }
         $('#create-volume-close').click();
       }
     }

@@ -4,6 +4,7 @@
 #include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <cstddef>
 #include <concepts>
@@ -1570,6 +1571,106 @@ void test_a_cancelled_creation_publishes_nothing_and_keeps_no_staging() {
       "a cancelled creation published a container or kept its staging file");
 }
 
+void test_both_creation_paths_preserve_cancellation_cleanup_and_retry() {
+  using usb_vault::volume_creation::CreationError;
+  using usb_vault::volume_creation::make_error_code;
+  constexpr std::wstring_view path = L"C:\\vault\\cancel-retry.hc";
+  for (const bool hidden : {false, true}) {
+    // Exercise both the session's post-format query and an abort from the
+    // publication callback after that query has already returned false.
+    for (const bool at_publication : {false, true}) {
+      for (const bool cleanup_fails : {false, true}) {
+        CardAuthenticationSession authentication;
+        FakeRuntime runtime;
+        CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                         LoginMountPolicy::manual);
+        session.consume_authenticated_login(root_secret(), bytes("login-password"));
+        const auto create = [&] {
+          return hidden
+              ? session.create_container_b(path, 64ULL * 1024 * 1024,
+                    16ULL * 1024 * 1024, bytes("decoy-password"))
+              : session.create_container(path, 64ULL * 1024 * 1024);
+        };
+        runtime.fail_remove = cleanup_fails;
+        runtime.creation_cancelled = [=] { return !at_publication; };
+        bool publication_boundary_seen = false;
+        runtime.creation_feedback = [&](unsigned int stage, unsigned int, wchar_t) {
+          if (stage == 4) {
+            publication_boundary_seen = true;
+            throw std::system_error(make_error_code(CreationError::operation_cancelled));
+          }
+        };
+        runtime.events.clear();
+        bool cancelled = false;
+        bool cleanup_reported = false;
+        try { static_cast<void>(create()); }
+        catch (const ContainerCreationCleanupError& error) {
+          cleanup_reported = error.cleanup_failure() != nullptr;
+          try { std::rethrow_exception(error.operation_failure()); }
+          catch (const std::system_error& cause) {
+            cancelled = cause.code() == make_error_code(CreationError::operation_cancelled);
+          }
+        } catch (const std::system_error& error) {
+          cancelled = error.code() == make_error_code(CreationError::operation_cancelled);
+        }
+        require(cancelled && cleanup_reported == cleanup_fails &&
+            publication_boundary_seen == at_publication && authentication.authenticated() &&
+            session.container_statuses().empty() && !session.mounted() &&
+            runtime.other_existing.empty() &&
+            runtime.other_staging.size() == (cleanup_fails ? 1U : 0U) &&
+            std::count(runtime.events.begin(), runtime.events.end(), "cleanup:other") == 1 &&
+            std::find(runtime.events.begin(), runtime.events.end(), "publish:other") == runtime.events.end() &&
+            std::find(runtime.events.begin(), runtime.events.end(), "mount-created:other") == runtime.events.end(),
+            "cancellation lost its cause, published a container, or misrepresented staging cleanup");
+        runtime.creation_cancelled = {};
+        runtime.creation_feedback = {};
+        runtime.fail_remove = false;
+        if (cleanup_fails) {
+          // A residual staging file must block overwrite; recovery here
+          // explicitly models external cleanup, never automatic deletion.
+          const auto events_before_retry = runtime.events.size();
+          require_throws<std::system_error>([&] { static_cast<void>(create()); },
+              "same-name retry overwrote a residual staging file");
+          require(runtime.other_staging.size() == 1 &&
+              std::none_of(runtime.events.begin() + events_before_retry, runtime.events.end(),
+                  [](const auto& event) { return event.starts_with("create:"); }),
+              "blocked retry entered the formatter or removed its residual");
+          runtime.remove_incomplete(std::wstring(path) + L".preparing");
+        }
+        const auto id = create();
+        require(id != 0 && session.mounted() && session.container_statuses().size() == 1 &&
+            runtime.other_existing == std::vector<std::wstring>{std::wstring(path)} &&
+            runtime.other_staging.empty(),
+            "same-session same-name retry failed after cancellation cleanup");
+      }
+    }
+  }
+}
+
+void test_both_creation_paths_do_not_cancel_after_publication() {
+  for (const bool hidden : {false, true}) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    bool late_request = false;
+    runtime.creation_cancelled = [&] { return late_request; };
+    runtime.creation_feedback = [&](unsigned int stage, unsigned int, wchar_t) {
+      if (stage == 5) late_request = true;
+    };
+    constexpr std::wstring_view path = L"C:\\vault\\already-published.hc";
+    const auto id = hidden
+        ? session.create_container_b(path, 64ULL * 1024 * 1024,
+              16ULL * 1024 * 1024, bytes("decoy-password"))
+        : session.create_container(path, 64ULL * 1024 * 1024);
+    require(late_request && id != 0 && session.mounted() &&
+        runtime.other_existing == std::vector<std::wstring>{std::wstring(path)} &&
+        runtime.other_staging.empty() &&
+        std::find(runtime.events.begin(), runtime.events.end(), "cleanup:other") == runtime.events.end(),
+        "late cancellation undid publication or removed the completed container");
+  }
+}
+
 void test_operation_logging_can_pause_without_affecting_volume_actions() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -2646,6 +2747,8 @@ int main() {
     test_operation_logging_can_pause_without_affecting_volume_actions();
     test_creation_feedback_prevents_mount_after_interruption();
     test_a_cancelled_creation_publishes_nothing_and_keeps_no_staging();
+    test_both_creation_paths_preserve_cancellation_cleanup_and_retry();
+    test_both_creation_paths_do_not_cancel_after_publication();
     test_operation_history_distinguishes_publish_from_mount_failure();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();
