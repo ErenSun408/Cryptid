@@ -18,6 +18,13 @@
 
 namespace usb_vault::application {
 
+// Session facts for selecting operations; no driver capacity query, path or type.
+struct ContainerOperationTarget final {
+  std::uint32_t id{};
+  std::wstring name;
+  bool mounted{};
+};
+
 // Presentation-only stages: authorization, allocation, formatting, mounting.
 // No container shape, password role or path is carried across this boundary.
 // Stage 4 is emitted before publication, within the staging cleanup scope.
@@ -344,6 +351,12 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
+  [[nodiscard]] virtual std::vector<ContainerOperationTarget> container_operation_targets() {
+    std::vector<ContainerOperationTarget> targets;
+    for (const auto& entry : container_statuses())
+      targets.push_back({entry.id, entry.name, entry.mounted});
+    return targets;
+  }
 
   // Returns only the live, non-secret A-container facts required by the
   // authenticated product UI. No path, password, root, tier, B-container
@@ -442,6 +455,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
+  [[nodiscard]] std::vector<ContainerOperationTarget> container_operation_targets() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;
   void clear_operation_history() noexcept override;

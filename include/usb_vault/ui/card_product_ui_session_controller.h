@@ -237,6 +237,7 @@ class CardProductUiSessionController final {
   // Live facts for every adopted container, in adoption order. Returns an
   // empty list on every route other than `authenticated`.
   [[nodiscard]] std::vector<ContainerUiStatus> container_statuses();
+  [[nodiscard]] std::vector<application::ContainerOperationTarget> batch_targets();
   [[nodiscard]] std::vector<OperationUiEvent> operation_history();
   void clear_operation_history();
   void set_creation_feedback(application::CreationFeedback feedback);

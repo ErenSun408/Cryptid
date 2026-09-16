@@ -214,6 +214,7 @@ class CardLoginMountSessionCore final {
       std::uint32_t id, std::wstring_view absolute_destination_directory);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
+  [[nodiscard]] std::vector<ContainerOperationTarget> container_operation_targets();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();
   [[nodiscard]] std::vector<::usb_vault::application::OperationEvent>
   operation_history();

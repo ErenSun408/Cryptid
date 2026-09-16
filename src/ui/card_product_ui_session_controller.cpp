@@ -508,6 +508,17 @@ bool CardProductUiSessionController::mounted() const noexcept {
   return volume_session_.mounted();
 }
 
+std::vector<application::ContainerOperationTarget> CardProductUiSessionController::batch_targets() {
+  if (state() != CardProductUiState::authenticated)
+    throw_wrong_route("batch selection requires authentication");
+  auto targets = volume_session_.container_operation_targets();
+  for (const auto& target : targets) {
+    if (target.id == 0 || target.name.empty())
+      throw std::runtime_error("invalid operation target");
+  }
+  return targets;
+}
+
 std::vector<ContainerUiStatus>
 CardProductUiSessionController::container_statuses() {
   if (state() != CardProductUiState::authenticated) return {};

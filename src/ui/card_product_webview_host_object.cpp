@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 #include <thread>
+#include <mutex>
 
 namespace usb_vault::ui {
 namespace {
@@ -108,6 +109,16 @@ constexpr DISPID kBeginMountAdoptedId = 51;
 constexpr DISPID kBeginUnmountContainerId = 52;
 constexpr DISPID kBeginUnmountId = 53;
 constexpr DISPID kVolumeOperationStatusId = 54;
+constexpr DISPID kBeginMountBatchId = 57;
+constexpr DISPID kBeginUnmountBatchId = 58;
+constexpr DISPID kBatchProgressId = 59;
+constexpr DISPID kBatchItemIdId = 60;
+constexpr DISPID kBatchItemNameId = 61;
+constexpr DISPID kBatchItemOutcomeId = 62;
+constexpr std::size_t kMaximumBatchItems = 1024;
+bool is_batch_query(DISPID member) noexcept {
+  return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
+}
 constexpr DISPID kBeginForceUnmountLastId = 55;
 constexpr DISPID kBeginMountAllId = 56;
 // Public, role-neutral outcomes: idle/running/success/unknown, busy, missing,
@@ -510,6 +521,12 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginUnmount")) { ids[0] = kBeginUnmountId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountLast")) { ids[0] = kBeginForceUnmountLastId; return S_OK; }
     if (matches(names[0], L"getVolumeOperationStatus")) { ids[0] = kVolumeOperationStatusId; return S_OK; }
+    if (matches(names[0], L"beginMountBatch")) { ids[0] = kBeginMountBatchId; return S_OK; }
+    if (matches(names[0], L"beginUnmountBatch")) { ids[0] = kBeginUnmountBatchId; return S_OK; }
+    if (matches(names[0], L"getBatchProgress")) { ids[0] = kBatchProgressId; return S_OK; }
+    if (matches(names[0], L"getBatchItemId")) { ids[0] = kBatchItemIdId; return S_OK; }
+    if (matches(names[0], L"getBatchItemName")) { ids[0] = kBatchItemNameId; return S_OK; }
+    if (matches(names[0], L"getBatchItemOutcome")) { ids[0] = kBatchItemOutcomeId; return S_OK; }
     if (matches(names[0], kGetContainerDriveLetterName)) {
       ids[0] = kGetContainerDriveLetterId;
       return S_OK;
@@ -568,7 +585,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     // readable; cancellation belongs to creation, never volume operations.
     if (creation_work_->running.load() &&
         (creation_work_->volume_operation.load()
-             ? member != kVolumeOperationStatusId
+             ? (batch_mode_ ? !is_batch_query(member) : member != kVolumeOperationStatusId)
              : member != kCreationProgressId && member != kCancelCreationId)) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
@@ -579,6 +596,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     // revokes the last cleanup target, so a stale page cannot force a new mount.
     switch (member) {
       case kBeginForceUnmountLastId: case kVolumeOperationStatusId:
+      case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
@@ -587,9 +605,13 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kListContainerDirectoryId: break;
-      default: last_volume_member_ = 0; break;
+      default: last_volume_member_ = 0; clear_batch(); break;
     }
     switch (member) {
+      case kBeginMountBatchId: case kBeginUnmountBatchId:
+        return begin_batch(member == kBeginMountBatchId, parameters, result);
+      case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
+        return invoke_batch_query(member, parameters, result);
       case kBeginMountAdoptedId:
       case kBeginMountAllId:
       case kBeginUnmountContainerId:
@@ -749,6 +771,151 @@ class CardProductWebViewHostObject final : public IDispatch {
   }
 
  private:
+  struct BatchItem {
+    application::ContainerOperationTarget target;
+    unsigned int outcome{};
+  };
+  void clear_batch() {
+    std::lock_guard lock(batch_mutex_);
+    batch_items_.clear();
+    batch_mode_ = false;
+  }
+
+  HRESULT begin_batch(bool mount, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs != 0 || !parameters->rgvarg)
+      return DISP_E_BADPARAMCOUNT;
+    const auto& input = parameters->rgvarg[0];
+    if (input.vt != VT_BSTR || !input.bstrVal) return DISP_E_TYPEMISMATCH;
+    const auto length = ::SysStringLen(input.bstrVal);
+    if (length == 0 || length > kMaximumBatchItems * 11) return E_INVALIDARG;
+    try {
+      // Canonical positive decimal identifiers only. Validate the whole request
+      // before admitting work; duplicates must never issue duplicate IOCTLs.
+      std::vector<std::uint32_t> ids;
+      std::uint32_t value = 0;
+      bool digit_seen = false;
+      for (UINT i = 0; i <= length; ++i) {
+        const wchar_t ch = i == length ? L',' : input.bstrVal[i];
+        if (ch == L',') {
+          if (!digit_seen || value == 0 || ids.size() == kMaximumBatchItems ||
+              std::find(ids.begin(), ids.end(), value) != ids.end()) return E_INVALIDARG;
+          ids.push_back(value);
+          value = 0; digit_seen = false;
+        } else {
+          if (ch < L'0' || ch > L'9' || (!digit_seen && ch == L'0')) return E_INVALIDARG;
+          const auto digit = static_cast<std::uint32_t>(ch - L'0');
+          if (value > (UINT32_MAX - digit) / 10) return E_INVALIDARG;
+          value = value * 10 + digit; digit_seen = true;
+        }
+      }
+      if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
+        return E_ACCESSDENIED;
+      const auto available = controller_.batch_targets();
+      std::vector<BatchItem> plan;
+      plan.reserve(ids.size());
+      for (const auto id : ids) {
+        const auto entry = std::find_if(available.begin(), available.end(),
+            [id](const auto& target) { return target.id == id; });
+        if (entry == available.end()) return E_INVALIDARG;
+        plan.push_back({*entry, 0});
+      }
+      if (creation_thread_.joinable()) creation_thread_.join();
+      const auto epoch = creation_work_->card_epoch.load();
+      {
+        std::lock_guard lock(batch_mutex_);
+        batch_items_ = plan;
+        batch_epoch_ = epoch;
+        batch_mount_ = mount;
+        batch_state_ = 1;
+        batch_completed_ = 0;
+        batch_current_ = 0;
+        batch_mode_ = true;
+      }
+      creation_work_->finish();
+      creation_work_->volume_operation.store(true);
+      volume_status_.store(3); // Batch outcomes are never a single-volume force grant.
+      creation_work_->running.store(true);
+      creation_thread_ = std::thread([this, plan = std::move(plan), mount, epoch] {
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const auto interrupted = [this, epoch] {
+          return creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch;
+        };
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+          if (interrupted()) break;
+          {
+            std::lock_guard lock(batch_mutex_);
+            batch_current_ = i + 1;
+            batch_items_[i].outcome = 1;
+          }
+          unsigned int outcome = 3;
+          if (SUCCEEDED(com)) {
+            try {
+              if (plan[i].target.mounted == mount) outcome = 11;
+              else {
+                if (mount) controller_.mount_container(plan[i].target.id);
+                else controller_.unmount_container(plan[i].target.id);
+                outcome = 2;
+              }
+            } catch (const std::system_error& error) {
+              outcome = volume_failure_status(error.code());
+            } catch (...) {} // One failed item does not stop an independent request.
+          }
+          {
+            std::lock_guard lock(batch_mutex_);
+            batch_items_[i].outcome = interrupted() ? 10 : outcome;
+            batch_completed_ = i + 1;
+          }
+        }
+        if (SUCCEEDED(com)) ::CoUninitialize();
+        {
+          std::lock_guard lock(batch_mutex_);
+          batch_state_ = interrupted() ? 4U : SUCCEEDED(com) ? 2U : 3U;
+          batch_current_ = 0;
+          // Removed-card snapshots must not retain container names for a later login.
+          if (interrupted()) batch_items_.clear();
+        }
+        creation_work_->running.store(false);
+      });
+      return complete_selection(true, result);
+    } catch (...) {
+      creation_work_->running.store(false);
+      clear_batch();
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_batch_query(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    const bool progress = member == kBatchProgressId;
+    if (!parameters || parameters->cNamedArgs != 0 || parameters->cArgs != (progress ? 0U : 1U) ||
+        (!progress && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+    std::uint32_t index = 0;
+    if (!progress && !exact_uint32(parameters->rgvarg[0], index)) return DISP_E_TYPEMISMATCH;
+    if (!result) return E_POINTER;
+    try {
+      if (!batch_mode_) return E_UNEXPECTED;
+      if (batch_epoch_ != creation_work_->card_epoch.load() || creation_work_->interrupted.load() ||
+          (!creation_work_->running.load() && controller_.state() != CardProductUiState::authenticated)) {
+        if (!creation_work_->running.load()) clear_batch();
+        return E_ACCESSDENIED;
+      }
+      std::lock_guard lock(batch_mutex_);
+      if (progress) {
+        const auto current_id = batch_current_ == 0 ? 0 : batch_items_[batch_current_ - 1].target.id;
+        const std::wstring packed = std::to_wstring(batch_state_) + L"," + (batch_mount_ ? L"0," : L"1,") +
+            std::to_wstring(batch_items_.size()) + L"," + std::to_wstring(batch_completed_) + L"," +
+            std::to_wstring(batch_current_) + L"," + std::to_wstring(current_id);
+        return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+      }
+      if (index >= batch_items_.size()) return E_INVALIDARG;
+      const auto& entry = batch_items_[index];
+      if (member == kBatchItemNameId)
+        return complete_string(entry.target.name.c_str(), static_cast<UINT>(entry.target.name.size()), result);
+      ::VariantInit(result); result->vt = VT_UI4;
+      result->ulVal = member == kBatchItemIdId ? entry.target.id : entry.outcome;
+      return S_OK;
+    } catch (...) { return E_FAIL; }
+  }
+
   HRESULT begin_volume_operation(DISPID member, DISPPARAMS* parameters,
                                  VARIANT* result, UINT* argument_error) noexcept {
     const bool force = member == kBeginForceUnmountLastId;
@@ -1743,6 +1910,14 @@ class CardProductWebViewHostObject final : public IDispatch {
   CreationWorkState* creation_work_;
   std::thread creation_thread_;
   std::atomic<unsigned int> volume_status_{0};
+  bool batch_mode_{false}; // Accessed only by the COM/window thread.
+  std::mutex batch_mutex_;
+  std::vector<BatchItem> batch_items_;
+  std::uint64_t batch_epoch_{};
+  bool batch_mount_{};
+  unsigned int batch_state_{};
+  std::size_t batch_completed_{};
+  std::size_t batch_current_{};
   DISPID last_volume_member_{0};
   std::uint32_t last_volume_id_{0};
   std::uint64_t last_volume_epoch_{0};

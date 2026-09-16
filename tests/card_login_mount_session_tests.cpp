@@ -1098,6 +1098,24 @@ void test_manual_forced_release_preserves_scope_secrets_and_failed_state() {
   require(session.mounted(), "unified manual force destroyed remount secrets");
 }
 
+void test_operation_selection_does_not_query_attached_volume_capacity() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime = runtime_with_both_containers();
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto before = session.container_operation_targets();
+  require(before.size() == 2 && !before[0].mounted, "selection snapshot missing adopted items");
+  session.mount_adopted_container(before[0].id);
+  runtime.attached_volume_sizes.clear(); // An external disappearance must not block selecting the other item.
+  runtime.events.clear();
+  const auto targets = session.container_operation_targets();
+  require(targets.size() == 2 && targets[0].id == before[0].id && targets[0].mounted &&
+          targets[0].name == before[0].name && runtime.events.empty(),
+          "selection performed driver IO or changed session facts");
+  authentication.clear_authentication();
+  require(session.container_operation_targets().empty(), "selection exposed names without authentication");
+}
+
 void test_deliberate_release_keeps_the_captured_volume_password() {
   // A deliberate unmount keeps it so the same session can mount again.
   CardAuthenticationSession authentication;
@@ -2825,6 +2843,7 @@ int main() {
     test_mounting_every_adopted_container_keeps_b_before_a();
     test_forced_release_drops_the_captured_volume_password();
     test_deliberate_release_keeps_the_captured_volume_password();
+    test_operation_selection_does_not_query_attached_volume_capacity();
     test_manual_forced_release_preserves_scope_secrets_and_failed_state();
     test_login_adopts_every_mounted_container();
     test_import_falls_back_to_the_login_derivation();

@@ -450,6 +450,10 @@ std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
   return impl_->core.container_statuses();
 }
 
+std::vector<ContainerOperationTarget> CardLoginMountSession::container_operation_targets() {
+  return impl_->core.container_operation_targets();
+}
+
 ContainerAStatus CardLoginMountSession::container_a_status() {
   return impl_->core.container_a_status();
 }
@@ -1535,6 +1539,14 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                       .size_bytes = *size,
                       .drive_letter = container.drive_letter});
   }
+  return result;
+}
+
+std::vector<ContainerOperationTarget> CardLoginMountSessionCore::container_operation_targets() {
+  std::vector<ContainerOperationTarget> result;
+  if (!authentication_.authenticated()) return result;
+  for (const auto& entry : state_.containers)
+    result.push_back({entry.id, entry.name, entry.mounted});
   return result;
 }
 

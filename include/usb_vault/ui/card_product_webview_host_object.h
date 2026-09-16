@@ -71,6 +71,21 @@ class IUiCloseRequestSink {
 // unified volume cleanup, and a bounded current-session operation history. No
 // card identity, credential role, B-container shape, tier, full path,
 // persistent history, or secret-returning member is available.
+//
+// Selected batch contract (separate from login / whole-session transactions):
+// beginMountBatch / beginUnmountBatch take one BSTR: 1..1024 distinct positive
+// uint32 decimal IDs separated by commas, with no whitespace/leading zeroes.
+// The complete selection is validated before any operation, then runs in the
+// supplied order. Item failures continue; card changes stop subsequent items.
+// getBatchProgress(): "state,kind,total,completed,currentIndex,currentId".
+// State 1=running, 2=finished (inspect item outcomes), 3=worker setup failed;
+// kind 0=mount/1=unmount; currentIndex is one-based, zero when none is running.
+// getBatchItemId/Name/Outcome take a zero-based result index. Outcomes:
+// 0=pending, 1=running, 2=succeeded, 3..10=the single-volume failure categories,
+// 11=already in the requested state. Names are session file names, not paths.
+// Only batch queries are available during batch execution. Card changes or
+// authentication loss deny old snapshots; another mutation discards them.
+// No batch outcome grants single-volume force permission or manual cancellation.
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,

@@ -175,6 +175,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   void mount_adopted_container(const std::uint32_t id) override {
     await_volume_operation();
+    batch_calls.push_back(id);
+    if (id == batch_fail_id) throw std::system_error(
+        usb_vault::volume::make_error_code(usb_vault::volume::DriverError::volume_busy));
     ++mount_adopted_calls;
     for (Adopted& entry : containers) {
       if (entry.id != id) continue;
@@ -200,6 +203,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   int mount_all_calls{};
   void unmount_container(const std::uint32_t id) override {
     await_volume_operation();
+    batch_calls.push_back(id);
+    if (id == batch_fail_id) throw std::system_error(
+        usb_vault::volume::make_error_code(usb_vault::volume::DriverError::volume_busy));
     ++unmount_container_calls;
     for (Adopted& entry : containers) {
       if (entry.id != id) continue;
@@ -449,6 +455,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   std::vector<Adopted> containers;
+  std::vector<std::uint32_t> batch_calls;
+  std::uint32_t batch_fail_id{};
   std::uint64_t created_size_bytes{};
   std::uint32_t next_id{1};
   bool reject_create{};
@@ -1951,6 +1959,119 @@ void test_background_volume_operations() {
   require(no_args(L"beginMountAdoptedContainer") == DISP_E_BADPARAMCOUNT, "missing identifier was admitted");
 }
 
+void test_selected_batches_are_serial_bounded_and_session_scoped() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  for (const auto* name : {L"one.hc", L"two.hc", L"three.hc", L"four.hc"})
+    static_cast<void>(fixture.volume.adopt(name, 64ULL * 1024 * 1024));
+  for (auto& entry : fixture.volume.containers) entry.mounted = entry.id == 4;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, &g_close_sink, &host, nullptr, &work)), "batch host creation failed");
+  DISPPARAMS none{};
+  const auto no_args = [&](const wchar_t* name, VARIANT* result = nullptr) {
+    return host->Invoke(member_id(*host.Get(), name), IID_NULL, LOCALE_INVARIANT,
+        DISPATCH_METHOD, &none, result, nullptr, nullptr);
+  };
+  const auto begin = [&](const wchar_t* name, std::wstring_view selection) {
+    VARIANT value{}; value.vt = VT_BSTR;
+    value.bstrVal = ::SysAllocStringLen(selection.data(), static_cast<UINT>(selection.size()));
+    require(value.bstrVal != nullptr, "batch test allocation failed");
+    DISPPARAMS arguments{&value, nullptr, 1, 0};
+    const auto hr = host->Invoke(member_id(*host.Get(), name), IID_NULL, LOCALE_INVARIANT,
+        DISPATCH_METHOD, &arguments, nullptr, nullptr, nullptr);
+    ::VariantClear(&value);
+    return hr;
+  };
+  const auto progress = [&] {
+    VARIANT value{};
+    require(no_args(L"getBatchProgress", &value) == S_OK && value.vt == VT_BSTR,
+            "batch progress unavailable");
+    const std::wstring text(value.bstrVal, ::SysStringLen(value.bstrVal));
+    ::VariantClear(&value); return text;
+  };
+  const auto done = [&] {
+    for (int i = 0; work.running.load() && i < 2000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(), "batch did not finish");
+  };
+  for (const auto* invalid : {L"", L"0", L"01", L"1,1", L"1,", L",1", L"1,,2", L"-1", L"1 2", L"4294967296", L"1,999"})
+    require(begin(L"beginMountBatch", invalid) == E_INVALIDARG, "invalid selection admitted");
+  require(begin(L"beginMountBatch", std::wstring_view(L"1\0,2", 5)) == E_INVALIDARG,
+          "embedded NUL admitted");
+  require(begin(L"beginMountBatch", std::wstring(11265, L'1')) == E_INVALIDARG, "oversized batch admitted");
+  require(no_args(L"beginMountBatch") == DISP_E_BADPARAMCOUNT &&
+          invoke_with_number(*host.Get(), L"beginMountBatch", 1, nullptr, nullptr) == DISP_E_TYPEMISMATCH &&
+          fixture.volume.batch_calls.empty(), "invalid request performed work");
+
+  fixture.volume.batch_fail_id = 1;
+  fixture.volume.pause_volume.store(true);
+  fixture.volume.volume_entered.store(false);
+  require(begin(L"beginMountBatch", L"3,1,2,4") == S_OK, "mount batch did not start");
+  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  require(progress() == L"1,0,4,0,1,3" &&
+          invoke_container_number(*host.Get(), L"getBatchItemId", 0) == 3 &&
+          invoke_container_text(*host.Get(), L"getBatchItemName", 0) == L"three.hc" &&
+          fixture.volume.volume_thread != std::this_thread::get_id(), "batch current item or thread is wrong");
+  require(no_args(L"getSessionState") == E_PENDING && no_args(L"beginUnmount") == E_PENDING &&
+          no_args(L"getVolumeOperationStatus") == E_PENDING &&
+          begin(L"beginUnmountBatch", L"1") == E_PENDING && !work.request_cancel(),
+          "batch admitted concurrent session work or manual cancellation");
+  fixture.volume.pause_volume.store(false);
+  done();
+  require(progress() == L"2,0,4,4,0,0" && fixture.volume.batch_calls == std::vector<std::uint32_t>{3,1,2},
+          "batch stopped on failure, reordered or repeated work");
+  for (std::uint32_t i = 0; i < 4; ++i) {
+    const ULONG expected[] = {2,4,2,11};
+    require(invoke_container_number(*host.Get(), L"getBatchItemOutcome", i) == expected[i], "item outcome mismatch");
+  }
+  require(no_args(L"beginForceUnmountLast") == E_ACCESSDENIED, "batch created a force grant");
+  VARIANT unused{};
+  require(invoke_with_number(*host.Get(), L"getBatchItemName", 4, &unused, nullptr) == E_INVALIDARG,
+          "out of range batch item admitted");
+  fixture.volume.batch_calls.clear(); fixture.volume.batch_fail_id = 0;
+  require(begin(L"beginMountBatch", L"1") == S_OK, "failed-item retry did not start");
+  done();
+  require(progress() == L"2,0,1,1,0,0" && fixture.volume.batch_calls == std::vector<std::uint32_t>{1},
+          "retry reused old outcomes or included unselected items");
+
+  fixture.volume.batch_calls.clear(); fixture.volume.batch_fail_id = 2;
+  require(begin(L"beginUnmountBatch", L"1,2,3,4") == S_OK, "unmount batch did not start");
+  done();
+  require(progress() == L"2,1,4,4,0,0" && fixture.volume.batch_calls == std::vector<std::uint32_t>{1,2,3,4} &&
+          fixture.volume.containers[1].mounted && !fixture.volume.containers[2].mounted,
+          "unmount failure stopped following items or cleared failed state");
+  require(invoke_container_number(*host.Get(), L"getBatchItemOutcome", 1) == 4 &&
+          no_args(L"beginForceUnmountLast") == E_ACCESSDENIED, "batch busy unlocked force");
+  require(begin(L"beginUnmountBatch", L"1") == S_OK, "already-unmounted batch rejected");
+  done();
+  require(invoke_container_number(*host.Get(), L"getBatchItemOutcome", 0) == 11, "already-unmounted item was not skipped");
+
+  fixture.volume.batch_calls.clear(); fixture.volume.batch_fail_id = 0;
+  fixture.volume.pause_volume.store(true); fixture.volume.volume_entered.store(false);
+  require(begin(L"beginMountBatch", L"1,3,4") == S_OK, "interruption batch did not start");
+  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  work.card_epoch.fetch_add(1); work.interrupted.store(true);
+  require(no_args(L"getBatchProgress", &unused) == E_ACCESSDENIED &&
+          invoke_with_number(*host.Get(), L"getBatchItemName", 0, &unused, nullptr) == E_ACCESSDENIED,
+          "removed card exposed a batch snapshot");
+  fixture.volume.pause_volume.store(false); done();
+  require(fixture.volume.batch_calls == std::vector<std::uint32_t>{1}, "batch continued after card removal");
+  work.interrupted.store(false);
+  require(no_args(L"getBatchProgress", &unused) == E_ACCESSDENIED, "old batch survived card reinsertion");
+  require(begin(L"beginMountBatch", L"3") == S_OK, "new batch did not recover after lifecycle cleanup");
+  done();
+  require(progress() == L"2,0,1,1,0,0", "new batch inherited stale progress");
+  require(no_args(L"unmount") == S_OK && no_args(L"getBatchProgress", &unused) == E_UNEXPECTED,
+          "another session action retained stale batch results");
+  fixture.authentication.clear_authentication();
+  require(begin(L"beginMountBatch", L"1") == E_ACCESSDENIED &&
+          begin(L"beginUnmountBatch", L"1") == E_ACCESSDENIED, "unauthenticated batch admitted");
+}
+
 void test_adopted_container_mount_and_unmount_route_through_identifiers() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2530,6 +2651,7 @@ int main() {
     test_directory_browse_reports_the_choice_as_a_string();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
     test_background_volume_operations();
+    test_selected_batches_are_serial_bounded_and_session_scoped();
     test_the_remember_switch_crosses_the_bridge_as_a_boolean();
     test_the_import_switch_crosses_the_bridge_as_a_boolean();
     test_container_b_creation_consumes_six_reversed_arguments();
