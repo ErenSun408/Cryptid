@@ -169,6 +169,18 @@
       text-transform: uppercase; color: var(--text-2);
     }
     .topbar-actions { gap: .5rem; }
+    .batch-split { display: flex; position: relative; }
+    .batch-split > .shell-button:first-child { border-radius: .5rem 0 0 .5rem; }
+    .batch-split > .batch-arrow { border-radius: 0 .5rem .5rem 0; padding-inline: .45rem; border-left: 0; }
+    .batch-menu { position: absolute; right: 0; top: calc(100% + .4rem); z-index: 30; width: min(21rem, 80vw); padding: .5rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--ink-800); box-shadow: 0 .5rem 1.5rem #0003; }
+    .batch-menu label { display: flex; align-items: center; gap: .5rem; padding: .5rem; cursor: pointer; font-size: .8rem; }
+    .batch-menu label:has(input:disabled) { color: var(--text-3); cursor: default; }
+    .batch-menu input { accent-color: var(--gold); flex: 0 0 auto; }
+    .batch-menu input:disabled { opacity: 1; }
+    .batch-items { max-height: 18rem; overflow-y: auto; border-top: 1px solid var(--line); }
+    .batch-state { font-size: .7rem; flex: 0 0 auto; color: var(--text-3); }
+    .batch-name { overflow-wrap: anywhere; min-width: 0; }
+    .batch-empty { padding: .5rem; color: var(--text-3); font-size: .8rem; }
     .dashboard-status { font-size: .74rem; color: var(--text-3); }
     .dashboard-status[data-tone="error"] { color: var(--danger); }
     .shell-button, .create-button, .modal-button {
@@ -876,14 +888,28 @@
       </div>
       <div class="topbar-actions">
         <output id="dashboard-status" class="dashboard-status" aria-live="polite" data-tone=""></output>
-        <button id="dashboard-mount" class="shell-button" type="button" hidden>
+        <div class="batch-split" id="mount-split">
+        <button id="dashboard-mount" class="shell-button" type="button" disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9.5h14"></path><path d="M12 19.5l6-7H6l6 7z"></path><path d="M6 5.5h12"></path></svg>
           一键挂载
         </button>
-        <button id="dashboard-unmount" class="shell-button danger" type="button" hidden>
+        <button id="mount-select" class="shell-button batch-arrow" type="button" aria-label="选择挂载容器" aria-expanded="false" aria-controls="mount-menu">⌄</button>
+        <div id="mount-menu" class="batch-menu" role="group" aria-label="选择挂载容器" hidden>
+          <label><input id="mount-select-all" type="checkbox">全选</label>
+          <div id="mount-items" class="batch-items"></div>
+        </div>
+        </div>
+        <div class="batch-split" id="unmount-split">
+        <button id="dashboard-unmount" class="shell-button danger" type="button" disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14.5h14"></path><path d="M12 4.5l6 7H6l6-7z"></path><path d="M6 18.5h12"></path></svg>
           一键卸载
         </button>
+        <button id="unmount-select" class="shell-button danger batch-arrow" type="button" aria-label="选择卸载容器" aria-expanded="false" aria-controls="unmount-menu">⌄</button>
+        <div id="unmount-menu" class="batch-menu" role="group" aria-label="选择卸载容器" hidden>
+          <label><input id="unmount-select-all" type="checkbox">全选</label>
+          <div id="unmount-items" class="batch-items"></div>
+        </div>
+        </div>
       </div>
     </header>
 

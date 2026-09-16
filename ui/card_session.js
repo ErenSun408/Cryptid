@@ -415,6 +415,116 @@
   let operationEvents = [];
   let busy = true;
   let externalRefreshPending = false;
+  const batchControls = ["mount", "unmount"].map((kind) => ({
+    kind, mounting: kind === "mount", selected: new Set(),
+    button: document.getElementById(`dashboard-${kind}`),
+    arrow: document.getElementById(`${kind}-select`),
+    menu: document.getElementById(`${kind}-menu`),
+    items: document.getElementById(`${kind}-items`),
+    all: document.getElementById(`${kind}-select-all`),
+    split: document.getElementById(`${kind}-split`),
+  }));
+  const closeBatchMenus = () => {
+    for (const control of batchControls) {
+      control.menu.hidden = true;
+      control.arrow.setAttribute("aria-expanded", "false");
+    }
+  };
+  const updateBatchSelection = (control) => {
+    const eligible = containers.filter((item) => item.mounted !== control.mounting);
+    for (const id of control.selected) {
+      if (!eligible.some((item) => item.id === id)) control.selected.delete(id);
+    }
+    control.button.disabled = busy || currentState !== nativeState.authenticated || !control.selected.size;
+    control.all.disabled = busy || !eligible.length;
+    control.all.checked = eligible.length > 0 && control.selected.size === eligible.length;
+    control.all.indeterminate = control.selected.size > 0 && control.selected.size < eligible.length;
+    for (const input of control.items.querySelectorAll("input")) {
+      if (!input.disabled) input.checked = control.selected.has(Number(input.dataset.id));
+    }
+  };
+  const renderBatchControls = () => {
+    const authenticated = currentState === nativeState.authenticated;
+    if (busy || !authenticated) closeBatchMenus();
+    for (const control of batchControls) {
+      if (!authenticated) control.selected.clear();
+      control.arrow.disabled = busy || !authenticated;
+      control.items.replaceChildren();
+      // Clear names while refreshing or working; a card event can arrive
+      // before the native session projection has been replaced.
+      for (const item of authenticated && !busy ? containers : []) {
+        const row = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.id = String(item.id);
+        const reached = item.mounted === control.mounting;
+        input.checked = reached || control.selected.has(item.id);
+        input.disabled = reached || busy;
+        if (reached) {
+          const state = document.createElement("span");
+          state.className = "batch-state";
+          state.textContent = item.mounted ? "已挂载" : "未挂载";
+          row.append(state);
+        }
+        const name = document.createElement("span");
+        name.className = "batch-name";
+        name.textContent = item.name;
+        row.append(input, name);
+        control.items.append(row);
+      }
+      if (!control.items.childElementCount && authenticated && !busy) {
+        const empty = document.createElement("div");
+        empty.className = "batch-empty";
+        empty.textContent = "暂无容器";
+        control.items.append(empty);
+      }
+      updateBatchSelection(control);
+    }
+  };
+  for (const control of batchControls) {
+    control.arrow.addEventListener("click", () => {
+      if (busy || currentState !== nativeState.authenticated || !volumeOperationDialog.hidden) return;
+      const opening = control.menu.hidden;
+      closeBatchMenus();
+      control.menu.hidden = !opening;
+      control.arrow.setAttribute("aria-expanded", String(opening));
+      if (opening) control.menu.querySelector("input:not(:disabled)")?.focus();
+    });
+    control.all.addEventListener("change", () => {
+      if (busy || externalRefreshPending || currentState !== nativeState.authenticated) return;
+      control.selected.clear();
+      if (control.all.checked) for (const item of containers) {
+        if (item.mounted !== control.mounting) control.selected.add(item.id);
+      }
+      updateBatchSelection(control);
+    });
+    control.items.addEventListener("change", (event) => {
+      const input = event.target;
+      if (busy || externalRefreshPending || currentState !== nativeState.authenticated ||
+          input.disabled || !input.matches("input[data-id]")) return;
+      const id = Number(input.dataset.id);
+      if (input.checked) control.selected.add(id);
+      else control.selected.delete(id);
+      updateBatchSelection(control);
+    });
+    control.split.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !control.menu.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeBatchMenus();
+        control.arrow.focus();
+      }
+    });
+    control.split.addEventListener("focusout", (event) => {
+      if (!control.split.contains(event.relatedTarget)) {
+        control.menu.hidden = true;
+        control.arrow.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+  document.addEventListener("click", (event) => {
+    if (!batchControls.some((control) => control.split.contains(event.target))) closeBatchMenus();
+  });
   let creationKind = null;
   // The dialog is one flow in two steps: "type" picks the container shape,
   // "params" collects what that shape needs.
@@ -2536,14 +2646,7 @@
     // so it has to be redrawn with it. Without this a mount made from one of
     // its own rows left the row saying what was true before the mount.
     renderBackupCentre();
-    dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
-    dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
-    // Its counterpart appears on the same rule read the other way: there has
-    // to be something left to open. Both can be up at once on a session that
-    // is only partly mounted, which is exactly when either is worth pressing.
-    const closedVolumes = containers.some((container) => !container.mounted);
-    dashboardMountButton.hidden = !showDashboard || !closedVolumes;
-    dashboardMountButton.disabled = busy || !showDashboard || !closedVolumes;
+    renderBatchControls();
     // Every creation entry stays visible on every route the page can reach.
     // Hiding one would tell an observer which containers this machine holds.
     for (const button of creationButtons) {
@@ -2886,6 +2989,13 @@
   };
 
   window.addEventListener("usb-vault-session-changed", () => {
+    closeBatchMenus();
+    for (const control of batchControls) {
+      control.selected.clear();
+      control.items.replaceChildren();
+      control.button.disabled = true;
+      control.arrow.disabled = true;
+    }
     if (!volumeOperationDialog.hidden) {
       volumeOperationContext = null;
       volumeForceContext = null;
@@ -3277,15 +3387,70 @@
     () => bridge.forgetContainer(id),
     "无法从列表移除该容器，请稍后重试。");
 
-  // The page never names which containers are still closed: beginMountAll
-  // takes no argument and the session decides, in the fixed B-before-A order,
-  // aborting on the first failure rather than opening a subset.
-  const mountAllContainers = () => {
-    const closed = containers.filter((container) => !container.mounted);
-    return runContainerAction(() => bridge.beginMountAll(),
-      "无法挂载全部容器，请检查磁盘状态后重试。",
-      { verb: "挂载", all: true,
-        target: closed.length === 1 ? closed[0].name : "全部未挂载卷" });
+  const runSelectedBatch = async (control) => {
+    if (busy || bridge === null || currentState !== nativeState.authenticated ||
+        externalRefreshPending || !volumeOperationDialog.hidden) return;
+    updateBatchSelection(control);
+    const ids = [...control.selected];
+    if (!ids.length) return;
+    const verb = control.mounting ? "挂载" : "卸载";
+    busy = true;
+    closeBatchMenus();
+    render(messageForCurrentState());
+    setDashboardStatus("");
+    showVolumeOperation({ verb, target: "所选容器", batch: true });
+    try {
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      if (externalRefreshPending) throw new Error("session changed");
+      if (control.mounting) await bridge.beginMountBatch(ids.join(","));
+      else await bridge.beginUnmountBatch(ids.join(","));
+      for (;;) {
+        const raw = String(await bridge.getBatchProgress());
+        if (externalRefreshPending) throw new Error("session changed");
+        if (!/^\d+,\d+,\d+,\d+,\d+,\d+$/.test(raw)) throw new Error("invalid progress");
+        const [state, kind, total, completed, current, id] = raw.split(",").map(Number);
+        if (kind !== (control.mounting ? 0 : 1) || total !== ids.length ||
+            completed > total || current > total || (current && ids[current - 1] !== id)) throw new Error("invalid progress");
+        if (state === 2) break;
+        if (state !== 1) throw new Error("batch failed");
+        if (current) {
+          const name = await bridge.getBatchItemName(current - 1);
+          if (externalRefreshPending) throw new Error("session changed");
+          volumeOperationTitle.textContent = `正在${verb} ${name} (${current}/${total})`;
+        } else volumeOperationTitle.textContent = `正在${verb}所选容器 (${completed}/${total})`;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      let succeeded = 0, skipped = 0, failed = 0;
+      const reasons = new Set();
+      for (let index = 0; index < ids.length; ++index) {
+        const outcome = await bridge.getBatchItemOutcome(index);
+        if (externalRefreshPending) throw new Error("session changed");
+        if (outcome === 2) ++succeeded;
+        else if (outcome === 11) ++skipped;
+        else { ++failed; reasons.add(volumeFailureMessages[outcome] || volumeFailureMessages[3]); }
+      }
+      await refreshNativeState();
+      if (externalRefreshPending) throw new Error("session changed");
+      control.selected.clear();
+      busy = false;
+      render(messageForCurrentState());
+      finishVolumeOperation(failed === 0);
+      const summary = `成功 ${succeeded}，失败 ${failed}，已处于目标状态 ${skipped}。`;
+      volumeOperationTitle.textContent = `${verb}完成`;
+      volumeOperationNote.textContent = summary + (failed ? ` ${[...reasons].join(" ")}` : "");
+      setDashboardStatus(summary, failed ? "error" : "success");
+      if (activeSection === "files") void refreshFileManager();
+    } catch (_) {
+      try { await refreshNativeState(); }
+      catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
+      busy = false;
+      render(messageForCurrentState());
+      finishVolumeOperation(false, externalRefreshPending
+        ? "安全卡状态已变化，请检查当前磁盘状态。"
+        : "无法确认批量操作结果，请检查当前磁盘状态后重试。");
+    } finally {
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
   };
 
   const resetCardRecord = async () => {
@@ -4043,16 +4208,11 @@
     closeCreationFlow();
   });
   dashboardUnmountButton.addEventListener("click", async () => {
-    if (!busy && currentState === nativeState.authenticated && activeVolumes) {
-      await unmount();
-    }
+    await runSelectedBatch(batchControls[1]);
   });
 
   dashboardMountButton.addEventListener("click", async () => {
-    if (!busy && currentState === nativeState.authenticated &&
-        containers.some((container) => !container.mounted)) {
-      await mountAllContainers();
-    }
+    await runSelectedBatch(batchControls[0]);
   });
 
   actionButton.addEventListener("click", async () => {

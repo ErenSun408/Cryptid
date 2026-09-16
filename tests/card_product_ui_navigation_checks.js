@@ -456,46 +456,93 @@
     await tick();
     check(!$("#file-list-body").textContent.includes("迟到文件"), "Late directory result cannot restore departed view");
     check(!$("#dashboard-mount").hidden && !$("#dashboard-unmount").hidden,
-      "A partly mounted session offers both unified actions at once");
+      "Both batch actions remain visible");
+    check($("#dashboard-mount").disabled && $("#dashboard-unmount").disabled,
+      "Both selections start empty");
+    $("#mount-select").click();
+    check(!$("#mount-menu").hidden && $("#mount-select").getAttribute("aria-expanded") === "true",
+      "Mount arrow opens an accessible selection panel");
+    check($("#mount-items input[data-id='1']").checked && $("#mount-items input[data-id='1']").disabled &&
+      $("#mount-items").textContent.includes("已挂载") && !$("#mount-items input[data-id='2']").checked,
+      "Mounted entries are checked and locked while eligible entries start unchecked");
+    $("#mount-select-all").click();
+    check(!$("#dashboard-mount").disabled && $("#mount-items input[data-id='2']").checked,
+      "Select all includes eligible mount targets");
+    $("#mount-select-all").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check($("#mount-menu").hidden && document.activeElement === $("#mount-select"),
+      "Escape closes selection and restores arrow focus");
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
     $("#dashboard-mount").click();
+    await wait(() => window.navigationFixture.completeVolume);
+    await wait(() => $("#volume-operation-title").textContent.includes("(1/1)"));
+    check(window.navigationFixture.batchRequests.at(-1)[1] === "2" &&
+      $("#volume-operation-title").textContent.includes("影像存档"),
+      "Batch submits only selected IDs and displays the current name and count");
+    const batchCount = window.navigationFixture.batchRequests.length;
+    $("#dashboard-mount").click();
+    $("#unmount-select").click();
+    check(window.navigationFixture.batchRequests.length === batchCount && $("#unmount-menu").hidden,
+      "Running batch blocks repeated submission and selection changes");
+    window.navigationFixture.completeVolume();
     await wait(() => window.navigationFixture.containers.every((item) => item.mounted));
-    check($("#volume-operation-title").textContent === "挂载成功" &&
-      $("#dashboard-mount").hidden && !$("#dashboard-unmount").hidden,
-      "Unified mount opens every closed container and then withdraws itself");
+    await wait(() => $("#volume-operation-dialog").dataset.result === "success");
+    check($("#volume-operation-title").textContent === "挂载完成" &&
+      !$("#dashboard-mount").hidden && $("#dashboard-mount").disabled &&
+      $("#volume-operation-note").textContent.includes("成功 1，失败 0"),
+      "Batch completion reports counts and keeps mount visible with no eligible selection");
     $("#volume-operation-confirm").click();
-    window.navigationFixture.failUnmount = true;
+    window.navigationFixture.delayVolume = false;
+    $("#unmount-select").click();
+    $("#unmount-items input[data-id='1']").click();
+    check($("#unmount-select-all").indeterminate, "Partial selection marks select-all indeterminate");
+    $("#unmount-select-all").click();
+    check(all("#unmount-items input").every((input) => input.checked), "Unmount select-all selects all eligible targets");
+    $("#unmount-select-all").click();
+    check($("#dashboard-unmount").disabled, "Clearing select-all disables the action");
+    $("#unmount-items input[data-id='1']").click();
+    $("#unmount-items input[data-id='3']").click();
+    document.body.click();
+    check($("#unmount-menu").hidden, "Outside click closes selection without discarding it");
+    window.navigationFixture.batchFailId = 1;
     $("#dashboard-unmount").click();
-    check(!$("#volume-operation-dialog").hidden, "Unified unmount shows the same progress dialog");
     await wait(() => $("#volume-operation-dialog").dataset.result === "error");
-    check($("#dashboard-status").dataset.tone === "error" && window.navigationFixture.containers[0].mounted,
-      "Unified unmount refusal is visible on the dashboard and preserves volumes");
-    $("#volume-operation-force").click();
-    check($("#volume-operation-title").textContent.includes("全部已挂载卷"), "Unified force names the full cleanup scope");
-    const beforeCardChange = window.navigationFixture.forceCalls;
-    window.dispatchEvent(new Event("usb-vault-session-changed"));
-    await wait(() => $("#volume-operation-force").hidden);
-    $("#volume-operation-force").click();
-    check(window.navigationFixture.forceCalls === beforeCardChange, "Card change invalidates an open force confirmation");
+    check(window.navigationFixture.batchRequests.at(-1)[1] === "1,3" &&
+      window.navigationFixture.containers[0].mounted && window.navigationFixture.containers[1].mounted &&
+      !window.navigationFixture.containers[2].mounted && $("#volume-operation-note").textContent.includes("成功 1，失败 1"),
+      "Selected batch continues after failure and leaves unselected targets untouched");
+    check($("#volume-operation-force").hidden && $("#volume-operation-retry").hidden &&
+      $("#volume-operation-note").textContent.includes("占用"),
+      "Batch failure explains its reason without granting single-target force or retry");
     $("#volume-operation-confirm").click();
-    await wait(() => !$("#dashboard-unmount").disabled);
-    window.navigationFixture.failUnmount = false;
+    window.navigationFixture.batchFailId = 0;
+    $("#unmount-select").click();
+    check($("#unmount-items input[data-id='3']").checked && $("#unmount-items input[data-id='3']").disabled &&
+      $("#unmount-items").textContent.includes("未挂载") && !$("#unmount-items input[data-id='1']").checked,
+      "Completed selection resets and unmounted targets are checked but locked");
+    $("#unmount-select-all").click();
     window.navigationFixture.delayVolume = true;
     window.navigationFixture.completeVolume = null;
     $("#dashboard-unmount").click();
     await wait(() => window.navigationFixture.completeVolume);
     window.navigationFixture.state = 0;
     window.dispatchEvent(new Event("usb-vault-session-changed"));
+    check(!$("#mount-items").textContent && !$("#unmount-items").textContent &&
+      $("#mount-menu").hidden && $("#unmount-menu").hidden,
+      "Card change immediately clears dropdown names while native work is pending");
     window.navigationFixture.completeVolume();
     await wait(() => $("#authenticated-dashboard").hidden);
     check($("#volume-operation-dialog").dataset.result === "error" &&
       !$("#volume-operation-note").textContent.includes("工作资料") && window.navigationFixture.containers.every((item) => !item.mounted),
-      "Session change during unified unmount clears names and never claims success");
+      "Session change during batch unmount clears names and never claims success");
     $("#volume-operation-confirm").click();
     check(!$(".container-details") && !$("[data-file-enter]"), "Session loss clears details and file contents");
     window.navigationFixture.state = 3;
     window.dispatchEvent(new Event("usb-vault-session-changed"));
     await wait(() => !$("#authenticated-dashboard").hidden);
     check(order(home) === "1,2,3" && !$(manager).hidden, "New session resets navigation and page-local order");
+    check($("#dashboard-mount").disabled && $("#dashboard-unmount").disabled,
+      "New session cannot inherit old batch selections");
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;
