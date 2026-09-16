@@ -455,6 +455,14 @@
     window.navigationFixture.pending("0\u001e迟到文件\u001f0\u001f0\u001f1\u001f0");
     await tick();
     check(!$("#file-list-body").textContent.includes("迟到文件"), "Late directory result cannot restore departed view");
+    check(!$("#dashboard-mount").hidden && !$("#dashboard-unmount").hidden,
+      "A partly mounted session offers both unified actions at once");
+    $("#dashboard-mount").click();
+    await wait(() => window.navigationFixture.containers.every((item) => item.mounted));
+    check($("#volume-operation-title").textContent === "挂载成功" &&
+      $("#dashboard-mount").hidden && !$("#dashboard-unmount").hidden,
+      "Unified mount opens every closed container and then withdraws itself");
+    $("#volume-operation-confirm").click();
     window.navigationFixture.failUnmount = true;
     $("#dashboard-unmount").click();
     check(!$("#volume-operation-dialog").hidden, "Unified unmount shows the same progress dialog");

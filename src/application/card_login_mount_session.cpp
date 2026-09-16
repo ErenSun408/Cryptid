@@ -354,6 +354,10 @@ void CardLoginMountSession::mount_adopted_container(const std::uint32_t id) {
   impl_->core.mount_adopted_container(id);
 }
 
+void CardLoginMountSession::mount_adopted_all() {
+  impl_->core.mount_adopted_all();
+}
+
 void CardLoginMountSession::unmount_container(const std::uint32_t id) {
   impl_->core.unmount_container(id);
 }
@@ -1184,6 +1188,31 @@ void CardLoginMountSessionCore::mount_adopted_container(
     }
     throw;
   }
+}
+
+void CardLoginMountSessionCore::mount_adopted_all() {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "mounting containers requires an authenticated card session");
+  }
+  // Q-07 fixes mounting at B-before-A and requires the run to abort on the
+  // first failure, so this keeps the same {true, false} order unmount_active
+  // uses rather than reversing it: a rollback must not leave A's drive letter
+  // briefly visible. mount_adopted_container already returns early for a
+  // container that is mounted, so a partially mounted session resumes.
+  std::vector<std::uint32_t> pending;
+  for (const bool release_first : {true, false}) {
+    for (const SessionContainer& container : state_.containers) {
+      if (container.mounted || container.release_first != release_first) {
+        continue;
+      }
+      pending.push_back(container.id);
+    }
+  }
+  // The order is settled before any mounting starts: mount_adopted_container
+  // writes back into state_.containers, and reading the list while it does
+  // would tie this loop to that function's internals.
+  for (const std::uint32_t id : pending) mount_adopted_container(id);
 }
 
 std::uint32_t CardLoginMountSessionCore::mount_container(

@@ -187,6 +187,17 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   int mount_adopted_calls{};
+
+  void mount_adopted_all() override {
+    await_volume_operation();
+    ++mount_all_calls;
+    for (Adopted& entry : containers) {
+      entry.mounted = true;
+      mounted_state = true;
+    }
+  }
+
+  int mount_all_calls{};
   void unmount_container(const std::uint32_t id) override {
     await_volume_operation();
     ++unmount_container_calls;
@@ -1802,10 +1813,15 @@ void test_background_volume_operations() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     require(!work.running.load(), "volume worker did not finish");
   };
-  for (const auto* name : {L"beginUnmountContainer", L"beginMountAdoptedContainer", L"beginUnmount"}) {
+  // beginUnmount stays last: the checks after this loop rely on the session
+  // ending it with nothing mounted.
+  for (const auto* name : {L"beginUnmountContainer", L"beginMountAdoptedContainer",
+                           L"beginMountAll", L"beginUnmount"}) {
     fixture.volume.pause_volume.store(true);
     fixture.volume.volume_entered.store(false);
-    const HRESULT started = std::wstring_view(name) == L"beginUnmount"
+    const bool takes_no_id = std::wstring_view(name) == L"beginUnmount" ||
+                             std::wstring_view(name) == L"beginMountAll";
+    const HRESULT started = takes_no_id
         ? no_args(name) : invoke_with_number(*host.Get(), name, id, nullptr, nullptr);
     require(started == S_OK && work.running.load() && status() == 1, "worker did not start");
     for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
@@ -1821,6 +1837,24 @@ void test_background_volume_operations() {
     require(status() == 2, "successful volume operation was not reported");
   }
   require(!fixture.volume.mounted_state, "unified unmount did not finish");
+  // beginMountAll takes no identifier, so the page cannot narrow or redirect
+  // it, and unlike beginUnmount it is not a cleanup path: it must refuse once
+  // the session is no longer authenticated rather than inherit that exemption.
+  require(invoke_with_number(*host.Get(), L"beginMountAll", id, nullptr, nullptr) ==
+              DISP_E_BADPARAMCOUNT,
+          "unified mount accepted a container identifier");
+  const int mount_all_before = fixture.volume.mount_all_calls;
+  require(no_args(L"beginMountAll") == S_OK, "unified mount did not start");
+  wait_done();
+  require(status() == 2 && fixture.volume.mount_all_calls == mount_all_before + 1 &&
+              fixture.volume.mounted_state,
+          "unified mount did not open the session's containers");
+  // A finished mount must never leave the forced-cleanup retry armed; that
+  // eligibility belongs to a busy unmount alone.
+  require(no_args(L"beginForceUnmountLast") == E_ACCESSDENIED,
+          "unified mount left forced cleanup eligible");
+  require(no_args(L"beginUnmount") == S_OK, "cleanup after unified mount did not start");
+  wait_done();
   fixture.volume.reject_unmount = true;
   require(no_args(L"beginUnmount") == S_OK, "failure worker did not start");
   wait_done();

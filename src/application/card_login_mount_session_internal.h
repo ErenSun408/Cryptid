@@ -167,6 +167,7 @@ class CardLoginMountSessionCore final {
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes);
   void mount_adopted_container(std::uint32_t id);
+  void mount_adopted_all();
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,

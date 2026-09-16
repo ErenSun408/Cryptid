@@ -333,6 +333,10 @@ void test_bridge_calls_are_narrow_and_route_specific() {
           "initialization page does not use the independent P2 inputs");
   require(script.find("bridge.beginUnmount()") != std::string::npos,
           "product page lacks unified cleanup");
+  // Its counterpart takes no argument either: the session decides which
+  // containers are still closed, so the page cannot name a subset.
+  require(script.find("bridge.beginMountAll()") != std::string::npos,
+          "product page lacks a unified mount");
   require(script.find(
               "await bridge.beginCreateContainerMib(name, directory, sizeMib);") !=
               std::string::npos,

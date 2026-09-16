@@ -170,6 +170,13 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // follows the password the session was opened with.
   virtual void mount_adopted_container(std::uint32_t id) = 0;
 
+  // Mounts every adopted container that is not mounted yet, in the fixed
+  // B-before-A order Q-07 requires, aborting on the first failure. A session
+  // implementation that cannot do this refuses rather than mounting a subset.
+  virtual void mount_adopted_all() {
+    throw std::logic_error("this session cannot mount every container at once");
+  }
+
   // Unmounts one adopted container. The container stays adopted and unmounted
   // so it can be mounted again without reselecting its file.
   virtual void unmount_container(std::uint32_t id) = 0;
@@ -397,6 +404,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] security::SecureBuffer copy_session_password() override;
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
+  void mount_adopted_all() override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
   void force_unmount_user_active() override;

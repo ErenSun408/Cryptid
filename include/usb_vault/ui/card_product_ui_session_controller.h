@@ -145,6 +145,10 @@ class CardProductUiSessionController final {
   // user: the session still holds everything each container needs to open.
   void mount_container(std::uint32_t id);
 
+  // Mounts every adopted container that is still closed, in one run. The page
+  // names no container: which ones are missing is the session's own fact.
+  void mount_all();
+
   void unmount_container(std::uint32_t id);
   void force_unmount_container(std::uint32_t id);
   void force_unmount_user_active();

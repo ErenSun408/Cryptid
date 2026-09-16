@@ -37,6 +37,14 @@ window.navigationFixture = {
       if (fixture.failUnmount) throw new Error("simulated refusal");
       for (const container of fixture.containers) bridge.unmountContainer(container.id);
     }),
+    // Like the native side: no identifier crosses the bridge, and the run
+    // stops at the first refusal instead of opening the rest.
+    beginMountAll: () => beginVolume(() => {
+      fixture.forceTarget = 0;
+      for (const container of fixture.containers) {
+        if (!container.mounted) bridge.mountAdoptedContainer(container.id);
+      }
+    }),
     beginForceUnmountLast: () => {
       fixture.forceCalls = (fixture.forceCalls || 0) + 1;
       return beginVolume(() => {

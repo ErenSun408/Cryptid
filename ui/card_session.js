@@ -37,6 +37,7 @@
   const errorOutput = document.getElementById("card-session-error");
   const dashboard = document.getElementById("authenticated-dashboard");
   const dashboardUnmountButton = document.getElementById("dashboard-unmount");
+  const dashboardMountButton = document.getElementById("dashboard-mount");
   const dashboardVolumeState =
     document.getElementById("dashboard-volume-state");
   const dashboardContainerCount =
@@ -1335,7 +1336,6 @@
   const kCheckPaths = Object.freeze(["M6 12.5l4 4 8-9"]);
   // Six dots, drawn as circles so the handle reads as a grip rather than a
   // glyph. They need their own builder because the icons elsewhere are paths.
-  const kGripPaths = Object.freeze([]);
   const gripGlyph = () => {
     const svg = document.createElementNS(kSvgNamespace, "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -2538,6 +2538,12 @@
     renderBackupCentre();
     dashboardUnmountButton.hidden = !showDashboard || !activeVolumes;
     dashboardUnmountButton.disabled = busy || !showDashboard || !activeVolumes;
+    // Its counterpart appears on the same rule read the other way: there has
+    // to be something left to open. Both can be up at once on a session that
+    // is only partly mounted, which is exactly when either is worth pressing.
+    const closedVolumes = containers.some((container) => !container.mounted);
+    dashboardMountButton.hidden = !showDashboard || !closedVolumes;
+    dashboardMountButton.disabled = busy || !showDashboard || !closedVolumes;
     // Every creation entry stays visible on every route the page can reach.
     // Hiding one would tell an observer which containers this machine holds.
     for (const button of creationButtons) {
@@ -2597,11 +2603,11 @@
         stateTitle.textContent = activeVolumes
           ? "安全会话已打开"
           : "安全卡已认证";
-        actionLabel.textContent = "安全卸载";
+        actionLabel.textContent = "一键卸载";
         break;
       case nativeState.unavailable:
         stateTitle.textContent = "安全组件当前不可用";
-        actionLabel.textContent = "尝试安全卸载";
+        actionLabel.textContent = "尝试一键卸载";
         break;
       default:
         stateTitle.textContent = "正在连接安全组件";
@@ -2617,7 +2623,7 @@
         ? "正在初始化安全卡"
         : acceptsLogin()
           ? "正在验证安全卡"
-          : "正在安全卸载";
+          : "正在一键卸载";
     }
     statusOutput.textContent = message;
     errorOutput.textContent = error;
@@ -2842,7 +2848,7 @@
       case nativeState.unavailable:
       default:
         return activeVolumes
-          ? "安全操作未完成，请尝试安全卸载。"
+          ? "安全操作未完成，请尝试一键卸载。"
           : "请重新插入安全卡后重试。";
     }
   };
@@ -2868,7 +2874,7 @@
         currentState = nativeState.unavailable;
         activeVolumes = true;
         busy = false;
-        render("无法确认安全会话状态，请尝试安全卸载。");
+        render("无法确认安全会话状态，请尝试一键卸载。");
       }
     } while (externalRefreshPending);
     if (!volumeOperationDialog.hidden) {
@@ -3185,7 +3191,7 @@
   const unmount = async () => {
     if (busy || bridge === null || !volumeOperationDialog.hidden) return;
     busy = true;
-    render("正在安全卸载");
+    render("正在一键卸载");
     setDashboardStatus("");
     const mountedNames = containers.filter((container) => container.mounted).map((container) => container.name);
     showVolumeOperation({ verb: "卸载", all: true, target: mountedNames.length === 1 ? mountedNames[0] : "全部已挂载卷" });
@@ -3194,7 +3200,7 @@
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
-      setDashboardStatus("安全卸载已完成。");
+      setDashboardStatus("一键卸载已完成。");
       finishVolumeOperation(true);
     } catch (error) {
       try {
@@ -3205,9 +3211,9 @@
       }
       busy = false;
       render(activeVolumes
-        ? "无法安全卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。"
+        ? "无法一键卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。"
         : messageForCurrentState());
-      if (activeVolumes) setDashboardStatus("无法安全卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。", "error");
+      if (activeVolumes) setDashboardStatus("无法一键卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。", "error");
       finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。", error instanceof VolumeOperationFailure ? error.code : 0);
     } finally {
       if (externalRefreshPending) {
@@ -3270,6 +3276,17 @@
   const forgetAdoptedContainer = (id) => runContainerAction(
     () => bridge.forgetContainer(id),
     "无法从列表移除该容器，请稍后重试。");
+
+  // The page never names which containers are still closed: beginMountAll
+  // takes no argument and the session decides, in the fixed B-before-A order,
+  // aborting on the first failure rather than opening a subset.
+  const mountAllContainers = () => {
+    const closed = containers.filter((container) => !container.mounted);
+    return runContainerAction(() => bridge.beginMountAll(),
+      "无法挂载全部容器，请检查磁盘状态后重试。",
+      { verb: "挂载", all: true,
+        target: closed.length === 1 ? closed[0].name : "全部未挂载卷" });
+  };
 
   const resetCardRecord = async () => {
     if (busy || currentState !== nativeState.authenticated ||
@@ -4031,6 +4048,13 @@
     }
   });
 
+  dashboardMountButton.addEventListener("click", async () => {
+    if (!busy && currentState === nativeState.authenticated &&
+        containers.some((container) => !container.mounted)) {
+      await mountAllContainers();
+    }
+  });
+
   actionButton.addEventListener("click", async () => {
     if (busy) {
       return;
@@ -4109,7 +4133,7 @@
       currentState = nativeState.unavailable;
       activeVolumes = true;
       busy = false;
-      render("安全组件不可用，请尝试安全卸载。");
+      render("安全组件不可用，请尝试一键卸载。");
     }
   })();
 })();
