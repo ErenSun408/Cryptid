@@ -4,6 +4,7 @@
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/offline_card_password_policy.h"
 #include "usb_vault/volume_creation/volume_creator.h"
+#include "usb_vault/volume/volume_provider.h"
 
 #include <Windows.h>
 #include <OleAuto.h>
@@ -173,6 +174,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   void mount_adopted_container(const std::uint32_t id) override {
+    await_volume_operation();
     ++mount_adopted_calls;
     for (Adopted& entry : containers) {
       if (entry.id != id) continue;
@@ -186,6 +188,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   int mount_adopted_calls{};
   void unmount_container(const std::uint32_t id) override {
+    await_volume_operation();
     ++unmount_container_calls;
     for (Adopted& entry : containers) {
       if (entry.id != id) continue;
@@ -478,6 +481,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   void unmount_active() override {
+    await_volume_operation();
     ++unmount_calls;
     if (reject_unmount) throw std::runtime_error("unmount failed");
     container_a_mounted = false;
@@ -498,6 +502,17 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool mount_on_login{};
   bool mounted_state{};
   bool reject_unmount{};
+  std::atomic<bool> pause_volume{false};
+  std::atomic<bool> volume_entered{false};
+  std::thread::id volume_thread;
+  void await_volume_operation() {
+    volume_thread = std::this_thread::get_id();
+    volume_entered.store(true);
+    for (int i = 0; pause_volume.load() && i < 2000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (volume_failure) throw std::system_error(volume_failure, "private path and diagnostic must not cross UI bridge");
+  }
+  std::error_code volume_failure;
   bool reject_create_a{};
   bool container_a_exists{};
   bool container_a_mounted{};
@@ -1747,6 +1762,98 @@ void test_the_import_switch_crosses_the_bridge_as_a_boolean() {
           "a refused call still reached the session");
 }
 
+void test_background_volume_operations() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, &g_close_sink, &host, nullptr, &work)), "host creation failed");
+  require(create_container_succeeds(*host.Get(), L"work", fixture.directory.wide(), 64), "setup failed");
+  const ULONG id = invoke_container_number(*host.Get(), L"getContainerId", 0);
+  DISPPARAMS none{};
+  const auto no_args = [&](const wchar_t* name, VARIANT* result = nullptr) {
+    return host->Invoke(member_id(*host.Get(), name), IID_NULL, LOCALE_INVARIANT,
+        DISPATCH_METHOD, &none, result, nullptr, nullptr);
+  };
+  const auto status = [&] {
+    VARIANT value{};
+    require(no_args(L"getVolumeOperationStatus", &value) == S_OK && value.vt == VT_UI4,
+            "status query failed");
+    return value.ulVal;
+  };
+  const auto wait_done = [&] {
+    for (int i = 0; work.running.load() && i < 2000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(), "volume worker did not finish");
+  };
+  for (const auto* name : {L"beginUnmountContainer", L"beginMountAdoptedContainer", L"beginUnmount"}) {
+    fixture.volume.pause_volume.store(true);
+    fixture.volume.volume_entered.store(false);
+    const HRESULT started = std::wstring_view(name) == L"beginUnmount"
+        ? no_args(name) : invoke_with_number(*host.Get(), name, id, nullptr, nullptr);
+    require(started == S_OK && work.running.load() && status() == 1, "worker did not start");
+    for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(fixture.volume.volume_entered.load() && fixture.volume.volume_thread != std::this_thread::get_id(),
+            "volume operation ran on window thread");
+    require(!work.can_cancel() && !work.request_cancel(), "volume worker accepted creation cancellation");
+    require(no_args(L"getSessionState") == E_PENDING && no_args(L"unmount") == E_PENDING &&
+            no_args(L"beginUnmount") == E_PENDING && no_args(L"getCreationProgress") == E_PENDING &&
+            no_args(L"cancelContainerCreation") == E_PENDING, "worker allowed concurrent session access");
+    fixture.volume.pause_volume.store(false);
+    wait_done();
+    require(status() == 2, "successful volume operation was not reported");
+  }
+  require(!fixture.volume.mounted_state, "unified unmount did not finish");
+  fixture.volume.reject_unmount = true;
+  require(no_args(L"beginUnmount") == S_OK, "failure worker did not start");
+  wait_done();
+  require(status() == 3, "unmount failure was reported as success");
+  fixture.volume.reject_unmount = false;
+  fixture.volume.pause_volume.store(true);
+  require(invoke_with_number(*host.Get(), L"beginMountAdoptedContainer", id, nullptr, nullptr) == S_OK,
+          "retry did not start");
+  work.interrupted.store(true);
+  fixture.volume.pause_volume.store(false);
+  wait_done();
+  require(status() == 10 && no_args(L"beginUnmount") == E_PENDING,
+          "removed card allowed success or new work before lifecycle cleanup");
+  work.interrupted.store(false);
+  require(no_args(L"beginUnmount") == S_OK, "cleanup retry did not start");
+  wait_done();
+  require(status() == 2, "failure poisoned next operation");
+  using usb_vault::volume::DriverError;
+  const std::pair<std::error_code, ULONG> failures[] = {
+      {usb_vault::volume::make_error_code(DriverError::volume_busy), 4},
+      {std::make_error_code(std::errc::no_such_file_or_directory), 5},
+      {std::make_error_code(std::errc::permission_denied), 6},
+      {usb_vault::volume::make_error_code(DriverError::authentication_failed), 7},
+      {usb_vault::volume::make_error_code(DriverError::read_failed), 8},
+      {usb_vault::volume::make_error_code(DriverError::version_mismatch), 9},
+      {std::error_code(ERROR_SHARING_VIOLATION, std::system_category()), 4},
+      {std::error_code(ERROR_PATH_NOT_FOUND, std::system_category()), 5},
+      {std::error_code(ERROR_ACCESS_DENIED, std::system_category()), 6},
+      {std::error_code(ERROR_IO_DEVICE, std::system_category()), 8},
+      {std::make_error_code(std::errc::not_supported), 3},
+  };
+  for (const auto& [failure, expected] : failures) {
+    fixture.volume.volume_failure = failure;
+    require(no_args(L"beginUnmount") == S_OK, "failure classification did not start");
+    wait_done();
+    const auto actual = status();
+    if (actual != expected) {
+      std::cerr << "classification code=" << failure.value() << " category=" << failure.category().name()
+                << " expected=" << expected << " actual=" << actual << '\n';
+    }
+    require(actual == expected, "failure classification was lost or fabricated");
+  }
+  fixture.volume.volume_failure.clear();
+  require(invoke_with_number(*host.Get(), L"beginMountAdoptedContainer", 0, nullptr, nullptr) == DISP_E_TYPEMISMATCH,
+          "invalid identifier was admitted");
+  require(no_args(L"beginMountAdoptedContainer") == DISP_E_BADPARAMCOUNT, "missing identifier was admitted");
+}
+
 void test_adopted_container_mount_and_unmount_route_through_identifiers() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2325,6 +2432,7 @@ int main() {
     test_container_calls_reject_wrong_shapes_and_report_cancellation();
     test_directory_browse_reports_the_choice_as_a_string();
     test_adopted_container_mount_and_unmount_route_through_identifiers();
+    test_background_volume_operations();
     test_the_remember_switch_crosses_the_bridge_as_a_boolean();
     test_the_import_switch_crosses_the_bridge_as_a_boolean();
     test_container_b_creation_consumes_six_reversed_arguments();

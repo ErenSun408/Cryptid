@@ -2,6 +2,7 @@
 
 #include "usb_vault/ui/webview_password_array.h"
 #include "usb_vault/volume_creation/volume_creator.h"
+#include "usb_vault/volume/volume_provider.h"
 
 #include <Windows.h>
 
@@ -103,6 +104,38 @@ constexpr DISPID kBeginCreateId = 47;
 constexpr DISPID kBeginCreateBId = 48;
 constexpr DISPID kCreationProgressId = 49;
 constexpr DISPID kCancelCreationId = 50;
+constexpr DISPID kBeginMountAdoptedId = 51;
+constexpr DISPID kBeginUnmountContainerId = 52;
+constexpr DISPID kBeginUnmountId = 53;
+constexpr DISPID kVolumeOperationStatusId = 54;
+// Public, role-neutral outcomes: idle/running/success/unknown, busy, missing,
+// denied, unreadable container, IO failure, driver unavailable, card removed.
+unsigned int volume_failure_status(const std::error_code& error) noexcept {
+  using volume::DriverError;
+  if (error == volume::make_error_code(DriverError::volume_busy) ||
+      error == volume::make_error_code(DriverError::volume_locked)) return 4;
+  // Windows maps sharing violations to generic permission_denied. Preserve
+  // the more precise native reason before comparing generic conditions.
+  if (error.category() == std::system_category()) {
+    switch (error.value()) {
+      case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION: return 4;
+      case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: return 5;
+      case ERROR_ACCESS_DENIED: return 6;
+      case ERROR_READ_FAULT: case ERROR_WRITE_FAULT: case ERROR_IO_DEVICE: return 8;
+    }
+  }
+  if (error == std::errc::no_such_file_or_directory) return 5;
+  if (error == std::errc::permission_denied) return 6;
+  if (error == volume::make_error_code(DriverError::authentication_failed) ||
+      error == volume::make_error_code(DriverError::damaged_volume)) return 7;
+  if (error == volume::make_error_code(DriverError::read_failed) ||
+      error == volume::make_error_code(DriverError::write_failed) ||
+      error == volume::make_error_code(DriverError::seek_failed) ||
+      error == std::errc::io_error) return 8;
+  if (error == volume::make_error_code(DriverError::driver_or_drive_not_found) ||
+      error == volume::make_error_code(DriverError::version_mismatch)) return 9;
+  return 3;
+}
 constexpr DISPID kGetOperationLoggingEnabledId = 45;
 constexpr DISPID kSetOperationLoggingEnabledId = 46;
 
@@ -469,6 +502,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kGetContainerSizeMibId;
       return S_OK;
     }
+    if (matches(names[0], L"beginMountAdoptedContainer")) { ids[0] = kBeginMountAdoptedId; return S_OK; }
+    if (matches(names[0], L"beginUnmountContainer")) { ids[0] = kBeginUnmountContainerId; return S_OK; }
+    if (matches(names[0], L"beginUnmount")) { ids[0] = kBeginUnmountId; return S_OK; }
+    if (matches(names[0], L"getVolumeOperationStatus")) { ids[0] = kVolumeOperationStatusId; return S_OK; }
     if (matches(names[0], kGetContainerDriveLetterName)) {
       ids[0] = kGetContainerDriveLetterId;
       return S_OK;
@@ -523,17 +560,29 @@ class CardProductWebViewHostObject final : public IDispatch {
       override {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
-    // Reading progress and calling the creation off are the only two things
-    // a creation leaves reachable: everything else would be a second session
-    // action taken while the first is still running.
-    if (creation_work_->running.load() && member != kCreationProgressId &&
-        member != kCancelCreationId) {
+    // Workers exclusively own the session. Only their atomic progress is
+    // readable; cancellation belongs to creation, never volume operations.
+    if (creation_work_->running.load() &&
+        (creation_work_->volume_operation.load()
+             ? member != kVolumeOperationStatusId
+             : member != kCreationProgressId && member != kCancelCreationId)) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
     }
 
     switch (member) {
+      case kBeginMountAdoptedId:
+      case kBeginUnmountContainerId:
+      case kBeginUnmountId:
+        return begin_volume_operation(member, parameters, result, argument_error);
+      case kVolumeOperationStatusId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        ::VariantInit(result);
+        result->vt = VT_UI4;
+        result->ulVal = creation_work_->running.load() ? 1U : volume_status_.load();
+        return S_OK;
       case kBeginCreateId: return invoke_create_container(parameters, result, argument_error, true);
       case kBeginCreateBId: return invoke_create_container_b(parameters, result, argument_error, true);
       case kCancelCreationId: {
@@ -680,6 +729,56 @@ class CardProductWebViewHostObject final : public IDispatch {
   }
 
  private:
+  HRESULT begin_volume_operation(DISPID member, DISPPARAMS* parameters,
+                                 VARIANT* result, UINT* argument_error) noexcept {
+    const bool all = member == kBeginUnmountId;
+    if (!parameters || parameters->cNamedArgs != 0 ||
+        parameters->cArgs != (all ? 0U : 1U) ||
+        (!all && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+    std::uint32_t id = 0;
+    if (!all && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
+      if (argument_error) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    try {
+      // Cleanup remains available in the unavailable state. A removed card
+      // must be processed by the window before any new worker is admitted.
+      if (creation_work_->interrupted.load()) return E_PENDING;
+      if (!all && controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+      if (creation_thread_.joinable()) creation_thread_.join();
+      creation_work_->finish(); // Volume operations cannot be cancelled.
+      creation_work_->volume_operation.store(true);
+      volume_status_.store(1);
+      creation_work_->running.store(true);
+      creation_thread_ = std::thread([this, member, id] {
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        unsigned int status = 3;
+        try {
+          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          if (!creation_work_->interrupted.load()) {
+            if (member == kBeginMountAdoptedId) controller_.mount_container(id);
+            else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
+            else controller_.unmount();
+            status = 2;
+          }
+        } catch (const std::system_error& error) {
+          status = volume_failure_status(error.code());
+        } catch (...) {}
+        if (SUCCEEDED(com)) ::CoUninitialize();
+        // A removal during an IOCTL is handled by the deferred lifecycle path.
+        // Do not present its late result as a successful user operation.
+        if (creation_work_->interrupted.load()) status = 10;
+        volume_status_.store(status);
+        creation_work_->running.store(false);
+      });
+      return complete_selection(true, result);
+    } catch (...) {
+      volume_status_.store(3);
+      creation_work_->running.store(false);
+      return E_FAIL;
+    }
+  }
+
   template <typename Operation>
   HRESULT begin_creation(Operation operation, VARIANT* result) {
     if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated) return E_FAIL;
@@ -687,6 +786,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     creation_progress_.store(0);
     creation_flags_.store(0);
     creation_status_.store(1);
+    creation_work_->volume_operation.store(false);
     creation_work_->begin();
     creation_work_->running.store(true);
     try {
@@ -1602,6 +1702,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   CreationWorkState local_creation_work_;
   CreationWorkState* creation_work_;
   std::thread creation_thread_;
+  std::atomic<unsigned int> volume_status_{0};
   std::atomic<unsigned int> creation_status_{0};
   std::atomic<std::uint64_t> creation_progress_{0};
   std::atomic<unsigned int> creation_flags_{0};

@@ -10,6 +10,8 @@ namespace usb_vault::ui {
 struct CreationWorkState final {
   std::atomic<bool> running{false};
   std::atomic<bool> interrupted{false};
+  // Shares the session exclusion and deferred card-event gate with creation.
+  std::atomic<bool> volume_operation{false};
   void begin() noexcept { phase_.store(Phase::cancellable); }
   void finish() noexcept { phase_.store(Phase::idle); }
   [[nodiscard]] bool cancellation_requested() const noexcept {

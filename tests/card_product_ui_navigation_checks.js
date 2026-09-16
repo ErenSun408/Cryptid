@@ -332,21 +332,62 @@
     check($("#file-list-body").textContent.includes("这个容器没有挂载"), "Unmounted containers remain reachable");
     check($("#file-mount-toggle").textContent === "挂载" && $("#file-create-directory").disabled,
       "Unmounted file view offers mounting and disables file creation");
+    window.navigationFixture.delayVolume = true;
     $("#file-mount-toggle").click();
     check($("#file-mount-toggle").disabled, "Mount controls disable while the action is running");
+    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "正在挂载影像存档…" &&
+      !$("#volume-operation-dialog [role=progressbar]").hasAttribute("aria-valuenow"), "Mount immediately opens indeterminate progress");
+    await wait(() => window.navigationFixture.completeVolume);
+    const starts = window.navigationFixture.volumeStarts;
+    $("#file-mount-toggle").click();
+    $("#volume-operation-dialog").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    $("#volume-operation-dialog").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    check(window.navigationFixture.volumeStarts === starts && !$("#volume-operation-dialog").hidden,
+      "Pending operation prevents duplicate dispatch, Escape, and outside-click dismissal");
+    window.navigationFixture.completeVolume();
+    window.navigationFixture.delayVolume = false;
     await wait(() => $("[data-file-enter]") && $("#file-mount-toggle").textContent === "卸载");
     check(window.navigationFixture.containers[1].mounted && $("#file-mount-toggle").classList.contains("danger") &&
       !$("#management-files").hidden, "Toolbar mounts the current container and stays in its file view");
     window.navigationFixture.failUnmount = true;
+    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "挂载成功" &&
+      $("#volume-operation-note").textContent.includes("影像存档") && !$("#volume-operation-confirm").hidden,
+      "Successful mount shows its named result and explicit confirmation");
+    $("#volume-operation-confirm").click();
+    check($("#volume-operation-dialog").hidden, "Confirmation dismisses success immediately");
     $("#file-mount-toggle").click();
+    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "正在卸载影像存档…",
+      "Unmount immediately opens progress");
     await wait(() => !$("#file-mount-toggle").disabled);
     check($("#file-mount-toggle").textContent === "卸载" && window.navigationFixture.containers[1].mounted,
       "Refused unmount keeps the actual mounted state");
+    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "卸载失败" &&
+      $("#volume-operation-note").textContent.includes("占用"), "Failed unmount displays its native reason");
+    await new Promise((resolve) => setTimeout(resolve, 3100));
+    check(!$("#volume-operation-dialog").hidden, "Failure persists and an old success timer cannot dismiss it");
+    $("#volume-operation-dialog").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    check($("#volume-operation-dialog").hidden, "Clicking outside dismisses a failed result");
+    for (const [code, reason] of [[5, "找不到"], [6, "访问被拒绝"], [7, "无法打开"], [8, "读取或写入"], [9, "驱动"], [3, "无法确定"]]) {
+      window.navigationFixture.volumeFailureStatus = code;
+      $("#file-mount-toggle").click();
+      await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+      check($("#volume-operation-note").textContent.includes(reason), `Failure ${code} shows the bounded native reason`);
+      $("#volume-operation-confirm").click();
+    }
+    window.navigationFixture.volumeFailureStatus = 0;
     window.navigationFixture.failUnmount = false;
     $("#file-mount-toggle").click();
     await wait(() => $("#file-mount-toggle").textContent === "挂载" && !$("[data-file-enter]"));
     check(!window.navigationFixture.containers[1].mounted && window.navigationFixture.containers[0].mounted &&
       $("#file-refresh").disabled && !$("#management-files").hidden, "Toolbar unmounts only the current container and clears its listing");
+    check($("#volume-operation-title").textContent === "卸载成功", "Unmount shows its own success label");
+    $("#volume-operation-title").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    check(!$("#volume-operation-dialog").hidden, "Clicking inside the result dialog keeps it open");
+    await new Promise((resolve) => setTimeout(resolve, 2800));
+    check(!$("#volume-operation-dialog").hidden && !$("#volume-operation-note").textContent.includes("关闭"),
+      "Success remains visible before three seconds and never narrates its own timer");
+    await wait(() => $("#volume-operation-dialog").hidden);
+    check($("#volume-operation-title").textContent === "", "Success automatically closes and clears its name after three seconds");
     $("[data-file-back]").click();
 
     window.navigationFixture.delayListing = true;
@@ -356,9 +397,26 @@
     window.navigationFixture.pending("0\u001e迟到文件\u001f0\u001f0\u001f1\u001f0");
     await tick();
     check(!$("#file-list-body").textContent.includes("迟到文件"), "Late directory result cannot restore departed view");
+    window.navigationFixture.failUnmount = true;
+    $("#dashboard-unmount").click();
+    check(!$("#volume-operation-dialog").hidden, "Unified unmount shows the same progress dialog");
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    check($("#dashboard-status").dataset.tone === "error" && window.navigationFixture.containers[0].mounted,
+      "Unified unmount refusal is visible on the dashboard and preserves volumes");
+    $("#volume-operation-confirm").click();
+    window.navigationFixture.failUnmount = false;
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
+    $("#dashboard-unmount").click();
+    await wait(() => window.navigationFixture.completeVolume);
     window.navigationFixture.state = 0;
     window.dispatchEvent(new Event("usb-vault-session-changed"));
+    window.navigationFixture.completeVolume();
     await wait(() => $("#authenticated-dashboard").hidden);
+    check($("#volume-operation-dialog").dataset.result === "error" &&
+      !$("#volume-operation-note").textContent.includes("工作资料") && window.navigationFixture.containers.every((item) => !item.mounted),
+      "Session change during unified unmount clears names and never claims success");
+    $("#volume-operation-confirm").click();
     check(!$(".container-details") && !$("[data-file-enter]"), "Session loss clears details and file contents");
     window.navigationFixture.state = 3;
     window.dispatchEvent(new Event("usb-vault-session-changed"));

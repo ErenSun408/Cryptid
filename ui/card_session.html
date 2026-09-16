@@ -632,6 +632,17 @@
     .modal-close svg { width: .9rem; height: .9rem; }
     .modal-body { padding: 1.25rem; max-height: calc(100vh - 9rem); overflow-y: auto; }
     .modal-body > p { margin: 0 0 1.1rem; font-size: .8rem; line-height: 1.7; color: var(--text-2); }
+    #volume-operation-dialog .modal { width: min(23rem, 100%); min-height: 13rem; display: flex; flex-direction: column; text-align: center; }
+    #volume-operation-dialog .modal-body { flex: 1; padding: 1.5rem 1.5rem .75rem; }
+    #volume-operation-title { font-size: 1.05rem; line-height: 1.6; overflow-wrap: anywhere; margin: .85rem 0 .5rem; }
+    #volume-operation-note { font-size: .8rem; line-height: 1.7; color: var(--text-2); margin: 0; overflow-wrap: anywhere; }
+    #volume-operation-dialog .modal-footer { justify-content: center; min-height: 3.25rem; }
+    #volume-operation-confirm { min-width: 7rem; }
+    .volume-operation-mark { width: 2.75rem; height: 2.75rem; margin: 0 auto; display: grid; place-items: center; font-size: 1.8rem; color: var(--gold); }
+    #volume-operation-dialog[data-result="running"] .volume-operation-mark { border: 3px solid var(--line); border-top-color: var(--gold); border-radius: 50%; animation: creation-spin 1s linear infinite; }
+    #volume-operation-dialog[data-result="success"] .volume-operation-mark { color: var(--ok); }
+    #volume-operation-dialog[data-result="error"] .volume-operation-mark { color: var(--danger); }
+    @media (prefers-reduced-motion: reduce) { #volume-operation-dialog .volume-operation-mark { animation: none !important; } }
     .modal-overlay[data-step="type"] .modal { width: min(40rem, 100%); }
     .type-picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
     .type-pick {
@@ -1092,6 +1103,17 @@
       </main>
     </div>
   </section>
+
+  <div id="volume-operation-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="volume-operation-title" aria-describedby="volume-operation-note" tabindex="-1" hidden>
+    <div class="modal">
+      <div class="modal-body">
+        <div id="volume-operation-mark" class="volume-operation-mark" role="progressbar" aria-label="磁盘操作处理中"></div>
+        <h3 id="volume-operation-title" role="status">正在处理磁盘操作…</h3>
+        <p id="volume-operation-note">请稍候，完成后将自动更新磁盘状态。</p>
+      </div>
+      <div class="modal-footer"><button id="volume-operation-confirm" class="shell-button primary" type="button" hidden>确定</button></div>
+    </div>
+  </div>
 
   <div id="reset-card-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-card-title" hidden>
     <div class="modal">

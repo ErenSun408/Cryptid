@@ -572,6 +572,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     }
     case WM_CLOSE:
       if (g_creation_work.running.load()) {
+        if (g_creation_work.volume_operation.load()) {
+          ::MessageBoxW(window, L"正在处理磁盘操作，请等待处理结果后再关闭。",
+                        kWindowTitle, MB_OK | MB_ICONINFORMATION);
+          return 0;
+        }
         if (!g_creation_work.can_cancel()) {
           ::MessageBoxW(window, g_creation_work.cancellation_requested()
               ? L"正在取消创建，请等待处理结果后再关闭。"

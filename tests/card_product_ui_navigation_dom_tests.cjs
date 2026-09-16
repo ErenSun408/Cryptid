@@ -26,7 +26,8 @@ for (const file of ["tests/card_product_ui_navigation_mock.js", "ui/card_session
                     "tests/card_product_ui_navigation_checks.js"]) {
   window.eval(fs.readFileSync(path.join(root, file), "utf8"));
 }
-const deadline = Date.now() + 10000;
+// Includes real three-second success dismissal and persistent-error checks.
+const deadline = Date.now() + 15000;
 const timer = setInterval(() => {
   const output = window.document.getElementById("navigation-test-results");
   if (output || Date.now() > deadline) {

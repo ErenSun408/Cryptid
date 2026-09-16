@@ -2871,9 +2871,18 @@
         render("无法确认安全会话状态，请尝试安全卸载。");
       }
     } while (externalRefreshPending);
+    if (!volumeOperationDialog.hidden) {
+      if (volumeOperationDialog.dataset.result === "running") volumeOperationDialog.focus();
+      else volumeOperationConfirm.focus();
+    }
   };
 
   window.addEventListener("usb-vault-session-changed", () => {
+    if (!volumeOperationDialog.hidden) {
+      volumeOperationTarget = "";
+      if (volumeOperationDialog.dataset.result === "running") volumeOperationTitle.textContent = "正在处理磁盘操作…";
+      else finishVolumeOperation(false, "安全卡状态已变化，请检查当前磁盘状态。");
+    }
     void refreshAfterExternalChange();
   });
 
@@ -2998,15 +3007,123 @@
     }
   };
 
+  const volumeOperationDialog = document.getElementById("volume-operation-dialog");
+  const volumeOperationTitle = document.getElementById("volume-operation-title");
+  const volumeOperationNote = document.getElementById("volume-operation-note");
+  const volumeOperationMark = document.getElementById("volume-operation-mark");
+  const volumeOperationConfirm = document.getElementById("volume-operation-confirm");
+  let volumeOperationFocus = null;
+  let volumeOperationTimer = null;
+  let volumeOperationVerb = "";
+  let volumeOperationTarget = "";
+  const clearVolumeOperationTimer = () => {
+    if (volumeOperationTimer !== null) clearTimeout(volumeOperationTimer);
+    volumeOperationTimer = null;
+  };
+  const showVolumeOperation = ({ verb, target }) => {
+    clearVolumeOperationTimer();
+    volumeOperationFocus = document.activeElement;
+    volumeOperationVerb = verb;
+    volumeOperationTarget = target;
+    volumeOperationTitle.textContent = `正在${verb}${target}…`;
+    volumeOperationNote.textContent = "请稍候，完成后将自动更新磁盘状态。";
+    volumeOperationDialog.dataset.result = "running";
+    volumeOperationMark.textContent = "";
+    volumeOperationMark.setAttribute("role", "progressbar");
+    volumeOperationMark.removeAttribute("aria-hidden");
+    volumeOperationConfirm.hidden = true;
+    volumeOperationDialog.hidden = false;
+    volumeOperationDialog.focus();
+  };
+  const hideVolumeOperation = () => {
+    clearVolumeOperationTimer();
+    volumeOperationDialog.hidden = true;
+    volumeOperationTitle.textContent = "";
+    volumeOperationNote.textContent = "";
+    volumeOperationTarget = "";
+    if (volumeOperationFocus?.isConnected && !volumeOperationFocus.disabled) volumeOperationFocus.focus();
+    else if (currentState === nativeState.authenticated) dashboardNavigation[0]?.focus();
+    else focusCurrentInput();
+    volumeOperationFocus = null;
+  };
+  const finishVolumeOperation = (succeeded, reason = "") => {
+    clearVolumeOperationTimer();
+    if (succeeded && externalRefreshPending) {
+      succeeded = false;
+      reason = "安全卡状态已变化，无法确认操作成功。请检查当前磁盘状态。";
+    }
+    // Names are existing session display facts; never retain them after logout.
+    if (currentState !== nativeState.authenticated || externalRefreshPending) volumeOperationTarget = "";
+    volumeOperationDialog.dataset.result = succeeded ? "success" : "error";
+    volumeOperationTitle.textContent = `${volumeOperationVerb}${succeeded ? "成功" : "失败"}`;
+    volumeOperationNote.textContent = succeeded
+      ? (volumeOperationTarget ? `${volumeOperationTarget}已${volumeOperationVerb}。` : "磁盘状态已更新。")
+      : reason;
+    volumeOperationMark.removeAttribute("role");
+    volumeOperationMark.setAttribute("aria-hidden", "true");
+    volumeOperationMark.textContent = succeeded ? "✓" : "!";
+    volumeOperationConfirm.hidden = false;
+    volumeOperationConfirm.focus();
+    if (succeeded) volumeOperationTimer = setTimeout(hideVolumeOperation, 3000);
+  };
+  volumeOperationConfirm.addEventListener("click", () => {
+    if (volumeOperationDialog.dataset.result !== "running") hideVolumeOperation();
+  });
+  // A finished result is safe to dismiss by clicking away; a running operation is not.
+  volumeOperationDialog.addEventListener("click", (event) => {
+    if (event.target === volumeOperationDialog && volumeOperationDialog.dataset.result !== "running") hideVolumeOperation();
+  });
+  volumeOperationDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Tab" || event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (volumeOperationDialog.dataset.result === "running") volumeOperationDialog.focus();
+      else if (event.key === "Escape") hideVolumeOperation();
+      else volumeOperationConfirm.focus();
+    }
+  });
+  class VolumeOperationFailure extends Error {}
+  const volumeFailureMessages = {
+    3: "操作未完成，暂时无法确定具体原因。请检查磁盘状态后重试。",
+    4: "卷正在被其他程序占用或锁定。请关闭使用该卷的文件、窗口或程序后重试。",
+    5: "找不到容器文件或所在位置。请确认文件未被移动，且存储设备已连接。",
+    6: "访问被拒绝。请检查容器文件和所在位置的访问权限。",
+    7: "无法打开容器：当前安全卡或登录信息不匹配，或容器数据无法识别。",
+    8: "读取或写入磁盘失败。请检查存储设备的连接及可用状态。",
+    9: "加密驱动或目标磁盘不可用，或驱动版本不兼容。请检查安全组件和磁盘状态。",
+    10: "操作期间安全卡已拔出，无法确认操作成功。请重新插卡并检查磁盘状态。",
+  };
+  const waitForVolumeOperation = async (start) => {
+    // Give the overlay a paint before dispatching native work.
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+    try { await start(); }
+    catch (_) { throw new VolumeOperationFailure("操作未能开始。请检查安全卡及磁盘状态后重试。"); }
+    for (;;) {
+      let status;
+      try { status = await bridge.getVolumeOperationStatus(); }
+      catch (_) { throw new VolumeOperationFailure("无法获取操作结果，请检查当前磁盘状态后重试。"); }
+      if (status === 2) return;
+      if (status !== 1) throw new VolumeOperationFailure(
+        Number.isInteger(status) && status >= 3 && status <= 10 ? volumeFailureMessages[status] : volumeFailureMessages[3]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
   const unmount = async () => {
+    if (busy || bridge === null || !volumeOperationDialog.hidden) return;
     busy = true;
     render("正在安全卸载");
+    setDashboardStatus("");
+    const mountedNames = containers.filter((container) => container.mounted).map((container) => container.name);
+    showVolumeOperation({ verb: "卸载", target: mountedNames.length === 1 ? mountedNames[0] : "全部已挂载卷" });
     try {
-      await bridge.unmount();
+      await waitForVolumeOperation(() => bridge.beginUnmount());
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
-    } catch (_) {
+      setDashboardStatus("安全卸载已完成。");
+      finishVolumeOperation(true);
+    } catch (error) {
       try {
         await refreshNativeState();
       } catch (_) {
@@ -3015,10 +3132,11 @@
       }
       busy = false;
       render(activeVolumes
-        ? "无法安全卸载，请关闭占用文件后重试。"
+        ? "无法安全卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。"
         : messageForCurrentState());
+      if (activeVolumes) setDashboardStatus("无法安全卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。", "error");
+      finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。");
     } finally {
-      focusCurrentInput();
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }
@@ -3028,18 +3146,24 @@
   // One shared shape for the dashboard-side container actions: serialize on
   // the busy flag, refresh from the native side, and report failure on the
   // dashboard instead of the hidden session surface.
-  const runContainerAction = async (action, failure) => {
+  const runContainerAction = async (action, failure, progress = null) => {
+    if (busy || bridge === null || !volumeOperationDialog.hidden) return;
     busy = true;
     setDashboardStatus("");
     render(messageForCurrentState());
+    if (progress) showVolumeOperation(progress);
     try {
-      const outcome = await action();
+      const outcome = progress ? await waitForVolumeOperation(action) : await action();
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
       if (activeSection === "files") void refreshFileManager();
       if (outcome === false) setDashboardStatus("已取消。");
-    } catch (_) {
+      else if (progress) {
+        setDashboardStatus(`${progress.verb}成功。`);
+        finishVolumeOperation(true);
+      }
+    } catch (error) {
       try {
         await refreshNativeState();
       } catch (_) {
@@ -3050,6 +3174,7 @@
       render(messageForCurrentState());
       if (activeSection === "files") void refreshFileManager();
       setDashboardStatus(failure, "error");
+      if (progress) finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。");
     } finally {
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
@@ -3062,12 +3187,12 @@
     "无法导入该容器，请确认文件仍在原位置且与当前安全卡匹配。");
 
   const mountAdoptedContainer = (id) => runContainerAction(
-    () => bridge.mountAdoptedContainer(id),
-    "无法挂载该容器，请稍后重试。");
+    () => bridge.beginMountAdoptedContainer(id),
+    "无法挂载该容器，请稍后重试。", { verb: "挂载", target: containers.find((container) => container.id === id)?.name || "当前卷" });
 
   const unmountAdoptedContainer = (id) => runContainerAction(
-    () => bridge.unmountContainer(id),
-    "无法卸载该容器，请关闭占用文件后重试。");
+    () => bridge.beginUnmountContainer(id),
+    "无法卸载该容器，请检查磁盘状态，并关闭可能占用文件的程序后重试。", { verb: "卸载", target: containers.find((container) => container.id === id)?.name || "当前卷" });
 
   const forgetAdoptedContainer = (id) => runContainerAction(
     () => bridge.forgetContainer(id),

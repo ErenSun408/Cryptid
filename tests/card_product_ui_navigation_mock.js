@@ -26,6 +26,13 @@ window.navigationFixture = {
 {
   const fixture = window.navigationFixture;
   const bridge = {
+    beginMountAdoptedContainer: (id) => beginVolume(() => bridge.mountAdoptedContainer(id)),
+    beginUnmountContainer: (id) => beginVolume(() => bridge.unmountContainer(id)),
+    beginUnmount: () => beginVolume(() => {
+      if (fixture.failUnmount) throw new Error("simulated refusal");
+      for (const container of fixture.containers) bridge.unmountContainer(container.id);
+    }),
+    getVolumeOperationStatus: () => fixture.volumeStatus,
     getSessionState: () => fixture.state,
     hasActiveSession: () => fixture.state === 3,
     canResetCardRecord: () => false,
@@ -93,5 +100,16 @@ window.navigationFixture = {
     },
   };
   window.chrome = window.chrome || {};
+  const beginVolume = (operation) => {
+    fixture.volumeStarts = (fixture.volumeStarts || 0) + 1;
+    fixture.volumeStatus = 1;
+    const complete = () => {
+      try { operation(); fixture.volumeStatus = 2; }
+      catch (_) { fixture.volumeStatus = fixture.volumeFailureStatus || 4; }
+    };
+    if (fixture.delayVolume) fixture.completeVolume = complete;
+    else complete();
+    return true;
+  };
   window.chrome.webview = { hostObjects: { nativeBridge: bridge } };
 }

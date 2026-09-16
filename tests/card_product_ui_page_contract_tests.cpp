@@ -331,7 +331,7 @@ void test_bridge_calls_are_narrow_and_route_specific() {
               "          passwordBytes, confirmationBytes);") !=
               std::string::npos,
           "initialization page does not use the independent P2 inputs");
-  require(script.find("await bridge.unmount();") != std::string::npos,
+  require(script.find("bridge.beginUnmount()") != std::string::npos,
           "product page lacks unified cleanup");
   require(script.find(
               "await bridge.beginCreateContainerMib(name, directory, sizeMib);") !=
@@ -354,9 +354,9 @@ void test_bridge_calls_are_narrow_and_route_specific() {
                   std::string::npos,
           "authenticated dashboard does not query the live container list");
   require(script.find("bridge.mountContainer()") != std::string::npos &&
-              script.find("bridge.mountAdoptedContainer(id)") !=
+              script.find("bridge.beginMountAdoptedContainer(id)") !=
                   std::string::npos &&
-              script.find("bridge.unmountContainer(id)") != std::string::npos,
+              script.find("bridge.beginUnmountContainer(id)") != std::string::npos,
           "the page cannot adopt, remount, or release one container");
   // The page asks; the native side chooses. A path must never be built,
   // stored, or sent by the page.
