@@ -61,8 +61,8 @@ UnmountEscalationResult unmount_with_forced_escalation(
     if (error.code() != make_error_code(DriverError::volume_busy)) {
       throw;
     }
-    // The card is already gone, so a busy window cannot be waited out. Fall
-    // through to the forced unmount and let its own failure propagate.
+    // The caller explicitly selected escalation (card removal or confirmed
+    // user cleanup). Let the forced attempt's own failure propagate.
   }
 
   UnmountResult result = provider.unmount(

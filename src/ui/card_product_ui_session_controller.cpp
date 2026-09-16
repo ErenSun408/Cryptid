@@ -464,6 +464,16 @@ void CardProductUiSessionController::unmount() {
   volume_session_.unmount_active();
 }
 
+void CardProductUiSessionController::force_unmount_container(const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated)
+    throw_wrong_route("manual container cleanup requires an authenticated session");
+  volume_session_.force_unmount_container(id);
+}
+
+void CardProductUiSessionController::force_unmount_user_active() {
+  volume_session_.force_unmount_user_active();
+}
+
 CardProductUiState CardProductUiSessionController::state() const noexcept {
   if (authentication_.authenticated()) {
     return CardProductUiState::authenticated;

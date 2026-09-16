@@ -480,6 +480,14 @@ bool CardLoginMountSession::mounted() const noexcept {
   return impl_->core.mounted();
 }
 
+void CardLoginMountSession::force_unmount_container(const std::uint32_t id) {
+  impl_->core.force_unmount_container(id);
+}
+
+void CardLoginMountSession::force_unmount_user_active() {
+  impl_->core.force_unmount_user_active();
+}
+
 namespace detail {
 namespace {
 
@@ -1253,12 +1261,31 @@ void CardLoginMountSessionCore::set_mounting_imported_containers(
 }
 
 void CardLoginMountSessionCore::unmount_container(const std::uint32_t id) {
+  unmount_container_impl(id, false);
+}
+
+void CardLoginMountSessionCore::force_unmount_container(const std::uint32_t id) {
+  unmount_container_impl(id, true);
+}
+
+void CardLoginMountSessionCore::force_unmount_user_active() {
+  for (const bool release_first : {true, false}) {
+    for (const SessionContainer& container : state_.containers) {
+      if (container.mounted && container.release_first == release_first)
+        unmount_container_impl(container.id, true);
+    }
+  }
+}
+
+void CardLoginMountSessionCore::unmount_container_impl(
+    const std::uint32_t id, const bool allow_force) {
   for (SessionContainer& container : state_.containers) {
     if (container.id != id) continue;
     if (!container.mounted) return;
     const wchar_t drive_letter = container.drive_letter;
     try {
-      static_cast<void>(runtime_.unmount(drive_letter));
+      if (allow_force) static_cast<void>(runtime_.unmount_forced(drive_letter));
+      else static_cast<void>(runtime_.unmount(drive_letter));
       container.mounted = false;
       container.drive_letter = wchar_t{};
       record_operation(OperationKind::container_unmounted,

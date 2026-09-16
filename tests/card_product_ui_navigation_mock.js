@@ -6,6 +6,7 @@ window.navigationFixture = {
   delayListing: false,
   listingSuffix: "",
   failUnmount: false,
+  failMount: false,
   chosenLocation: "D:\\Export",
   pickerCalls: 0,
   windowSizes: [],
@@ -27,11 +28,27 @@ window.navigationFixture = {
   const fixture = window.navigationFixture;
   const bridge = {
     beginMountAdoptedContainer: (id) => beginVolume(() => bridge.mountAdoptedContainer(id)),
-    beginUnmountContainer: (id) => beginVolume(() => bridge.unmountContainer(id)),
+    beginUnmountContainer: (id) => {
+      fixture.forceTarget = id;
+      return beginVolume(() => bridge.unmountContainer(id));
+    },
     beginUnmount: () => beginVolume(() => {
+      fixture.forceTarget = 0;
       if (fixture.failUnmount) throw new Error("simulated refusal");
       for (const container of fixture.containers) bridge.unmountContainer(container.id);
     }),
+    beginForceUnmountLast: () => {
+      fixture.forceCalls = (fixture.forceCalls || 0) + 1;
+      return beginVolume(() => {
+        if (fixture.failForce) throw new Error("simulated force failure");
+        for (const container of fixture.containers) {
+          if (fixture.forceTarget && fixture.forceTarget !== container.id) continue;
+          container.mounted = false;
+          container.drive = "";
+          container.size = 0;
+        }
+      });
+    },
     getVolumeOperationStatus: () => fixture.volumeStatus,
     getSessionState: () => fixture.state,
     hasActiveSession: () => fixture.state === 3,
@@ -79,6 +96,7 @@ window.navigationFixture = {
       return fixture.chosenLocation;
     },
     mountAdoptedContainer: (id) => {
+      if (fixture.failMount) throw new Error("simulated mount refusal");
       const container = fixture.containers.find((item) => item.id === id);
       container.mounted = true;
       container.drive = "Z:";

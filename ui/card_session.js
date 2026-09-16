@@ -2872,6 +2872,8 @@
       }
     } while (externalRefreshPending);
     if (!volumeOperationDialog.hidden) {
+      volumeForceContext = null;
+      volumeOperationForce.hidden = true;
       if (volumeOperationDialog.dataset.result === "running") volumeOperationDialog.focus();
       else volumeOperationConfirm.focus();
     }
@@ -2879,6 +2881,11 @@
 
   window.addEventListener("usb-vault-session-changed", () => {
     if (!volumeOperationDialog.hidden) {
+      volumeOperationContext = null;
+      volumeForceContext = null;
+      volumeRetryContext = null;
+      volumeOperationForce.hidden = true;
+      volumeOperationRetry.hidden = true;
       volumeOperationTarget = "";
       if (volumeOperationDialog.dataset.result === "running") volumeOperationTitle.textContent = "正在处理磁盘操作…";
       else finishVolumeOperation(false, "安全卡状态已变化，请检查当前磁盘状态。");
@@ -3012,6 +3019,11 @@
   const volumeOperationNote = document.getElementById("volume-operation-note");
   const volumeOperationMark = document.getElementById("volume-operation-mark");
   const volumeOperationConfirm = document.getElementById("volume-operation-confirm");
+  const volumeOperationForce = document.getElementById("volume-operation-force");
+  const volumeOperationRetry = document.getElementById("volume-operation-retry");
+  let volumeForceContext = null;
+  let volumeRetryContext = null;
+  let volumeOperationContext = null;
   let volumeOperationFocus = null;
   let volumeOperationTimer = null;
   let volumeOperationVerb = "";
@@ -3020,12 +3032,22 @@
     if (volumeOperationTimer !== null) clearTimeout(volumeOperationTimer);
     volumeOperationTimer = null;
   };
-  const showVolumeOperation = ({ verb, target }) => {
+  const showVolumeOperation = (context) => {
+    const { verb, target } = context;
+    volumeOperationContext = context;
+    volumeForceContext = null;
+    volumeRetryContext = null;
+    volumeOperationForce.hidden = true;
+    volumeOperationRetry.hidden = true;
+    volumeOperationForce.textContent = "强制卸载";
+    volumeOperationConfirm.textContent = "确定";
     clearVolumeOperationTimer();
     volumeOperationFocus = document.activeElement;
     volumeOperationVerb = verb;
     volumeOperationTarget = target;
-    volumeOperationTitle.textContent = `正在${verb}${target}…`;
+    // The volume name is set off by spaces so it does not run into the
+    // surrounding Chinese, which matters most when the name is Latin or mixed.
+    volumeOperationTitle.textContent = `正在${verb} ${target} …`;
     volumeOperationNote.textContent = "请稍候，完成后将自动更新磁盘状态。";
     volumeOperationDialog.dataset.result = "running";
     volumeOperationMark.textContent = "";
@@ -3036,6 +3058,11 @@
     volumeOperationDialog.focus();
   };
   const hideVolumeOperation = () => {
+    volumeForceContext = null;
+    volumeRetryContext = null;
+    volumeOperationContext = null;
+    volumeOperationForce.hidden = true;
+    volumeOperationRetry.hidden = true;
     clearVolumeOperationTimer();
     volumeOperationDialog.hidden = true;
     volumeOperationTitle.textContent = "";
@@ -3046,7 +3073,7 @@
     else focusCurrentInput();
     volumeOperationFocus = null;
   };
-  const finishVolumeOperation = (succeeded, reason = "") => {
+  const finishVolumeOperation = (succeeded, reason = "", failureCode = 0) => {
     clearVolumeOperationTimer();
     if (succeeded && externalRefreshPending) {
       succeeded = false;
@@ -3057,17 +3084,59 @@
     volumeOperationDialog.dataset.result = succeeded ? "success" : "error";
     volumeOperationTitle.textContent = `${volumeOperationVerb}${succeeded ? "成功" : "失败"}`;
     volumeOperationNote.textContent = succeeded
-      ? (volumeOperationTarget ? `${volumeOperationTarget}已${volumeOperationVerb}。` : "磁盘状态已更新。")
+      ? (volumeOperationTarget ? ` ${volumeOperationTarget} 已${volumeOperationVerb}。` : "磁盘状态已更新。")
       : reason;
     volumeOperationMark.removeAttribute("role");
     volumeOperationMark.setAttribute("aria-hidden", "true");
-    volumeOperationMark.textContent = succeeded ? "✓" : "!";
+    // The tick and the exclamation are drawn by the stylesheet from
+    // data-result, so the mark carries no text of its own in any state.
     volumeOperationConfirm.hidden = false;
+    volumeOperationConfirm.textContent = "确定";
+    volumeOperationForce.textContent = "强制卸载";
+    volumeForceContext = !succeeded && failureCode === 4 && !externalRefreshPending &&
+      volumeOperationContext?.verb === "卸载" &&
+      (volumeOperationContext.all ? activeVolumes : currentState === nativeState.authenticated &&
+        containers.some((container) => container.id === volumeOperationContext.id && container.mounted))
+      ? { ...volumeOperationContext } : null;
+    volumeOperationForce.hidden = volumeForceContext === null;
+    // Retrying a mount is not destructive, so any failure code may offer it;
+    // the container only has to still be known to this session and unmounted.
+    volumeRetryContext = !succeeded && !externalRefreshPending &&
+      volumeOperationContext?.verb === "挂载" && currentState === nativeState.authenticated &&
+      containers.some((container) => container.id === volumeOperationContext.id && !container.mounted)
+      ? { ...volumeOperationContext } : null;
+    volumeOperationRetry.hidden = volumeRetryContext === null;
     volumeOperationConfirm.focus();
     if (succeeded) volumeOperationTimer = setTimeout(hideVolumeOperation, 3000);
   };
   volumeOperationConfirm.addEventListener("click", () => {
     if (volumeOperationDialog.dataset.result !== "running") hideVolumeOperation();
+  });
+  volumeOperationForce.addEventListener("click", async () => {
+    if (busy || externalRefreshPending || volumeForceContext === null) return;
+    if (volumeOperationDialog.dataset.result !== "confirm-force") {
+      clearVolumeOperationTimer();
+      volumeOperationDialog.dataset.result = "confirm-force";
+      volumeOperationTitle.textContent = `强制卸载 ${volumeForceContext.target} ？`;
+      volumeOperationNote.textContent = "未保存或尚未写入磁盘的数据可能丢失，文件或文件系统可能损坏，仍要强制卸载吗？";
+      volumeOperationConfirm.textContent = "取消";
+      volumeOperationForce.textContent = "确认强制卸载";
+      volumeOperationConfirm.focus();
+      return;
+    }
+    const context = { ...volumeForceContext, verb: "强制卸载" };
+    hideVolumeOperation();
+    await runContainerAction(() => bridge.beginForceUnmountLast(),
+      "强制卸载未完成，请检查磁盘状态。", context);
+  });
+  volumeOperationRetry.addEventListener("click", async () => {
+    if (busy || externalRefreshPending || volumeRetryContext === null) return;
+    // hideVolumeOperation first: runContainerAction refuses to start while the
+    // dialog is still up, and it opens its own fresh progress state.
+    const context = { ...volumeRetryContext };
+    hideVolumeOperation();
+    await runContainerAction(() => bridge.beginMountAdoptedContainer(context.id),
+      "无法挂载该容器，请稍后重试。", context);
   });
   // A finished result is safe to dismiss by clicking away; a running operation is not.
   volumeOperationDialog.addEventListener("click", (event) => {
@@ -3079,10 +3148,14 @@
       event.stopPropagation();
       if (volumeOperationDialog.dataset.result === "running") volumeOperationDialog.focus();
       else if (event.key === "Escape") hideVolumeOperation();
+      else if (document.activeElement === volumeOperationConfirm && !volumeOperationForce.hidden) volumeOperationForce.focus();
+      else if (document.activeElement === volumeOperationConfirm && !volumeOperationRetry.hidden) volumeOperationRetry.focus();
       else volumeOperationConfirm.focus();
     }
   });
-  class VolumeOperationFailure extends Error {}
+  class VolumeOperationFailure extends Error {
+    constructor(message, code = 0) { super(message); this.code = code; }
+  }
   const volumeFailureMessages = {
     3: "操作未完成，暂时无法确定具体原因。请检查磁盘状态后重试。",
     4: "卷正在被其他程序占用或锁定。请关闭使用该卷的文件、窗口或程序后重试。",
@@ -3104,7 +3177,7 @@
       catch (_) { throw new VolumeOperationFailure("无法获取操作结果，请检查当前磁盘状态后重试。"); }
       if (status === 2) return;
       if (status !== 1) throw new VolumeOperationFailure(
-        Number.isInteger(status) && status >= 3 && status <= 10 ? volumeFailureMessages[status] : volumeFailureMessages[3]);
+        Number.isInteger(status) && status >= 3 && status <= 10 ? volumeFailureMessages[status] : volumeFailureMessages[3], status);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   };
@@ -3115,7 +3188,7 @@
     render("正在安全卸载");
     setDashboardStatus("");
     const mountedNames = containers.filter((container) => container.mounted).map((container) => container.name);
-    showVolumeOperation({ verb: "卸载", target: mountedNames.length === 1 ? mountedNames[0] : "全部已挂载卷" });
+    showVolumeOperation({ verb: "卸载", all: true, target: mountedNames.length === 1 ? mountedNames[0] : "全部已挂载卷" });
     try {
       await waitForVolumeOperation(() => bridge.beginUnmount());
       await refreshNativeState();
@@ -3135,7 +3208,7 @@
         ? "无法安全卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。"
         : messageForCurrentState());
       if (activeVolumes) setDashboardStatus("无法安全卸载，请检查磁盘状态，并关闭可能占用文件的程序后重试。", "error");
-      finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。");
+      finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。", error instanceof VolumeOperationFailure ? error.code : 0);
     } finally {
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
@@ -3174,7 +3247,7 @@
       render(messageForCurrentState());
       if (activeSection === "files") void refreshFileManager();
       setDashboardStatus(failure, "error");
-      if (progress) finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。");
+      if (progress) finishVolumeOperation(false, error instanceof VolumeOperationFailure ? error.message : "无法确认最新磁盘状态，请刷新或重新插卡后检查。", error instanceof VolumeOperationFailure ? error.code : 0);
     } finally {
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
@@ -3188,11 +3261,11 @@
 
   const mountAdoptedContainer = (id) => runContainerAction(
     () => bridge.beginMountAdoptedContainer(id),
-    "无法挂载该容器，请稍后重试。", { verb: "挂载", target: containers.find((container) => container.id === id)?.name || "当前卷" });
+    "无法挂载该容器，请稍后重试。", { verb: "挂载", id, target: containers.find((container) => container.id === id)?.name || "当前卷" });
 
   const unmountAdoptedContainer = (id) => runContainerAction(
     () => bridge.beginUnmountContainer(id),
-    "无法卸载该容器，请检查磁盘状态，并关闭可能占用文件的程序后重试。", { verb: "卸载", target: containers.find((container) => container.id === id)?.name || "当前卷" });
+    "无法卸载该容器，请检查磁盘状态，并关闭可能占用文件的程序后重试。", { verb: "卸载", id, target: containers.find((container) => container.id === id)?.name || "当前卷" });
 
   const forgetAdoptedContainer = (id) => runContainerAction(
     () => bridge.forgetContainer(id),

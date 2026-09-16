@@ -501,6 +501,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
             wparam, lparam, kDevelopmentCardIdentity);
         if (arrival.has_value()) {
+          g_creation_work.card_epoch.fetch_add(1);
           if (!*arrival) { g_deferred_removal = true; g_creation_work.interrupted.store(true); }
           g_deferred_arrival = *arrival;
         }
@@ -515,6 +516,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         using Transition = usb_vault::application::CardPresenceTransition;
         if (transition.entry_changed ||
             transition.presence != Transition::no_change) {
+          g_creation_work.card_epoch.fetch_add(1);
           notify_webview_session_changed();
         }
         if (transition.presence ==

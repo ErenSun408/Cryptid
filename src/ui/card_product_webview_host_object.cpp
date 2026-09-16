@@ -108,6 +108,7 @@ constexpr DISPID kBeginMountAdoptedId = 51;
 constexpr DISPID kBeginUnmountContainerId = 52;
 constexpr DISPID kBeginUnmountId = 53;
 constexpr DISPID kVolumeOperationStatusId = 54;
+constexpr DISPID kBeginForceUnmountLastId = 55;
 // Public, role-neutral outcomes: idle/running/success/unknown, busy, missing,
 // denied, unreadable container, IO failure, driver unavailable, card removed.
 unsigned int volume_failure_status(const std::error_code& error) noexcept {
@@ -505,6 +506,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginMountAdoptedContainer")) { ids[0] = kBeginMountAdoptedId; return S_OK; }
     if (matches(names[0], L"beginUnmountContainer")) { ids[0] = kBeginUnmountContainerId; return S_OK; }
     if (matches(names[0], L"beginUnmount")) { ids[0] = kBeginUnmountId; return S_OK; }
+    if (matches(names[0], L"beginForceUnmountLast")) { ids[0] = kBeginForceUnmountLastId; return S_OK; }
     if (matches(names[0], L"getVolumeOperationStatus")) { ids[0] = kVolumeOperationStatusId; return S_OK; }
     if (matches(names[0], kGetContainerDriveLetterName)) {
       ids[0] = kGetContainerDriveLetterId;
@@ -571,10 +573,25 @@ class CardProductWebViewHostObject final : public IDispatch {
       return E_PENDING;
     }
 
+    // Observations may refresh the failure dialog. Any unrelated mutation
+    // revokes the last cleanup target, so a stale page cannot force a new mount.
+    switch (member) {
+      case kBeginForceUnmountLastId: case kVolumeOperationStatusId:
+      case kHasActiveSessionId: case kGetSessionStateId:
+      case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
+      case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
+      case kGetOperationCountId: case kGetOperationCompletedAtId: case kGetOperationKindId:
+      case kGetOperationOutcomeId: case kGetOperationContainerNameId: case kGetOperationDriveLetterId:
+      case kCanResetCardRecordId: case kGetRememberContainerPathsId:
+      case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
+      case kListContainerDirectoryId: break;
+      default: last_volume_member_ = 0; break;
+    }
     switch (member) {
       case kBeginMountAdoptedId:
       case kBeginUnmountContainerId:
       case kBeginUnmountId:
+      case kBeginForceUnmountLastId:
         return begin_volume_operation(member, parameters, result, argument_error);
       case kVolumeOperationStatusId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -731,12 +748,20 @@ class CardProductWebViewHostObject final : public IDispatch {
  private:
   HRESULT begin_volume_operation(DISPID member, DISPPARAMS* parameters,
                                  VARIANT* result, UINT* argument_error) noexcept {
+    const bool force = member == kBeginForceUnmountLastId;
+    if (force) {
+      if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+      if (volume_status_.load() != 4 || last_volume_epoch_ != creation_work_->card_epoch.load() ||
+          (last_volume_member_ != kBeginUnmountId && last_volume_member_ != kBeginUnmountContainerId))
+        return E_ACCESSDENIED;
+      member = last_volume_member_;
+    }
     const bool all = member == kBeginUnmountId;
     if (!parameters || parameters->cNamedArgs != 0 ||
-        parameters->cArgs != (all ? 0U : 1U) ||
-        (!all && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
-    std::uint32_t id = 0;
-    if (!all && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
+        parameters->cArgs != (all || force ? 0U : 1U) ||
+        (!all && !force && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+    std::uint32_t id = force ? last_volume_id_ : 0;
+    if (!all && !force && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
       if (argument_error) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
@@ -746,17 +771,22 @@ class CardProductWebViewHostObject final : public IDispatch {
       if (creation_work_->interrupted.load()) return E_PENDING;
       if (!all && controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
       if (creation_thread_.joinable()) creation_thread_.join();
+      last_volume_member_ = member;
+      last_volume_id_ = id;
+      last_volume_epoch_ = creation_work_->card_epoch.load();
       creation_work_->finish(); // Volume operations cannot be cancelled.
       creation_work_->volume_operation.store(true);
       volume_status_.store(1);
       creation_work_->running.store(true);
-      creation_thread_ = std::thread([this, member, id] {
+      creation_thread_ = std::thread([this, member, id, force] {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         unsigned int status = 3;
         try {
           if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
           if (!creation_work_->interrupted.load()) {
-            if (member == kBeginMountAdoptedId) controller_.mount_container(id);
+            if (force && member == kBeginUnmountContainerId) controller_.force_unmount_container(id);
+            else if (force) controller_.force_unmount_user_active();
+            else if (member == kBeginMountAdoptedId) controller_.mount_container(id);
             else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
             else controller_.unmount();
             status = 2;
@@ -1703,6 +1733,9 @@ class CardProductWebViewHostObject final : public IDispatch {
   CreationWorkState* creation_work_;
   std::thread creation_thread_;
   std::atomic<unsigned int> volume_status_{0};
+  DISPID last_volume_member_{0};
+  std::uint32_t last_volume_id_{0};
+  std::uint64_t last_volume_epoch_{0};
   std::atomic<unsigned int> creation_status_{0};
   std::atomic<std::uint64_t> creation_progress_{0};
   std::atomic<unsigned int> creation_flags_{0};

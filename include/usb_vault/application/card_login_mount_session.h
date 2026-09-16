@@ -173,6 +173,14 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // Unmounts one adopted container. The container stays adopted and unmounted
   // so it can be mounted again without reselecting its file.
   virtual void unmount_container(std::uint32_t id) = 0;
+  // Explicit user cleanup retains the authenticated session for remounting.
+  // Implementations without this capability fail closed.
+  virtual void force_unmount_container(std::uint32_t) {
+    throw std::logic_error("manual forced cleanup is unavailable");
+  }
+  virtual void force_unmount_user_active() {
+    throw std::logic_error("manual forced cleanup is unavailable");
+  }
 
   // Drops one adopted container from the session and forgets where it is. The
   // file is left exactly where it was: this removes the record, never the
@@ -390,6 +398,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
+  void force_unmount_container(std::uint32_t id) override;
+  void force_unmount_user_active() override;
   void forget_container(std::uint32_t id) override;
   std::uint32_t adopt_container(std::wstring_view path) override;
   [[nodiscard]] bool mounting_imported_containers() override;

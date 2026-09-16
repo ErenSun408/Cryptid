@@ -19,12 +19,9 @@ struct UnmountEscalationResult final {
   bool forced{false};
 };
 
-// Emergency cleanup for a drive whose key material can no longer be trusted,
-// such as a volume left behind by a physically removed card. One normal unmount
-// is attempted first so an idle volume is still flushed and closed cleanly; a
-// precise busy rejection escalates immediately to a forced unmount rather than
-// waiting out the busy window, because no user action can make the removed card
-// present again.
+// Explicit forced cleanup after card removal or a confirmed user request.
+// One normal unmount is attempted first so an idle volume is still flushed
+// and closed cleanly; only a precise busy rejection escalates to force.
 // Other driver or transport failures propagate without attempting force.
 // A forced unmount discards data that the filesystem has not written yet, so
 // this policy is never the default and never runs behind unmount_with_retry.

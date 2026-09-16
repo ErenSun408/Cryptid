@@ -637,11 +637,26 @@
     #volume-operation-title { font-size: 1.05rem; line-height: 1.6; overflow-wrap: anywhere; margin: .85rem 0 .5rem; }
     #volume-operation-note { font-size: .8rem; line-height: 1.7; color: var(--text-2); margin: 0; overflow-wrap: anywhere; }
     #volume-operation-dialog .modal-footer { justify-content: center; min-height: 3.25rem; }
-    #volume-operation-confirm { min-width: 7rem; }
-    .volume-operation-mark { width: 2.75rem; height: 2.75rem; margin: 0 auto; display: grid; place-items: center; font-size: 1.8rem; color: var(--gold); }
-    #volume-operation-dialog[data-result="running"] .volume-operation-mark { border: 3px solid var(--line); border-top-color: var(--gold); border-radius: 50%; animation: creation-spin 1s linear infinite; }
-    #volume-operation-dialog[data-result="success"] .volume-operation-mark { color: var(--ok); }
-    #volume-operation-dialog[data-result="error"] .volume-operation-mark { color: var(--danger); }
+    /* One shared floor so the two footer buttons match whatever their labels
+       say: the longest is "确认强制卸载" at roughly 6.2rem, so 7rem wins. */
+    #volume-operation-confirm, #volume-operation-force, #volume-operation-retry { min-width: 7rem; }
+    /* All three states keep the same disc, so the mark never collapses when a
+       result replaces the spinner; only its colour and inner shape change. The
+       shapes are drawn in CSS like .creation-progress-steps .step-mark above,
+       which keeps a font from deciding what a check mark looks like here. */
+    .volume-operation-mark { position: relative; width: 2.75rem; height: 2.75rem; margin: 0 auto; border: 3px solid transparent; border-radius: 50%; font-size: 0; color: var(--gold); }
+    #volume-operation-dialog[data-result="running"] .volume-operation-mark { border-color: var(--line); border-top-color: var(--gold); animation: creation-spin 1s linear infinite; }
+    #volume-operation-dialog[data-result="success"] .volume-operation-mark { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+    /* A pending force confirmation is still a warning, so it keeps the danger disc. */
+    #volume-operation-dialog[data-result="error"] .volume-operation-mark,
+    #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+    /* Two borders of a box, rotated into a tick. */
+    #volume-operation-dialog[data-result="success"] .volume-operation-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: .8rem; height: .42rem; border-left: 2.5px solid currentColor; border-bottom: 2.5px solid currentColor; border-radius: 1px; transform: translate(-50%, -70%) rotate(-45deg); }
+    /* A stem and a dot, so the exclamation is ours rather than the font's. */
+    #volume-operation-dialog[data-result="error"] .volume-operation-mark::before,
+    #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark::before { content: ""; position: absolute; left: 50%; top: .58rem; width: 2.5px; height: .78rem; border-radius: 1.25px; background: currentColor; transform: translateX(-50%); }
+    #volume-operation-dialog[data-result="error"] .volume-operation-mark::after,
+    #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark::after { content: ""; position: absolute; left: 50%; top: 1.61rem; width: 3px; height: 3px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
     @media (prefers-reduced-motion: reduce) { #volume-operation-dialog .volume-operation-mark { animation: none !important; } }
     .modal-overlay[data-step="type"] .modal { width: min(40rem, 100%); }
     .type-picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
@@ -1111,7 +1126,11 @@
         <h3 id="volume-operation-title" role="status">正在处理磁盘操作…</h3>
         <p id="volume-operation-note">请稍候，完成后将自动更新磁盘状态。</p>
       </div>
-      <div class="modal-footer"><button id="volume-operation-confirm" class="shell-button primary" type="button" hidden>确定</button></div>
+      <div class="modal-footer">
+        <button id="volume-operation-force" class="shell-button danger" type="button" hidden>强制卸载</button>
+        <button id="volume-operation-retry" class="shell-button" type="button" hidden>重试挂载</button>
+        <button id="volume-operation-confirm" class="shell-button primary" type="button" hidden>确定</button>
+      </div>
     </div>
   </div>
 

@@ -142,6 +142,8 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool leave_b_after_failure{};
   bool fail_unmount_a{};
   bool fail_unmount_b{};
+  bool fail_manual_force{};
+  wchar_t fail_manual_force_drive{};
   bool force_required_a{};
   bool force_required_b{};
   bool container_a_exists{};
@@ -215,6 +217,8 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
 
   [[nodiscard]] usb_vault::volume::UnmountEscalationResult unmount_forced(
       const wchar_t drive_letter) override {
+    if (fail_manual_force || drive_letter == fail_manual_force_drive)
+      throw std::runtime_error("forced cleanup failed");
     attached_volume_sizes.erase(drive_letter);
     if (drive_letter == L'Y') {
       events.emplace_back("force:B");
@@ -999,6 +1003,47 @@ void test_forced_release_drops_the_captured_volume_password() {
   require_throws<std::logic_error>(
       [&] { session.mount_adopted_container(hidden_id); },
       "the hidden container was mounted after its password was dropped");
+}
+
+void test_manual_forced_release_preserves_scope_secrets_and_failed_state() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime = runtime_with_both_containers();
+  runtime.free_drive_letters = {L'Y', L'X', L'Y', L'Y'};
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto entries = session.container_statuses();
+  const auto first = entries[0].id;
+  const auto second = entries[1].id;
+  session.mount_adopted_container(first);
+  session.mount_adopted_container(second);
+  const auto history_before = session.operation_history().size();
+  runtime.fail_manual_force = true;
+  require_throws<std::runtime_error>([&] { session.force_unmount_container(first); }, "force failure was swallowed");
+  require(session.container_statuses()[0].mounted && session.container_statuses()[1].mounted,
+          "failed force cleared active state");
+  runtime.fail_manual_force = false;
+  session.force_unmount_container(first);
+  require(!session.container_statuses()[0].mounted && session.container_statuses()[1].mounted,
+          "single force crossed target boundary");
+  require(authentication.authenticated() && !session.copy_session_password().empty() &&
+          session.operation_history().size() == history_before + 2,
+          "manual force cleared authentication, password or history");
+  session.mount_adopted_container(first);
+  require(session.container_statuses()[0].mounted, "manual force prevented remount");
+  runtime.events.clear();
+  runtime.fail_manual_force_drive = L'X';
+  require_throws<std::runtime_error>([&] { session.force_unmount_user_active(); }, "partial force failure was hidden");
+  require(runtime.events == std::vector<std::string>{"force:B"}, "partial force changed release order");
+  require(!session.container_statuses()[0].mounted && session.container_statuses()[1].mounted &&
+          session.mounted(), "partial cleanup lost precise remaining state");
+  runtime.fail_manual_force_drive = 0;
+  runtime.events.clear();
+  session.force_unmount_user_active();
+  require(!session.mounted() && runtime.events == std::vector<std::string>{"force:A"},
+          "unified manual force changed release order or left a volume");
+  require_throws<std::invalid_argument>([&] { session.force_unmount_container(9999); }, "unknown force target accepted");
+  session.mount_adopted_container(first);
+  require(session.mounted(), "unified manual force destroyed remount secrets");
 }
 
 void test_deliberate_release_keeps_the_captured_volume_password() {
@@ -2727,6 +2772,7 @@ int main() {
     test_adopted_containers_mount_without_further_input();
     test_forced_release_drops_the_captured_volume_password();
     test_deliberate_release_keeps_the_captured_volume_password();
+    test_manual_forced_release_preserves_scope_secrets_and_failed_state();
     test_login_adopts_every_mounted_container();
     test_import_falls_back_to_the_login_derivation();
     test_import_reports_a_file_no_derivation_opens();

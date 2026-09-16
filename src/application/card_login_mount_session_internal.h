@@ -175,6 +175,9 @@ class CardLoginMountSessionCore final {
   std::uint32_t mount_container(std::wstring_view path);
   std::uint32_t adopt_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);
+  void force_unmount_container(std::uint32_t id);
+  void force_unmount_user_active();
+  void unmount_container_impl(std::uint32_t id, bool allow_force);
   void forget_container(std::uint32_t id);
   [[nodiscard]] bool remembering_container_paths();
   void set_remembering_container_paths(bool remember);

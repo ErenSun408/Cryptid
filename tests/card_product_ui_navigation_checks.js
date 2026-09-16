@@ -335,7 +335,7 @@
     window.navigationFixture.delayVolume = true;
     $("#file-mount-toggle").click();
     check($("#file-mount-toggle").disabled, "Mount controls disable while the action is running");
-    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "正在挂载影像存档…" &&
+    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "正在挂载 影像存档 …" &&
       !$("#volume-operation-dialog [role=progressbar]").hasAttribute("aria-valuenow"), "Mount immediately opens indeterminate progress");
     await wait(() => window.navigationFixture.completeVolume);
     const starts = window.navigationFixture.volumeStarts;
@@ -356,7 +356,7 @@
     $("#volume-operation-confirm").click();
     check($("#volume-operation-dialog").hidden, "Confirmation dismisses success immediately");
     $("#file-mount-toggle").click();
-    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "正在卸载影像存档…",
+    check(!$("#volume-operation-dialog").hidden && $("#volume-operation-title").textContent === "正在卸载 影像存档 …",
       "Unmount immediately opens progress");
     await wait(() => !$("#file-mount-toggle").disabled);
     check($("#file-mount-toggle").textContent === "卸载" && window.navigationFixture.containers[1].mounted,
@@ -372,9 +372,53 @@
       $("#file-mount-toggle").click();
       await wait(() => $("#volume-operation-dialog").dataset.result === "error");
       check($("#volume-operation-note").textContent.includes(reason), `Failure ${code} shows the bounded native reason`);
+      check($("#volume-operation-force").hidden, `Failure ${code} cannot escalate to force`);
       $("#volume-operation-confirm").click();
     }
     window.navigationFixture.volumeFailureStatus = 0;
+    $("#file-mount-toggle").click();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    check(!$("#volume-operation-force").hidden && $("#volume-operation-force").classList.contains("danger"),
+      "Busy unmount exposes a red force button");
+    $("#volume-operation-force").click();
+    check($("#volume-operation-dialog").dataset.result === "confirm-force" &&
+      $("#volume-operation-note").textContent.includes("文件系统可能损坏") && !window.navigationFixture.forceCalls,
+      "Force requires separate risk confirmation before native work");
+    $("#volume-operation-confirm").click();
+    check(!window.navigationFixture.forceCalls && window.navigationFixture.containers[1].mounted,
+      "Cancelling force never calls native cleanup");
+    $("#file-mount-toggle").click();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    $("#volume-operation-force").click();
+    window.navigationFixture.failForce = true;
+    window.navigationFixture.volumeFailureStatus = 8;
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
+    $("#volume-operation-force").click();
+    await wait(() => window.navigationFixture.completeVolume);
+    $("#volume-operation-force").click();
+    check(window.navigationFixture.forceCalls === 1 && $("#volume-operation-dialog").dataset.result === "running",
+      "Confirmed force runs once with progress");
+    window.navigationFixture.completeVolume();
+    window.navigationFixture.delayVolume = false;
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    check(window.navigationFixture.containers[1].mounted && $("#volume-operation-note").textContent.includes("读取或写入"),
+      "Failed force keeps mounted state and reports reason");
+    $("#volume-operation-confirm").click();
+    window.navigationFixture.failForce = false;
+    window.navigationFixture.volumeFailureStatus = 0;
+    $("#file-mount-toggle").click();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    $("#volume-operation-force").click();
+    $("#volume-operation-force").click();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "success");
+    check($("#volume-operation-title").textContent === "强制卸载成功" &&
+      !window.navigationFixture.containers[1].mounted && window.navigationFixture.containers[0].mounted,
+      "Successful force unmounts only the failed target");
+    $("#volume-operation-confirm").click();
+    $("#file-mount-toggle").click();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "success");
+    $("#volume-operation-confirm").click();
     window.navigationFixture.failUnmount = false;
     $("#file-mount-toggle").click();
     await wait(() => $("#file-mount-toggle").textContent === "挂载" && !$("[data-file-enter]"));
@@ -388,6 +432,20 @@
       "Success remains visible before three seconds and never narrates its own timer");
     await wait(() => $("#volume-operation-dialog").hidden);
     check($("#volume-operation-title").textContent === "", "Success automatically closes and clears its name after three seconds");
+    window.navigationFixture.failMount = true;
+    $("#file-mount-toggle").click();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    check($("#volume-operation-title").textContent === "挂载失败" && !$("#volume-operation-retry").hidden &&
+      $("#volume-operation-force").hidden, "Failed mount offers a retry and never the force button");
+    window.navigationFixture.failMount = false;
+    $("#volume-operation-retry").click();
+    await wait(() => window.navigationFixture.containers[1].mounted);
+    check($("#volume-operation-title").textContent === "挂载成功" && $("#volume-operation-retry").hidden,
+      "Retry remounts the same container and withdraws itself on success");
+    $("#volume-operation-confirm").click();
+    $("#file-mount-toggle").click();
+    await wait(() => !window.navigationFixture.containers[1].mounted);
+    $("#volume-operation-confirm").click();
     $("[data-file-back]").click();
 
     window.navigationFixture.delayListing = true;
@@ -403,7 +461,15 @@
     await wait(() => $("#volume-operation-dialog").dataset.result === "error");
     check($("#dashboard-status").dataset.tone === "error" && window.navigationFixture.containers[0].mounted,
       "Unified unmount refusal is visible on the dashboard and preserves volumes");
+    $("#volume-operation-force").click();
+    check($("#volume-operation-title").textContent.includes("全部已挂载卷"), "Unified force names the full cleanup scope");
+    const beforeCardChange = window.navigationFixture.forceCalls;
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    await wait(() => $("#volume-operation-force").hidden);
+    $("#volume-operation-force").click();
+    check(window.navigationFixture.forceCalls === beforeCardChange, "Card change invalidates an open force confirmation");
     $("#volume-operation-confirm").click();
+    await wait(() => !$("#dashboard-unmount").disabled);
     window.navigationFixture.failUnmount = false;
     window.navigationFixture.delayVolume = true;
     window.navigationFixture.completeVolume = null;

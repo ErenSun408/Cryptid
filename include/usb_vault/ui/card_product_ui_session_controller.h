@@ -146,6 +146,8 @@ class CardProductUiSessionController final {
   void mount_container(std::uint32_t id);
 
   void unmount_container(std::uint32_t id);
+  void force_unmount_container(std::uint32_t id);
+  void force_unmount_user_active();
 
   // Takes a container off the list and forgets where it was left. The file
   // stays exactly where it is: this drops the record, never the container, and

@@ -491,6 +491,21 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] bool force_unmount_active() override {
     throw std::logic_error("forced unmount is outside the UI contract");
   }
+  void force_unmount_container(std::uint32_t id) override {
+    await_volume_operation();
+    ++manual_force_calls;
+    manual_force_id = id;
+    for (auto& entry : containers) if (entry.id == id) entry.mounted = false;
+  }
+  void force_unmount_user_active() override {
+    await_volume_operation();
+    ++manual_force_calls;
+    manual_force_id = 0;
+    for (auto& entry : containers) entry.mounted = false;
+    mounted_state = false;
+  }
+  int manual_force_calls{};
+  std::uint32_t manual_force_id{};
 
   [[nodiscard]] bool mounted() const noexcept override {
     return mounted_state;
@@ -1849,6 +1864,54 @@ void test_background_volume_operations() {
     require(actual == expected, "failure classification was lost or fabricated");
   }
   fixture.volume.volume_failure.clear();
+  require(no_args(L"beginForceUnmountLast") == E_ACCESSDENIED,
+          "non-busy failure allowed forced cleanup");
+  fixture.volume.volume_failure = usb_vault::volume::make_error_code(DriverError::volume_busy);
+  require(invoke_with_number(*host.Get(), L"beginMountAdoptedContainer", id, nullptr, nullptr) == S_OK,
+          "busy mount did not start");
+  wait_done();
+  fixture.volume.volume_failure.clear();
+  require(status() == 4 && no_args(L"beginForceUnmountLast") == E_ACCESSDENIED,
+          "mount failure allowed forced unmount");
+  const auto busy_cleanup = [&](bool all) {
+    fixture.volume.volume_failure = usb_vault::volume::make_error_code(DriverError::volume_busy);
+    const auto started = all ? no_args(L"beginUnmount")
+        : invoke_with_number(*host.Get(), L"beginUnmountContainer", id, nullptr, nullptr);
+    require(started == S_OK, "busy cleanup did not start");
+    wait_done();
+    fixture.volume.volume_failure.clear();
+    require(status() == 4, "busy cleanup result lost");
+  };
+  busy_cleanup(false);
+  require(invoke_with_number(*host.Get(), L"beginForceUnmountLast", id + 1, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "forced cleanup accepted a caller-selected target");
+  require(no_args(L"getSessionState") == S_OK, "observation failed");
+  fixture.volume.pause_volume.store(true);
+  require(no_args(L"beginForceUnmountLast") == S_OK && work.running.load(), "single forced cleanup did not start");
+  require(no_args(L"beginForceUnmountLast") == E_PENDING, "duplicate forced cleanup was admitted");
+  fixture.volume.pause_volume.store(false);
+  wait_done();
+  require(status() == 2 && fixture.volume.manual_force_calls == 1 && fixture.volume.manual_force_id == id,
+          "single forced cleanup crossed target boundary");
+  require(no_args(L"beginForceUnmountLast") == E_ACCESSDENIED, "completed force was replayed");
+  busy_cleanup(true);
+  require(no_args(L"beginForceUnmountLast") == S_OK, "unified forced cleanup did not start");
+  wait_done();
+  require(status() == 2 && fixture.volume.manual_force_calls == 2 && fixture.volume.manual_force_id == 0,
+          "unified forced cleanup lost its scope");
+  busy_cleanup(false);
+  work.card_epoch.fetch_add(1);
+  require(no_args(L"beginForceUnmountLast") == E_ACCESSDENIED, "card change retained stale force target");
+  busy_cleanup(false);
+  require(no_args(L"unmount") == S_OK && no_args(L"beginForceUnmountLast") == E_ACCESSDENIED,
+          "unrelated mutation retained stale force target");
+  busy_cleanup(false);
+  fixture.volume.volume_failure = std::make_error_code(std::errc::io_error);
+  require(no_args(L"beginForceUnmountLast") == S_OK, "failing force did not start");
+  wait_done();
+  fixture.volume.volume_failure.clear();
+  require(status() == 8 && no_args(L"beginForceUnmountLast") == E_ACCESSDENIED,
+          "force failure fabricated success or left a force grant");
   require(invoke_with_number(*host.Get(), L"beginMountAdoptedContainer", 0, nullptr, nullptr) == DISP_E_TYPEMISMATCH,
           "invalid identifier was admitted");
   require(no_args(L"beginMountAdoptedContainer") == DISP_E_BADPARAMCOUNT, "missing identifier was admitted");
