@@ -1,1 +1,21 @@
-third_party/argon2/** text eol=lf
+# Line endings are pinned here rather than left to each machine's
+# core.autocrlf, which had produced a working tree mixing CRLF, LF, and
+# files with both. Git stores LF either way; these rules decide what a
+# checkout writes to disk.
+* text=auto eol=lf
+
+# Batch files must keep CRLF. cmd.exe mis-parses goto labels, trailing ^
+# continuations, and a final line without a terminator when a .cmd or .bat
+# is LF-only. "Start USB Vault.cmd" ships inside the customer package.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.cmd.in text eol=crlf
+
+# Text shipped to the customer may be opened in an old Notepad, which
+# renders an LF-only file as a single line.
+packaging/**/*.txt text eol=crlf
+
+# Upstream code is already stored with LF, including the VeraCrypt patch
+# that the format DLL is built from. Say so explicitly: -text would write
+# the current CRLF working copies back into the repository instead.
+third_party/** text eol=lf
