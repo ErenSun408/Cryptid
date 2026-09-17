@@ -518,7 +518,7 @@
       "Nothing to retry hides both retry controls");
     check($("#volume-operation-dialog").hidden && $("#batch-result-retry").disabled &&
       $("#batch-result-list .batch-result-ok").getAttribute("aria-label") === "挂载成功" &&
-      $("#batch-result-list input").checked && $("#batch-result-list input").disabled,
+      !$("#batch-result-list input") && $("#batch-result-force").closest("label").hidden,
       "Successful batch opens a separate result dialog with successful items locked");
     $("#batch-result-confirm").click();
     window.navigationFixture.delayVolume = false;
@@ -584,11 +584,16 @@
     check($("#volume-operation-force").hidden && $("#volume-operation-retry").hidden &&
       $("#batch-result-list").textContent.includes("占用"),
       "Batch failure explains its reason without granting single-target force or retry");
-    check(all("#batch-result-list input").map((input) => input.dataset.id).join(",") === "1,3" &&
+    check(resultRows().map((row) => row.dataset.id).join(",") === "1,3" &&
       !$("#batch-result-list input[data-id='1']").checked && !$("#batch-result-list input[data-id='1']").disabled,
       "Result dialog lists the full batch with failures first and no retry preselected");
     const failedRow = failedRows()[0];
     const mark = failedRow.querySelector(".batch-result-why");
+    failedRow.querySelector(".batch-result-name").click();
+    check(failedRow.querySelector("input").checked && mark.getAttribute("aria-expanded") === "false",
+      "Clicking a result name selects its retry checkbox rather than the reason button");
+    failedRow.click();
+    check(!failedRow.querySelector("input").checked, "Clicking row whitespace toggles retry selection once");
     check(failedRow.firstElementChild.className === "batch-result-name" &&
       failedRow.lastElementChild === failedRow.querySelector("input") &&
       mark.nextElementSibling.className === "batch-result-bubble" &&
@@ -641,7 +646,7 @@
     $("#batch-result-retry").click();
     await wait(() => !$("#batch-result-dialog").hidden);
     check(window.navigationFixture.batchRequests.at(-1)[1] === "1" &&
-      all("#batch-result-list input").length === 2 && failedRows().length === 1,
+      resultRows().length === 2 && all("#batch-result-list input").length === 1 && failedRows().length === 1,
       "Failed retry attempts only selected failures and retains previous successes");
     $("#batch-result-confirm").click();
     check(!$("#batch-result-list").textContent, "Closing results clears names and selections");
@@ -691,7 +696,7 @@
     $("#batch-result-retry").click();
     await wait(() => !$("#batch-result-dialog").hidden);
     check(window.navigationFixture.batchRequests.at(-1)[1] === "1" &&
-      all("#batch-result-list input").map((input) => input.dataset.id).join(",") === "2,3,1" &&
+      resultRows().map((row) => row.dataset.id).join(",") === "2,3,1" &&
       failedRows().length === 2,
       "Selective mount retry updates one item and reorders remaining failures first");
     const beforeEmptyRetry = window.navigationFixture.batchRequests.length;
@@ -716,7 +721,7 @@
     await wait(() => !$("#batch-result-dialog").hidden);
     check(window.navigationFixture.batchRequests.at(-1)[1] === "2,3" &&
       failedRows().length === 0 && $("#batch-result-all").disabled &&
-      all("#batch-result-list input").every((input) => input.checked && input.disabled),
+      !$("#batch-result-list input"),
       "Multi-retry preserves the complete result set and locks all successful items");
     $("#batch-result-confirm").dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     check($("#batch-result-dialog").contains(document.activeElement) &&
@@ -740,8 +745,8 @@
     await wait(() => !$("#batch-result-dialog").hidden);
     check($("#batch-result-list").textContent.includes('<img src=x onerror="bad()">') &&
       !$("#batch-result-list img"), "Result names render as literal text rather than HTML");
-    const skippedRow = $("#batch-result-list input[data-id='3']").closest(".batch-result-row");
-    check($("#batch-result-list input[data-id='3']").disabled &&
+    const skippedRow = $("#batch-result-list .batch-result-row[data-id='3']");
+    check(!skippedRow.querySelector("input") &&
       skippedRow.dataset.failed === "false" &&
       !skippedRow.querySelector(".batch-result-mark").childElementCount &&
       !$("#batch-result-list").textContent.includes("无需重复操作"),
@@ -758,6 +763,59 @@
       !$("#volume-operation-note").textContent.includes("<img") && $("#batch-result-retry").disabled,
       "Late retry completion after a card event cannot restore the old result set");
     $("#volume-operation-confirm").click();
+    await wait(() => !$("#unmount-select").disabled);
+    check(!$("#unmount-force").checked, "Force batch mode defaults off and clears on card changes");
+    for (const item of window.navigationFixture.containers) {
+      item.mounted = true; item.drive = `${String.fromCharCode(87 + item.id)}:`; item.size = 1024;
+    }
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    await wait(() => !$("#unmount-select").disabled);
+    window.navigationFixture.delayVolume = false;
+    window.navigationFixture.batchFailId = 1;
+    window.navigationFixture.failUnmount = true;
+    $("#unmount-select").click();
+    $("#unmount-force").click();
+    $("#unmount-items input[data-id='1']").click();
+    $("#unmount-items input[data-id='2']").click();
+    $("#dashboard-unmount").click();
+    check($("#unmount-force").disabled, "Force mode is locked while a batch is running");
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[2] === true &&
+      window.navigationFixture.batchRequests.at(-1)[1] === "1,2" &&
+      !window.navigationFixture.containers[1].mounted && window.navigationFixture.containers[2].mounted &&
+      $("#batch-result-title").textContent.includes("强制卸载"),
+      "Enabled force mode applies only to selected targets and labels its results");
+    window.navigationFixture.batchFailId = 0;
+    $("#unmount-force").checked = false;
+    $("#batch-result-all").click();
+    $("#batch-result-retry").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[2] === true &&
+      window.navigationFixture.batchRequests.at(-1)[1] === "1" && !window.navigationFixture.containers[0].mounted,
+      "Result retry retains its original force mode independently of the dropdown");
+    $("#batch-result-confirm").click();
+    $("#unmount-select").click();
+    $("#unmount-select-all").click();
+    $("#dashboard-unmount").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[2] === false && window.navigationFixture.containers[2].mounted,
+      "Unchecked force mode returns new batches to ordinary unmount");
+    check(!$("#batch-result-force").closest("label").hidden && !$("#batch-result-force").checked &&
+      $("#batch-result-force").closest("label").parentElement.firstElementChild === $("#batch-result-force").closest("label"),
+      "Failed ordinary unmount offers force opt-in on the left of the result footer");
+    $("#batch-result-force").click();
+    $("#batch-result-all").click();
+    check($("#batch-result-retry").textContent === "重试卸载选中项", "Result force opt-in keeps retry wording unchanged");
+    $("#batch-result-retry").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[2] === true &&
+      window.navigationFixture.batchRequests.at(-1)[1] === "3" && !window.navigationFixture.containers[2].mounted &&
+      $("#batch-result-force").closest("label").hidden && !$("#batch-result-list input"),
+      "Result force opt-in retries only selected failures and disappears when all succeed");
+    $("#batch-result-confirm").click();
+    $("#unmount-force").checked = true;
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    check(!$("#unmount-force").checked, "Card change clears explicit force opt-in");
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;

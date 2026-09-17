@@ -205,6 +205,8 @@
     .batch-menu label:hover:not(:has(input:disabled)) { background: rgba(255, 255, 255, .05); }
     .batch-menu label:has(input:disabled) { color: var(--text-3); cursor: default; }
     .batch-all { justify-content: flex-end; }
+    .batch-menu-options { display: flex; align-items: center; justify-content: space-between; }
+    .batch-menu-options .batch-force { color: var(--danger); gap: .35rem; }
     .batch-menu input { accent-color: var(--gold); flex: 0 0 auto; }
     .batch-menu input:disabled { opacity: 1; }
     .batch-items { max-height: 18rem; overflow-y: auto; border-top: 1px solid var(--line); }
@@ -707,12 +709,11 @@
     #batch-result-confirm:hover:not(:disabled) { border-color: transparent; background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     #batch-result-dialog .modal-body { padding: .75rem 1.25rem; }
     .batch-result-list { max-height: min(23rem, 50vh); overflow-y: auto; }
-    /* One line per container: the name, then the failure mark and the retry
-       box on the right edge. The reason lives in the bubble, not the row. */
+    /* The mark follows the bounded name; retry boxes stay on the right. */
     .batch-result-row { display: flex; align-items: center; gap: .65rem; padding: .55rem .2rem; border-bottom: 1px solid var(--line); }
     .batch-result-row:last-child { border-bottom: 0; }
-    .batch-result-row input { accent-color: var(--gold); flex: 0 0 auto; }
-    .batch-result-name { flex: 1; min-width: 0; font-size: .85rem; overflow-wrap: anywhere; }
+    .batch-result-row input { accent-color: var(--gold); flex: 0 0 auto; width: 1rem; height: 1rem; margin: 0 0 0 auto; }
+    .batch-result-name { flex: 0 1 auto; min-width: 0; max-width: min(14rem, calc(100% - 3.3rem)); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .batch-result-mark { display: flex; flex: 0 0 auto; width: 1rem; height: 1rem; }
     .batch-result-sign {
       position: relative; width: 1rem; height: 1rem; padding: 0; font-size: 0;
@@ -746,6 +747,11 @@
     .batch-result-ok[aria-expanded="true"] { color: #12140f; background: var(--ok); }
     .batch-result-all { display: flex; align-items: center; gap: .45rem; font-size: .78rem; cursor: pointer; }
     .batch-result-all input { accent-color: var(--gold); }
+    #batch-result-dialog .modal-footer { flex-wrap: nowrap; gap: .5rem; padding-inline: 1rem; }
+    #batch-result-dialog .modal-footer > * { flex-shrink: 0; white-space: nowrap; }
+    #batch-result-dialog .modal-footer .shell-button { padding-inline: .6rem; }
+    .batch-result-force { display: flex; align-items: center; gap: .35rem; margin-right: auto; font-size: .78rem; color: var(--danger); cursor: pointer; }
+    .batch-result-force input { accent-color: var(--danger); }
     .batch-result-all:has(input:disabled) { color: var(--text-3); cursor: default; }
     /* Nothing selected is the resting state here, not a mistake, so the
        button dims without the blocked cursor the other buttons use. */
@@ -984,7 +990,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
         </button>
         <div id="unmount-menu" class="batch-menu" role="group" aria-label="选择卸载容器" hidden>
-          <label class="batch-all"><span>全选</span><input id="unmount-select-all" type="checkbox"></label>
+          <div class="batch-menu-options">
+            <label class="batch-force" title="强制卸载可能导致未保存数据丢失或文件系统损坏"><input id="unmount-force" type="checkbox"><span>启用强制卸载</span></label>
+            <label class="batch-all"><span>全选</span><input id="unmount-select-all" type="checkbox"></label>
+          </div>
           <div id="unmount-items" class="batch-items"></div>
         </div>
         </div>
@@ -1249,7 +1258,8 @@
         <div id="batch-result-list" class="batch-result-list"></div>
       </div>
       <div class="modal-footer">
-        <label class="batch-result-all"><span>全选可重试项</span><input id="batch-result-all" type="checkbox"></label>
+        <label class="batch-result-force" hidden title="强制卸载可能导致未保存数据丢失或文件系统损坏"><span>强制卸载</span><input id="batch-result-force" type="checkbox"></label>
+        <label class="batch-result-all"><span>全选</span><input id="batch-result-all" type="checkbox"></label>
         <button id="batch-result-retry" class="shell-button" type="button" disabled>重试选中项</button>
         <button id="batch-result-confirm" class="shell-button" type="button">确定</button>
       </div>

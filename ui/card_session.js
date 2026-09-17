@@ -414,6 +414,7 @@
   let busy = true;
   let externalRefreshPending = false;
   let batchSessionRevision = 0;
+  const batchForceUnmount = document.getElementById("unmount-force");
   const batchControls = ["mount", "unmount"].map((kind) => ({
     kind, mounting: kind === "mount", selected: new Set(),
     button: document.getElementById(`dashboard-${kind}`),
@@ -444,6 +445,8 @@
   };
   const renderBatchControls = () => {
     const authenticated = currentState === nativeState.authenticated;
+    batchForceUnmount.disabled = busy || !authenticated;
+    if (!authenticated) batchForceUnmount.checked = false;
     if (busy || !authenticated) closeBatchMenus();
     for (const control of batchControls) {
       if (!authenticated) control.selected.clear();
@@ -3050,6 +3053,8 @@
 
   window.addEventListener("usb-vault-session-changed", () => {
     ++batchSessionRevision;
+    batchForceUnmount.checked = false;
+    batchForceUnmount.disabled = true;
     clearBatchResults();
     closeBatchMenus();
     for (const control of batchControls) {
@@ -3350,6 +3355,7 @@
   const batchResultAll = document.getElementById("batch-result-all");
   const batchResultRetry = document.getElementById("batch-result-retry");
   const batchResultConfirm = document.getElementById("batch-result-confirm");
+  const batchResultForce = document.getElementById("batch-result-force");
   let batchResultContext = null;
   const batchItemFailed = (item) => item.outcome !== 2 && item.outcome !== 11;
   const retryableBatchItems = (context) => context.items.filter((item) =>
@@ -3368,6 +3374,9 @@
     batchResultAll.indeterminate = false;
     batchResultAll.disabled = true;
     batchResultRetry.disabled = true;
+    batchResultForce.checked = false;
+    batchResultForce.disabled = true;
+    batchResultForce.closest("label").hidden = true;
   };
   const dismissBatchResults = () => {
     if (busy || batchResultDialog.hidden) return;
@@ -3389,6 +3398,8 @@
     batchResultAll.closest("label").hidden = !eligible.length;
     batchResultRetry.hidden = !eligible.length;
     batchResultRetry.disabled = busy || !context.selected.size;
+    batchResultForce.closest("label").hidden = context.mounting || !eligible.length;
+    batchResultForce.disabled = busy || context.mounting || !eligible.length;
     for (const input of batchResultList.querySelectorAll("input:not(:disabled)")) {
       input.checked = context.selected.has(Number(input.dataset.id));
     }
@@ -3445,7 +3456,8 @@
   const showBatchResults = (context) => {
     batchResultContext = context;
     context.selected.clear();
-    const verb = context.mounting ? "挂载" : "卸载";
+    batchResultForce.checked = Boolean(context.force);
+    const verb = context.mounting ? "挂载" : context.force ? "强制卸载" : "卸载";
     const heading = document.createElement("span");
     heading.textContent = `${verb}结果`;
     const counts = document.createElement("span");
@@ -3453,26 +3465,31 @@
     counts.textContent = `成功：${context.items.filter((item) => item.outcome === 2).length}` +
       `　失败：${context.items.filter(batchItemFailed).length}`;
     batchResultTitle.replaceChildren(heading, counts);
-    batchResultRetry.textContent = `重试${verb}选中项`;
+    batchResultRetry.textContent = context.mounting ? "重试挂载选中项" : "重试卸载选中项";
     batchResultList.replaceChildren();
     const eligible = new Set(retryableBatchItems(context).map((item) => item.id));
     // Stable sort preserves the original batch order within each outcome group.
     for (const item of [...context.items].sort((a, b) => Number(batchItemFailed(b)) - Number(batchItemFailed(a)))) {
-      const row = document.createElement("label");
+      const row = document.createElement(eligible.has(item.id) ? "label" : "div");
       row.className = "batch-result-row";
+      row.dataset.id = String(item.id);
       row.dataset.failed = String(batchItemFailed(item));
       const input = document.createElement("input");
       input.type = "checkbox";
       input.dataset.id = String(item.id);
+      input.id = `batch-retry-${item.id}`;
+      if (eligible.has(item.id)) row.htmlFor = input.id;
       input.disabled = !eligible.has(item.id);
       input.checked = !batchItemFailed(item);
       const name = document.createElement("span");
       name.className = "batch-result-name";
       name.textContent = item.name;
+      name.title = item.name;
       row.append(name, batchResultMark(item, verb, batchItemFailed(item)
         ? `${verb}失败：${volumeFailureMessages[item.outcome] || volumeFailureMessages[3]}` +
           (eligible.has(item.id) ? "" : "当前状态无需重试，或容器已不在本会话中。")
-        : ""), input);
+        : ""));
+      if (eligible.has(item.id)) row.append(input);
       batchResultList.append(row);
     }
     updateBatchResultSelection();
@@ -3486,6 +3503,11 @@
       batchResultContext.selected.add(item.id);
     }
     updateBatchResultSelection();
+  });
+  batchResultForce.addEventListener("change", () => {
+    if (busy || !batchResultContext || batchResultContext.mounting ||
+        externalRefreshPending || batchResultForce.disabled) return;
+    batchResultContext.force = batchResultForce.checked;
   });
   batchResultList.addEventListener("change", (event) => {
     const input = event.target;
@@ -3647,7 +3669,8 @@
       if (externalRefreshPending || revision !== batchSessionRevision) throw new Error("session changed");
     };
     const originFocus = retryContext?.focus || document.activeElement;
-    const verb = control.mounting ? "挂载" : "卸载";
+    const force = !control.mounting && (retryContext ? retryContext.force : batchForceUnmount.checked);
+    const verb = control.mounting ? "挂载" : force ? "强制卸载" : "卸载";
     busy = true;
     batchResultDialog.hidden = true;
     batchResultList.replaceChildren();
@@ -3660,6 +3683,7 @@
       await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
       checkSession();
       if (control.mounting) await bridge.beginMountBatch(ids.join(","));
+      else if (force) await bridge.beginForceUnmountBatch(ids.join(","));
       else await bridge.beginUnmountBatch(ids.join(","));
       for (;;) {
         const raw = String(await bridge.getBatchProgress());
@@ -3698,7 +3722,7 @@
       // Retry replaces only the attempted entries, retaining the whole batch.
       const items = retryContext ? retryContext.items.map((item) =>
         results.find((result) => result.id === item.id) || item) : results;
-      showBatchResults({ mounting: control.mounting, items, selected: new Set(), focus: originFocus });
+      showBatchResults({ mounting: control.mounting, force, items, selected: new Set(), focus: originFocus });
       if (activeSection === "files") void refreshFileManager();
     } catch (_) {
       clearBatchResults();

@@ -514,6 +514,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     await_volume_operation();
     ++manual_force_calls;
     manual_force_id = id;
+    manual_force_ids.push_back(id);
+    if (id == batch_fail_id) throw std::system_error(
+        usb_vault::volume::make_error_code(usb_vault::volume::DriverError::volume_busy));
     for (auto& entry : containers) if (entry.id == id) entry.mounted = false;
   }
   void force_unmount_user_active() override {
@@ -524,6 +527,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     mounted_state = false;
   }
   int manual_force_calls{};
+  std::vector<std::uint32_t> manual_force_ids;
   std::uint32_t manual_force_id{};
 
   [[nodiscard]] bool mounted() const noexcept override {
@@ -2049,6 +2053,27 @@ void test_selected_batches_are_serial_bounded_and_session_scoped() {
   done();
   require(invoke_container_number(*host.Get(), L"getBatchItemOutcome", 0) == 11, "already-unmounted item was not skipped");
 
+  require(begin(L"beginForceUnmountBatch", L"2,999") == E_INVALIDARG &&
+          no_args(L"beginForceUnmountBatch") == DISP_E_BADPARAMCOUNT &&
+          invoke_with_number(*host.Get(), L"beginForceUnmountBatch", 2, nullptr, nullptr) == DISP_E_TYPEMISMATCH &&
+          fixture.volume.manual_force_calls == 0, "invalid force batch performed work");
+  fixture.volume.containers[2].mounted = true;
+  fixture.volume.batch_calls.clear();
+  require(begin(L"beginForceUnmountBatch", L"2,3,1") == S_OK, "force batch did not start");
+  done();
+  require(fixture.volume.manual_force_ids == std::vector<std::uint32_t>{2,3} &&
+          fixture.volume.batch_calls.empty() && fixture.volume.containers[1].mounted &&
+          !fixture.volume.containers[2].mounted &&
+          invoke_container_number(*host.Get(), L"getBatchItemOutcome", 0) == 4 &&
+          invoke_container_number(*host.Get(), L"getBatchItemOutcome", 1) == 2 &&
+          invoke_container_number(*host.Get(), L"getBatchItemOutcome", 2) == 11,
+          "force batch lost selection, continuation or already-unmounted semantics");
+  fixture.volume.batch_fail_id = 0;
+  require(begin(L"beginForceUnmountBatch", L"2") == S_OK, "force retry did not start");
+  done();
+  require(!fixture.volume.containers[1].mounted &&
+          no_args(L"beginForceUnmountLast") == E_ACCESSDENIED, "force retry failed or granted unrelated force");
+
   fixture.volume.batch_calls.clear(); fixture.volume.batch_fail_id = 0;
   fixture.volume.pause_volume.store(true); fixture.volume.volume_entered.store(false);
   require(begin(L"beginMountBatch", L"1,3,4") == S_OK, "interruption batch did not start");
@@ -2069,6 +2094,7 @@ void test_selected_batches_are_serial_bounded_and_session_scoped() {
           "another session action retained stale batch results");
   fixture.authentication.clear_authentication();
   require(begin(L"beginMountBatch", L"1") == E_ACCESSDENIED &&
+          begin(L"beginForceUnmountBatch", L"1") == E_ACCESSDENIED &&
           begin(L"beginUnmountBatch", L"1") == E_ACCESSDENIED, "unauthenticated batch admitted");
 }
 

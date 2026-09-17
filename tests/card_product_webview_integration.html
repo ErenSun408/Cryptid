@@ -50,7 +50,7 @@
     <div id="unmount-split">
       <button id="dashboard-unmount" type="button" disabled>一键卸载</button>
       <button id="unmount-select" type="button" aria-expanded="false">选择卸载容器</button>
-      <div id="unmount-menu" hidden><input id="unmount-select-all" type="checkbox"><div id="unmount-items"></div></div>
+      <div id="unmount-menu" hidden><input id="unmount-force" type="checkbox"><input id="unmount-select-all" type="checkbox"><div id="unmount-items"></div></div>
     </div>
     <span id="dashboard-volume-state">未挂载</span>
     <span id="dashboard-container-count">0</span>
@@ -141,6 +141,7 @@
   </div>
   <div id="batch-result-dialog" role="dialog" tabindex="-1" hidden>
     <h3 id="batch-result-title"></h3>
+    <label hidden><input id="batch-result-force" type="checkbox"></label>
     <input id="batch-result-all" type="checkbox">
     <div id="batch-result-list"></div>
     <button id="batch-result-retry" type="button" disabled>重试选中项</button>

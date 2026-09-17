@@ -115,6 +115,7 @@ constexpr DISPID kBatchProgressId = 59;
 constexpr DISPID kBatchItemIdId = 60;
 constexpr DISPID kBatchItemNameId = 61;
 constexpr DISPID kBatchItemOutcomeId = 62;
+constexpr DISPID kBeginForceUnmountBatchId = 63;
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
@@ -523,6 +524,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getVolumeOperationStatus")) { ids[0] = kVolumeOperationStatusId; return S_OK; }
     if (matches(names[0], L"beginMountBatch")) { ids[0] = kBeginMountBatchId; return S_OK; }
     if (matches(names[0], L"beginUnmountBatch")) { ids[0] = kBeginUnmountBatchId; return S_OK; }
+    if (matches(names[0], L"beginForceUnmountBatch")) { ids[0] = kBeginForceUnmountBatchId; return S_OK; }
     if (matches(names[0], L"getBatchProgress")) { ids[0] = kBatchProgressId; return S_OK; }
     if (matches(names[0], L"getBatchItemId")) { ids[0] = kBatchItemIdId; return S_OK; }
     if (matches(names[0], L"getBatchItemName")) { ids[0] = kBatchItemNameId; return S_OK; }
@@ -609,7 +611,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
     switch (member) {
       case kBeginMountBatchId: case kBeginUnmountBatchId:
-        return begin_batch(member == kBeginMountBatchId, parameters, result);
+      case kBeginForceUnmountBatchId:
+        return begin_batch(member == kBeginMountBatchId, member == kBeginForceUnmountBatchId, parameters, result);
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
         return invoke_batch_query(member, parameters, result);
       case kBeginMountAdoptedId:
@@ -781,7 +784,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     batch_mode_ = false;
   }
 
-  HRESULT begin_batch(bool mount, DISPPARAMS* parameters, VARIANT* result) noexcept {
+  HRESULT begin_batch(bool mount, bool force, DISPPARAMS* parameters, VARIANT* result) noexcept {
     if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs != 0 || !parameters->rgvarg)
       return DISP_E_BADPARAMCOUNT;
     const auto& input = parameters->rgvarg[0];
@@ -835,7 +838,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       creation_work_->volume_operation.store(true);
       volume_status_.store(3); // Batch outcomes are never a single-volume force grant.
       creation_work_->running.store(true);
-      creation_thread_ = std::thread([this, plan = std::move(plan), mount, epoch] {
+      creation_thread_ = std::thread([this, plan = std::move(plan), mount, force, epoch] {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         const auto interrupted = [this, epoch] {
           return creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch;
@@ -853,6 +856,7 @@ class CardProductWebViewHostObject final : public IDispatch {
               if (plan[i].target.mounted == mount) outcome = 11;
               else {
                 if (mount) controller_.mount_container(plan[i].target.id);
+                else if (force) controller_.force_unmount_container(plan[i].target.id);
                 else controller_.unmount_container(plan[i].target.id);
                 outcome = 2;
               }

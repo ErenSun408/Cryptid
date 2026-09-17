@@ -29,6 +29,7 @@ window.navigationFixture = {
   const bridge = {
     beginMountBatch: (ids) => beginBatch(ids, true),
     beginUnmountBatch: (ids) => beginBatch(ids, false),
+    beginForceUnmountBatch: (ids) => beginBatch(ids, false, true),
     getBatchProgress: () => fixture.batchProgress,
     getBatchItemName: (index) => fixture.batchItems[index].name,
     getBatchItemId: (index) => fixture.batchItems[index].id,
@@ -132,9 +133,9 @@ window.navigationFixture = {
     },
   };
   window.chrome = window.chrome || {};
-  const beginBatch = (ids, mounting) => {
+  const beginBatch = (ids, mounting, force = false) => {
     fixture.batchRequests = fixture.batchRequests || [];
-    fixture.batchRequests.push([mounting, ids]);
+    fixture.batchRequests.push([mounting, ids, force]);
     fixture.batchItems = ids.split(",").map((id) => ({
       ...fixture.containers.find((item) => item.id === Number(id)), outcome: 0,
     }));
@@ -146,6 +147,10 @@ window.navigationFixture = {
         try {
           if (fixture.batchFailId === item.id) throw new Error("simulated failure");
           if (mounting) bridge.mountAdoptedContainer(item.id);
+          else if (force) {
+            const target = fixture.containers.find((entry) => entry.id === item.id);
+            target.mounted = false; target.drive = ""; target.size = 0;
+          }
           else bridge.unmountContainer(item.id);
           item.outcome = 2;
         } catch (_) { item.outcome = 4; }

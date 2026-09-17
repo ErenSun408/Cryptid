@@ -75,6 +75,8 @@ class IUiCloseRequestSink {
 // Selected batch contract (separate from login / whole-session transactions):
 // beginMountBatch / beginUnmountBatch take one BSTR: 1..1024 distinct positive
 // uint32 decimal IDs separated by commas, with no whitespace/leading zeroes.
+// beginForceUnmountBatch uses the same selection contract for explicitly
+// opted-in manual forced release. Its progress kind remains 1 (unmount).
 // The complete selection is validated before any operation, then runs in the
 // supplied order. Item failures continue; card changes stop subsequent items.
 // getBatchProgress(): "state,kind,total,completed,currentIndex,currentId".
