@@ -42,8 +42,16 @@
     <output id="card-session-error" hidden></output>
   </main>
   <section id="authenticated-dashboard" hidden>
-    <button id="dashboard-mount" type="button" hidden>一键挂载</button>
-    <button id="dashboard-unmount" type="button" hidden>一键卸载</button>
+    <div id="mount-split">
+      <button id="dashboard-mount" type="button" disabled>一键挂载</button>
+      <button id="mount-select" type="button" aria-expanded="false">选择挂载容器</button>
+      <div id="mount-menu" hidden><input id="mount-select-all" type="checkbox"><div id="mount-items"></div></div>
+    </div>
+    <div id="unmount-split">
+      <button id="dashboard-unmount" type="button" disabled>一键卸载</button>
+      <button id="unmount-select" type="button" aria-expanded="false">选择卸载容器</button>
+      <div id="unmount-menu" hidden><input id="unmount-select-all" type="checkbox"><div id="unmount-items"></div></div>
+    </div>
     <span id="dashboard-volume-state">未挂载</span>
     <span id="dashboard-container-count">0</span>
     <output id="dashboard-status" data-tone=""></output>
@@ -130,6 +138,13 @@
     <button id="volume-operation-confirm" type="button" hidden>确定</button>
     <button id="volume-operation-force" type="button" hidden>强制卸载</button>
     <button id="volume-operation-retry" type="button" hidden>重试挂载</button>
+  </div>
+  <div id="batch-result-dialog" role="dialog" tabindex="-1" hidden>
+    <h3 id="batch-result-title"></h3>
+    <input id="batch-result-all" type="checkbox">
+    <div id="batch-result-list"></div>
+    <button id="batch-result-retry" type="button" disabled>重试选中项</button>
+    <button id="batch-result-confirm" type="button">确定</button>
   </div>
   <div id="reset-card-dialog" role="dialog" hidden>
     <button id="reset-card-close" type="button">关闭</button>

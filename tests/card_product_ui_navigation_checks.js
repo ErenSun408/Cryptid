@@ -2,6 +2,8 @@
 (async () => {
   const $ = (selector) => document.querySelector(selector);
   const all = (selector) => [...document.querySelectorAll(selector)];
+  const resultRows = () => all("#batch-result-list .batch-result-row");
+  const failedRows = () => resultRows().filter((row) => row.dataset.failed === "true");
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
   const wait = async (condition) => {
     for (let i = 0; i < 100; i += 1) {
@@ -457,16 +459,35 @@
     check(!$("#file-list-body").textContent.includes("迟到文件"), "Late directory result cannot restore departed view");
     check(!$("#dashboard-mount").hidden && !$("#dashboard-unmount").hidden,
       "Both batch actions remain visible");
-    check($("#dashboard-mount").disabled && $("#dashboard-unmount").disabled,
-      "Both selections start empty");
+    check(!$("#dashboard-mount").disabled && !$("#dashboard-unmount").disabled,
+      "Both batch actions stay clickable with nothing selected");
+    $("#dashboard-mount").click();
+    check(!$("#mount-menu").hidden && $("#mount-select").getAttribute("aria-expanded") === "true" &&
+      !(window.navigationFixture.batchRequests || []).length,
+      "An empty selection opens the panel instead of submitting a batch");
+    $("#dashboard-mount").click();
+    check($("#mount-menu").hidden, "A second click on the empty action closes the panel");
     $("#mount-select").click();
     check(!$("#mount-menu").hidden && $("#mount-select").getAttribute("aria-expanded") === "true",
       "Mount arrow opens an accessible selection panel");
     check($("#mount-items input[data-id='1']").checked && $("#mount-items input[data-id='1']").disabled &&
       $("#mount-items").textContent.includes("已挂载") && !$("#mount-items input[data-id='2']").checked,
       "Mounted entries are checked and locked while eligible entries start unchecked");
+    const mountRow = $("#mount-items input[data-id='2']").closest("label");
+    check(mountRow.firstElementChild.className === "batch-name" &&
+      mountRow.lastElementChild === $("#mount-items input[data-id='2']") &&
+      $("#mount-items input[data-id='1']").closest("label").children[1].className === "batch-state" &&
+      $("#mount-select-all").parentElement.lastElementChild === $("#mount-select-all"),
+      "Names lead each row while the state note, the box and select-all sit on the right");
+    mountRow.querySelector(".batch-name").click();
+    check($("#mount-items input[data-id='2']").checked && !$("#mount-menu").hidden,
+      "Clicking anywhere on a row selects it without closing the panel");
+    $("#mount-menu").dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    check(!$("#mount-menu").hidden, "Blank panel space does not close the panel");
+    mountRow.querySelector(".batch-name").click();
+    check(!$("#mount-items input[data-id='2']").checked, "A second row click clears that entry");
     $("#mount-select-all").click();
-    check(!$("#dashboard-mount").disabled && $("#mount-items input[data-id='2']").checked,
+    check($("#mount-items input[data-id='2']").checked,
       "Select all includes eligible mount targets");
     $("#mount-select-all").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     check($("#mount-menu").hidden && document.activeElement === $("#mount-select"),
@@ -486,12 +507,20 @@
       "Running batch blocks repeated submission and selection changes");
     window.navigationFixture.completeVolume();
     await wait(() => window.navigationFixture.containers.every((item) => item.mounted));
-    await wait(() => $("#volume-operation-dialog").dataset.result === "success");
-    check($("#volume-operation-title").textContent === "挂载完成" &&
-      !$("#dashboard-mount").hidden && $("#dashboard-mount").disabled &&
-      $("#volume-operation-note").textContent.includes("成功 1，失败 0"),
-      "Batch completion reports counts and keeps mount visible with no eligible selection");
-    $("#volume-operation-confirm").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check($("#batch-result-title").textContent === "挂载结果成功：1　失败：0" &&
+      $("#batch-result-title .batch-result-counts").textContent === "成功：1　失败：0" &&
+      !$("#dashboard-mount").hidden && !$("#dashboard-mount").disabled &&
+      resultRows().length === 1 && failedRows().length === 0 &&
+      !$("#batch-result-summary") && !$("#dashboard-status").textContent,
+      "The heading carries the counts and mount stays clickable");
+    check($("#batch-result-retry").hidden && $("#batch-result-all").closest("label").hidden,
+      "Nothing to retry hides both retry controls");
+    check($("#volume-operation-dialog").hidden && $("#batch-result-retry").disabled &&
+      $("#batch-result-list .batch-result-ok").getAttribute("aria-label") === "挂载成功" &&
+      $("#batch-result-list input").checked && $("#batch-result-list input").disabled,
+      "Successful batch opens a separate result dialog with successful items locked");
+    $("#batch-result-confirm").click();
     window.navigationFixture.delayVolume = false;
     $("#unmount-select").click();
     $("#unmount-items input[data-id='1']").click();
@@ -499,22 +528,123 @@
     $("#unmount-select-all").click();
     check(all("#unmount-items input").every((input) => input.checked), "Unmount select-all selects all eligible targets");
     $("#unmount-select-all").click();
-    check($("#dashboard-unmount").disabled, "Clearing select-all disables the action");
+    check(!$("#dashboard-unmount").disabled &&
+      all("#unmount-items input").every((input) => !input.checked),
+      "Clearing select-all empties the selection without disabling the action");
+    // Every container is mounted here, so the unmount panel has three live rows.
+    const press = (id) => $(`#unmount-items input[data-id="${id}"]`).closest("label")
+      .querySelector(".batch-name")
+      .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    const cross = (id) => $(`#unmount-items input[data-id="${id}"]`).closest("label")
+      .querySelector(".batch-name")
+      .dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+    // A real release either produces the press's own click or none at all;
+    // the tick lets the page settle either way before the next gesture.
+    const release = async () => {
+      document.dispatchEvent(new PointerEvent("pointerup"));
+      await tick();
+    };
+    const boxed = (id) => $(`#unmount-items input[data-id="${id}"]`).checked;
+    press(1);
+    check(boxed(1) && !boxed(2), "Pressing a row selects it on the way down");
+    cross(2);
+    check(boxed(1) && boxed(2) && !boxed(3) && !$("#dashboard-unmount").disabled,
+      "Holding the button paints every row the pointer crosses");
+    await release();
+    cross(3);
+    check(!boxed(3), "Crossing a row with the button up paints nothing");
+    press(1);
+    cross(2);
+    check(!boxed(1) && !boxed(2),
+      "A press that starts on a selected row clears the rows it crosses");
+    await release();
+    const clickRow = (id) => $(`#unmount-items input[data-id="${id}"]`).closest("label")
+      .querySelector(".batch-name")
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    press(3);
+    clickRow(3);
+    check(boxed(3), "A press and the click it produces select the row exactly once");
+    await release();
+    press(3);
+    clickRow(3);
+    check(!boxed(3), "The same gesture again clears it exactly once");
+    await release();
     $("#unmount-items input[data-id='1']").click();
     $("#unmount-items input[data-id='3']").click();
     document.body.click();
     check($("#unmount-menu").hidden, "Outside click closes selection without discarding it");
     window.navigationFixture.batchFailId = 1;
     $("#dashboard-unmount").click();
-    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    await wait(() => !$("#batch-result-dialog").hidden);
     check(window.navigationFixture.batchRequests.at(-1)[1] === "1,3" &&
       window.navigationFixture.containers[0].mounted && window.navigationFixture.containers[1].mounted &&
-      !window.navigationFixture.containers[2].mounted && $("#volume-operation-note").textContent.includes("成功 1，失败 1"),
+      !window.navigationFixture.containers[2].mounted &&
+      resultRows().length === 2 && failedRows().length === 1,
       "Selected batch continues after failure and leaves unselected targets untouched");
     check($("#volume-operation-force").hidden && $("#volume-operation-retry").hidden &&
-      $("#volume-operation-note").textContent.includes("占用"),
+      $("#batch-result-list").textContent.includes("占用"),
       "Batch failure explains its reason without granting single-target force or retry");
-    $("#volume-operation-confirm").click();
+    check(all("#batch-result-list input").map((input) => input.dataset.id).join(",") === "1,3" &&
+      !$("#batch-result-list input[data-id='1']").checked && !$("#batch-result-list input[data-id='1']").disabled,
+      "Result dialog lists the full batch with failures first and no retry preselected");
+    const failedRow = failedRows()[0];
+    const mark = failedRow.querySelector(".batch-result-why");
+    check(failedRow.firstElementChild.className === "batch-result-name" &&
+      failedRow.lastElementChild === failedRow.querySelector("input") &&
+      mark.nextElementSibling.className === "batch-result-bubble" &&
+      mark.nextElementSibling.textContent.includes("占用") &&
+      mark.getAttribute("aria-label").includes("卸载失败") &&
+      !$("#batch-result-list .batch-result-row[data-failed='false'] .batch-result-why") &&
+      resultRows().every((row) => row.querySelectorAll(".batch-result-mark").length === 1) &&
+      $("#batch-result-list .batch-result-row[data-failed='false'] .batch-result-ok")
+        .getAttribute("aria-label") === "卸载成功" &&
+      !$("#batch-result-retry").hidden && !$("#batch-result-all").closest("label").hidden,
+      "Each row gets one mark slot: a tick when it worked, the reason bubble when it did not");
+    const done = $("#batch-result-list .batch-result-ok");
+    done.click();
+    check(done.getAttribute("aria-expanded") === "true" &&
+      done.nextElementSibling.textContent === "卸载成功" &&
+      done.nextElementSibling.dataset.open === "true" &&
+      mark.getAttribute("aria-expanded") === "false",
+      "A success mark pins its own bubble and puts the other one away");
+    done.click();
+    mark.dispatchEvent(new PointerEvent("pointerenter"));
+    check(mark.nextElementSibling.dataset.open === "true", "Hovering the mark opens its bubble");
+    mark.dispatchEvent(new PointerEvent("pointerleave"));
+    check(!mark.nextElementSibling.dataset.open, "Leaving an unpinned mark closes its bubble");
+    mark.click();
+    check(mark.getAttribute("aria-expanded") === "true" &&
+      mark.nextElementSibling.dataset.open === "true" &&
+      !$("#batch-result-list input[data-id='1']").checked,
+      "Clicking the mark pins its bubble without touching that row's retry box");
+    mark.dispatchEvent(new PointerEvent("pointerleave"));
+    check(mark.nextElementSibling.dataset.open === "true", "A pinned bubble survives the pointer leaving");
+    mark.click();
+    check(mark.getAttribute("aria-expanded") === "false" && !mark.nextElementSibling.dataset.open,
+      "A second mark click unpins the bubble");
+    mark.click();
+    $("#batch-result-list").click();
+    check(mark.getAttribute("aria-expanded") === "false" && !mark.nextElementSibling.dataset.open &&
+      !$("#batch-result-dialog").hidden,
+      "Clicking elsewhere puts a pinned bubble away without closing the dialog");
+    mark.click();
+    $("#batch-result-dialog").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    check(mark.getAttribute("aria-expanded") === "false" && !$("#batch-result-dialog").hidden,
+      "Escape puts a pinned bubble away before it reaches the dialog");
+    $("#batch-result-all").click();
+    check(!$("#batch-result-retry").disabled && $("#batch-result-list input[data-id='1']").checked,
+      "Result select-all includes only retryable failures");
+    check($("#batch-result-all").closest(".modal-footer") !== null &&
+      $("#batch-result-all").closest("label").lastElementChild === $("#batch-result-all") &&
+      $("#batch-result-all").closest("label").nextElementSibling === $("#batch-result-retry"),
+      "Select-all keeps its box on the right and sits immediately left of retry");
+    $("#batch-result-retry").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[1] === "1" &&
+      all("#batch-result-list input").length === 2 && failedRows().length === 1,
+      "Failed retry attempts only selected failures and retains previous successes");
+    $("#batch-result-confirm").click();
+    check(!$("#batch-result-list").textContent, "Closing results clears names and selections");
     window.navigationFixture.batchFailId = 0;
     $("#unmount-select").click();
     check($("#unmount-items input[data-id='3']").checked && $("#unmount-items input[data-id='3']").disabled &&
@@ -541,8 +671,93 @@
     window.dispatchEvent(new Event("usb-vault-session-changed"));
     await wait(() => !$("#authenticated-dashboard").hidden);
     check(order(home) === "1,2,3" && !$(manager).hidden, "New session resets navigation and page-local order");
-    check($("#dashboard-mount").disabled && $("#dashboard-unmount").disabled,
+    $("#dashboard-mount").click();
+    check(!$("#mount-menu").hidden && !all("#mount-items input").some((input) => input.checked),
       "New session cannot inherit old batch selections");
+    $("#dashboard-mount").click();
+    // A mount round with two failures exercises selective retries and sorting
+    // when a successful entry originally preceded the failing entries.
+    window.navigationFixture.delayVolume = false;
+    window.navigationFixture.failMount = true;
+    $("#mount-select").click();
+    $("#mount-select-all").click();
+    $("#dashboard-mount").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(failedRows().length === 3 && resultRows().length === 3,
+      "Every mount failure gets its own marked row");
+    window.navigationFixture.failMount = false;
+    $("#batch-result-list input[data-id='1']").click();
+    check($("#batch-result-all").indeterminate, "Partial result selection marks select-all indeterminate");
+    $("#batch-result-retry").click();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[1] === "1" &&
+      all("#batch-result-list input").map((input) => input.dataset.id).join(",") === "2,3,1" &&
+      failedRows().length === 2,
+      "Selective mount retry updates one item and reorders remaining failures first");
+    const beforeEmptyRetry = window.navigationFixture.batchRequests.length;
+    $("#batch-result-retry").click();
+    check(window.navigationFixture.batchRequests.length === beforeEmptyRetry,
+      "Completed retry clears selection and cannot dispatch an empty retry");
+    $("#batch-result-all").click();
+    $("#batch-result-all").click();
+    check($("#batch-result-retry").disabled && !$("#batch-result-all").checked,
+      "Clearing result select-all disables retry");
+    $("#batch-result-all").click();
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
+    $("#batch-result-retry").click();
+    await wait(() => window.navigationFixture.completeVolume);
+    const beforeDuplicateRetry = window.navigationFixture.batchRequests.length;
+    $("#batch-result-retry").click();
+    check($("#batch-result-dialog").hidden && !$("#volume-operation-dialog").hidden &&
+      window.navigationFixture.batchRequests.length === beforeDuplicateRetry,
+      "Retry uses the same progress dialog and blocks duplicate dispatch");
+    window.navigationFixture.completeVolume();
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check(window.navigationFixture.batchRequests.at(-1)[1] === "2,3" &&
+      failedRows().length === 0 && $("#batch-result-all").disabled &&
+      all("#batch-result-list input").every((input) => input.checked && input.disabled),
+      "Multi-retry preserves the complete result set and locks all successful items");
+    $("#batch-result-confirm").dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    check($("#batch-result-dialog").contains(document.activeElement) &&
+      !document.activeElement.closest("[hidden]"),
+      "Result focus stays on visible, enabled dialog controls");
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    check($("#batch-result-dialog").hidden && !$("#batch-result-list").textContent && $("#batch-result-retry").disabled,
+      "Card event invalidates completed results immediately even when authentication returns");
+    await wait(() => !$("#mount-select").disabled);
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
+    window.navigationFixture.batchFailId = 1;
+    $("#unmount-select").click();
+    $("#unmount-select-all").click();
+    $("#dashboard-unmount").click();
+    await wait(() => window.navigationFixture.completeVolume);
+    window.navigationFixture.completeVolume();
+    // Simulate a native already-target result and an arbitrary display name.
+    window.navigationFixture.batchItems[2].outcome = 11;
+    window.navigationFixture.batchItems[0].name = '<img src=x onerror="bad()">';
+    await wait(() => !$("#batch-result-dialog").hidden);
+    check($("#batch-result-list").textContent.includes('<img src=x onerror="bad()">') &&
+      !$("#batch-result-list img"), "Result names render as literal text rather than HTML");
+    const skippedRow = $("#batch-result-list input[data-id='3']").closest(".batch-result-row");
+    check($("#batch-result-list input[data-id='3']").disabled &&
+      skippedRow.dataset.failed === "false" &&
+      !skippedRow.querySelector(".batch-result-mark").childElementCount &&
+      !$("#batch-result-list").textContent.includes("无需重复操作"),
+      "An already-target result keeps an empty mark slot and cannot be selected for retry");
+    window.navigationFixture.batchFailId = 0;
+    window.navigationFixture.completeVolume = null;
+    $("#batch-result-all").click();
+    $("#batch-result-retry").click();
+    await wait(() => window.navigationFixture.completeVolume);
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    window.navigationFixture.completeVolume();
+    await wait(() => $("#volume-operation-dialog").dataset.result === "error");
+    check($("#batch-result-dialog").hidden && !$("#batch-result-list").textContent &&
+      !$("#volume-operation-note").textContent.includes("<img") && $("#batch-result-retry").disabled,
+      "Late retry completion after a card event cannot restore the old result set");
+    $("#volume-operation-confirm").click();
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;

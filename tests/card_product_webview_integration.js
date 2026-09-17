@@ -204,7 +204,7 @@ chrome.webview.postMessage("driver-loaded");
       passwordVisibility.getAttribute("aria-pressed") !== "false" ||
       confirmationVisibility.getAttribute("aria-pressed") !== "false" ||
       !action.hidden || !surface.hidden || dashboard.hidden ||
-      !dashboardUnmount.hidden || dashboardVolumeState.textContent !== "未挂载" ||
+      dashboardUnmount.hidden || dashboardUnmount.disabled || dashboardVolumeState.textContent !== "未挂载" ||
       dashboardContainerCount.textContent !== "0" ||
       containersCreate.hidden || containerRows().length !== 0) {
     request("fail-initialization-submit");

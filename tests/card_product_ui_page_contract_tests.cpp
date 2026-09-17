@@ -316,6 +316,7 @@ void test_five_states_are_complete_and_vendor_neutral() {
 }
 
 void test_bridge_calls_are_narrow_and_route_specific() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script =
       read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   require(script.find("await bridge.getSessionState();") !=
@@ -337,6 +338,11 @@ void test_bridge_calls_are_narrow_and_route_specific() {
               script.find("bridge.beginUnmountBatch(ids.join(\",\"))") != std::string::npos &&
               script.find("bridge.getBatchProgress()") != std::string::npos,
           "product page lacks selected batch operations and progress");
+  require(page.find("id=\"batch-result-dialog\"") != std::string::npos &&
+              page.find("id=\"batch-result-retry\"") != std::string::npos &&
+              script.find("bridge.getBatchItemId(index)") != std::string::npos &&
+              script.find("bridge.getBatchItemOutcome(index)") != std::string::npos,
+          "product page lacks the per-container batch result and retry surface");
   require(script.find(
               "await bridge.beginCreateContainerMib(name, directory, sizeMib);") !=
               std::string::npos,
@@ -639,6 +645,12 @@ void test_the_integration_fixture_page_carries_every_element_the_script_takes() 
     offset = end;
   }
   require(checked > 40, "the element lookups were not found in the script");
+  for (const std::string kind : {"mount", "unmount"}) {
+    for (const std::string suffix : {"split", "select", "menu", "items", "select-all"}) {
+      require(fixture.find("id=\"" + kind + "-" + suffix + "\"") != std::string::npos,
+              "the integration fixture is missing a generated batch control ID");
+    }
+  }
 }
 
 void test_card_reset_is_gated_and_states_its_cost() {

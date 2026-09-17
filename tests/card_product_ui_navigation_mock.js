@@ -31,6 +31,7 @@ window.navigationFixture = {
     beginUnmountBatch: (ids) => beginBatch(ids, false),
     getBatchProgress: () => fixture.batchProgress,
     getBatchItemName: (index) => fixture.batchItems[index].name,
+    getBatchItemId: (index) => fixture.batchItems[index].id,
     getBatchItemOutcome: (index) => fixture.batchItems[index].outcome,
     beginMountAdoptedContainer: (id) => beginVolume(() => bridge.mountAdoptedContainer(id)),
     beginUnmountContainer: (id) => {

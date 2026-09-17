@@ -36,8 +36,6 @@
   const statusOutput = document.getElementById("card-session-status");
   const errorOutput = document.getElementById("card-session-error");
   const dashboard = document.getElementById("authenticated-dashboard");
-  const dashboardUnmountButton = document.getElementById("dashboard-unmount");
-  const dashboardMountButton = document.getElementById("dashboard-mount");
   const dashboardVolumeState =
     document.getElementById("dashboard-volume-state");
   const dashboardContainerCount =
@@ -415,6 +413,7 @@
   let operationEvents = [];
   let busy = true;
   let externalRefreshPending = false;
+  let batchSessionRevision = 0;
   const batchControls = ["mount", "unmount"].map((kind) => ({
     kind, mounting: kind === "mount", selected: new Set(),
     button: document.getElementById(`dashboard-${kind}`),
@@ -435,7 +434,7 @@
     for (const id of control.selected) {
       if (!eligible.some((item) => item.id === id)) control.selected.delete(id);
     }
-    control.button.disabled = busy || currentState !== nativeState.authenticated || !control.selected.size;
+    control.button.disabled = busy || currentState !== nativeState.authenticated;
     control.all.disabled = busy || !eligible.length;
     control.all.checked = eligible.length > 0 && control.selected.size === eligible.length;
     control.all.indeterminate = control.selected.size > 0 && control.selected.size < eligible.length;
@@ -460,16 +459,17 @@
         const reached = item.mounted === control.mounting;
         input.checked = reached || control.selected.has(item.id);
         input.disabled = reached || busy;
+        const name = document.createElement("span");
+        name.className = "batch-name";
+        name.textContent = item.name;
+        row.append(name);
         if (reached) {
           const state = document.createElement("span");
           state.className = "batch-state";
           state.textContent = item.mounted ? "已挂载" : "未挂载";
           row.append(state);
         }
-        const name = document.createElement("span");
-        name.className = "batch-name";
-        name.textContent = item.name;
-        row.append(input, name);
+        row.append(input);
         control.items.append(row);
       }
       if (!control.items.childElementCount && authenticated && !busy) {
@@ -481,14 +481,56 @@
       updateBatchSelection(control);
     }
   };
+  // While the button is down this holds the control being painted and the
+  // state the press decided on, so crossing a row applies that one state
+  // instead of flipping each row it touches.
+  let batchPaint = null;
+  // Set while a press owns the box it just painted, so the click that press
+  // produces can be cancelled. Keyboard activation files no pointerdown.
+  let batchClickFromPointer = false;
+  const paintBatchRow = (control, input) => {
+    if (input.disabled || input.checked === batchPaint.checked) return;
+    input.checked = batchPaint.checked;
+    const id = Number(input.dataset.id);
+    if (batchPaint.checked) control.selected.add(id);
+    else control.selected.delete(id);
+    updateBatchSelection(control);
+  };
+  const batchRowInput = (target) =>
+    target?.closest?.("label")?.querySelector("input[data-id]") || null;
+  document.addEventListener("pointerup", () => {
+    batchPaint = null;
+    // A release normally produces the click this press owns; the guard
+    // below spends itself on that one. Drop it afterwards so a release that
+    // produced no click cannot swallow someone else's.
+    setTimeout(() => { batchClickFromPointer = false; }, 0);
+  });
+  document.addEventListener("pointercancel", () => {
+    batchPaint = null;
+    batchClickFromPointer = false;
+  });
+  // The press already set the box, so the click it produces must not reach
+  // the row label and flip it straight back.
+  document.addEventListener("click", (event) => {
+    if (!batchClickFromPointer) return;
+    batchClickFromPointer = false;
+    if (event.target.closest?.(".batch-items")) event.preventDefault();
+  }, true);
+  const toggleBatchMenu = (control) => {
+    if (busy || currentState !== nativeState.authenticated || !volumeOperationDialog.hidden || !batchResultDialog.hidden) return;
+    const opening = control.menu.hidden;
+    closeBatchMenus();
+    control.menu.hidden = !opening;
+    control.arrow.setAttribute("aria-expanded", String(opening));
+    if (opening) control.menu.querySelector("input:not(:disabled)")?.focus();
+  };
   for (const control of batchControls) {
-    control.arrow.addEventListener("click", () => {
-      if (busy || currentState !== nativeState.authenticated || !volumeOperationDialog.hidden) return;
-      const opening = control.menu.hidden;
-      closeBatchMenus();
-      control.menu.hidden = !opening;
-      control.arrow.setAttribute("aria-expanded", String(opening));
-      if (opening) control.menu.querySelector("input:not(:disabled)")?.focus();
+    control.arrow.addEventListener("click", () => toggleBatchMenu(control));
+    // With nothing picked the action has nothing to run, so it stands in
+    // for the arrow and offers the selection instead of rejecting a click.
+    control.button.addEventListener("click", async () => {
+      if (!control.selected.size) toggleBatchMenu(control);
+      else await runSelectedBatch(control);
     });
     control.all.addEventListener("change", () => {
       if (busy || externalRefreshPending || currentState !== nativeState.authenticated) return;
@@ -497,6 +539,24 @@
         if (item.mounted !== control.mounting) control.selected.add(item.id);
       }
       updateBatchSelection(control);
+    });
+    control.items.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || busy || externalRefreshPending ||
+          currentState !== nativeState.authenticated) return;
+      const input = batchRowInput(event.target);
+      if (!input || input.disabled) return;
+      // The box is ours for the duration of the press: stop the browser
+      // from selecting the name the pointer starts on.
+      event.preventDefault();
+      batchClickFromPointer = true;
+      batchPaint = { control, checked: !input.checked };
+      paintBatchRow(control, input);
+    });
+    control.items.addEventListener("pointerover", (event) => {
+      if (batchPaint?.control !== control || busy || externalRefreshPending ||
+          currentState !== nativeState.authenticated) return;
+      const input = batchRowInput(event.target);
+      if (input) paintBatchRow(control, input);
     });
     control.items.addEventListener("change", (event) => {
       const input = event.target;
@@ -516,7 +576,7 @@
       }
     });
     control.split.addEventListener("focusout", (event) => {
-      if (!control.split.contains(event.relatedTarget)) {
+      if (event.relatedTarget !== null && !control.split.contains(event.relatedTarget)) {
         control.menu.hidden = true;
         control.arrow.setAttribute("aria-expanded", "false");
       }
@@ -2989,6 +3049,8 @@
   };
 
   window.addEventListener("usb-vault-session-changed", () => {
+    ++batchSessionRevision;
+    clearBatchResults();
     closeBatchMenus();
     for (const control of batchControls) {
       control.selected.clear();
@@ -3282,6 +3344,191 @@
     9: "加密驱动或目标磁盘不可用，或驱动版本不兼容。请检查安全组件和磁盘状态。",
     10: "操作期间安全卡已拔出，无法确认操作成功。请重新插卡并检查磁盘状态。",
   };
+  const batchResultDialog = document.getElementById("batch-result-dialog");
+  const batchResultTitle = document.getElementById("batch-result-title");
+  const batchResultList = document.getElementById("batch-result-list");
+  const batchResultAll = document.getElementById("batch-result-all");
+  const batchResultRetry = document.getElementById("batch-result-retry");
+  const batchResultConfirm = document.getElementById("batch-result-confirm");
+  let batchResultContext = null;
+  const batchItemFailed = (item) => item.outcome !== 2 && item.outcome !== 11;
+  const retryableBatchItems = (context) => context.items.filter((item) =>
+    batchItemFailed(item) && containers.some((container) =>
+      container.id === item.id && container.mounted !== context.mounting));
+  const clearBatchResults = () => {
+    if (batchResultContext) {
+      batchResultContext.items.length = 0;
+      batchResultContext.selected.clear();
+    }
+    batchResultContext = null;
+    batchResultDialog.hidden = true;
+    batchResultTitle.textContent = "";
+    batchResultList.replaceChildren();
+    batchResultAll.checked = false;
+    batchResultAll.indeterminate = false;
+    batchResultAll.disabled = true;
+    batchResultRetry.disabled = true;
+  };
+  const dismissBatchResults = () => {
+    if (busy || batchResultDialog.hidden) return;
+    const focus = batchResultContext?.focus;
+    clearBatchResults();
+    if (focus?.isConnected && !focus.disabled) focus.focus();
+    else dashboardNavigation[0]?.focus();
+  };
+  const updateBatchResultSelection = () => {
+    const context = batchResultContext;
+    if (!context) return;
+    const eligible = retryableBatchItems(context);
+    for (const id of context.selected) {
+      if (!eligible.some((item) => item.id === id)) context.selected.delete(id);
+    }
+    batchResultAll.checked = eligible.length > 0 && context.selected.size === eligible.length;
+    batchResultAll.indeterminate = context.selected.size > 0 && context.selected.size < eligible.length;
+    batchResultAll.disabled = busy || !eligible.length;
+    batchResultAll.closest("label").hidden = !eligible.length;
+    batchResultRetry.hidden = !eligible.length;
+    batchResultRetry.disabled = busy || !context.selected.size;
+    for (const input of batchResultList.querySelectorAll("input:not(:disabled)")) {
+      input.checked = context.selected.has(Number(input.dataset.id));
+    }
+  };
+  // Every row gets the same slot so the retry boxes stay in one column:
+  // a tick when it worked, an exclamation that owns the reason bubble when
+  // it did not, and nothing at all for a container already at its target.
+  const batchResultMark = (item, verb, reason) => {
+    const slot = document.createElement("span");
+    slot.className = "batch-result-mark";
+    const note = reason || (item.outcome === 2 ? `${verb}成功` : "");
+    if (!note) return slot;
+    const mark = document.createElement("button");
+    mark.type = "button";
+    mark.className = `batch-result-sign ${reason ? "batch-result-why" : "batch-result-ok"}`;
+    mark.setAttribute("aria-expanded", "false");
+    mark.setAttribute("aria-label", note);
+    const bubble = document.createElement("span");
+    bubble.className = "batch-result-bubble";
+    bubble.setAttribute("role", "tooltip");
+    bubble.textContent = note;
+    mark.addEventListener("pointerenter", () => openBatchReason(mark));
+    mark.addEventListener("focus", () => openBatchReason(mark));
+    mark.addEventListener("pointerleave", () => closeBatchReason(mark));
+    mark.addEventListener("blur", () => closeBatchReason(mark));
+    slot.append(mark, bubble);
+    return slot;
+  };
+  // Fixed placement needs real coordinates: sit above the mark when there is
+  // room, otherwise below it, and never past either edge of the window.
+  const openBatchReason = (mark) => {
+    const bubble = mark.nextElementSibling;
+    bubble.dataset.open = "true";
+    const anchor = mark.getBoundingClientRect();
+    const box = bubble.getBoundingClientRect();
+    const margin = 12;
+    const limit = Math.max(margin, window.innerWidth - box.width - margin);
+    const above = anchor.top - box.height - 6;
+    bubble.style.left = `${Math.max(margin, Math.min(anchor.right - box.width, limit))}px`;
+    bubble.style.top = `${above < margin ? anchor.bottom + 6 : above}px`;
+  };
+  const closeBatchReason = (mark) => {
+    if (mark.getAttribute("aria-expanded") !== "true") delete mark.nextElementSibling.dataset.open;
+  };
+  const unpinBatchReasons = (except = null) => {
+    for (const mark of batchResultList.querySelectorAll(".batch-result-sign")) {
+      if (mark === except) continue;
+      mark.setAttribute("aria-expanded", "false");
+      if (!mark.matches(":hover")) delete mark.nextElementSibling.dataset.open;
+    }
+  };
+  // A pinned bubble would float away from its row once the list moves.
+  batchResultList.addEventListener("scroll", () => unpinBatchReasons());
+  const showBatchResults = (context) => {
+    batchResultContext = context;
+    context.selected.clear();
+    const verb = context.mounting ? "挂载" : "卸载";
+    const heading = document.createElement("span");
+    heading.textContent = `${verb}结果`;
+    const counts = document.createElement("span");
+    counts.className = "batch-result-counts";
+    counts.textContent = `成功：${context.items.filter((item) => item.outcome === 2).length}` +
+      `　失败：${context.items.filter(batchItemFailed).length}`;
+    batchResultTitle.replaceChildren(heading, counts);
+    batchResultRetry.textContent = `重试${verb}选中项`;
+    batchResultList.replaceChildren();
+    const eligible = new Set(retryableBatchItems(context).map((item) => item.id));
+    // Stable sort preserves the original batch order within each outcome group.
+    for (const item of [...context.items].sort((a, b) => Number(batchItemFailed(b)) - Number(batchItemFailed(a)))) {
+      const row = document.createElement("label");
+      row.className = "batch-result-row";
+      row.dataset.failed = String(batchItemFailed(item));
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.dataset.id = String(item.id);
+      input.disabled = !eligible.has(item.id);
+      input.checked = !batchItemFailed(item);
+      const name = document.createElement("span");
+      name.className = "batch-result-name";
+      name.textContent = item.name;
+      row.append(name, batchResultMark(item, verb, batchItemFailed(item)
+        ? `${verb}失败：${volumeFailureMessages[item.outcome] || volumeFailureMessages[3]}` +
+          (eligible.has(item.id) ? "" : "当前状态无需重试，或容器已不在本会话中。")
+        : ""), input);
+      batchResultList.append(row);
+    }
+    updateBatchResultSelection();
+    batchResultDialog.hidden = false;
+    batchResultConfirm.focus();
+  };
+  batchResultAll.addEventListener("change", () => {
+    if (busy || !batchResultContext || externalRefreshPending) return;
+    batchResultContext.selected.clear();
+    if (batchResultAll.checked) for (const item of retryableBatchItems(batchResultContext)) {
+      batchResultContext.selected.add(item.id);
+    }
+    updateBatchResultSelection();
+  });
+  batchResultList.addEventListener("change", (event) => {
+    const input = event.target;
+    if (busy || !batchResultContext || externalRefreshPending || input.disabled || !input.matches("input[data-id]")) return;
+    const id = Number(input.dataset.id);
+    if (input.checked) batchResultContext.selected.add(id);
+    else batchResultContext.selected.delete(id);
+    updateBatchResultSelection();
+  });
+  batchResultRetry.addEventListener("click", () => {
+    if (busy || !batchResultContext || batchResultDialog.hidden || externalRefreshPending) return;
+    void runSelectedBatch(batchControls[batchResultContext.mounting ? 0 : 1], batchResultContext);
+  });
+  batchResultConfirm.addEventListener("click", dismissBatchResults);
+  batchResultDialog.addEventListener("click", (event) => {
+    const mark = event.target.closest?.(".batch-result-sign");
+    if (mark) {
+      // A button inside a label already suppresses the label's activation;
+      // cancel it outright so reading a reason can never flip its retry box.
+      event.preventDefault();
+      const pinned = mark.getAttribute("aria-expanded") === "true";
+      unpinBatchReasons(mark);
+      mark.setAttribute("aria-expanded", pinned ? "false" : "true");
+      if (pinned) closeBatchReason(mark);
+      else openBatchReason(mark);
+      return;
+    }
+    unpinBatchReasons();
+    if (event.target === batchResultDialog) dismissBatchResults();
+  });
+  batchResultDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault(); event.stopPropagation();
+      if (batchResultList.querySelector('.batch-result-sign[aria-expanded="true"]')) unpinBatchReasons();
+      else dismissBatchResults();
+    } else if (event.key === "Tab") {
+      const controls = [...batchResultDialog.querySelectorAll("input:not(:disabled), button:not(:disabled)")]
+        .filter((control) => !control.closest("[hidden]"));
+      const index = controls.indexOf(document.activeElement);
+      event.preventDefault(); event.stopPropagation();
+      controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length]?.focus();
+    }
+  });
   const waitForVolumeOperation = async (start) => {
     // Give the overlay a paint before dispatching native work.
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
@@ -3299,7 +3546,7 @@
   };
 
   const unmount = async () => {
-    if (busy || bridge === null || !volumeOperationDialog.hidden) return;
+    if (busy || bridge === null || !volumeOperationDialog.hidden || !batchResultDialog.hidden) return;
     busy = true;
     render("正在一键卸载");
     setDashboardStatus("");
@@ -3336,7 +3583,7 @@
   // the busy flag, refresh from the native side, and report failure on the
   // dashboard instead of the hidden session surface.
   const runContainerAction = async (action, failure, progress = null) => {
-    if (busy || bridge === null || !volumeOperationDialog.hidden) return;
+    if (busy || bridge === null || !volumeOperationDialog.hidden || !batchResultDialog.hidden) return;
     busy = true;
     setDashboardStatus("");
     render(messageForCurrentState());
@@ -3387,26 +3634,36 @@
     () => bridge.forgetContainer(id),
     "无法从列表移除该容器，请稍后重试。");
 
-  const runSelectedBatch = async (control) => {
+  const runSelectedBatch = async (control, retryContext = null) => {
     if (busy || bridge === null || currentState !== nativeState.authenticated ||
         externalRefreshPending || !volumeOperationDialog.hidden) return;
-    updateBatchSelection(control);
-    const ids = [...control.selected];
+    if (retryContext ? retryContext !== batchResultContext : !batchResultDialog.hidden) return;
+    if (retryContext) updateBatchResultSelection();
+    else updateBatchSelection(control);
+    const ids = [...(retryContext ? retryContext.selected : control.selected)];
     if (!ids.length) return;
+    const revision = batchSessionRevision;
+    const checkSession = () => {
+      if (externalRefreshPending || revision !== batchSessionRevision) throw new Error("session changed");
+    };
+    const originFocus = retryContext?.focus || document.activeElement;
     const verb = control.mounting ? "挂载" : "卸载";
     busy = true;
+    batchResultDialog.hidden = true;
+    batchResultList.replaceChildren();
+    batchResultRetry.disabled = true;
     closeBatchMenus();
     render(messageForCurrentState());
     setDashboardStatus("");
     showVolumeOperation({ verb, target: "所选容器", batch: true });
     try {
       await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
-      if (externalRefreshPending) throw new Error("session changed");
+      checkSession();
       if (control.mounting) await bridge.beginMountBatch(ids.join(","));
       else await bridge.beginUnmountBatch(ids.join(","));
       for (;;) {
         const raw = String(await bridge.getBatchProgress());
-        if (externalRefreshPending) throw new Error("session changed");
+        checkSession();
         if (!/^\d+,\d+,\d+,\d+,\d+,\d+$/.test(raw)) throw new Error("invalid progress");
         const [state, kind, total, completed, current, id] = raw.split(",").map(Number);
         if (kind !== (control.mounting ? 0 : 1) || total !== ids.length ||
@@ -3415,37 +3672,41 @@
         if (state !== 1) throw new Error("batch failed");
         if (current) {
           const name = await bridge.getBatchItemName(current - 1);
-          if (externalRefreshPending) throw new Error("session changed");
+          checkSession();
           volumeOperationTitle.textContent = `正在${verb} ${name} (${current}/${total})`;
         } else volumeOperationTitle.textContent = `正在${verb}所选容器 (${completed}/${total})`;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      let succeeded = 0, skipped = 0, failed = 0;
-      const reasons = new Set();
+      const results = [];
       for (let index = 0; index < ids.length; ++index) {
         const outcome = await bridge.getBatchItemOutcome(index);
-        if (externalRefreshPending) throw new Error("session changed");
-        if (outcome === 2) ++succeeded;
-        else if (outcome === 11) ++skipped;
-        else { ++failed; reasons.add(volumeFailureMessages[outcome] || volumeFailureMessages[3]); }
+        checkSession();
+        const id = await bridge.getBatchItemId(index);
+        checkSession();
+        if (id !== ids[index] || !Number.isInteger(outcome) || outcome < 2 || outcome > 11) throw new Error("invalid result");
+        const name = await bridge.getBatchItemName(index);
+        checkSession();
+        results.push({ id, name, outcome });
       }
       await refreshNativeState();
-      if (externalRefreshPending) throw new Error("session changed");
+      checkSession();
+      if (currentState !== nativeState.authenticated) throw new Error("session ended");
       control.selected.clear();
       busy = false;
       render(messageForCurrentState());
-      finishVolumeOperation(failed === 0);
-      const summary = `成功 ${succeeded}，失败 ${failed}，已处于目标状态 ${skipped}。`;
-      volumeOperationTitle.textContent = `${verb}完成`;
-      volumeOperationNote.textContent = summary + (failed ? ` ${[...reasons].join(" ")}` : "");
-      setDashboardStatus(summary, failed ? "error" : "success");
+      hideVolumeOperation();
+      // Retry replaces only the attempted entries, retaining the whole batch.
+      const items = retryContext ? retryContext.items.map((item) =>
+        results.find((result) => result.id === item.id) || item) : results;
+      showBatchResults({ mounting: control.mounting, items, selected: new Set(), focus: originFocus });
       if (activeSection === "files") void refreshFileManager();
     } catch (_) {
+      clearBatchResults();
       try { await refreshNativeState(); }
       catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
       busy = false;
       render(messageForCurrentState());
-      finishVolumeOperation(false, externalRefreshPending
+      finishVolumeOperation(false, externalRefreshPending || revision !== batchSessionRevision
         ? "安全卡状态已变化，请检查当前磁盘状态。"
         : "无法确认批量操作结果，请检查当前磁盘状态后重试。");
     } finally {
@@ -4207,14 +4468,6 @@
     }
     closeCreationFlow();
   });
-  dashboardUnmountButton.addEventListener("click", async () => {
-    await runSelectedBatch(batchControls[1]);
-  });
-
-  dashboardMountButton.addEventListener("click", async () => {
-    await runSelectedBatch(batchControls[0]);
-  });
-
   actionButton.addEventListener("click", async () => {
     if (busy) {
       return;

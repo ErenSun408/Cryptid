@@ -171,15 +171,45 @@
     .topbar-actions { gap: .5rem; }
     .batch-split { display: flex; position: relative; }
     .batch-split > .shell-button:first-child { border-radius: .5rem 0 0 .5rem; }
-    .batch-split > .batch-arrow { border-radius: 0 .5rem .5rem 0; padding-inline: .45rem; border-left: 0; }
-    .batch-menu { position: absolute; right: 0; top: calc(100% + .4rem); z-index: 30; width: min(21rem, 80vw); padding: .5rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--ink-800); box-shadow: 0 .5rem 1.5rem #0003; }
-    .batch-menu label { display: flex; align-items: center; gap: .5rem; padding: .5rem; cursor: pointer; font-size: .8rem; }
+    .batch-split > .batch-arrow { border-radius: 0 .5rem .5rem 0; padding-inline: .28rem; border-left: 0; }
+    /* The chevron carries the whole arrow segment now, so it is sized up and
+       centred on the button box instead of riding a text baseline. */
+    .batch-split > .batch-arrow svg { width: 1.15rem; height: 1.15rem; stroke-width: 2; }
+    /* Both segments of a split share one fill, with a hairline seam so the
+       arrow still reads as its own target. */
+    .batch-split.mount > .shell-button {
+      color: #14160f; border-color: transparent;
+      background: linear-gradient(145deg, var(--gold-2), var(--gold));
+    }
+    .batch-split.mount > .shell-button:hover:not(:disabled) {
+      border-color: transparent; background: linear-gradient(145deg, #eed3a0, var(--gold-2));
+    }
+    /* Flat gold on the arrow picks up where the main segment's sweep ends,
+       so the pair reads as one button rather than two gradients. */
+    .batch-split.mount > .batch-arrow {
+      border-left: 1px solid rgba(20, 22, 15, .22); background: var(--gold);
+    }
+    .batch-split.mount > .batch-arrow:hover:not(:disabled) { background: var(--gold-2); }
+    .batch-split.unmount > .shell-button {
+      color: #fff; border-color: transparent; background: var(--danger);
+    }
+    .batch-split.unmount > .shell-button:hover:not(:disabled) {
+      color: #fff; border-color: transparent; background: #e07b72;
+    }
+    .batch-split.unmount > .batch-arrow { border-left: 1px solid rgba(255, 255, 255, .28); }
+    .batch-menu { position: absolute; right: 0; top: calc(100% + .4rem); z-index: 30; width: min(16rem, 80vw); padding: .5rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--ink-800); box-shadow: 0 .5rem 1.5rem #0003; }
+    /* Holding the button drags a selection across rows, so the press must
+       never start a text selection on the names it passes over. */
+    .batch-menu { user-select: none; -webkit-user-select: none; }
+    .batch-menu label { display: flex; align-items: center; gap: .5rem; padding: .5rem; border-radius: .4rem; cursor: pointer; font-size: .8rem; }
+    .batch-menu label:hover:not(:has(input:disabled)) { background: rgba(255, 255, 255, .05); }
     .batch-menu label:has(input:disabled) { color: var(--text-3); cursor: default; }
+    .batch-all { justify-content: flex-end; }
     .batch-menu input { accent-color: var(--gold); flex: 0 0 auto; }
     .batch-menu input:disabled { opacity: 1; }
     .batch-items { max-height: 18rem; overflow-y: auto; border-top: 1px solid var(--line); }
     .batch-state { font-size: .7rem; flex: 0 0 auto; color: var(--text-3); }
-    .batch-name { overflow-wrap: anywhere; min-width: 0; }
+    .batch-name { flex: 1; overflow-wrap: anywhere; min-width: 0; }
     .batch-empty { padding: .5rem; color: var(--text-3); font-size: .8rem; }
     .dashboard-status { font-size: .74rem; color: var(--text-3); }
     .dashboard-status[data-tone="error"] { color: var(--danger); }
@@ -670,6 +700,56 @@
     #volume-operation-dialog[data-result="error"] .volume-operation-mark::after,
     #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark::after { content: ""; position: absolute; left: 50%; top: 1.61rem; width: 3px; height: 3px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
     @media (prefers-reduced-motion: reduce) { #volume-operation-dialog .volume-operation-mark { animation: none !important; } }
+    #batch-result-dialog .modal { width: min(24rem, 100%); min-width: 0; }
+    #batch-result-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: .1rem .5rem; font-size: 1.05rem; }
+    .batch-result-counts { font-size: .72rem; font-weight: 400; color: var(--text-3); }
+    #batch-result-confirm { color: #14160f; border-color: transparent; background: linear-gradient(145deg, var(--gold-2), var(--gold)); }
+    #batch-result-confirm:hover:not(:disabled) { border-color: transparent; background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
+    #batch-result-dialog .modal-body { padding: .75rem 1.25rem; }
+    .batch-result-list { max-height: min(23rem, 50vh); overflow-y: auto; }
+    /* One line per container: the name, then the failure mark and the retry
+       box on the right edge. The reason lives in the bubble, not the row. */
+    .batch-result-row { display: flex; align-items: center; gap: .65rem; padding: .55rem .2rem; border-bottom: 1px solid var(--line); }
+    .batch-result-row:last-child { border-bottom: 0; }
+    .batch-result-row input { accent-color: var(--gold); flex: 0 0 auto; }
+    .batch-result-name { flex: 1; min-width: 0; font-size: .85rem; overflow-wrap: anywhere; }
+    .batch-result-mark { display: flex; flex: 0 0 auto; width: 1rem; height: 1rem; }
+    .batch-result-sign {
+      position: relative; width: 1rem; height: 1rem; padding: 0; font-size: 0;
+      border-radius: 50%; cursor: pointer;
+    }
+    .batch-result-why {
+      border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+      color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent);
+    }
+    .batch-result-ok {
+      border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+      color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
+    }
+    /* Two borders of a box, rotated into a tick, as the operation dialog does. */
+    .batch-result-ok::after { content: ""; position: absolute; left: 50%; top: 50%; width: .42rem; height: .22rem; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; border-radius: 1px; transform: translate(-50%, -75%) rotate(-45deg); }
+    /* A stem and a dot, matching the operation dialog's own exclamation. */
+    .batch-result-why::before { content: ""; position: absolute; left: 50%; top: .19rem; width: 2px; height: .34rem; border-radius: 1px; background: currentColor; transform: translateX(-50%); }
+    .batch-result-why::after { content: ""; position: absolute; left: 50%; top: .63rem; width: 2px; height: 2px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
+    /* The list scrolls, so an absolutely positioned bubble would be clipped
+       by it. Fixed placement escapes that; the script gives it coordinates. */
+    .batch-result-bubble {
+      display: none; position: fixed; left: 0; top: 0; z-index: 5;
+      width: max-content; max-width: min(17rem, calc(100vw - 3rem)); padding: .5rem .6rem;
+      border: 1px solid var(--line-2); border-radius: .5rem; background: var(--ink-850);
+      box-shadow: 0 .4rem 1.2rem rgba(0, 0, 0, .55);
+      font-size: .72rem; line-height: 1.6; color: var(--text-2);
+      text-align: left; overflow-wrap: anywhere; pointer-events: none;
+    }
+    .batch-result-bubble[data-open="true"] { display: block; }
+    .batch-result-why[aria-expanded="true"] { color: #fff; background: var(--danger); }
+    .batch-result-ok[aria-expanded="true"] { color: #12140f; background: var(--ok); }
+    .batch-result-all { display: flex; align-items: center; gap: .45rem; font-size: .78rem; cursor: pointer; }
+    .batch-result-all input { accent-color: var(--gold); }
+    .batch-result-all:has(input:disabled) { color: var(--text-3); cursor: default; }
+    /* Nothing selected is the resting state here, not a mistake, so the
+       button dims without the blocked cursor the other buttons use. */
+    #batch-result-retry:disabled { cursor: default; }
     .modal-overlay[data-step="type"] .modal { width: min(40rem, 100%); }
     .type-picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
     .type-pick {
@@ -888,25 +968,23 @@
       </div>
       <div class="topbar-actions">
         <output id="dashboard-status" class="dashboard-status" aria-live="polite" data-tone=""></output>
-        <div class="batch-split" id="mount-split">
-        <button id="dashboard-mount" class="shell-button" type="button" disabled>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9.5h14"></path><path d="M12 19.5l6-7H6l6 7z"></path><path d="M6 5.5h12"></path></svg>
-          一键挂载
+        <div class="batch-split mount" id="mount-split">
+        <button id="dashboard-mount" class="shell-button" type="button" disabled>一键挂载</button>
+        <button id="mount-select" class="shell-button batch-arrow" type="button" aria-label="选择挂载容器" aria-expanded="false" aria-controls="mount-menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
         </button>
-        <button id="mount-select" class="shell-button batch-arrow" type="button" aria-label="选择挂载容器" aria-expanded="false" aria-controls="mount-menu">⌄</button>
         <div id="mount-menu" class="batch-menu" role="group" aria-label="选择挂载容器" hidden>
-          <label><input id="mount-select-all" type="checkbox">全选</label>
+          <label class="batch-all"><span>全选</span><input id="mount-select-all" type="checkbox"></label>
           <div id="mount-items" class="batch-items"></div>
         </div>
         </div>
-        <div class="batch-split" id="unmount-split">
-        <button id="dashboard-unmount" class="shell-button danger" type="button" disabled>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14.5h14"></path><path d="M12 4.5l6 7H6l6-7z"></path><path d="M6 18.5h12"></path></svg>
-          一键卸载
+        <div class="batch-split unmount" id="unmount-split">
+        <button id="dashboard-unmount" class="shell-button" type="button" disabled>一键卸载</button>
+        <button id="unmount-select" class="shell-button batch-arrow" type="button" aria-label="选择卸载容器" aria-expanded="false" aria-controls="unmount-menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
         </button>
-        <button id="unmount-select" class="shell-button danger batch-arrow" type="button" aria-label="选择卸载容器" aria-expanded="false" aria-controls="unmount-menu">⌄</button>
         <div id="unmount-menu" class="batch-menu" role="group" aria-label="选择卸载容器" hidden>
-          <label><input id="unmount-select-all" type="checkbox">全选</label>
+          <label class="batch-all"><span>全选</span><input id="unmount-select-all" type="checkbox"></label>
           <div id="unmount-items" class="batch-items"></div>
         </div>
         </div>
@@ -1160,6 +1238,20 @@
         <button id="volume-operation-force" class="shell-button danger" type="button" hidden>强制卸载</button>
         <button id="volume-operation-retry" class="shell-button" type="button" hidden>重试挂载</button>
         <button id="volume-operation-confirm" class="shell-button primary" type="button" hidden>确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="batch-result-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="batch-result-title" tabindex="-1" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="batch-result-title">批量操作结果</h3></div>
+      <div class="modal-body">
+        <div id="batch-result-list" class="batch-result-list"></div>
+      </div>
+      <div class="modal-footer">
+        <label class="batch-result-all"><span>全选可重试项</span><input id="batch-result-all" type="checkbox"></label>
+        <button id="batch-result-retry" class="shell-button" type="button" disabled>重试选中项</button>
+        <button id="batch-result-confirm" class="shell-button" type="button">确定</button>
       </div>
     </div>
   </div>
