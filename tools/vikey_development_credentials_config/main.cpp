@@ -183,7 +183,7 @@ void save(UiState& state) noexcept {
     else
 #endif
       message = L"保存失败（Windows 错误 " + std::to_wstring(error.code().value()) +
-          L"）。部分凭据可能已更新，请重新保存全部三项。";
+          L"）。无法确认整组凭据已保存并验证，请重新保存全部三项。";
     static_cast<void>(::SetWindowTextW(state.status, message.c_str()));
   } catch (...) {
     static_cast<void>(::SetWindowTextW(

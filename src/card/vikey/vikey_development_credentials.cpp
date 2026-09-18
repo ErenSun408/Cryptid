@@ -77,26 +77,23 @@ class Credential final {
   PCREDENTIALW value_{};
 };
 
-[[nodiscard]] security::SecureBuffer read_credential(
-    const wchar_t* const target, const std::size_t expected_bytes) {
+[[nodiscard]] std::optional<security::SecureBuffer> read_raw_credential(
+    const wchar_t* target) {
   PCREDENTIALW raw = nullptr;
-  if (::CredReadW(target, CRED_TYPE_GENERIC, 0, &raw) == FALSE ||
-      raw == nullptr) {
+  if (::CredReadW(target, CRED_TYPE_GENERIC, 0, &raw) == FALSE) {
+    if (::GetLastError() == ERROR_NOT_FOUND) return std::nullopt;
     fail_windows("read development ViKey credential");
   }
   Credential credential(raw);
-  const CREDENTIALW& value = credential.get();
-  if (value.CredentialBlob == nullptr) {
-    throw std::invalid_argument(
-        "development ViKey credential has no value");
-  }
-  return decode_credential_blob(
-      std::span<const std::byte>(
-          reinterpret_cast<const std::byte*>(value.CredentialBlob),
-          value.CredentialBlobSize),
-      expected_bytes);
+  if (raw == nullptr || raw->CredentialBlob == nullptr ||
+      raw->CredentialBlobSize > CRED_MAX_CREDENTIAL_BLOB_SIZE)
+    throw std::invalid_argument("invalid credential blob");
+  security::SecureBuffer result(raw->CredentialBlobSize);
+  std::ranges::copy(std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(raw->CredentialBlob), raw->CredentialBlobSize),
+      result.bytes().begin());
+  return result;
 }
-
 void write_credential(const wchar_t* const target,
                       security::SecureBuffer& value) {
   static_assert(kVikeyApiKeyBytes <= CRED_MAX_CREDENTIAL_BLOB_SIZE);
@@ -176,61 +173,104 @@ security::SecureBuffer decode_credential_blob(
       "development ViKey credential has the wrong size");
 }
 
-VikeyCredentialSet WindowsCredentialProvider::load_credentials() {
-  const auto load = [](const wchar_t* target, std::size_t bytes, CredentialField field,
-                       DiagnosticStage stage) {
+namespace {
+constexpr std::size_t kBundleHeaderSize = 4;
+constexpr std::size_t kBundleSize = kBundleHeaderSize + kVikeyUserSnBytes + kVikeyApiKeyBytes + kVikeyUserPinBytes;
+constexpr std::byte kBundleHeader[] = {std::byte{'U'}, std::byte{'V'}, std::byte{'C'}, std::byte{1}};
+static_assert(kBundleSize <= CRED_MAX_CREDENTIAL_BLOB_SIZE);
+
+class WindowsCredentialStorage final : public ICredentialStorage {
+ public:
+  std::optional<security::SecureBuffer> read(CredentialEntry entry) override {
+    switch (entry) {
+      case CredentialEntry::bundle: return read_raw_credential(L"usb-vault-vikey-dev-credentials");
+      case CredentialEntry::legacy_sn: return read_raw_credential(kUserSnCredentialTarget);
+      case CredentialEntry::legacy_key: return read_raw_credential(kApiKeyCredentialTarget);
+      case CredentialEntry::legacy_pin: return read_raw_credential(kUserPinCredentialTarget);
+    }
+    throw std::invalid_argument("unknown credential entry");
+  }
+  void write_bundle(security::SecureBuffer& value) override {
+    write_credential(L"usb-vault-vikey-dev-credentials", value);
+  }
+};
+
+security::SecureBuffer encode_bundle(const VikeyCredentialSet& credentials) {
+  if (!valid_credential_value(CredentialField::user_sn, credentials.user_sn.bytes()) ||
+      !valid_credential_value(CredentialField::api_key, credentials.api_key.bytes()) ||
+      !valid_credential_value(CredentialField::user_pin, credentials.user_pin.bytes()))
+    throw std::invalid_argument("development ViKey credentials have an invalid shape");
+  security::SecureBuffer result(kBundleSize);
+  auto output = std::ranges::copy(kBundleHeader, result.bytes().begin()).out;
+  output = std::ranges::copy(credentials.user_sn.bytes(), output).out;
+  output = std::ranges::copy(credentials.api_key.bytes(), output).out;
+  std::ranges::copy(credentials.user_pin.bytes(), output);
+  return result;
+}
+}
+
+VikeyCredentialSet load_credentials(ICredentialStorage& storage) {
+  std::optional<security::SecureBuffer> bundle;
+  try { bundle = storage.read(CredentialEntry::bundle); }
+  catch (const std::system_error& e) {
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::credential_sn,
+        "read saved credentials", static_cast<std::uint32_t>(e.code().value()), NativeCodeKind::win32);
+  } catch (...) {
+    throw DiagnosticError(make_error_code(CardError::invalid_configuration), DiagnosticStage::credential_sn,
+        "invalid credential bundle");
+  }
+  if (bundle && (bundle->size() != kBundleSize ||
+      !std::ranges::equal(bundle->bytes().first(kBundleHeaderSize), kBundleHeader)))
+    throw DiagnosticError(make_error_code(CardError::invalid_configuration), DiagnosticStage::credential_sn,
+        "invalid credential bundle version or size");
+
+  std::size_t offset = kBundleHeaderSize;
+  const auto load = [&](CredentialEntry entry, std::size_t bytes, CredentialField field,
+                        DiagnosticStage stage) {
     try {
-      auto value = read_credential(target, bytes);
+      security::SecureBuffer value(bytes);
+      if (bundle) {
+        std::ranges::copy(bundle->bytes().subspan(offset, bytes), value.bytes().begin());
+        offset += bytes;
+      } else {
+        auto legacy = storage.read(entry);
+        if (!legacy) throw std::system_error(ERROR_NOT_FOUND, std::system_category());
+        value = decode_credential_blob(legacy->bytes(), bytes);
+      }
       if (!valid_credential_value(field, value.bytes()))
         throw std::invalid_argument("credential format invalid");
       return value;
     } catch (const std::system_error& e) {
       throw DiagnosticError(make_error_code(CardError::backend_unavailable), stage,
-          "read saved credential", static_cast<std::uint32_t>(e.code().value()),
-          NativeCodeKind::win32);
+          "read saved credential", static_cast<std::uint32_t>(e.code().value()), NativeCodeKind::win32);
     } catch (...) {
       throw DiagnosticError(make_error_code(CardError::invalid_configuration), stage,
           "saved credential format invalid");
     }
   };
   return {
-    .user_sn = load(kUserSnCredentialTarget, kVikeyUserSnBytes, CredentialField::user_sn, DiagnosticStage::credential_sn),
-    .api_key = load(kApiKeyCredentialTarget, kVikeyApiKeyBytes, CredentialField::api_key, DiagnosticStage::credential_key),
-    .user_pin = load(kUserPinCredentialTarget, kVikeyUserPinBytes, CredentialField::user_pin, DiagnosticStage::credential_pin),
+    .user_sn = load(CredentialEntry::legacy_sn, kVikeyUserSnBytes, CredentialField::user_sn, DiagnosticStage::credential_sn),
+    .api_key = load(CredentialEntry::legacy_key, kVikeyApiKeyBytes, CredentialField::api_key, DiagnosticStage::credential_key),
+    .user_pin = load(CredentialEntry::legacy_pin, kVikeyUserPinBytes, CredentialField::user_pin, DiagnosticStage::credential_pin),
   };
 }
 
+void store_credentials(ICredentialStorage& storage, const VikeyCredentialSet& credentials) {
+  auto bundle = encode_bundle(credentials);
+  storage.write_bundle(bundle);
+  auto stored = storage.read(CredentialEntry::bundle);
+  if (!stored || !std::ranges::equal(bundle.bytes(), stored->bytes()))
+    throw std::system_error(ERROR_WRITE_FAULT, std::system_category(), "verify development ViKey credentials");
+}
+
+VikeyCredentialSet WindowsCredentialProvider::load_credentials() {
+  WindowsCredentialStorage storage;
+  return development::load_credentials(storage);
+}
+
 void store_credentials(VikeyCredentialSet credentials) {
-  if (!valid_credential_value(CredentialField::user_sn,
-                              credentials.user_sn.bytes()) ||
-      !valid_credential_value(CredentialField::api_key,
-                              credentials.api_key.bytes()) ||
-      !valid_credential_value(CredentialField::user_pin,
-                              credentials.user_pin.bytes())) {
-    throw std::invalid_argument(
-        "development ViKey credentials have an invalid shape");
-  }
-
-  // All three shapes are checked before this point. CredWriteW has no
-  // multi-item transaction, so a system failure can still leave a prefix of
-  // the set updated; the configuration UI tells the operator to save all
-  // three fields again rather than treating a partial result as usable.
-  write_credential(kUserSnCredentialTarget, credentials.user_sn);
-  write_credential(kApiKeyCredentialTarget, credentials.api_key);
-  write_credential(kUserPinCredentialTarget, credentials.user_pin);
-
-  WindowsCredentialProvider provider;
-  VikeyCredentialSet stored = provider.load_credentials();
-  if (!std::ranges::equal(credentials.user_sn.bytes(),
-                          stored.user_sn.bytes()) ||
-      !std::ranges::equal(credentials.api_key.bytes(),
-                          stored.api_key.bytes()) ||
-      !std::ranges::equal(credentials.user_pin.bytes(),
-                          stored.user_pin.bytes())) {
-    throw std::system_error(
-        static_cast<int>(ERROR_WRITE_FAULT), std::system_category(),
-        "verify development ViKey credentials");
-  }
+  WindowsCredentialStorage storage;
+  store_credentials(storage, credentials);
 }
 
 }  // namespace usb_vault::card::vikey::development
