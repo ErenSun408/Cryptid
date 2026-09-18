@@ -243,6 +243,8 @@ class CardProductUiSessionController final {
   void set_creation_feedback(application::CreationFeedback feedback);
   void set_creation_cancellation(application::CreationCancellation cancelled);
   [[nodiscard]] bool operation_logging_enabled();
+  bool force_unmount_enabled();
+  void set_force_unmount_enabled(bool enabled);
   void set_operation_logging_enabled(bool enabled);
 
   // Reset is offered only inside an authenticated session. The card entry

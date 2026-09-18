@@ -370,6 +370,8 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void set_creation_feedback(CreationFeedback) {}
   virtual void set_creation_cancellation(CreationCancellation) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
+  virtual bool force_unmount_enabled() { return false; }
+  virtual void set_force_unmount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void set_operation_logging_enabled(bool) {
     throw std::runtime_error("operation logging preference is unavailable");
   }
@@ -462,6 +464,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void set_creation_feedback(CreationFeedback feedback) override;
   void set_creation_cancellation(CreationCancellation cancelled) override;
   [[nodiscard]] bool operation_logging_enabled() override;
+  bool force_unmount_enabled() override;
+  void set_force_unmount_enabled(bool enabled) override;
   void set_operation_logging_enabled(bool enabled) override;
   void release_session_secrets() noexcept override;
 

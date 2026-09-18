@@ -775,6 +775,7 @@
     window.navigationFixture.failUnmount = true;
     $("#unmount-select").click();
     $("#unmount-force").click();
+    await wait(() => !$("#unmount-force").disabled);
     $("#unmount-items input[data-id='1']").click();
     $("#unmount-items input[data-id='2']").click();
     $("#dashboard-unmount").click();
@@ -785,6 +786,12 @@
       !window.navigationFixture.containers[1].mounted && window.navigationFixture.containers[2].mounted &&
       $("#batch-result-title").textContent.includes("强制卸载"),
       "Enabled force mode applies only to selected targets and labels its results");
+    window.navigationFixture.failForcePreference = true;
+    $("#batch-result-force").click();
+    await wait(() => !$("#batch-result-force").disabled);
+    check($("#batch-result-force").checked && !$("#batch-result-setting-status").hidden,
+      "Failed result-page preference save keeps its value and shows an in-dialog error");
+    window.navigationFixture.failForcePreference = false;
     window.navigationFixture.batchFailId = 0;
     $("#unmount-force").checked = false;
     $("#batch-result-all").click();
@@ -795,6 +802,8 @@
       "Result retry retains its original force mode independently of the dropdown");
     $("#batch-result-confirm").click();
     $("#unmount-select").click();
+    $("#unmount-force").click();
+    await wait(() => !$("#unmount-force").disabled);
     $("#unmount-select-all").click();
     $("#dashboard-unmount").click();
     await wait(() => !$("#batch-result-dialog").hidden);
@@ -804,6 +813,7 @@
       $("#batch-result-force").closest("label").parentElement.firstElementChild === $("#batch-result-force").closest("label"),
       "Failed ordinary unmount offers force opt-in on the left of the result footer");
     $("#batch-result-force").click();
+    await wait(() => !$("#batch-result-force").disabled);
     $("#batch-result-all").click();
     check($("#batch-result-retry").textContent === "重试卸载选中项", "Result force opt-in keeps retry wording unchanged");
     $("#batch-result-retry").click();
@@ -816,6 +826,14 @@
     $("#unmount-force").checked = true;
     window.dispatchEvent(new Event("usb-vault-session-changed"));
     check(!$("#unmount-force").checked, "Card change clears explicit force opt-in");
+    await wait(() => !$("#unmount-force").disabled);
+    check($("#unmount-force").checked && window.navigationFixture.forceEnabled,
+      "New authenticated session restores persisted force preference without restoring selection");
+    window.navigationFixture.failForcePreference = true;
+    $("#unmount-force").click();
+    await wait(() => !$("#unmount-force").disabled);
+    check($("#unmount-force").checked && window.navigationFixture.forceEnabled &&
+      $("#dashboard-status").textContent.includes("无法保存"), "Failed preference write restores the saved value and reports failure");
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;

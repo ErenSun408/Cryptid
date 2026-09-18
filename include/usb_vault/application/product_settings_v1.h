@@ -5,6 +5,12 @@
 
 namespace usb_vault::application {
 
+enum class ProductPreference { force_unmount, operation_logging, window_size };
+// Neutral user preferences only. Defaults: force off, logging on, spacious.
+// Malformed force values always read as off. Window presets are 0..3.
+[[nodiscard]] unsigned int product_preference_v1(std::wstring_view path, ProductPreference key);
+void set_product_preference_v1(std::wstring_view path, ProductPreference key, unsigned int value);
+
 // The preferences this product keeps on disk, and the rules for keeping them.
 //
 // A settings file is a local artifact, so what may go in it is bounded by 8.4:

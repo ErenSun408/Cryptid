@@ -7,6 +7,7 @@
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/verified_local_artifact.h"
 #include "p2_deployment.h"
+#include "usb_vault/application/product_settings_v1.h"
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
@@ -82,8 +83,29 @@ bool apply_window_size(const HWND window, const unsigned int preset) noexcept {
 class MainWindowSizeSink final : public usb_vault::ui::IUiWindowSizeSink {
  public:
   bool set_window_size(const unsigned int preset) noexcept override {
-    return apply_window_size(g_main_window, preset);
+    if (!apply_window_size(g_main_window, preset)) return false;
+    try {
+      usb_vault::application::set_product_preference_v1(
+          usb_vault::application::product_settings_v1_default_path(),
+          usb_vault::application::ProductPreference::window_size, preset);
+      preset_ = preset;
+      return true;
+    } catch (...) {
+      static_cast<void>(apply_window_size(g_main_window, preset_));
+      return false;
+    }
   }
+  unsigned int window_size() const noexcept override { return preset_; }
+  void restore() noexcept {
+    try {
+      preset_ = usb_vault::application::product_preference_v1(
+          usb_vault::application::product_settings_v1_default_path(),
+          usb_vault::application::ProductPreference::window_size);
+    } catch (...) { preset_ = 1; }
+    static_cast<void>(apply_window_size(g_main_window, preset_));
+  }
+ private:
+  unsigned int preset_{1};
 };
 MainWindowSizeSink g_window_size_sink;
 
@@ -654,7 +676,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
-  static_cast<void>(apply_window_size(window, 1));
+  g_window_size_sink.restore();
 
   try {
     initialize_application_session(window);
@@ -674,7 +696,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
-  ::ShowWindow(window, show_command);
+  ::ShowWindow(window, g_window_size_sink.window_size() == 2 ? SW_MAXIMIZE : show_command);
   static_cast<void>(::UpdateWindow(window));
   MSG message{};
   while (::GetMessageW(&message, nullptr, 0, 0) > 0) {

@@ -136,6 +136,16 @@ void require(const bool condition, const char* const message) {
 
 class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
+  bool saved_logging{true};
+  bool saved_force{};
+  bool fail_preference_write{};
+  bool operation_logging_enabled() override { return saved_logging; }
+  void set_operation_logging_enabled(bool enabled) override {
+    if (fail_preference_write) throw std::runtime_error("settings write failed");
+    saved_logging = enabled;
+  }
+  bool force_unmount_enabled() override { return saved_force; }
+  void set_force_unmount_enabled(bool enabled) override { saved_force = enabled; }
   bool mount_a{};
   bool mount_b{};
   bool fail_mount{};
@@ -1787,6 +1797,18 @@ void test_both_creation_paths_do_not_cancel_after_publication() {
 }
 
 void test_operation_logging_can_pause_without_affecting_volume_actions() {
+  {
+    FakeRuntime preference_runtime;
+    CardAuthenticationSession preference_auth;
+    CardLoginMountSessionCore original(preference_auth, preference_runtime, layout(), LoginMountPolicy::manual);
+    original.set_operation_logging_enabled(false);
+    original.set_force_unmount_enabled(true);
+    CardLoginMountSessionCore reopened(preference_auth, preference_runtime, layout(), LoginMountPolicy::manual);
+    require(!reopened.operation_logging_enabled() && reopened.force_unmount_enabled(), "new session lost saved preferences");
+    preference_runtime.fail_preference_write = true;
+    require_throws<std::runtime_error>([&] { reopened.set_operation_logging_enabled(true); }, "failed save was swallowed");
+    require(!reopened.operation_logging_enabled(), "failed save changed logging state");
+  }
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
   CardLoginMountSessionCore session(

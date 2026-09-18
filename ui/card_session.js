@@ -415,6 +415,7 @@
   let externalRefreshPending = false;
   let batchSessionRevision = 0;
   const batchForceUnmount = document.getElementById("unmount-force");
+  let savedForceUnmount = false;
   const batchControls = ["mount", "unmount"].map((kind) => ({
     kind, mounting: kind === "mount", selected: new Set(),
     button: document.getElementById(`dashboard-${kind}`),
@@ -2879,6 +2880,10 @@
     (candidate) => candidate.setting === control.dataset.setting);
 
   const refreshStoredSwitches = async () => {
+    const force = await bridge.getForceUnmountEnabled();
+    if (typeof force !== "boolean") throw new Error("invalid force preference");
+    savedForceUnmount = force;
+    batchForceUnmount.checked = force;
     for (const stored of storedSettings) {
       const control = settingSwitches.find(
         (candidate) => candidate.dataset.setting === stored.setting);
@@ -3356,6 +3361,7 @@
   const batchResultRetry = document.getElementById("batch-result-retry");
   const batchResultConfirm = document.getElementById("batch-result-confirm");
   const batchResultForce = document.getElementById("batch-result-force");
+  const batchResultSettingStatus = document.getElementById("batch-result-setting-status");
   let batchResultContext = null;
   const batchItemFailed = (item) => item.outcome !== 2 && item.outcome !== 11;
   const retryableBatchItems = (context) => context.items.filter((item) =>
@@ -3367,6 +3373,8 @@
       batchResultContext.selected.clear();
     }
     batchResultContext = null;
+    batchResultSettingStatus.textContent = "";
+    batchResultSettingStatus.hidden = true;
     batchResultDialog.hidden = true;
     batchResultTitle.textContent = "";
     batchResultList.replaceChildren();
@@ -3504,11 +3512,48 @@
     }
     updateBatchResultSelection();
   });
-  batchResultForce.addEventListener("change", () => {
-    if (busy || !batchResultContext || batchResultContext.mounting ||
-        externalRefreshPending || batchResultForce.disabled) return;
-    batchResultContext.force = batchResultForce.checked;
-  });
+  const saveForcePreference = async (source) => {
+    if (busy || externalRefreshPending || currentState !== nativeState.authenticated) return;
+    const revision = batchSessionRevision;
+    const context = batchResultContext;
+    const previous = savedForceUnmount;
+    const requested = source.checked;
+    batchResultSettingStatus.textContent = "";
+    batchResultSettingStatus.hidden = true;
+    busy = true;
+    batchForceUnmount.disabled = true;
+    batchResultForce.disabled = true;
+    if (context) updateBatchResultSelection();
+    try {
+      await bridge.setForceUnmountEnabled(requested);
+      const value = await bridge.getForceUnmountEnabled();
+      if (typeof value !== "boolean") throw new Error("invalid preference");
+      savedForceUnmount = value;
+      if (revision === batchSessionRevision) {
+        batchForceUnmount.checked = value;
+        if (context && batchResultContext === context) {
+          context.force = value;
+          batchResultForce.checked = value;
+        }
+      }
+    } catch (_) {
+      if (revision === batchSessionRevision) {
+        source.checked = previous;
+        setDashboardStatus("无法保存强制卸载设置，请重试。", "error");
+        if (context && batchResultContext === context && !batchResultDialog.hidden) {
+          batchResultSettingStatus.textContent = "无法保存强制卸载设置，请重试。";
+          batchResultSettingStatus.hidden = false;
+        }
+      }
+    } finally {
+      busy = false;
+      renderBatchControls();
+      if (batchResultContext) updateBatchResultSelection();
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  };
+  batchForceUnmount.addEventListener("change", () => { void saveForcePreference(batchForceUnmount); });
+  batchResultForce.addEventListener("change", () => { void saveForcePreference(batchResultForce); });
   batchResultList.addEventListener("change", (event) => {
     const input = event.target;
     if (busy || !batchResultContext || externalRefreshPending || input.disabled || !input.matches("input[data-id]")) return;
@@ -4558,6 +4603,10 @@
   (async () => {
     try {
       bridge = chrome.webview.hostObjects.nativeBridge;
+      const preset = await bridge.getWindowSize();
+      if (![0, 1, 2, 3].includes(preset)) throw new Error("invalid window preference");
+      appliedWindowSize = String(preset);
+      windowSizeSelect.value = appliedWindowSize;
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());

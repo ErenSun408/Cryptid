@@ -88,6 +88,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     creation_cancelled = std::move(cancelled);
   }
   bool logging_enabled{true};
+  bool force_preference{};
+  bool force_unmount_enabled() override { return force_preference; }
+  void set_force_unmount_enabled(bool enabled) override { force_preference = enabled; }
   bool operation_logging_enabled() override { return logging_enabled; }
   void set_operation_logging_enabled(bool enabled) override { logging_enabled = enabled; }
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
@@ -1331,6 +1334,16 @@ void test_creation_finalization_rejects_late_cancellation() {
 }
 
 void test_operation_logging_setting_is_authenticated_and_boolean() {
+  {
+    Fixture preference_fixture;
+    auto preference_host = make_host(preference_fixture.controller);
+    require(FAILED(invoke_set_setting(*preference_host.Get(), L"setForceUnmountEnabled", true, nullptr)), "unauthenticated force preference accepted");
+    preference_fixture.authentication.establish(root_secret());
+    require(SUCCEEDED(invoke_set_setting(*preference_host.Get(), L"setForceUnmountEnabled", true, nullptr)) &&
+            preference_fixture.volume.force_preference, "force preference was not saved");
+    require(invoke_with_number(*preference_host.Get(), L"setForceUnmountEnabled", 1, nullptr, nullptr) == DISP_E_TYPEMISMATCH,
+            "non-boolean force preference admitted");
+  }
   Fixture fixture;
   ComPtr<IDispatch> host = make_host(fixture.controller);
   require(FAILED(invoke_set_setting(*host.Get(), L"setOperationLoggingEnabled",
@@ -1349,6 +1362,7 @@ void test_operation_logging_setting_is_authenticated_and_boolean() {
 void test_window_size_presets_are_bounded() {
   class SizeSink final : public usb_vault::ui::IUiWindowSizeSink {
    public:
+    unsigned int window_size() const noexcept override { return selected; }
     bool set_window_size(unsigned int preset) noexcept override {
       selected = preset;
       ++calls;
@@ -1377,6 +1391,11 @@ void test_window_size_presets_are_bounded() {
         nullptr) == DISP_E_TYPEMISMATCH, "invalid size accepted");
   }
   require(sink.calls == 4, "invalid size reached window sink");
+  DISPPARAMS no_size_arguments{};
+  VARIANT size_result{};
+  require(host->Invoke(member_id(*host.Get(), L"getWindowSize"), IID_NULL, LOCALE_INVARIANT,
+          DISPATCH_METHOD, &no_size_arguments, &size_result, nullptr, nullptr) == S_OK &&
+          size_result.vt == VT_UI4 && size_result.ulVal == 3, "window preset was not restored to the page");
   sink.succeeds = false;
   require(FAILED(invoke_with_number(*host.Get(), L"setWindowSize", 0,
       nullptr, nullptr)), "window failure was hidden");

@@ -671,6 +671,14 @@ bool CardProductUiSessionController::operation_logging_enabled() {
   }
   return volume_session_.operation_logging_enabled();
 }
+bool CardProductUiSessionController::force_unmount_enabled() {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
+  return volume_session_.force_unmount_enabled();
+}
+void CardProductUiSessionController::set_force_unmount_enabled(bool enabled) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
+  volume_session_.set_force_unmount_enabled(enabled);
+}
 
 void CardProductUiSessionController::set_operation_logging_enabled(bool enabled) {
   if (state() != CardProductUiState::authenticated) {

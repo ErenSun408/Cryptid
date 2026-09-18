@@ -20,6 +20,12 @@ constexpr std::wstring_view kSettingsFileName = L"settings.txt";
 constexpr std::string_view kRememberKey = "remember-container-paths=";
 constexpr std::string_view kMountImportedKey = "mount-imported-containers=";
 constexpr std::size_t kMaximumSettingsSize = 4096;
+constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size="};
+unsigned int preference_index(ProductPreference key) {
+  const auto index = static_cast<unsigned int>(key);
+  if (index > 2) throw std::invalid_argument("unknown preference");
+  return index;
+}
 
 // Reads one key. A key that is not there, or has nothing after it, is not a
 // choice, so it answers the same as no file at all.
@@ -32,10 +38,11 @@ constexpr std::size_t kMaximumSettingsSize = 4096;
   return content[value] == '1';
 }
 
-// The whole file, always written as a whole. Both keys are always present, so
+// The whole file, always written as a whole. All keys are always present, so
 // a file written by this product never depends on a default to be read back.
 [[nodiscard]] std::string settings_text(const bool remember,
-                                        const bool mount_imported) {
+                                        const bool mount_imported,
+                                        std::wstring_view path) {
   std::string text = "# usb-vault settings\r\n";
   text += kRememberKey;
   text += remember ? '1' : '0';
@@ -43,6 +50,11 @@ constexpr std::size_t kMaximumSettingsSize = 4096;
   text += kMountImportedKey;
   text += mount_imported ? '1' : '0';
   text += "\r\n";
+  for (unsigned int i = 0; i < 3; ++i) {
+    text += kPreferenceKeys[i];
+    text += static_cast<char>('0' + product_preference_v1(path, static_cast<ProductPreference>(i)));
+    text += "\r\n";
+  }
   return text;
 }
 
@@ -176,6 +188,41 @@ void write_settings(const std::wstring &path, const std::string_view content) {
 
 } // namespace
 
+unsigned int product_preference_v1(std::wstring_view path, ProductPreference key) {
+  const auto index = preference_index(key);
+  const auto fallback = index == 0 ? 0U : 1U;
+  const auto content = read_settings(std::wstring(path));
+  if (!content) return fallback;
+  const auto prefix = kPreferenceKeys[index];
+  bool found = false;
+  unsigned int result = fallback;
+  std::size_t start = 0;
+  while (start < content->size()) {
+    const auto end = content->find('\n', start);
+    auto line = std::string_view(*content).substr(start, end == std::string::npos ? content->size() - start : end - start);
+    if (line.ends_with('\r')) line.remove_suffix(1);
+    if (line.starts_with(prefix)) {
+      if (found) return fallback;
+      found = true;
+      const auto value = line.substr(prefix.size());
+      if (value.size() != 1 || value[0] < '0' || value[0] > (index == 2 ? '3' : '1')) return fallback;
+      result = static_cast<unsigned int>(value[0] - '0');
+    }
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  return result;
+}
+
+void set_product_preference_v1(std::wstring_view path, ProductPreference key, unsigned int value) {
+  const auto index = preference_index(key);
+  if (value > (index == 2 ? 3U : 1U)) throw std::invalid_argument("invalid preference value");
+  auto text = settings_text(remember_container_paths_v1(path), mount_imported_containers_v1(path), path);
+  const auto at = text.find(kPreferenceKeys[index]);
+  text[at + kPreferenceKeys[index].size()] = static_cast<char>('0' + value);
+  write_settings(std::wstring(path), text);
+}
+
 std::wstring product_settings_v1_default_path() {
   wchar_t *raw_folder = nullptr;
   const HRESULT result = ::SHGetKnownFolderPath(
@@ -219,13 +266,13 @@ bool mount_imported_containers_v1(const std::wstring_view path) {
 void set_remember_container_paths_v1(const std::wstring_view path,
                                      const bool remember) {
   write_settings(std::wstring(path),
-                 settings_text(remember, mount_imported_containers_v1(path)));
+                 settings_text(remember, mount_imported_containers_v1(path), path));
 }
 
 void set_mount_imported_containers_v1(const std::wstring_view path,
                                       const bool mount) {
   write_settings(std::wstring(path),
-                 settings_text(remember_container_paths_v1(path), mount));
+                 settings_text(remember_container_paths_v1(path), mount, path));
 }
 
 }  // namespace usb_vault::application

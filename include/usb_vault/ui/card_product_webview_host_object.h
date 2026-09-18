@@ -44,6 +44,7 @@ class IUiWindowSizeSink {
   virtual ~IUiWindowSizeSink() noexcept = default;
   // Fixed presentation presets only: standard, spacious, maximized, compact.
   virtual bool set_window_size(unsigned int preset) noexcept = 0;
+  virtual unsigned int window_size() const noexcept { return 1; }
 };
 
 // Asks the host window to close. A card returned to the provisioning marker

@@ -12,6 +12,8 @@ window.navigationFixture = {
   windowSizes: [],
   failWindowSize: false,
   loggingEnabled: true,
+  forceEnabled: false,
+  windowPreset: 1,
   failLogging: false,
   hiddenCreateCalls: 0,
   pendingCreation: null,
@@ -27,6 +29,12 @@ window.navigationFixture = {
 {
   const fixture = window.navigationFixture;
   const bridge = {
+    getForceUnmountEnabled: () => fixture.forceEnabled,
+    setForceUnmountEnabled: (value) => {
+      if (fixture.failForcePreference) throw new Error("preference write failed");
+      fixture.forceEnabled = value;
+    },
+    getWindowSize: () => fixture.windowPreset,
     beginMountBatch: (ids) => beginBatch(ids, true),
     beginUnmountBatch: (ids) => beginBatch(ids, false),
     beginForceUnmountBatch: (ids) => beginBatch(ids, false, true),
@@ -105,6 +113,7 @@ window.navigationFixture = {
     setWindowSize: (preset) => {
       if (fixture.failWindowSize) throw new Error("simulated resize failure");
       fixture.windowSizes.push(preset);
+      fixture.windowPreset = preset;
     },
     chooseContainerDirectory: () => {
       fixture.pickerCalls += 1;

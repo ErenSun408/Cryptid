@@ -203,6 +203,18 @@ class ProductionCardLoginMountSessionRuntime final
   [[nodiscard]] bool mount_imported_containers() override {
     return mount_imported_containers_v1(product_settings_v1_default_path());
   }
+  bool force_unmount_enabled() override {
+    return product_preference_v1(product_settings_v1_default_path(), ProductPreference::force_unmount) != 0;
+  }
+  void set_force_unmount_enabled(bool enabled) override {
+    set_product_preference_v1(product_settings_v1_default_path(), ProductPreference::force_unmount, enabled ? 1U : 0U);
+  }
+  bool operation_logging_enabled() override {
+    return product_preference_v1(product_settings_v1_default_path(), ProductPreference::operation_logging) != 0;
+  }
+  void set_operation_logging_enabled(bool enabled) override {
+    set_product_preference_v1(product_settings_v1_default_path(), ProductPreference::operation_logging, enabled ? 1U : 0U);
+  }
 
   void set_mount_imported_containers(const bool mount) override {
     set_mount_imported_containers_v1(product_settings_v1_default_path(),
@@ -469,6 +481,8 @@ void CardLoginMountSession::clear_operation_history() noexcept {
 bool CardLoginMountSession::operation_logging_enabled() {
   return impl_->core.operation_logging_enabled();
 }
+bool CardLoginMountSession::force_unmount_enabled() { return impl_->core.force_unmount_enabled(); }
+void CardLoginMountSession::set_force_unmount_enabled(bool enabled) { impl_->core.set_force_unmount_enabled(enabled); }
 
 void CardLoginMountSession::set_operation_logging_enabled(const bool enabled) {
   impl_->core.set_operation_logging_enabled(enabled);
@@ -639,7 +653,9 @@ CardLoginMountSessionCore::CardLoginMountSessionCore(
     : authentication_(authentication),
       runtime_(runtime),
       layout_(std::move(layout)),
-      login_mount_policy_(login_mount_policy) {}
+      login_mount_policy_(login_mount_policy) {
+  state_.operation_logging_enabled = runtime_.operation_logging_enabled();
+}
 
 void CardLoginMountSessionCore::record_operation(
     const OperationKind kind,

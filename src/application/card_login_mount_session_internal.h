@@ -79,6 +79,10 @@ class CardLoginMountSessionRuntime {
   // Whether the user wants an imported container mounted straight away.
   [[nodiscard]] virtual bool mount_imported_containers() = 0;
   virtual void set_mount_imported_containers(bool mount) = 0;
+  virtual bool force_unmount_enabled() { return false; }
+  virtual void set_force_unmount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
+  virtual bool operation_logging_enabled() { return true; }
+  virtual void set_operation_logging_enabled(bool) {}
   // The storage layer, reached through here for the same reason as everything
   // else on this interface: the session's own job is turning a container
   // identifier into a checked absolute path, and that is worth testing without
@@ -222,9 +226,12 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] bool operation_logging_enabled() const noexcept {
     return state_.operation_logging_enabled;
   }
-  void set_operation_logging_enabled(bool enabled) noexcept {
+  void set_operation_logging_enabled(bool enabled) {
+    runtime_.set_operation_logging_enabled(enabled);
     state_.operation_logging_enabled = enabled;
   }
+  bool force_unmount_enabled() { return runtime_.force_unmount_enabled(); }
+  void set_force_unmount_enabled(bool enabled) { runtime_.set_force_unmount_enabled(enabled); }
   void release_session_secrets() noexcept;
   void unmount_active();
   [[nodiscard]] bool force_unmount_active();

@@ -116,6 +116,9 @@ constexpr DISPID kBatchItemIdId = 60;
 constexpr DISPID kBatchItemNameId = 61;
 constexpr DISPID kBatchItemOutcomeId = 62;
 constexpr DISPID kBeginForceUnmountBatchId = 63;
+constexpr DISPID kGetForcePreferenceId = 64;
+constexpr DISPID kSetForcePreferenceId = 65;
+constexpr DISPID kGetWindowSizeId = 66;
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
@@ -392,6 +395,9 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kSetWindowSizeId;
       return S_OK;
     }
+    if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
+    if (matches(names[0], L"getForceUnmountEnabled")) { ids[0] = kGetForcePreferenceId; return S_OK; }
+    if (matches(names[0], L"setForceUnmountEnabled")) { ids[0] = kSetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerBMib")) { ids[0] = kBeginCreateBId; return S_OK; }
     if (matches(names[0], L"getCreationProgress")) { ids[0] = kCreationProgressId; return S_OK; }
@@ -606,6 +612,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetOperationOutcomeId: case kGetOperationContainerNameId: case kGetOperationDriveLetterId:
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
+      case kGetForcePreferenceId: case kGetWindowSizeId:
+      case kSetForcePreferenceId: // Changing a preference must not discard retry results.
       case kListContainerDirectoryId: break;
       default: last_volume_member_ = 0; clear_batch(); break;
     }
@@ -654,8 +662,11 @@ class CardProductWebViewHostObject final : public IDispatch {
         } catch (...) { return E_FAIL; }
       }
       case kGetOperationLoggingEnabledId:
+      case kGetForcePreferenceId:
+      case kSetForcePreferenceId:
       case kSetOperationLoggingEnabledId: {
-        const bool write = member == kSetOperationLoggingEnabledId;
+        const bool force = member == kGetForcePreferenceId || member == kSetForcePreferenceId;
+        const bool write = member == kSetOperationLoggingEnabledId || member == kSetForcePreferenceId;
         if (parameters == nullptr || parameters->cArgs != (write ? 1U : 0U) ||
             parameters->cNamedArgs != 0 || (write && parameters->rgvarg == nullptr)) {
           return DISP_E_BADPARAMCOUNT;
@@ -666,9 +677,11 @@ class CardProductWebViewHostObject final : public IDispatch {
         }
         try {
           if (write) {
-            controller_.set_operation_logging_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+            if (force) last_volume_member_ = 0;
+            if (force) controller_.set_force_unmount_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+            else controller_.set_operation_logging_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
           } else {
-            const bool enabled = controller_.operation_logging_enabled();
+            const bool enabled = force ? controller_.force_unmount_enabled() : controller_.operation_logging_enabled();
             if (result != nullptr) {
               ::VariantInit(result);
               result->vt = VT_BOOL;
@@ -691,6 +704,11 @@ class CardProductWebViewHostObject final : public IDispatch {
         return window_size_sink_ != nullptr &&
                        window_size_sink_->set_window_size(preset)
                    ? S_OK : E_FAIL;
+      }
+      case kGetWindowSizeId: {
+        if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
+        if (result) { ::VariantInit(result); result->vt = VT_UI4; result->ulVal = window_size_sink_ ? window_size_sink_->window_size() : 1U; }
+        return S_OK;
       }
       case kGetSessionStateId:
         return invoke_state(parameters, result);
