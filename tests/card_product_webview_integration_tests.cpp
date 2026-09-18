@@ -236,6 +236,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool remember_paths{true};
   int remember_paths_writes{};
   bool mount_imported{};
+  bool auto_mount{};
+  bool auto_mount_enabled() override { return auto_mount; }
+  void set_auto_mount_enabled(bool enabled) override { auto_mount = enabled; }
   int mount_imported_writes{};
   int adopt_calls{};
   bool reject_adopt{};

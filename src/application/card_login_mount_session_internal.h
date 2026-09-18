@@ -80,6 +80,8 @@ class CardLoginMountSessionRuntime {
   [[nodiscard]] virtual bool mount_imported_containers() = 0;
   virtual void set_mount_imported_containers(bool mount) = 0;
   virtual bool force_unmount_enabled() { return false; }
+  virtual bool auto_mount_enabled() { return false; }
+  virtual void set_auto_mount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void set_force_unmount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual bool operation_logging_enabled() { return true; }
   virtual void set_operation_logging_enabled(bool) {}
@@ -231,6 +233,8 @@ class CardLoginMountSessionCore final {
     state_.operation_logging_enabled = enabled;
   }
   bool force_unmount_enabled() { return runtime_.force_unmount_enabled(); }
+  bool auto_mount_enabled() { return runtime_.auto_mount_enabled(); }
+  void set_auto_mount_enabled(bool enabled) { runtime_.set_auto_mount_enabled(enabled); }
   void reorder_containers(std::span<const std::uint32_t> ids);
   void set_force_unmount_enabled(bool enabled) { runtime_.set_force_unmount_enabled(enabled); }
   void release_session_secrets() noexcept;

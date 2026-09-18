@@ -236,17 +236,13 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
   require(settings.find("<input") == std::string::npos,
           "settings page must not use form inputs");
 
-  // 8.7.4 has landed, so remember-containers now has a store and reaches the
-  // bridge; what that must look like is pinned separately. Auto-mount does
-  // not: 8.7.5 first requires a cap on how many volumes an automatic mount may
-  // attach, or a renegotiated five-second budget. Until that lands it stays
-  // page-local, so nothing here may carry it to the native side.
+  // P3.23 separates successful login from a visible background mount batch.
   require(script.find("control.setAttribute(\"aria-checked\", "
                       "enabled ? \"false\" : \"true\");") != std::string::npos,
           "a switch with no store behind it no longer flips its own state");
-  require(script.find("autoMount") == std::string::npos &&
-              script.find("AutoMount") == std::string::npos,
-          "the auto-mount switch reached the native side before 8.7.5 landed");
+  require(script.find("bridge.getAutoMountEnabled()") != std::string::npos &&
+              script.find("bridge.setAutoMountEnabled(value)") != std::string::npos,
+          "auto-mount no longer reads and writes the native preference");
   // Browser storage stays forbidden for every switch, store or no store.
   for (const std::string_view store : {"localStorage", "sessionStorage",
                                        "indexedDB", "document.cookie"}) {

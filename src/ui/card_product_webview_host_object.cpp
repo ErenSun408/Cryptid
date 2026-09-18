@@ -120,6 +120,8 @@ constexpr DISPID kGetForcePreferenceId = 64;
 constexpr DISPID kSetForcePreferenceId = 65;
 constexpr DISPID kGetWindowSizeId = 66;
 constexpr DISPID kReorderContainersId = 67;
+constexpr DISPID kGetAutoMountId = 68;
+constexpr DISPID kSetAutoMountId = 69;
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
@@ -397,6 +399,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       return S_OK;
     }
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
+    if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
+    if (matches(names[0], L"setAutoMountEnabled")) { ids[0] = kSetAutoMountId; return S_OK; }
     if (matches(names[0], L"reorderContainers")) { ids[0] = kReorderContainersId; return S_OK; }
     if (matches(names[0], L"getForceUnmountEnabled")) { ids[0] = kGetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"setForceUnmountEnabled")) { ids[0] = kSetForcePreferenceId; return S_OK; }
@@ -615,6 +619,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kGetForcePreferenceId: case kGetWindowSizeId:
+      case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
       case kListContainerDirectoryId: break;
       default: last_volume_member_ = 0; clear_batch(); break;
@@ -666,11 +671,14 @@ class CardProductWebViewHostObject final : public IDispatch {
         } catch (...) { return E_FAIL; }
       }
       case kGetOperationLoggingEnabledId:
+      case kGetAutoMountId:
+      case kSetAutoMountId:
       case kGetForcePreferenceId:
       case kSetForcePreferenceId:
       case kSetOperationLoggingEnabledId: {
         const bool force = member == kGetForcePreferenceId || member == kSetForcePreferenceId;
-        const bool write = member == kSetOperationLoggingEnabledId || member == kSetForcePreferenceId;
+        const bool automatic = member == kGetAutoMountId || member == kSetAutoMountId;
+        const bool write = member == kSetOperationLoggingEnabledId || member == kSetForcePreferenceId || member == kSetAutoMountId;
         if (parameters == nullptr || parameters->cArgs != (write ? 1U : 0U) ||
             parameters->cNamedArgs != 0 || (write && parameters->rgvarg == nullptr)) {
           return DISP_E_BADPARAMCOUNT;
@@ -683,9 +691,10 @@ class CardProductWebViewHostObject final : public IDispatch {
           if (write) {
             if (force) last_volume_member_ = 0;
             if (force) controller_.set_force_unmount_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+            else if (automatic) controller_.set_auto_mount_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
             else controller_.set_operation_logging_enabled(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
           } else {
-            const bool enabled = force ? controller_.force_unmount_enabled() : controller_.operation_logging_enabled();
+            const bool enabled = force ? controller_.force_unmount_enabled() : automatic ? controller_.auto_mount_enabled() : controller_.operation_logging_enabled();
             if (result != nullptr) {
               ::VariantInit(result);
               result->vt = VT_BOOL;

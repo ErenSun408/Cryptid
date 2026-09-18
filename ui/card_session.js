@@ -2893,11 +2893,16 @@
   };
 
   // The switches that have a store behind them. Every other switch on the
-  // settings page is page-local and flips itself; these two are views of what
+  // settings page is page-local and flips itself; these are views of what
   // the native side holds, and are never set from what the user clicked, so a
   // refused or failed write cannot leave the page showing a setting that was
   // not saved.
   const storedSettings = [
+    {
+      setting: "auto-mount",
+      read: () => bridge.getAutoMountEnabled(),
+      write: (value) => bridge.setAutoMountEnabled(value),
+    },
     {
       setting: "operation-logging",
       read: () => bridge.getOperationLoggingEnabled(),
@@ -3124,6 +3129,7 @@
   });
 
   const submitLogin = async () => {
+    const loginRevision = batchSessionRevision;
     let encodedPasswordBytes = null;
     let passwordBytes = null;
     busy = true;
@@ -3144,8 +3150,17 @@
         wipe(passwordBytes);
       }
       await refreshNativeState();
+      let autoMount = false;
+      if (currentState === nativeState.authenticated && loginRevision === batchSessionRevision && !externalRefreshPending) {
+        try { autoMount = (await bridge.getAutoMountEnabled()) === true; }
+        catch (_) { setDashboardStatus("无法读取自动挂载设置，本次请手动挂载。", "error"); }
+      }
       busy = false;
       render(messageForCurrentState());
+      if (autoMount && loginRevision === batchSessionRevision && !externalRefreshPending) {
+        const targets = orderedContainers().filter((container) => !container.mounted).map((container) => container.id);
+        await runSelectedBatch(batchControls[0], null, targets);
+      }
     } catch (_) {
       try {
         await refreshNativeState();
@@ -3160,7 +3175,7 @@
     } finally {
       wipe(encodedPasswordBytes);
       wipe(passwordBytes);
-      focusCurrentInput();
+      if (volumeOperationDialog.hidden && batchResultDialog.hidden) focusCurrentInput();
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }
@@ -3746,13 +3761,13 @@
     () => bridge.forgetContainer(id),
     "无法从列表移除该容器，请稍后重试。");
 
-  const runSelectedBatch = async (control, retryContext = null) => {
+  const runSelectedBatch = async (control, retryContext = null, automaticIds = null) => {
     if (busy || bridge === null || currentState !== nativeState.authenticated ||
         externalRefreshPending || !volumeOperationDialog.hidden) return;
     if (retryContext ? retryContext !== batchResultContext : !batchResultDialog.hidden) return;
     if (retryContext) updateBatchResultSelection();
     else updateBatchSelection(control);
-    const ids = [...(retryContext ? retryContext.selected : control.selected)];
+    const ids = automaticIds || [...(retryContext ? retryContext.selected : control.selected)];
     if (!ids.length) return;
     const revision = batchSessionRevision;
     const checkSession = () => {
@@ -3768,7 +3783,7 @@
     closeBatchMenus();
     render(messageForCurrentState());
     setDashboardStatus("");
-    showVolumeOperation({ verb, target: "所选容器", batch: true });
+    showVolumeOperation({ verb, target: automaticIds ? "全部可用容器" : "所选容器", batch: true });
     try {
       await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
       checkSession();

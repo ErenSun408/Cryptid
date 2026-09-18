@@ -869,6 +869,74 @@
     $('#create-volume-close').click();
     check($(home + " [data-row-container='100']").classList.contains("container-new") &&
       $(manager + " [data-row-container='100']").classList.contains("container-new"), "Closing creation highlights the new container in both views");
+    const fixture = window.navigationFixture;
+    const autoSwitch = $('[data-setting="auto-mount"]');
+    check(autoSwitch.getAttribute("aria-checked") === "false", "Automatic mounting defaults off");
+    const beforeSetting = fixture.batchRequests.length;
+    autoSwitch.click();
+    await wait(() => autoSwitch.getAttribute("aria-disabled") === "false");
+    check(fixture.autoMount && autoSwitch.getAttribute("aria-checked") === "true" && fixture.batchRequests.length === beforeSetting,
+      "Enabling automatic mounting saves the choice without immediately mounting");
+    fixture.failAutoSave = true;
+    autoSwitch.click();
+    await wait(() => autoSwitch.getAttribute("aria-disabled") === "false");
+    check(fixture.autoMount && autoSwitch.getAttribute("aria-checked") === "true", "Failed automatic-mount setting write restores the saved choice");
+    fixture.failAutoSave = false;
+    fixture.delayVolume = false;
+    fixture.batchFailId = 21;
+    fixture.containers = [
+      { id: 21, name: "失败.hc", mounted: false, size: 0, drive: "" },
+      { id: 22, name: "成功.hc", mounted: false, size: 0, drive: "" },
+    ];
+    fixture.orderIds = [21, 22];
+    const login = async () => {
+      fixture.state = 2;
+      window.dispatchEvent(new Event("usb-vault-session-changed"));
+      await wait(() => !$('#card-password').disabled && $('#authenticated-dashboard').hidden);
+      $('#card-password').value = 'test-login';
+      $('#card-password').dispatchEvent(new Event("input", { bubbles: true }));
+      $('#card-session-action').click();
+    };
+    await login();
+    await wait(() => !$('#batch-result-dialog').hidden);
+    check(fixture.batchRequests.length === beforeSetting + 1 && fixture.batchRequests.at(-1)[1] === "21,22" &&
+      fixture.containers[1].mounted && failedRows().length === 1 && !$('#authenticated-dashboard').hidden && $('#card-password').value === "",
+      "Successful login runs one visible batch and continues after a failed container");
+    $('#batch-result-confirm').click();
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    await wait(() => !$(home + " .container-grab").disabled);
+    check(fixture.batchRequests.length === beforeSetting + 1, "Ordinary authenticated refresh never repeats automatic mounting");
+    fixture.autoMount = false;
+    await login();
+    await wait(() => !$('#authenticated-dashboard').hidden && !$(home + " .container-grab").disabled);
+    check(fixture.batchRequests.length === beforeSetting + 1 && autoSwitch.getAttribute("aria-checked") === "false",
+      "Disabled saved preference leaves login manual");
+    fixture.autoMount = true;
+    fixture.failAutoRead = true;
+    await login();
+    await wait(() => !$('#authenticated-dashboard').hidden && !$(home + " .container-grab").disabled);
+    check(fixture.batchRequests.length === beforeSetting + 1 && $('#dashboard-status').textContent.includes("本次请手动挂载"),
+      "Unreadable automatic-mount setting keeps login successful without mounting");
+    fixture.failAutoRead = false;
+    fixture.failLogin = true;
+    await login();
+    await wait(() => !$('#card-session-action').disabled);
+    check($('#authenticated-dashboard').hidden && fixture.batchRequests.length === beforeSetting + 1,
+      "Rejected login cannot trigger automatic mounting");
+    fixture.failLogin = false;
+    fixture.containers = [];
+    await login();
+    await wait(() => !$('#authenticated-dashboard').hidden);
+    check($('#batch-result-dialog').hidden && $('#volume-operation-dialog').hidden && fixture.batchRequests.length === beforeSetting + 1,
+      "Empty login does not dispatch a batch or open an empty result dialog");
+    fixture.containers = [{ id: 21, name: "等待.hc", mounted: false, size: 0, drive: "" }];
+    fixture.onAutoRead = () => {
+      fixture.state = 0;
+      window.dispatchEvent(new Event("usb-vault-session-changed"));
+    };
+    await login();
+    await wait(() => fixture.state === 0 && $('#authenticated-dashboard').hidden);
+    check(fixture.batchRequests.length === beforeSetting + 1, "Card change during preference read prevents automatic dispatch");
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;

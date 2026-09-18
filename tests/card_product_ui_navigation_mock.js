@@ -34,6 +34,23 @@ window.navigationFixture = {
       ...ids.map((id) => fixture.containers.find((item) => item.id === id)).filter(Boolean)];
   };
   const bridge = {
+    getAutoMountEnabled: () => {
+      if (fixture.onAutoRead) {
+        const callback = fixture.onAutoRead;
+        fixture.onAutoRead = null;
+        callback();
+      }
+      if (fixture.failAutoRead) throw new Error("preference unreadable");
+      return fixture.autoMount === true;
+    },
+    setAutoMountEnabled: (value) => {
+      if (fixture.failAutoSave) throw new Error("preference write failed");
+      fixture.autoMount = value;
+    },
+    submitLoginPasswordBytes: () => {
+      if (fixture.failLogin) throw new Error("login rejected");
+      fixture.state = 3;
+    },
     reorderContainers: (packed) => {
       if (fixture.failOrder) throw new Error("order write failed");
       const ids = packed.split(",").map(Number);

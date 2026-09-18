@@ -5,9 +5,9 @@
 
 namespace usb_vault::application {
 
-enum class ProductPreference { force_unmount, operation_logging, window_size };
-// Neutral user preferences only. Defaults: force off, logging on, spacious.
-// Malformed force values always read as off. Window presets are 0..3.
+enum class ProductPreference { force_unmount, operation_logging, window_size, auto_mount };
+// Neutral user preferences only. Defaults: force/auto-mount off, logging on,
+// spacious. Malformed force/auto-mount values read as off. Window presets: 0..3.
 [[nodiscard]] unsigned int product_preference_v1(std::wstring_view path, ProductPreference key);
 void set_product_preference_v1(std::wstring_view path, ProductPreference key, unsigned int value);
 

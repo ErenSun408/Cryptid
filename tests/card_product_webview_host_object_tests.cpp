@@ -89,6 +89,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
   bool logging_enabled{true};
   bool force_preference{};
+  bool auto_preference{};
+  bool auto_mount_enabled() override { return auto_preference; }
+  void set_auto_mount_enabled(bool enabled) override { auto_preference = enabled; }
   bool force_unmount_enabled() override { return force_preference; }
   void set_force_unmount_enabled(bool enabled) override { force_preference = enabled; }
   std::vector<std::uint32_t> saved_order;
@@ -1347,7 +1350,13 @@ void test_operation_logging_setting_is_authenticated_and_boolean() {
     Fixture preference_fixture;
     auto preference_host = make_host(preference_fixture.controller);
     require(FAILED(invoke_set_setting(*preference_host.Get(), L"setForceUnmountEnabled", true, nullptr)), "unauthenticated force preference accepted");
+    require(FAILED(invoke_set_setting(*preference_host.Get(), L"setAutoMountEnabled", true, nullptr)), "unauthenticated auto preference accepted");
     preference_fixture.authentication.establish(root_secret());
+    require(!invoke_setting(*preference_host.Get(), L"getAutoMountEnabled"), "auto mount default changed");
+    require(SUCCEEDED(invoke_set_setting(*preference_host.Get(), L"setAutoMountEnabled", true, nullptr)) &&
+            invoke_setting(*preference_host.Get(), L"getAutoMountEnabled") && preference_fixture.volume.batch_calls.empty(), "auto preference started work or was not saved");
+    require(invoke_with_number(*preference_host.Get(), L"setAutoMountEnabled", 1, nullptr, nullptr) == DISP_E_TYPEMISMATCH,
+            "non-boolean auto preference accepted");
     require(SUCCEEDED(invoke_set_setting(*preference_host.Get(), L"setForceUnmountEnabled", true, nullptr)) &&
             preference_fixture.volume.force_preference, "force preference was not saved");
     require(invoke_with_number(*preference_host.Get(), L"setForceUnmountEnabled", 1, nullptr, nullptr) == DISP_E_TYPEMISMATCH,

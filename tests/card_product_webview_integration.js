@@ -224,8 +224,7 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-settings-navigation");
     return;
   }
-  // The switch with no store behind it flips in place; the locked one is not
-  // actuatable at all; 记住容器位置 shows what the native side holds.
+  // Stored switches settle after native readback; the locked one stays on.
   const autoMount = settingsSection.querySelector('[data-setting="auto-mount"]');
   const rememberContainers =
     settingsSection.querySelector('[data-setting="remember-containers"]');
@@ -241,13 +240,13 @@ chrome.webview.postMessage("driver-loaded");
   }
   autoMount.click();
   lockedUnmount.click();
-  if (autoMount.getAttribute("aria-checked") !== "true" ||
+  if (!await waitFor(() => autoMount.getAttribute("aria-checked") === "true") ||
       lockedUnmount.getAttribute("aria-checked") !== "true") {
     request("fail-settings-switch");
     return;
   }
   autoMount.click();
-  if (autoMount.getAttribute("aria-checked") !== "false") {
+  if (!await waitFor(() => autoMount.getAttribute("aria-checked") === "false")) {
     request("fail-settings-switch");
     return;
   }

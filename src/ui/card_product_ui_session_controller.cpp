@@ -675,6 +675,14 @@ bool CardProductUiSessionController::force_unmount_enabled() {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
   return volume_session_.force_unmount_enabled();
 }
+bool CardProductUiSessionController::auto_mount_enabled() {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
+  return volume_session_.auto_mount_enabled();
+}
+void CardProductUiSessionController::set_auto_mount_enabled(bool enabled) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
+  volume_session_.set_auto_mount_enabled(enabled);
+}
 void CardProductUiSessionController::set_force_unmount_enabled(bool enabled) {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
   volume_session_.set_force_unmount_enabled(enabled);

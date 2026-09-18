@@ -371,6 +371,8 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void set_creation_cancellation(CreationCancellation) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
   virtual bool force_unmount_enabled() { return false; }
+  virtual bool auto_mount_enabled() { return false; }
+  virtual void set_auto_mount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void set_force_unmount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void reorder_containers(std::span<const std::uint32_t>) { throw std::logic_error("ordering unavailable"); }
   virtual void set_operation_logging_enabled(bool) {
@@ -467,6 +469,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] bool operation_logging_enabled() override;
   bool force_unmount_enabled() override;
   void set_force_unmount_enabled(bool enabled) override;
+  bool auto_mount_enabled() override;
+  void set_auto_mount_enabled(bool enabled) override;
   void reorder_containers(std::span<const std::uint32_t> ids) override;
   void set_operation_logging_enabled(bool enabled) override;
   void release_session_secrets() noexcept override;

@@ -205,14 +205,17 @@ void test_neutral_preferences_round_trip_and_reject_malformed_force() {
   const TemporaryDirectory directory;
   const auto path = directory.settings_path();
   expect(product_preference_v1(path, ProductPreference::force_unmount) == 0 &&
+         product_preference_v1(path, ProductPreference::auto_mount) == 0 &&
          product_preference_v1(path, ProductPreference::window_size) == 1 &&
          product_preference_v1(path, ProductPreference::operation_logging) == 1, "new defaults changed");
   set_product_preference_v1(path, ProductPreference::force_unmount, 1);
+  set_product_preference_v1(path, ProductPreference::auto_mount, 1);
   set_product_preference_v1(path, ProductPreference::operation_logging, 0);
   set_product_preference_v1(path, ProductPreference::window_size, 3);
   set_remember_container_paths_v1(path, false);
   set_mount_imported_containers_v1(path, true);
   expect(product_preference_v1(path, ProductPreference::force_unmount) == 1 &&
+         product_preference_v1(path, ProductPreference::auto_mount) == 1 &&
          product_preference_v1(path, ProductPreference::operation_logging) == 0 &&
          product_preference_v1(path, ProductPreference::window_size) == 3 &&
          !remember_container_paths_v1(path) && mount_imported_containers_v1(path), "updating neighbours lost preferences");
@@ -221,6 +224,11 @@ void test_neutral_preferences_round_trip_and_reject_malformed_force() {
     expect(product_preference_v1(path, ProductPreference::force_unmount) == 0, "malformed force preference enabled force");
   }
   write_raw(path, "remember-container-paths=1\nmount-imported-containers=0\n");
+  expect(product_preference_v1(path, ProductPreference::auto_mount) == 0, "old settings enabled automatic mounting");
+  for (const auto* text : {"auto-mount=10\n", "xauto-mount=1\n", "auto-mount=1\nauto-mount=0\n", "auto-mount=yes\n"}) {
+    write_raw(path, text);
+    expect(product_preference_v1(path, ProductPreference::auto_mount) == 0, "malformed preference enabled automatic mounting");
+  }
   expect(product_preference_v1(path, ProductPreference::window_size) == 1, "old file migration lost default");
   bool rejected = false;
   try { set_product_preference_v1(path, ProductPreference::window_size, 4); } catch (...) { rejected = true; }
@@ -231,6 +239,9 @@ void test_neutral_preferences_round_trip_and_reject_malformed_force() {
   try { set_product_preference_v1(path, ProductPreference::force_unmount, 1); } catch (...) { rejected = true; }
   ::CloseHandle(locked);
   expect(rejected && product_preference_v1(path, ProductPreference::force_unmount) == 0, "failed write changed stored force");
+  set_product_preference_v1(path, ProductPreference::auto_mount, 1);
+  set_product_preference_v1(path, ProductPreference::auto_mount, 0);
+  expect(product_preference_v1(path, ProductPreference::auto_mount) == 0, "automatic mounting could not be disabled");
 }
 
 int main() {

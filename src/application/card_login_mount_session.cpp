@@ -207,6 +207,12 @@ class ProductionCardLoginMountSessionRuntime final
   bool force_unmount_enabled() override {
     return product_preference_v1(product_settings_v1_default_path(), ProductPreference::force_unmount) != 0;
   }
+  bool auto_mount_enabled() override {
+    return product_preference_v1(product_settings_v1_default_path(), ProductPreference::auto_mount) != 0;
+  }
+  void set_auto_mount_enabled(bool enabled) override {
+    set_product_preference_v1(product_settings_v1_default_path(), ProductPreference::auto_mount, enabled ? 1U : 0U);
+  }
   void set_force_unmount_enabled(bool enabled) override {
     set_product_preference_v1(product_settings_v1_default_path(), ProductPreference::force_unmount, enabled ? 1U : 0U);
   }
@@ -483,6 +489,8 @@ bool CardLoginMountSession::operation_logging_enabled() {
   return impl_->core.operation_logging_enabled();
 }
 bool CardLoginMountSession::force_unmount_enabled() { return impl_->core.force_unmount_enabled(); }
+bool CardLoginMountSession::auto_mount_enabled() { return impl_->core.auto_mount_enabled(); }
+void CardLoginMountSession::set_auto_mount_enabled(bool enabled) { impl_->core.set_auto_mount_enabled(enabled); }
 void CardLoginMountSession::set_force_unmount_enabled(bool enabled) { impl_->core.set_force_unmount_enabled(enabled); }
 void CardLoginMountSession::reorder_containers(std::span<const std::uint32_t> ids) { impl_->core.reorder_containers(ids); }
 

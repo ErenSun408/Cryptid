@@ -244,6 +244,8 @@ class CardProductUiSessionController final {
   void set_creation_cancellation(application::CreationCancellation cancelled);
   [[nodiscard]] bool operation_logging_enabled();
   bool force_unmount_enabled();
+  bool auto_mount_enabled();
+  void set_auto_mount_enabled(bool enabled);
   void set_force_unmount_enabled(bool enabled);
   void reorder_containers(std::span<const std::uint32_t> ids);
   void set_operation_logging_enabled(bool enabled);

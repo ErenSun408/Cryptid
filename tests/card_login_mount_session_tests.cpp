@@ -138,6 +138,12 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
   bool saved_logging{true};
   bool saved_force{};
+  bool saved_auto{};
+  bool auto_mount_enabled() override { return saved_auto; }
+  void set_auto_mount_enabled(bool enabled) override {
+    if (fail_preference_write) throw std::runtime_error("settings write failed");
+    saved_auto = enabled;
+  }
   bool fail_preference_write{};
   bool operation_logging_enabled() override { return saved_logging; }
   void set_operation_logging_enabled(bool enabled) override {
@@ -1803,9 +1809,13 @@ void test_operation_logging_can_pause_without_affecting_volume_actions() {
     CardLoginMountSessionCore original(preference_auth, preference_runtime, layout(), LoginMountPolicy::manual);
     original.set_operation_logging_enabled(false);
     original.set_force_unmount_enabled(true);
+    original.set_auto_mount_enabled(true);
     CardLoginMountSessionCore reopened(preference_auth, preference_runtime, layout(), LoginMountPolicy::manual);
     require(!reopened.operation_logging_enabled() && reopened.force_unmount_enabled(), "new session lost saved preferences");
+    require(reopened.auto_mount_enabled() && preference_runtime.events.empty(), "auto preference was lost or triggered volume work");
     preference_runtime.fail_preference_write = true;
+    require_throws<std::runtime_error>([&] { reopened.set_auto_mount_enabled(false); }, "failed auto save was swallowed");
+    require(reopened.auto_mount_enabled(), "failed auto save changed value");
     require_throws<std::runtime_error>([&] { reopened.set_operation_logging_enabled(true); }, "failed save was swallowed");
     require(!reopened.operation_logging_enabled(), "failed save changed logging state");
   }
