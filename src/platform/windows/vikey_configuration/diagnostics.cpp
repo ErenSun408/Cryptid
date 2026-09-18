@@ -3,7 +3,11 @@
 #include <WebView2.h>
 #include "diagnostics.h"
 #include "card_failure.h"
+#ifdef USB_VAULT_IN_APP_CONFIG
+#include "p2_deployment.h"
+#else
 #include "p2_config_deployment.h"
+#endif
 #include "card/verified_local_artifact.h"
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/vikey/vikey_development_credentials.h"
@@ -33,7 +37,7 @@ std::filesystem::path executable_directory() {
   return std::filesystem::path(path).parent_path();
 }
 
-bool diagnose(const Report& report) {
+bool diagnose(const Report& report, const bool include_card) {
   const auto root = executable_directory();
   std::vector<usb_vault::card::VerifiedLocalArtifact> artifacts;
   dev::WindowsCredentialProvider credentials;
@@ -51,14 +55,16 @@ bool diagnose(const Report& report) {
         return pin(root, name, digest);
       };
       try {
+#ifndef USB_VAULT_IN_APP_CONFIG
         artifacts.push_back(check( L"usb_vault_vikey_p2_development_app.exe", p2_deployment::app));
+#endif
         artifacts.push_back(check( L"usb_vault_vikey_helper.exe", p2_deployment::helper));
         artifacts.push_back(check( L"usb_vault_volume_creator.exe", p2_deployment::creator));
         artifacts.push_back(check( L"VeraCryptFormat.dll", p2_deployment::format));
         artifacts.push_back(check( L"vendor\\ViKey.dll", p2_deployment::vendor));
         artifacts.push_back(check( L"card_session.html", p2_deployment::html));
         artifacts.push_back(check( L"card_session.js", p2_deployment::js));
-        return pass(L"主程序和运行组件完整，版本一致。");
+        return pass(L"运行组件完整，版本一致。");
       } catch (const std::system_error& error) {
         auto result = card_failure(error);
         result.detail = std::wstring(component) + L"：" + result.detail;
@@ -108,10 +114,21 @@ bool diagnose(const Report& report) {
       } catch (...) { return fail(L"[CARD-UNKNOWN] 卡检查发生未分类异常。请提供此编号及软件版本；不要据此修改 PIN 或重新初始化。"); }
     }
   };
-  return run_checks(probes, report);
+  return run_checks(probes, report, include_card);
+}
+
+bool environment_ready() {
+  try {
+    return diagnose([](unsigned int, const Result&) {}, false);
+  } catch (...) {
+    return false;
+  }
 }
 
 void launch_application() {
+#ifdef USB_VAULT_IN_APP_CONFIG
+  throw std::logic_error("in-app setup must continue in the current process");
+#else
   const auto root = executable_directory();
   const auto app = pin(root, L"usb_vault_vikey_p2_development_app.exe", p2_deployment::app);
   std::wstring command = L"\"" + app.path().native() + L"\"";
@@ -121,5 +138,6 @@ void launch_application() {
                         0, nullptr, root.c_str(), &startup, &process))
     throw usb_vault::card::DiagnosticError(usb_vault::card::make_error_code(usb_vault::card::CardError::backend_unavailable), usb_vault::card::DiagnosticStage::application_start, "start app", ::GetLastError(), usb_vault::card::NativeCodeKind::win32);
   ::CloseHandle(process.hThread); ::CloseHandle(process.hProcess);
+#endif
 }
 }

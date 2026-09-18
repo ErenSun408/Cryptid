@@ -1,4 +1,4 @@
-#include "../tools/vikey_development_credentials_config/card_failure.h"
+#include "../src/platform/windows/vikey_configuration/card_failure.h"
 #include "card/vikey/vikey_module.h"
 #include <stdexcept>
 #include <iostream>

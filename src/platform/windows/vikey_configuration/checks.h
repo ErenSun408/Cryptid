@@ -14,11 +14,16 @@ using Report = std::function<void(unsigned int, const Result&)>;
 
 // Card access requires verified binaries, saved credentials and a present
 // device. Independent environment checks continue after a failure.
-inline bool run_checks(const Probes& probes, const Report& report) {
+inline bool run_checks(const Probes& probes, const Report& report,
+                       bool include_card = true) {
   std::array<Result, count> results{};
   bool passed = true;
   for (unsigned int index = 0; index < count; ++index) {
     auto& result = results[index];
+    if (!include_card && index >= static_cast<unsigned int>(Check::device)) {
+      report(index, {State::skipped, L"环境检查不访问安全卡。"});
+      continue;
+    }
     if (index == static_cast<unsigned int>(Check::card) &&
         (results[1].state != State::passed || results[4].state != State::passed ||
          results[5].state != State::passed)) {

@@ -1,4 +1,4 @@
-#include "../tools/vikey_development_credentials_config/installers.h"
+#include "../src/platform/windows/vikey_configuration/installers.h"
 #include <Windows.h>
 #include <filesystem>
 #include <fstream>

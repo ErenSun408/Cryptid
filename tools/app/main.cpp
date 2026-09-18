@@ -12,6 +12,9 @@
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
 #include "platform/windows/shell_container_file_chooser.h"
+#include "platform/windows/vikey_configuration/diagnostics.h"
+#include "platform/windows/vikey_configuration/startup.h"
+#include "platform/windows/vikey_configuration/window.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_device_lifecycle_controller.h"
 #include "usb_vault/application/card_entry_context_controller.h"
@@ -249,6 +252,17 @@ class LocalArguments final {
   LPWSTR* values_{};
   int count_{};
 };
+
+// The start check covers the reviewed layout beside this executable. A run
+// with explicit development arguments describes its own helper and vendor
+// files, so it keeps the behaviour it had before setup moved in here.
+[[nodiscard]] bool packaged_deployment() noexcept {
+  try {
+    return LocalArguments{}.views().size() == 1;
+  } catch (...) {
+    return false;
+  }
+}
 
 void initialize_application_session([[maybe_unused]] const HWND window) {
   const std::wstring directory = executable_directory();
@@ -648,6 +662,21 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
+  // Setup runs before the product window so that a missing WebView2 runtime
+  // can still be repaired: this window is plain Win32. The check itself never
+  // touches the card, and a failed one waits here for the user instead of
+  // starting an environment nobody confirmed. SW_SHOWNORMAL keeps setup
+  // visible even when the product was asked to start minimized.
+  if (packaged_deployment() &&
+      !configuration::ready_to_start(
+          [] { return configuration::environment_ready(); },
+          [instance] {
+            return configuration::run_window(instance, SW_SHOWNORMAL, true);
+          })) {
+    ::CoUninitialize();
+    return 0;
+  }
+
   WNDCLASSEXW window_class{sizeof(window_class)};
   window_class.lpfnWndProc = window_proc;
   window_class.hInstance = instance;
@@ -683,7 +712,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     initialize_webview(window);
     if (::SetTimer(window, 1, 100, nullptr) == 0) throw std::runtime_error("cannot schedule deferred card events");
   } catch (const DeploymentFailure&) {
-    show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请将完整测试包解压到本机磁盘后重试，不要仅复制主 EXE。首次使用请先运行凭据配置应用。");
+    show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE；启动检查会在应用内给出具体原因和修复入口。");
     ::DestroyWindow(window);
     clear_application_session();
     ::CoUninitialize();

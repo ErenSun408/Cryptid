@@ -399,6 +399,7 @@ usb_vault_configure_target(usb_vault_vikey_development_credentials)
 add_executable(usb_vault_vikey_development_credentials_config
   WIN32 EXCLUDE_FROM_ALL
   tools/vikey_development_credentials_config/main.cpp
+  src/platform/windows/vikey_configuration/window.cpp
 )
 target_include_directories(
   usb_vault_vikey_development_credentials_config PRIVATE
@@ -608,9 +609,18 @@ if(USB_VAULT_BUILD_UI)
   # The manifest is a source, not a resource: MSVC hands a .manifest listed
   # here to mt.exe, so the DPI declaration is embedded in the executable and
   # takes effect before the process runs its first instruction.
+  # The setup window, its checks and its installers are compiled into the
+  # product itself, so a first start with no WebView2 runtime still has a
+  # native way to repair the environment. USB_VAULT_IN_APP_CONFIG keeps the
+  # package check on the shipped dependencies: the executable cannot pin a
+  # digest of itself, and it never starts a second configuration process.
   add_executable(usb_vault_vikey_p2_development_app WIN32 EXCLUDE_FROM_ALL
     tools/app/main.cpp
     tools/app/usb_vault_app.manifest
+    src/platform/windows/vikey_configuration/window.cpp
+    src/platform/windows/vikey_configuration/diagnostics.cpp
+    src/platform/windows/vikey_configuration/installers.cpp
+    src/card/vikey/vikey_hid_probe.cpp
   )
   set(p2_deployment_header "${CMAKE_CURRENT_BINARY_DIR}/generated/p2_deployment.h")
   add_custom_command(OUTPUT "${p2_deployment_header}"
@@ -644,11 +654,16 @@ if(USB_VAULT_BUILD_UI)
     Ole32
     Shell32
     Shlwapi
+    Setupapi
+    Hid
+    Wintrust
   )
   target_compile_definitions(usb_vault_vikey_p2_development_app PRIVATE
     UNICODE
     _UNICODE
     USB_VAULT_VIKEY_P2_DEVELOPMENT_APP
+    USB_VAULT_CONFIG_DIAGNOSTICS
+    USB_VAULT_IN_APP_CONFIG
   )
 
   if(USB_VAULT_FORMAT_DLL)
@@ -707,8 +722,8 @@ if(USB_VAULT_BUILD_UI)
     VERBATIM)
   target_sources(usb_vault_vikey_development_credentials_config PRIVATE
     "${p2_config_header}"
-    tools/vikey_development_credentials_config/diagnostics.cpp
-    tools/vikey_development_credentials_config/installers.cpp
+    src/platform/windows/vikey_configuration/diagnostics.cpp
+    src/platform/windows/vikey_configuration/installers.cpp
     src/card/vikey/vikey_hid_probe.cpp)
   target_include_directories(usb_vault_vikey_development_credentials_config PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
