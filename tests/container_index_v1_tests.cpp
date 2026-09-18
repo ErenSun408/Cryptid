@@ -496,7 +496,7 @@ void test_the_reader_closes_on_a_version_or_length_it_cannot_trust() {
   const auto length = static_cast<std::uint16_t>(path.size());
 
   const std::vector<std::byte> future =
-      hand_sealed_slot(key, hand_built_contents(2, length, path));
+      hand_sealed_slot(key, hand_built_contents(3, length, path));
   expect(!try_open_container_index_entry_v1(key, future).has_value(),
          "a later format version was read as a v1 entry");
 
@@ -515,9 +515,33 @@ void test_the_reader_closes_on_a_version_or_length_it_cannot_trust() {
          "an entry claiming a path past the limit was accepted");
 }
 
+void test_order_is_authenticated_and_legacy_entries_still_open() {
+  using namespace usb_vault::application;
+  const Key key = test_key(0xDA);
+  const auto legacy = seal_container_index_entry_v1(key, L"D:\\old.hc");
+  const auto old = try_open_container_index_entry(key, legacy.bytes());
+  expect(old && !old->order, "legacy padding was treated as an order");
+  const auto ordered = seal_container_index_entry_v1(key, L"D:\\new.hc", 17);
+  const auto entry = try_open_container_index_entry(key, ordered.bytes());
+  expect(entry && entry->path == L"D:\\new.hc" && entry->order == 17U,
+         "ordered entry did not round trip");
+  const auto contents = hand_opened_contents(key, ordered.bytes());
+  expect(take_u32(contents, 0) == 2 && take_u32(contents, 524) == 17,
+         "order is not inside the versioned sealed payload");
+  expect(ordered.size() == legacy.size(), "ordered entry changed slot size");
+  auto invalid = hand_built_contents(2, 9, L"D:\\new.hc");
+  put_u32(invalid, 524, 1024);
+  expect(!try_open_container_index_entry(key, hand_sealed_slot(key, invalid)),
+         "out of range authenticated order was accepted");
+  expect_invalid_argument([&] {
+    static_cast<void>(seal_container_index_entry_v1(key, L"D:\\new.hc", 1024));
+  }, "writer accepted an out of range order");
+}
+
 } // namespace
 
 int main() {
+  test_order_is_authenticated_and_legacy_entries_still_open();
   test_round_trip_returns_the_same_path();
   test_non_ascii_paths_survive_as_code_units();
   test_longest_and_shortest_paths_produce_the_same_shape();

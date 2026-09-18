@@ -41,13 +41,24 @@ inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
 // produce the same size and the same shape: the unused remainder is random,
 // not zero, so slot contents never say how long the path is.
 //
-// A v1 slot carries only the path. The version lives inside the sealed bytes
-// and the sealed area is deliberately larger than v1 needs, so a later version
-// can carry more without changing the size of the file.
+// With no order this writes the original version 1 path-only payload; with an
+// order it writes version 2. Both versions have exactly the same slot size.
 [[nodiscard]] security::SecureBuffer seal_container_index_entry_v1(
-    std::span<const std::byte> key, std::wstring_view path);
+    std::span<const std::byte> key, std::wstring_view path,
+    std::optional<std::uint32_t> order = std::nullopt);
 
-// Returns the path when this key authenticates this slot.
+// Version 2 adds an authenticated order at offset 524, inside the same sealed
+// slot. Version 1 remains readable and has no order. Physical slot placement
+// remains random and conveys no display order.
+struct ContainerIndexEntry {
+  std::wstring path;
+  std::optional<std::uint32_t> order;
+};
+
+[[nodiscard]] std::optional<ContainerIndexEntry> try_open_container_index_entry(
+    std::span<const std::byte> key, std::span<const std::byte> slot);
+
+// Returns the path when this key authenticates a supported v1/v2 slot.
 //
 // Random filler, a slot sealed under a different key, and a damaged slot are
 // one answer: nothing. The caller cannot tell them apart, and neither can

@@ -38,9 +38,8 @@ namespace usb_vault::application {
 [[nodiscard]] security::SecureBuffer derive_shared_container_index_key_v1(
     std::span<const std::byte> root_secret);
 
-// Every path in the file this key opens, in slot order. Slot order is not
-// creation order and carries no meaning; it is simply where the paths were
-// found.
+// Every path this key opens, in authenticated display order. Legacy entries
+// without an order follow ordered entries in their original slot order.
 [[nodiscard]] std::vector<std::wstring> list_container_index_paths_v1(
     std::span<const std::byte> key, std::span<const std::byte> file);
 
@@ -66,6 +65,21 @@ enum class ContainerIndexWriteV1 {
 [[nodiscard]] ContainerIndexWriteV1 add_container_index_path_v1(
     std::span<const std::byte> key, std::span<std::byte> file,
     std::wstring_view path);
+
+// Ordered insertion for the UI integration: a genuinely new path goes first;
+// adding an existing path leaves its position and the entire buffer unchanged.
+[[nodiscard]] ContainerIndexWriteV1 prepend_container_index_path_v1(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    std::wstring_view path);
+
+// Places the requested known paths first, preserving the relative order of
+// omitted paths (including containers on disconnected disks). Rejects unknown
+// or repeated paths before mutation. Re-seals only entries this key opens;
+// opaque slots and the fixed file size are preserved. An exception leaves the
+// supplied buffer unchanged. The caller still owns atomic file replacement.
+void reorder_container_index_paths_v1(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    std::span<const std::wstring> paths);
 
 // Fills the slot holding this path with fresh random bytes, and reports
 // whether there was one. Only a slot this key opens can be found, so a record

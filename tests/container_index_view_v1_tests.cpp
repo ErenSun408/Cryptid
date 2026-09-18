@@ -271,9 +271,64 @@ void test_another_root_sees_an_empty_index() {
          "an index sealed under one root listed under another");
 }
 
+void test_order_survives_reload_and_preserves_unselected_and_opaque_slots() {
+  using usb_vault::application::reorder_container_index_paths_v1;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x31));
+  const auto other = derive_shared_container_index_key_v1(test_root(0x32));
+  auto file = fresh_file();
+  // Fixed physical positions make legacy fallback and opaque preservation
+  // deterministic, independently of the random-placement writer.
+  for (std::size_t index = 0; index < 4; ++index) {
+    const auto sealed = seal_container_index_entry_v1(key.bytes(), numbered_path(index));
+    std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(file, index).begin());
+  }
+  const auto foreign = seal_container_index_entry_v1(other.bytes(), L"E:\\other.hc");
+  std::ranges::copy(foreign.bytes(), container_index_v1_mutable_slot(file, 9).begin());
+  const auto before = file;
+  const std::vector<std::wstring> requested{numbered_path(3), numbered_path(1)};
+  reorder_container_index_paths_v1(key.bytes(), file, requested);
+  const std::vector<std::byte> reloaded(file);
+  const std::vector<std::wstring> expected{
+      numbered_path(3), numbered_path(1), numbered_path(0), numbered_path(2)};
+  expect(list_container_index_paths_v1(key.bytes(), reloaded) == expected,
+         "reload lost order or omitted records");
+  for (std::size_t index = 4; index < kContainerIndexV1SlotCount; ++index) {
+    expect(std::ranges::equal(container_index_v1_slot(before, index),
+                              container_index_v1_slot(file, index)),
+           "reordering changed an opaque slot");
+  }
+  expect(list_container_index_paths_v1(other.bytes(), file) ==
+             std::vector<std::wstring>{L"E:\\other.hc"},
+         "reordering damaged another key's entry");
+  const auto saved = file;
+  const std::vector<std::wstring> duplicate{numbered_path(0), L"d:\\VAULTS\\CONTAINER-0.HC"};
+  expect_invalid_argument([&] { reorder_container_index_paths_v1(key.bytes(), file, duplicate); },
+                          "case-insensitive duplicate order was accepted");
+  const std::vector<std::wstring> unknown{numbered_path(0), numbered_path(99)};
+  expect_invalid_argument([&] { reorder_container_index_paths_v1(key.bytes(), file, unknown); },
+                          "unknown path was accepted");
+  expect(file == saved, "invalid ordering partially modified the buffer");
+}
+
+void test_new_paths_go_first_without_changing_existing_relative_order() {
+  using usb_vault::application::prepend_container_index_path_v1;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x33));
+  auto file = fresh_file();
+  for (std::size_t i = 0; i < 3; ++i)
+    static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, numbered_path(i)));
+  expect(list_container_index_paths_v1(key.bytes(), file) ==
+             std::vector<std::wstring>{numbered_path(2), numbered_path(1), numbered_path(0)},
+         "new paths did not go first");
+  const auto before = file;
+  static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, numbered_path(0)));
+  expect(file == before, "reimporting a known path changed its order");
+}
+
 } // namespace
 
 int main() {
+  test_order_survives_reload_and_preserves_unselected_and_opaque_slots();
+  test_new_paths_go_first_without_changing_existing_relative_order();
   test_the_shared_key_follows_the_root_and_nothing_else();
   test_a_path_that_was_added_can_be_listed();
   test_the_same_path_never_takes_two_slots();

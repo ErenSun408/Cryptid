@@ -27,7 +27,8 @@ constexpr std::size_t kPlaintextSize =
 //   [0, 4)     format version
 //   [4, 6)     path length, in UTF-16 code units
 //   [6, 524)   path, padded to its full capacity with random bytes
-//   [524, 740) reserved, random
+//   [524, 528) v2: display order; v1: random
+//   [528, 740) reserved, random
 //
 // The reserved tail is what lets a later version carry more than a path
 // without changing the size of a slot, and so without changing the size of the
@@ -36,6 +37,8 @@ constexpr std::size_t kPlaintextSize =
 constexpr std::size_t kVersionOffset = 0;
 constexpr std::size_t kPathLengthOffset = 4;
 constexpr std::size_t kPathOffset = 6;
+constexpr std::size_t kOrderOffset = 524;
+constexpr std::uint32_t kOrderedEntryVersion = 2;
 constexpr std::size_t kPathCapacity =
     kContainerIndexV1PathMaximumLength * sizeof(wchar_t);
 
@@ -228,8 +231,12 @@ void require_slot_index(const std::size_t index) {
 
 security::SecureBuffer
 seal_container_index_entry_v1(const std::span<const std::byte> key,
-                              const std::wstring_view path) {
+                              const std::wstring_view path,
+                              const std::optional<std::uint32_t> order) {
   require_key(key);
+  if (order && *order >= kContainerIndexV1SlotCount) {
+    throw std::invalid_argument("container index order is out of range");
+  }
   if (path.empty()) {
     throw std::invalid_argument("container index path is empty");
   }
@@ -245,7 +252,9 @@ seal_container_index_entry_v1(const std::span<const std::byte> key,
   // even to somebody who has recovered the plaintext by other means.
   security::SecureBuffer plaintext(kPlaintextSize);
   fill_random(plaintext.bytes());
-  write_u32(plaintext.bytes(), kVersionOffset, kContainerIndexEntryV1Version);
+  write_u32(plaintext.bytes(), kVersionOffset,
+            order ? kOrderedEntryVersion : kContainerIndexEntryV1Version);
+  if (order) write_u32(plaintext.bytes(), kOrderOffset, *order);
   write_u16(plaintext.bytes(), kPathLengthOffset,
             static_cast<std::uint16_t>(path.size()));
   for (std::size_t index = 0; index < path.size(); ++index) {
@@ -289,8 +298,8 @@ seal_container_index_entry_v1(const std::span<const std::byte> key,
   return slot;
 }
 
-std::optional<std::wstring>
-try_open_container_index_entry_v1(const std::span<const std::byte> key,
+std::optional<ContainerIndexEntry>
+try_open_container_index_entry(const std::span<const std::byte> key,
                                   const std::span<const std::byte> slot) {
   require_key(key);
   require_slot_size(slot);
@@ -326,18 +335,23 @@ try_open_container_index_entry_v1(const std::span<const std::byte> key,
   }
 
   // Everything past this point answers the same way as a failed tag. A slot
-  // this key authenticates but that does not read as a v1 entry is worth
+  // this key authenticates but that does not read as a supported entry is worth
   // exactly as much to the caller as random filler, and saying more about
   // which it was would hand out the distinction this format exists to deny.
   const auto contents = plaintext.bytes();
   const std::uint32_t version = read_u32(contents, kVersionOffset);
   const std::size_t length = read_u16(contents, kPathLengthOffset);
-  if (version != kContainerIndexEntryV1Version || length == 0 ||
+  if ((version != kContainerIndexEntryV1Version && version != kOrderedEntryVersion) || length == 0 ||
       length > kContainerIndexV1PathMaximumLength) {
     plaintext.clear();
     return std::nullopt;
   }
 
+  std::optional<std::uint32_t> order;
+  if (version == kOrderedEntryVersion) {
+    order = read_u32(contents, kOrderOffset);
+    if (*order >= kContainerIndexV1SlotCount) return std::nullopt;
+  }
   std::wstring path(length, L'\0');
   for (std::size_t index = 0; index < length; ++index) {
     path[index] = static_cast<wchar_t>(
@@ -347,7 +361,15 @@ try_open_container_index_entry_v1(const std::span<const std::byte> key,
   if (path.find(L'\0') != std::wstring::npos) {
     return std::nullopt;
   }
-  return path;
+  return ContainerIndexEntry{std::move(path), order};
+}
+
+std::optional<std::wstring>
+try_open_container_index_entry_v1(const std::span<const std::byte> key,
+                                  const std::span<const std::byte> slot) {
+  auto opened = try_open_container_index_entry(key, slot);
+  if (!opened) return std::nullopt;
+  return std::move(opened->path);
 }
 
 void fill_container_index_slot_v1(const std::span<std::byte> slot) {

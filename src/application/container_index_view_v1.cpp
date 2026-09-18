@@ -144,6 +144,27 @@ mutable_bytes(const std::span<const std::byte> bytes) noexcept {
                                 TRUE) == CSTR_EQUAL;
 }
 
+struct LocatedEntry {
+  std::size_t slot;
+  ContainerIndexEntry entry;
+};
+
+std::vector<LocatedEntry> ordered_entries(
+    const std::span<const std::byte> key,
+    const std::span<const std::byte> file) {
+  std::vector<LocatedEntry> entries;
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    auto opened = try_open_container_index_entry(
+        key, container_index_v1_slot(file, index));
+    if (opened) entries.push_back({index, std::move(*opened)});
+  }
+  std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+    return a.entry.order.value_or(kContainerIndexV1SlotCount) <
+           b.entry.order.value_or(kContainerIndexV1SlotCount);
+  });
+  return entries;
+}
+
 } // namespace
 
 security::SecureBuffer derive_shared_container_index_key_v1(
@@ -190,14 +211,43 @@ std::vector<std::wstring>
 list_container_index_paths_v1(const std::span<const std::byte> key,
                               const std::span<const std::byte> file) {
   std::vector<std::wstring> paths;
-  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
-    std::optional<std::wstring> opened = try_open_container_index_entry_v1(
-        key, container_index_v1_slot(file, index));
-    if (opened.has_value()) {
-      paths.push_back(std::move(*opened));
-    }
-  }
+  for (auto& located : ordered_entries(key, file))
+    paths.push_back(std::move(located.entry.path));
   return paths;
+}
+
+void reorder_container_index_paths_v1(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const std::span<const std::wstring> paths) {
+  if (paths.size() > kContainerIndexV1SlotCount)
+    throw std::invalid_argument("too many container paths");
+  const auto entries = ordered_entries(key, file);
+  std::vector<std::size_t> order;
+  std::vector<bool> selected(entries.size(), false);
+  for (const auto& path : paths) {
+    const auto found = std::find_if(entries.begin(), entries.end(),
+        [&](const auto& item) { return same_path(item.entry.path, path); });
+    if (found == entries.end())
+      throw std::invalid_argument("unknown container path");
+    const auto index = static_cast<std::size_t>(found - entries.begin());
+    if (selected[index]) throw std::invalid_argument("duplicate container path");
+    selected[index] = true;
+    order.push_back(index);
+  }
+  for (std::size_t index = 0; index < entries.size(); ++index)
+    if (!selected[index]) order.push_back(index);
+
+  // Stage all encryption before touching the caller's buffer. No record is
+  // relocated into an opaque slot, even when it belongs to another key.
+  std::vector<std::byte> updated(file.begin(), file.end());
+  for (std::size_t rank = 0; rank < order.size(); ++rank) {
+    const auto& item = entries[order[rank]];
+    const auto sealed = seal_container_index_entry_v1(
+        key, item.entry.path, static_cast<std::uint32_t>(rank));
+    std::ranges::copy(sealed.bytes(),
+        container_index_v1_mutable_slot(updated, item.slot).begin());
+  }
+  std::ranges::copy(updated, file.begin());
 }
 
 ContainerIndexWriteV1
@@ -225,6 +275,19 @@ add_container_index_path_v1(const std::span<const std::byte> key,
       seal_container_index_entry_v1(key, path);
   std::ranges::copy(sealed.bytes(),
                     container_index_v1_mutable_slot(file, chosen).begin());
+  return ContainerIndexWriteV1::added;
+}
+
+ContainerIndexWriteV1 prepend_container_index_path_v1(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const std::wstring_view path) {
+  std::vector<std::byte> updated(file.begin(), file.end());
+  const auto result = add_container_index_path_v1(key, updated, path);
+  if (result != ContainerIndexWriteV1::added) return result;
+  const std::wstring first(path);
+  reorder_container_index_paths_v1(key, updated,
+                                   std::span<const std::wstring>(&first, 1));
+  std::ranges::copy(updated, file.begin());
   return ContainerIndexWriteV1::added;
 }
 
