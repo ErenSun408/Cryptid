@@ -59,8 +59,10 @@
     grip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 7 }));
     document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 7, clientY: rows[0].getBoundingClientRect().top - 1 }));
     document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 7 }));
+    await wait(() => order(home) === "3,1,2" && !$(home + " .container-grab").disabled);
     check(order(home) === "3,1,2" && order(manager) === "3,1,2", "Pointer reorder synchronizes both lists");
     $(home + " .container-grab").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, altKey: true, key: "ArrowDown" }));
+    await wait(() => order(home) === "1,3,2" && !$(home + " .container-grab").disabled);
     check(order(home) === "1,3,2" && order(manager) === "1,3,2", "Keyboard reorder shares the same order");
     const firstRow = $(home + " .container-row");
     firstRow.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 8 }));
@@ -675,7 +677,10 @@
     window.navigationFixture.state = 3;
     window.dispatchEvent(new Event("usb-vault-session-changed"));
     await wait(() => !$("#authenticated-dashboard").hidden);
-    check(order(home) === "1,2,3" && !$(manager).hidden, "New session resets navigation and page-local order");
+    check(order(home) === "1,3,2" && !$(manager).hidden, "New session restores native saved order");
+    // Establish a known order for the independent batch-result scenarios.
+    $(home + " [data-row-container='2'] .container-grab").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, altKey: true, key: "ArrowUp" }));
+    await wait(() => order(home) === "1,2,3" && !$(home + " .container-grab").disabled);
     $("#dashboard-mount").click();
     check(!$("#mount-menu").hidden && !all("#mount-items input").some((input) => input.checked),
       "New session cannot inherit old batch selections");
@@ -834,6 +839,36 @@
     await wait(() => !$("#unmount-force").disabled);
     check($("#unmount-force").checked && window.navigationFixture.forceEnabled &&
       $("#dashboard-status").textContent.includes("无法保存"), "Failed preference write restores the saved value and reports failure");
+    window.navigationFixture.failOrder = true;
+    const savedOrder = order(home);
+    $(home + " .container-grab").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, altKey: true, key: "ArrowDown" }));
+    await wait(() => !$(home + " .container-grab").disabled);
+    check(order(home) === savedOrder && $("#dashboard-status").textContent.includes("排序保存失败"),
+      "Failed order write retains both native and displayed order");
+    window.navigationFixture.failOrder = false;
+    window.navigationFixture.importNext = { id: 99, name: "新导入.hc", mounted: false, size: 0, drive: "" };
+    $("[data-mount-existing]").click();
+    await wait(() => order(home).startsWith("99,"));
+    check(order(manager).startsWith("99,") && $(home + " [data-row-container='99']").classList.contains("container-new"),
+      "New import goes first in both lists and highlights once");
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    await wait(() => !$(home + " .container-grab").disabled);
+    check(!$(".container-new") && order(home).startsWith("99,"), "Session refresh restores order without replaying highlight");
+    window.navigationFixture.pendingCreation = null;
+    $('[data-create-container]').click();
+    $('[data-create-kind="encrypted"]').click();
+    $('#create-volume-continue').click();
+    enterCreationValue('#create-container-name', 'new-highlight');
+    enterCreationValue('#create-container-directory', 'D:\\Containers');
+    $('#create-volume-continue').click();
+    await wait(() => window.navigationFixture.pendingCreation);
+    window.navigationFixture.containers.unshift({ id: 100, name: "new-highlight.hc", mounted: true, size: 64, drive: "Z:" });
+    window.navigationFixture.pendingCreation.resolve();
+    await wait(() => $('#create-volume-status').dataset.tone === "success");
+    check(order(home).startsWith("100,") && !$(".container-new"), "Creation queues highlight until its result dialog closes");
+    $('#create-volume-close').click();
+    check($(home + " [data-row-container='100']").classList.contains("container-new") &&
+      $(manager + " [data-row-container='100']").classList.contains("container-new"), "Closing creation highlights the new container in both views");
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;

@@ -245,6 +245,7 @@ class CardProductUiSessionController final {
   [[nodiscard]] bool operation_logging_enabled();
   bool force_unmount_enabled();
   void set_force_unmount_enabled(bool enabled);
+  void reorder_containers(std::span<const std::uint32_t> ids);
   void set_operation_logging_enabled(bool enabled);
 
   // Reset is offered only inside an authenticated session. The card entry

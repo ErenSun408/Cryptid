@@ -680,6 +680,11 @@ void CardProductUiSessionController::set_force_unmount_enabled(bool enabled) {
   volume_session_.set_force_unmount_enabled(enabled);
 }
 
+void CardProductUiSessionController::reorder_containers(std::span<const std::uint32_t> ids) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("ordering requires authentication");
+  volume_session_.reorder_containers(ids);
+}
+
 void CardProductUiSessionController::set_operation_logging_enabled(bool enabled) {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("operation logging preference requires authentication");

@@ -91,6 +91,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool force_preference{};
   bool force_unmount_enabled() override { return force_preference; }
   void set_force_unmount_enabled(bool enabled) override { force_preference = enabled; }
+  std::vector<std::uint32_t> saved_order;
+  void reorder_containers(std::span<const std::uint32_t> ids) override {
+    if (ids.size() != containers.size()) throw std::invalid_argument("incomplete order");
+    for (auto id : ids) {
+      if (std::none_of(containers.begin(), containers.end(), [id](const auto& entry) { return entry.id == id; }))
+        throw std::invalid_argument("unknown container");
+    }
+    saved_order.assign(ids.begin(), ids.end());
+  }
   bool operation_logging_enabled() override { return logging_enabled; }
   void set_operation_logging_enabled(bool enabled) override { logging_enabled = enabled; }
   explicit FakeVolumeSession(CardAuthenticationSession& authentication)
@@ -2029,9 +2038,16 @@ void test_selected_batches_are_serial_bounded_and_session_scoped() {
           fixture.volume.batch_calls.empty(), "invalid request performed work");
 
   fixture.volume.batch_fail_id = 1;
+  require(begin(L"reorderContainers", L"4,3,2,1") == S_OK && fixture.volume.saved_order == std::vector<std::uint32_t>{4,3,2,1},
+          "authenticated order did not reach the session");
+  for (const auto* invalid : {L"1,1", L"01,2,3,4", L"1,2,3,999", L"1,2", L""})
+    require(FAILED(begin(L"reorderContainers", invalid)), "invalid order admitted");
+  require(invoke_with_number(*host.Get(), L"reorderContainers", 1, nullptr, nullptr) == DISP_E_TYPEMISMATCH,
+          "numeric order admitted");
   fixture.volume.pause_volume.store(true);
   fixture.volume.volume_entered.store(false);
   require(begin(L"beginMountBatch", L"3,1,2,4") == S_OK, "mount batch did not start");
+  require(begin(L"reorderContainers", L"1,2,3,4") == E_PENDING, "ordering raced a volume worker");
   for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   require(progress() == L"1,0,4,0,1,3" &&
@@ -2112,6 +2128,7 @@ void test_selected_batches_are_serial_bounded_and_session_scoped() {
   require(no_args(L"unmount") == S_OK && no_args(L"getBatchProgress", &unused) == E_UNEXPECTED,
           "another session action retained stale batch results");
   fixture.authentication.clear_authentication();
+  require(begin(L"reorderContainers", L"1,2,3,4") == E_ACCESSDENIED, "unauthenticated ordering admitted");
   require(begin(L"beginMountBatch", L"1") == E_ACCESSDENIED &&
           begin(L"beginForceUnmountBatch", L"1") == E_ACCESSDENIED &&
           begin(L"beginUnmountBatch", L"1") == E_ACCESSDENIED, "unauthenticated batch admitted");

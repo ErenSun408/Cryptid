@@ -231,6 +231,7 @@ class CardLoginMountSessionCore final {
     state_.operation_logging_enabled = enabled;
   }
   bool force_unmount_enabled() { return runtime_.force_unmount_enabled(); }
+  void reorder_containers(std::span<const std::uint32_t> ids);
   void set_force_unmount_enabled(bool enabled) { runtime_.set_force_unmount_enabled(enabled); }
   void release_session_secrets() noexcept;
   void unmount_active();

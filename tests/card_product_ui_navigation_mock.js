@@ -28,7 +28,23 @@ window.navigationFixture = {
 };
 {
   const fixture = window.navigationFixture;
+  const displayContainers = () => {
+    const ids = fixture.orderIds || [];
+    return [...fixture.containers.filter((item) => !ids.includes(item.id)),
+      ...ids.map((id) => fixture.containers.find((item) => item.id === id)).filter(Boolean)];
+  };
   const bridge = {
+    reorderContainers: (packed) => {
+      if (fixture.failOrder) throw new Error("order write failed");
+      const ids = packed.split(",").map(Number);
+      fixture.orderIds = ids;
+    },
+    mountContainer: () => {
+      if (!fixture.importNext) return false;
+      fixture.containers.unshift(fixture.importNext);
+      fixture.importNext = null;
+      return true;
+    },
     getForceUnmountEnabled: () => fixture.forceEnabled,
     setForceUnmountEnabled: (value) => {
       if (fixture.failForcePreference) throw new Error("preference write failed");
@@ -79,11 +95,11 @@ window.navigationFixture = {
     getRememberContainerPaths: () => true,
     getMountImportedContainers: () => false,
     getContainerCount: () => fixture.containers.length,
-    getContainerId: (i) => fixture.containers[i].id,
-    getContainerName: (i) => fixture.containers[i].name,
-    getContainerMounted: (i) => fixture.containers[i].mounted,
-    getContainerSizeMib: (i) => fixture.containers[i].size,
-    getContainerDriveLetter: (i) => fixture.containers[i].drive,
+    getContainerId: (i) => displayContainers()[i].id,
+    getContainerName: (i) => displayContainers()[i].name,
+    getContainerMounted: (i) => displayContainers()[i].mounted,
+    getContainerSizeMib: (i) => displayContainers()[i].size,
+    getContainerDriveLetter: (i) => displayContainers()[i].drive,
     getOperationCount: () => 0,
     beginCreateContainerBMib: () => {
       fixture.hiddenCreateCalls += 1;

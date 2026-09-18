@@ -15,6 +15,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -483,6 +484,7 @@ bool CardLoginMountSession::operation_logging_enabled() {
 }
 bool CardLoginMountSession::force_unmount_enabled() { return impl_->core.force_unmount_enabled(); }
 void CardLoginMountSession::set_force_unmount_enabled(bool enabled) { impl_->core.set_force_unmount_enabled(enabled); }
+void CardLoginMountSession::reorder_containers(std::span<const std::uint32_t> ids) { impl_->core.reorder_containers(ids); }
 
 void CardLoginMountSession::set_operation_logging_enabled(const bool enabled) {
   impl_->core.set_operation_logging_enabled(enabled);
@@ -606,7 +608,8 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
                         const std::wstring_view path,
                         const wchar_t drive_letter, const bool mounted,
                         const bool release_first = false,
-                        const bool derivation_known = true) {
+                        const bool derivation_known = true,
+                        const bool newest = false) {
   if (SessionContainer* const existing = find_by_path(state, path)) {
     existing->drive_letter = drive_letter;
     existing->mounted = mounted;
@@ -623,6 +626,10 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
                               .release_first = release_first,
                               .derivation_known = derivation_known});
   ++state.next_container_id;
+  if (newest) {
+    std::rotate(state.containers.begin(), state.containers.end() - 1, state.containers.end());
+    return state.containers.front();
+  }
   return state.containers.back();
 }
 
@@ -834,7 +841,7 @@ void CardLoginMountSessionCore::remember_container_path(
     security::SecureBuffer key = container_index_key();
     std::vector<std::byte> file = runtime_.read_container_index();
     const ContainerIndexWriteV1 written =
-        add_container_index_path_v1(key.bytes(), file, path);
+        prepend_container_index_path_v1(key.bytes(), file, path);
     key.clear();
     if (written == ContainerIndexWriteV1::added) {
       runtime_.write_container_index(file);
@@ -856,6 +863,41 @@ void CardLoginMountSessionCore::forget_container_path(
     }
   } catch (...) {
   }
+}
+
+void CardLoginMountSessionCore::reorder_containers(
+    const std::span<const std::uint32_t> ids) {
+  if (!authentication_.authenticated()) throw std::logic_error("ordering requires authentication");
+  if (ids.empty() || ids.size() != state_.containers.size() || ids.size() > 1024)
+    throw std::invalid_argument("ordering must contain every current container");
+  std::vector<SessionContainer> ordered;
+  std::vector<std::wstring> paths;
+  ordered.reserve(ids.size());
+  paths.reserve(ids.size());
+  for (const auto id : ids) {
+    const auto* entry = find_by_id(state_, id);
+    if (!entry || std::any_of(ordered.begin(), ordered.end(),
+        [id](const auto& item) { return item.id == id; }))
+      throw std::invalid_argument("invalid container order");
+    ordered.push_back(*entry);
+    paths.push_back(entry->path);
+  }
+  if (runtime_.remember_container_paths()) {
+    auto key = container_index_key();
+    auto file = runtime_.read_container_index();
+    const auto remembered_paths = list_container_index_paths_v1(key.bytes(), file);
+    for (const auto& path : paths) {
+      if (std::any_of(remembered_paths.begin(), remembered_paths.end(), [&](const auto& saved) {
+            return ::CompareStringOrdinal(path.c_str(), -1, saved.c_str(), -1, TRUE) == CSTR_EQUAL;
+          })) continue;
+      if (add_container_index_path_v1(key.bytes(), file, path) == ContainerIndexWriteV1::full)
+        throw std::runtime_error("container index is full");
+    }
+    reorder_container_index_paths_v1(key.bytes(), file, paths);
+    key.clear();
+    runtime_.write_container_index(file);
+  }
+  state_.containers.swap(ordered);
 }
 
 bool CardLoginMountSessionCore::remembering_container_paths() {
@@ -887,6 +929,17 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
       if (!runtime_.container_exists(path)) continue;
       static_cast<void>(adopt(state_, path, wchar_t{}, false, false, false));
     }
+    // Layout containers may already be adopted. Match all visible entries to
+    // the saved order without changing mount flags or dropping absent paths.
+    std::stable_sort(state_.containers.begin(), state_.containers.end(),
+        [&](const auto& a, const auto& b) {
+          const auto rank = [&](const auto& entry) {
+            return std::find_if(paths.begin(), paths.end(), [&](const auto& path) {
+              return ::CompareStringOrdinal(path.c_str(), -1, entry.path.c_str(), -1, TRUE) == CSTR_EQUAL;
+            }) - paths.begin();
+          };
+          return rank(a) < rank(b);
+        });
   } catch (...) {
   }
 }
@@ -997,7 +1050,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                      container_name,
                      drive_letter);
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
-    const std::uint32_t id = adopt(state_, path, drive_letter, true).id;
+    const std::uint32_t id = adopt(state_, path, drive_letter, true, false, true, true).id;
     volume_password.clear();
     remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
@@ -1105,7 +1158,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                      container_name,
                      drive_letter);
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
-    const std::uint32_t id = adopt(state_, path, drive_letter, true, true).id;
+    const std::uint32_t id = adopt(state_, path, drive_letter, true, true, true, true).id;
     outer_password.clear();
     remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
@@ -1260,7 +1313,7 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
                      container_name,
                      probed.drive_letter);
     const std::uint32_t id = adopt(state_, path, probed.drive_letter, true,
-                                   probed.hidden_volume)
+                                   probed.hidden_volume, true, true)
                                  .id;
     remember_container_path(path);
     runtime_.notify_mounted(probed.drive_letter);
@@ -1295,7 +1348,7 @@ std::uint32_t CardLoginMountSessionCore::adopt_container(
   // arrival a remembered path gets at login, and it says the same amount
   // about the container -- which is nothing, until something mounts it.
   const std::uint32_t id =
-      adopt(state_, path, wchar_t{}, false, false, false).id;
+      adopt(state_, path, wchar_t{}, false, false, false, true).id;
   remember_container_path(path);
   return id;
 }

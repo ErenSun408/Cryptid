@@ -1390,8 +1390,8 @@ void test_hidden_containers_are_unlimited_and_share_one_derivation() {
           "the containers were not created at the caller's own paths");
 
   const std::vector<ContainerStatus> statuses = session.container_statuses();
-  require(statuses.size() == 2 && statuses[0].name == L"one.hc" &&
-              statuses[1].name == L"two.hc" && statuses[0].mounted &&
+  require(statuses.size() == 2 && statuses[0].name == L"two.hc" &&
+              statuses[1].name == L"one.hc" && statuses[0].mounted &&
               statuses[1].mounted &&
               statuses[0].drive_letter != statuses[1].drive_letter,
           "the session did not adopt both containers on distinct drives");
@@ -1424,17 +1424,17 @@ void test_capacity_reports_the_attached_volume_not_the_file() {
 
   std::vector<ContainerStatus> statuses = session.container_statuses();
   require(statuses.size() == 2 &&
-              statuses[0].size_bytes == 96ULL * 1024ULL * 1024ULL &&
-              statuses[1].size_bytes == 64ULL * 1024ULL * 1024ULL,
+              statuses[1].size_bytes == 96ULL * 1024ULL * 1024ULL &&
+              statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL,
           "capacity did not follow the volume the driver attached");
 
   session.unmount_container(hidden);
-  const wchar_t standard_drive = statuses[1].drive_letter;
+  const wchar_t standard_drive = statuses[0].drive_letter;
   statuses = session.container_statuses();
-  require(statuses.size() == 2 && !statuses[0].mounted &&
-              statuses[0].size_bytes == 0 &&
-              statuses[0].drive_letter == wchar_t{} &&
-              statuses[1].size_bytes == 64ULL * 1024ULL * 1024ULL,
+  require(statuses.size() == 2 && !statuses[1].mounted &&
+              statuses[1].size_bytes == 0 &&
+              statuses[1].drive_letter == wchar_t{} &&
+              statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL,
           "an unmounted container still reported a capacity");
 
   // A container this session believes is mounted, on a drive the driver has
@@ -1555,12 +1555,12 @@ void test_multiple_standard_containers_get_distinct_drive_letters() {
 
   const std::vector<ContainerStatus> statuses = session.container_statuses();
   require(statuses.size() == 2, "the session did not adopt both containers");
-  require(statuses[0].id == first && statuses[1].id == second,
-          "container statuses were not returned in adoption order");
-  require(statuses[0].name == L"a.hc" && statuses[1].name == L"second.hc",
+  require(statuses[0].id == second && statuses[1].id == first,
+          "new container did not go first");
+  require(statuses[0].name == L"second.hc" && statuses[1].name == L"a.hc",
           "container statuses did not project the file name");
-  require(statuses[0].drive_letter == L'X' &&
-              statuses[1].drive_letter == L'W',
+  require(statuses[0].drive_letter == L'W' &&
+              statuses[1].drive_letter == L'X',
           "the two containers did not receive distinct drive letters");
   require(statuses[0].mounted && statuses[1].mounted &&
               statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL &&
@@ -2033,6 +2033,49 @@ void in_one_login(FakeRuntime& runtime, Callable&& work) {
                                     LoginMountPolicy::manual);
   session.consume_authenticated_login(root_secret(), bytes("login-password"));
   std::forward<Callable>(work)(session);
+}
+
+void test_container_order_persists_and_failed_writes_preserve_session_order() {
+  FakeRuntime runtime;
+  runtime.other_existing = {L"D:\\one.hc", L"D:\\two.hc", L"E:\\offline.hc"};
+  in_one_login(runtime, [&](CardLoginMountSessionCore& session) {
+    const auto one = session.adopt_container(runtime.other_existing[0]);
+    const auto two = session.adopt_container(runtime.other_existing[1]);
+    const auto offline = session.adopt_container(runtime.other_existing[2]);
+    require(session.container_statuses().front().id == offline, "new import did not go first");
+    const std::vector<std::uint32_t> order{two, one, offline};
+    session.reorder_containers(order);
+    require(session.container_statuses().front().id == two && remembered(runtime).front() == L"D:\\two.hc",
+            "order was not saved in both session and encrypted index");
+    const auto saved = runtime.container_index;
+    const std::vector<std::uint32_t> duplicate{one, one, offline};
+    const std::vector<std::uint32_t> unknown{one, two, 999};
+    const std::vector<std::uint32_t> incomplete{one};
+    for (const auto& invalid : {duplicate, unknown, incomplete})
+      require_throws<std::invalid_argument>([&] { session.reorder_containers(invalid); }, "invalid order accepted");
+    runtime.fail_index_write = true;
+    const std::vector<std::uint32_t> changed{one, two, offline};
+    require_throws<std::runtime_error>([&] { session.reorder_containers(changed); }, "failed write was ignored");
+    require(runtime.container_index == saved && session.container_statuses().front().id == two,
+            "failed order write changed state");
+    runtime.fail_index_write = false;
+    runtime.remember_paths = false;
+    const auto reads = runtime.index_reads;
+    const auto writes = runtime.index_writes;
+    session.reorder_containers(changed);
+    require(session.container_statuses().front().id == one && runtime.index_reads == reads && runtime.index_writes == writes,
+            "session-only order accessed persistent index");
+    runtime.remember_paths = true;
+  });
+  runtime.other_existing.pop_back();
+  in_one_login(runtime, [&](CardLoginMountSessionCore& session) {
+    const auto restored = session.container_statuses();
+    require(restored.size() == 2 && restored[0].name == L"two.hc" && restored[1].name == L"one.hc",
+            "new login did not restore persisted order");
+    const std::vector<std::uint32_t> changed{restored[1].id, restored[0].id};
+    session.reorder_containers(changed);
+    require(remembers(runtime, L"E:\\offline.hc"), "sorting removed an offline container");
+  });
 }
 
 void test_every_way_a_container_arrives_writes_it_down() {
@@ -2892,6 +2935,7 @@ int main() {
     test_operation_history_distinguishes_publish_from_mount_failure();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();
+    test_container_order_persists_and_failed_writes_preserve_session_order();
     test_every_way_a_container_arrives_writes_it_down();
     test_adopting_a_container_lists_it_without_opening_anything();
     test_adopting_refuses_a_file_that_is_not_there();

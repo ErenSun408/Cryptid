@@ -119,6 +119,7 @@ constexpr DISPID kBeginForceUnmountBatchId = 63;
 constexpr DISPID kGetForcePreferenceId = 64;
 constexpr DISPID kSetForcePreferenceId = 65;
 constexpr DISPID kGetWindowSizeId = 66;
+constexpr DISPID kReorderContainersId = 67;
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
@@ -396,6 +397,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       return S_OK;
     }
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
+    if (matches(names[0], L"reorderContainers")) { ids[0] = kReorderContainersId; return S_OK; }
     if (matches(names[0], L"getForceUnmountEnabled")) { ids[0] = kGetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"setForceUnmountEnabled")) { ids[0] = kSetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
@@ -621,6 +623,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kBeginMountBatchId: case kBeginUnmountBatchId:
       case kBeginForceUnmountBatchId:
         return begin_batch(member == kBeginMountBatchId, member == kBeginForceUnmountBatchId, parameters, result);
+      case kReorderContainersId:
+        return begin_batch(false, false, parameters, result, true);
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
         return invoke_batch_query(member, parameters, result);
       case kBeginMountAdoptedId:
@@ -802,7 +806,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     batch_mode_ = false;
   }
 
-  HRESULT begin_batch(bool mount, bool force, DISPPARAMS* parameters, VARIANT* result) noexcept {
+  // Ordering shares the bounded ID parser; it starts no volume worker.
+  HRESULT begin_batch(bool mount, bool force, DISPPARAMS* parameters, VARIANT* result,
+                      bool reorder = false) noexcept {
     if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs != 0 || !parameters->rgvarg)
       return DISP_E_BADPARAMCOUNT;
     const auto& input = parameters->rgvarg[0];
@@ -831,6 +837,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
         return E_ACCESSDENIED;
+      if (reorder) {
+        controller_.reorder_containers(ids);
+        return complete_selection(true, result);
+      }
       const auto available = controller_.batch_targets();
       std::vector<BatchItem> plan;
       plan.reserve(ids.size());

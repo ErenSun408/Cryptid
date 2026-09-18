@@ -1005,6 +1005,7 @@
     creationStatus.dataset.tone = "";
     creationCancelLabel.textContent = "取消";
     creationBackIcon.hidden = true;
+    renderContainers();
   };
 
   // ---- File manager ------------------------------------------------------
@@ -1672,10 +1673,14 @@
   // native side on every refresh, and an order that survives a refresh has to
   // be keyed by something that survives one.
   //
-  // ⚠️ It lasts as long as the page does. Keeping it across sessions means a
-  // field in the container index slot, which the format reserved room for but
-  // which is not built; nothing here writes anything down.
+  // Native snapshots restore the encrypted order after each refresh.
   let containerOrder = [];
+  const pendingNewContainers = new Set();
+  const markNewContainers = (previousIds) => {
+    for (const container of containers) {
+      if (!previousIds.has(container.id)) pendingNewContainers.add(container.id);
+    }
+  };
 
   const orderedContainers = () => {
     const byId = new Map();
@@ -1695,8 +1700,29 @@
     return ordered;
   };
 
-  const rememberContainerOrder = (ordered) => {
-    containerOrder = ordered.map((container) => container.id);
+  const rememberContainerOrder = async (ordered) => {
+    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    const ids = ordered.map((container) => container.id);
+    if (ids.join(",") === orderedContainers().map((container) => container.id).join(",")) return;
+    const revision = batchSessionRevision;
+    let saved = false;
+    busy = true;
+    setDashboardStatus("");
+    render(messageForCurrentState());
+    try {
+      await bridge.reorderContainers(ids.join(","));
+      saved = true;
+      if (revision !== batchSessionRevision) return;
+      await refreshNativeState();
+    } catch (_) {
+      if (revision === batchSessionRevision) setDashboardStatus(saved
+        ? "排序已保存，但列表刷新失败，请刷新后查看。"
+        : "排序保存失败，已保留原顺序，请重试。", "error");
+    } finally {
+      busy = false;
+      render(messageForCurrentState());
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
   };
 
   const exportRow = (container, tail, onActivate) => {
@@ -1828,7 +1854,7 @@
     renderBackupCentre();
   };
 
-  const endContainerReorder = (event) => {
+  const endContainerReorder = async (event) => {
     if (reorderState === null || event.pointerId !== reorderState.pointerId) return;
     const { id, index } = reorderState;
     finishContainerReorder();
@@ -1840,7 +1866,7 @@
         const [moved] = ordered.splice(from, 1);
         const to = index > from ? index - 1 : index;
         ordered.splice(Math.max(0, Math.min(to, ordered.length)), 0, moved);
-        rememberContainerOrder(ordered);
+        await rememberContainerOrder(ordered);
       }
     }
     renderContainers();
@@ -2507,7 +2533,7 @@
     grab.addEventListener("pointerdown", (event) => {
       beginContainerReorder(event, row, container.id);
     });
-    grab.addEventListener("keydown", (event) => {
+    grab.addEventListener("keydown", async (event) => {
       if (busy || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
       event.preventDefault();
       const ordered = orderedContainers();
@@ -2516,10 +2542,10 @@
       if (from < 0 || to < 0 || to >= ordered.length) return;
       const list = row.closest("[data-container-list]");
       [ordered[from], ordered[to]] = [ordered[to], ordered[from]];
-      rememberContainerOrder(ordered);
+      await rememberContainerOrder(ordered);
       renderContainers();
       renderBackupCentre();
-      list.querySelector(`[data-row-container="${container.id}"] .container-grab`).focus();
+      list.querySelector(`[data-row-container="${container.id}"] .container-grab`)?.focus();
     });
 
     const mark = document.createElement("span");
@@ -2605,6 +2631,7 @@
       fileListingRevision += 1;
       expandedContainerId = 0;
       containerOrder = [];
+      pendingNewContainers.clear();
       fileContainerId = 0;
       filePath = [];
       fileEntries = [];
@@ -2634,6 +2661,17 @@
     // re-read here: exactly one place owns that, so a message set after an
     // action cannot race a refresh a re-render fired off.
     renderManagementView();
+    if (!busy && creationDialog.hidden && volumeOperationDialog.hidden && currentState === nativeState.authenticated) {
+      for (const id of pendingNewContainers) {
+        for (const list of containerLists) {
+          const row = list.querySelector(`[data-row-container="${id}"]`);
+          if (!row) continue;
+          row.classList.add("container-new");
+          setTimeout(() => row.classList.remove("container-new"), 2200);
+        }
+      }
+      pendingNewContainers.clear();
+    }
   };
 
   const twoDigits = (value) => String(value).padStart(2, "0");
@@ -2909,6 +2947,7 @@
   };
 
   const refreshNativeState = async () => {
+    const revision = batchSessionRevision;
     const nextState = await bridge.getSessionState();
     const nextActiveVolumes = await bridge.hasActiveSession();
     if (!Number.isInteger(nextState) || nextState < nativeState.noCard ||
@@ -2993,6 +3032,7 @@
           { completedAtUnixMs, kind, outcome, name, drive });
       }
     }
+    if (revision !== batchSessionRevision) throw new Error("session changed during refresh");
     currentState = nextActiveVolumes &&
         nextState !== nativeState.authenticated &&
         nextState !== nativeState.unavailable
@@ -3001,6 +3041,7 @@
     activeVolumes = nextActiveVolumes;
     cardResetAvailable = nextResetAvailable;
     containers = nextContainers;
+    containerOrder = nextContainers.map((container) => container.id);
     operationEvents = nextOperationEvents;
   };
 
@@ -3058,6 +3099,7 @@
 
   window.addEventListener("usb-vault-session-changed", () => {
     ++batchSessionRevision;
+    pendingNewContainers.clear();
     batchForceUnmount.checked = false;
     batchForceUnmount.disabled = true;
     clearBatchResults();
@@ -3649,15 +3691,18 @@
   // One shared shape for the dashboard-side container actions: serialize on
   // the busy flag, refresh from the native side, and report failure on the
   // dashboard instead of the hidden session surface.
-  const runContainerAction = async (action, failure, progress = null) => {
+  const runContainerAction = async (action, failure, progress = null, newArrival = false) => {
     if (busy || bridge === null || !volumeOperationDialog.hidden || !batchResultDialog.hidden) return;
     busy = true;
+    const previousIds = new Set(containers.map((container) => container.id));
+    const revision = batchSessionRevision;
     setDashboardStatus("");
     render(messageForCurrentState());
     if (progress) showVolumeOperation(progress);
     try {
       const outcome = progress ? await waitForVolumeOperation(action) : await action();
       await refreshNativeState();
+      if (newArrival && revision === batchSessionRevision && !externalRefreshPending) markNewContainers(previousIds);
       busy = false;
       render(messageForCurrentState());
       if (activeSection === "files") void refreshFileManager();
@@ -3687,7 +3732,7 @@
 
   const mountExistingContainer = () => runContainerAction(
     () => bridge.mountContainer(),
-    "无法导入该容器，请确认文件仍在原位置且与当前安全卡匹配。");
+    "无法导入该容器，请确认文件仍在原位置且与当前安全卡匹配。", null, true);
 
   const mountAdoptedContainer = (id) => runContainerAction(
     () => bridge.beginMountAdoptedContainer(id),
@@ -3823,6 +3868,8 @@
   };
 
   const createContainerB = async () => {
+    const previousIds = new Set(containers.map((container) => container.id));
+    const arrivalRevision = batchSessionRevision;
     if (busy || hiddenReview.hidden || !containerBAcknowledge.checked) return;
     const sizes = containerBSizes();
     if (sizes === null || !containerBInputReady() ||
@@ -3883,6 +3930,7 @@
       await waitForCreation();
       confirmCreationResult();
       await refreshNativeState();
+      if (arrivalRevision === batchSessionRevision && !externalRefreshPending) markNewContainers(previousIds);
       busy = false;
       render(messageForCurrentState());
       creationCompleted = true;
@@ -3923,6 +3971,8 @@
   };
 
   const createContainer = async () => {
+    const previousIds = new Set(containers.map((container) => container.id));
+    const arrivalRevision = batchSessionRevision;
     const sizeMib = containerCapacityMib();
     if (sizeMib === null || creationKind !== "encrypted" ||
         currentState !== nativeState.authenticated) {
@@ -3950,6 +4000,7 @@
       await waitForCreation();
       confirmCreationResult();
       await refreshNativeState();
+      if (arrivalRevision === batchSessionRevision && !externalRefreshPending) markNewContainers(previousIds);
       busy = false;
       render(messageForCurrentState());
       creationCompleted = true;

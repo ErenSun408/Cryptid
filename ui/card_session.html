@@ -499,6 +499,14 @@
     .container-group + .container-group { border-top: 1px solid var(--line); }
     .container-row { border-top: 0; position: relative; padding-right: 3rem; cursor: pointer; }
     .container-row:hover { background: rgba(255,255,255,.025); }
+    .container-row.container-new { animation: container-arrival 2.2s ease-out; }
+    @keyframes container-arrival {
+      0%, 18% { background: rgba(216,185,116,.24); box-shadow: inset 3px 0 #d8b974; }
+      100% { background: transparent; box-shadow: inset 3px 0 transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .container-row.container-new { animation: none; background: rgba(216,185,116,.16); box-shadow: inset 3px 0 #d8b974; }
+    }
     .container-row[data-busy="true"] { cursor: default; }
     .container-row.management-row { padding-right: 1rem; }
     .container-grab { border: 0; background: none; touch-action: none; }
