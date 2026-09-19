@@ -937,6 +937,23 @@
     await login();
     await wait(() => fixture.state === 0 && $('#authenticated-dashboard').hidden);
     check(fixture.batchRequests.length === beforeSetting + 1, "Card change during preference read prevents automatic dispatch");
+    check($("#open-configuration").hidden || $("#authenticated-dashboard").hidden,
+      "Configuration entry is hidden during authentication");
+    window.navigationFixture.state = 2;
+    window.navigationFixture.containers = [];
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    await wait(() => !$("#open-configuration").hidden && !$("#open-configuration").disabled);
+    window.navigationFixture.failConfiguration = true;
+    $("#card-password").value = "temporary input";
+    $("#open-configuration").click();
+    await wait(() => !$("#open-configuration").disabled);
+    check($("#card-password").value === "" && $("#card-session-error").textContent.includes("无法打开配置"),
+      "Failed configuration request clears password and permits retry");
+    window.navigationFixture.failConfiguration = false;
+    $("#open-configuration").click();
+    await wait(() => window.navigationFixture.configurationCalls === 2);
+    check($("#open-configuration").disabled && $("#card-session-action").disabled,
+      "Accepted configuration transition blocks old-page actions");
     document.title = `PASS: ${results.length} navigation checks`;
   } catch (error) {
     document.title = `FAIL: ${error.message}`;

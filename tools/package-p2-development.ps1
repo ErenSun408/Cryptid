@@ -91,7 +91,7 @@ foreach ($name in $RequiredBuildFiles) {
 $VendorSha256 = Require-Sha256 $ResolvedVendorDll $ExpectedVendorSha256 'ViKey.dll'
 $FormatSha256 = Require-Sha256 $ResolvedBuildFiles['VeraCryptFormat.dll'] $ExpectedFormatSha256 'VeraCryptFormat.dll'
 $VeraCryptInstallerSha256 = Require-Sha256 $ResolvedVeraCryptInstaller $ExpectedVeraCryptInstallerSha256 'VeraCrypt installer'
-$InstallerPolicy = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'tools\vikey_development_credentials_config\installers.h') -Raw
+$InstallerPolicy = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'src\platform\windows\vikey_configuration\installers.h') -Raw
 if ($InstallerPolicy -notmatch 'kWebViewInstallerDigest\[\]\s*=\s*L"([A-F0-9]{64})"') {
     throw 'Cannot resolve reviewed WebView2 installer digest'
 }

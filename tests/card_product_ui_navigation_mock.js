@@ -107,6 +107,10 @@ window.navigationFixture = {
     },
     getVolumeOperationStatus: () => fixture.volumeStatus,
     getSessionState: () => fixture.state,
+    openConfiguration: () => {
+      fixture.configurationCalls = (fixture.configurationCalls || 0) + 1;
+      if (fixture.failConfiguration) throw new Error("configuration unavailable");
+    },
     hasActiveSession: () => fixture.state === 3,
     canResetCardRecord: () => false,
     getRememberContainerPaths: () => true,

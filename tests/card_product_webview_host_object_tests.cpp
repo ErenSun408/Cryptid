@@ -827,6 +827,9 @@ class RecordingCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
  public:
   void request_close() noexcept override { ++close_calls; }
 
+  bool request_configuration() noexcept override { ++configuration_calls; return allow_configuration; }
+  int configuration_calls{};
+  bool allow_configuration{true};
   int close_calls{};
 };
 
@@ -2702,10 +2705,46 @@ void test_the_export_bridge_checks_its_shapes() {
           "a rejected export still reached the session");
 }
 
+void test_configuration_transition() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, &g_close_sink, &host, nullptr, &work)), "setup host failed");
+  const auto invoke = [&] {
+    DISPPARAMS args{};
+    return host->Invoke(member_id(*host.Get(), L"openConfiguration"), IID_NULL,
+        LOCALE_INVARIANT, DISPATCH_METHOD, &args, nullptr, nullptr, nullptr);
+  };
+  const int before = g_close_sink.configuration_calls;
+  require(invoke_with_number(*host.Get(), L"openConfiguration", 1, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "configuration accepted arguments");
+  fixture.authentication.establish(root_secret());
+  require(invoke() == E_ACCESSDENIED, "authenticated configuration was accepted");
+  fixture.authentication.clear_authentication();
+  fixture.volume.mounted_state = true;
+  require(invoke() == E_ACCESSDENIED, "mounted configuration was accepted");
+  fixture.volume.mounted_state = false;
+
+  work.running.store(true);
+  require(invoke() == E_PENDING, "configuration interrupted background work");
+  work.running.store(false);
+  require(g_close_sink.configuration_calls == before, "denied request reached window");
+  g_close_sink.allow_configuration = false;
+  require(FAILED(invoke()), "failed window request reported success");
+  g_close_sink.allow_configuration = true;
+  require(SUCCEEDED(invoke()), "unauthenticated configuration failed");
+  require(invoke() == E_PENDING, "pending transition accepted another request");
+  DISPPARAMS args{};
+  require(host->Invoke(member_id(*host.Get(), L"getSessionState"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &args, nullptr, nullptr, nullptr) == E_PENDING,
+      "retiring bridge still accessed old context");
+}
 }  // namespace
 
 int main() {
   try {
+    test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();
     test_operation_logging_setting_is_authenticated_and_boolean();

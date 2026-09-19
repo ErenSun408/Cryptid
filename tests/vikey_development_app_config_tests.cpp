@@ -72,6 +72,24 @@ void test_packaged_config() {
                  "invalid compiled digest accepted");
 }
 
+void test_environment_never_calls_card() {
+  using namespace configuration;
+  for (unsigned int failed = 0; failed <= 5; ++failed) {
+    Probes probes;
+    unsigned int calls = 0;
+    for (unsigned int index = 0; index < count; ++index) {
+      probes[index] = [&, index] {
+        expect(index < 5, "environment check accessed card");
+        ++calls;
+        return Result{index == failed ? State::failed : State::passed, L"test"};
+      };
+    }
+    expect(run_checks(probes, [](unsigned int, const Result&) {}, false) == (failed == 5),
+           "environment result ignored failure");
+    expect(calls == 5, "environment check did not inspect all prerequisites");
+  }
+}
+
 void test_diagnostic_gates() {
   using namespace configuration;
   for (const unsigned int failed : {1U, 4U, 5U, count}) {
@@ -209,6 +227,7 @@ int main() {
   try {
     test_valid_config();
     test_packaged_config();
+    test_environment_never_calls_card();
     test_diagnostic_gates();
     test_acknowledgement_is_mandatory();
     test_paths_must_be_absolute();

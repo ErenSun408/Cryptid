@@ -16,6 +16,7 @@
     "unavailable",
   ]);
   const surface = document.getElementById("card-session-surface");
+  const configurationButton = document.getElementById("open-configuration");
   const stateTitle = document.getElementById("card-state-title");
   const passwordFields = document.getElementById("password-fields");
   const passwordLabel = document.getElementById("card-password-label");
@@ -2770,6 +2771,8 @@
   };
 
   const render = (message, error = "") => {
+    configurationButton.hidden = currentState === nativeState.authenticated;
+    configurationButton.disabled = busy || activeVolumes || currentState === null || bridge === null;
     surface.dataset.sessionState = currentState === null
       ? "initializing"
       : stateName[currentState];
@@ -4603,6 +4606,21 @@
     }
     closeCreationFlow();
   });
+  configurationButton.addEventListener("click", async () => {
+    if (busy || activeVolumes || !bridge || currentState === null || currentState === nativeState.authenticated) return;
+    busy = true;
+    passwordInput.value = "";
+    confirmationInput.value = "";
+    render("正在打开配置与检测…");
+    try {
+      await bridge.openConfiguration();
+      // The native host retires this page and builds a new session afterwards.
+    } catch (_) {
+      busy = false;
+      render(messageForCurrentState(), "无法打开配置，请稍后重试。");
+    }
+  });
+
   actionButton.addEventListener("click", async () => {
     if (busy) {
       return;

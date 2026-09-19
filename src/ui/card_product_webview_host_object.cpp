@@ -122,6 +122,7 @@ constexpr DISPID kGetWindowSizeId = 66;
 constexpr DISPID kReorderContainersId = 67;
 constexpr DISPID kGetAutoMountId = 68;
 constexpr DISPID kSetAutoMountId = 69;
+constexpr DISPID kOpenConfigurationId = 70;
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
@@ -399,6 +400,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       return S_OK;
     }
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
+    if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
     if (matches(names[0], L"setAutoMountEnabled")) { ids[0] = kSetAutoMountId; return S_OK; }
     if (matches(names[0], L"reorderContainers")) { ids[0] = kReorderContainersId; return S_OK; }
@@ -595,6 +597,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       override {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
+    if (configuration_pending_) {
+      DispatchTextWiper text_wiper(parameters);
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return E_PENDING;
+    }
     // Workers exclusively own the session. Only their atomic progress is
     // readable; cancellation belongs to creation, never volume operations.
     if (creation_work_->running.load() &&
@@ -630,6 +637,13 @@ class CardProductWebViewHostObject final : public IDispatch {
         return begin_batch(member == kBeginMountBatchId, member == kBeginForceUnmountBatchId, parameters, result);
       case kReorderContainersId:
         return begin_batch(false, false, parameters, result, true);
+      case kOpenConfigurationId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (controller_.state() == CardProductUiState::authenticated || controller_.mounted())
+          return E_ACCESSDENIED;
+        if (!close_sink_ || !close_sink_->request_configuration()) return E_FAIL;
+        configuration_pending_ = true;
+        return S_OK;
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
         return invoke_batch_query(member, parameters, result);
       case kBeginMountAdoptedId:
@@ -1946,6 +1960,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::atomic<ULONG> references_{1};
   CardProductUiSessionController& controller_;
   IUiCloseRequestSink* close_sink_{};
+  bool configuration_pending_{};
   IUiWindowSizeSink* window_size_sink_{};
   CreationWorkState local_creation_work_;
   CreationWorkState* creation_work_;

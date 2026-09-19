@@ -4,7 +4,7 @@
 
 namespace configuration {
 std::filesystem::path executable_directory();
-bool diagnose(const Report& report, bool include_card = true);
+bool diagnose(const Report& report, bool include_card);
 // Silent start check. It never touches the security card, so starting the
 // product cannot consume a card attempt on its own.
 bool environment_ready();

@@ -48,6 +48,8 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 HWND g_main_window{};
+std::uint64_t g_window_generation{};
+bool g_configuration_requested{};
 std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
 class DeploymentFailure final : public std::runtime_error {
  public:
@@ -117,6 +119,7 @@ MainWindowSizeSink g_window_size_sink;
 // finished unwinding.
 class MainWindowCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
  public:
+  bool request_configuration() noexcept override;
   void request_close() noexcept override {
     if (g_main_window != nullptr) {
       static_cast<void>(::PostMessageW(g_main_window, WM_CLOSE, 0, 0));
@@ -366,6 +369,16 @@ void clear_application_session() noexcept {
   g_card_enrollment.reset();
   g_volume_provider.reset();
   g_vikey_credential_provider.reset();
+  g_deployment_artifacts.clear();
+}
+
+bool MainWindowCloseSink::request_configuration() noexcept {
+  if (!g_main_window || !g_ui_session || g_creation_work.running.load() ||
+      g_ui_session->state() == usb_vault::ui::CardProductUiState::authenticated ||
+      g_ui_session->mounted()) return false;
+  if (!::PostMessageW(g_main_window, WM_CLOSE, 0, 0)) return false;
+  g_configuration_requested = true;
+  return true;
 }
 
 void resize_webview(const HWND window) noexcept {
@@ -398,12 +411,14 @@ void notify_webview_session_changed() noexcept {
 }
 
 void initialize_webview(const HWND window) {
+  const auto generation = ++g_window_generation;
   g_page_uri = local_page_uri();
   const HRESULT result = ::CreateCoreWebView2EnvironmentWithOptions(
       nullptr, nullptr, nullptr,
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-          [window](const HRESULT environment_result,
+          [window, generation](const HRESULT environment_result,
                    ICoreWebView2Environment* const environment) -> HRESULT {
+            if (generation != g_window_generation || !::IsWindow(window)) return S_OK;
             if (FAILED(environment_result) || environment == nullptr) {
               show_failure(L"WebView2 运行时初始化失败。");
               return FAILED(environment_result) ? environment_result : E_FAIL;
@@ -411,8 +426,12 @@ void initialize_webview(const HWND window) {
             return environment->CreateCoreWebView2Controller(
                 window,
                 Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                    [window](const HRESULT controller_result,
+                    [window, generation](const HRESULT controller_result,
                              ICoreWebView2Controller* const controller) -> HRESULT {
+                      if (generation != g_window_generation || !::IsWindow(window)) {
+                        if (controller) controller->Close();
+                        return S_OK;
+                      }
                       if (FAILED(controller_result) || controller == nullptr) {
                         show_failure(L"WebView2 窗口初始化失败。");
                         return FAILED(controller_result) ? controller_result
@@ -533,6 +552,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
     case WM_DEVICECHANGE:
+      if (g_configuration_requested) return 0;
       if (g_creation_work.running.load() || g_deferred_removal || g_deferred_arrival) {
         const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
             wparam, lparam, kDevelopmentCardIdentity);
@@ -569,6 +589,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       }
       return 0;
     case WM_TIMER:
+      if (g_configuration_requested) return 0;
       if (wparam == 1 && !g_creation_work.running.load() && g_card_lifecycle_controller) {
         const bool changed = g_deferred_removal || g_deferred_arrival;
         if (g_deferred_removal) {
@@ -641,6 +662,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
+      ++g_window_generation;
+      ::KillTimer(window, 1);
+      if (g_webview) g_webview->RemoveHostObjectFromScript(kHostObjectName);
+      if (g_controller) g_controller->Close();
       g_card_device_notifications.reset();
       g_webview.Reset();
       g_controller.Reset();
@@ -688,52 +713,62 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
-  // The manifest makes this process per-monitor DPI aware, so these are real
-  // pixels rather than 96-DPI ones Windows would afterwards stretch. Scaling
-  // them keeps the window the size it used to look, instead of shrinking it by
-  // whatever the display is scaled to.
-  const UINT startup_dpi = ::GetDpiForSystem();
-  const HWND window = ::CreateWindowExW(
-      0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-      CW_USEDEFAULT, ::MulDiv(900, static_cast<int>(startup_dpi), 96),
-      ::MulDiv(640, static_cast<int>(startup_dpi), 96), nullptr, nullptr,
-      instance, nullptr);
-  g_main_window = window;
-  if (window == nullptr) {
-    show_failure(L"窗口创建失败。");
-    ::CoUninitialize();
-    return 1;
-  }
+  for (;;) {
+    g_configuration_requested = false;
+    g_deferred_removal = false;
+    g_deferred_arrival = false;
+    // The manifest makes this process per-monitor DPI aware, so these are real
+    // pixels rather than 96-DPI ones Windows would afterwards stretch. Scaling
+    // them keeps the window the size it used to look, instead of shrinking it by
+    // whatever the display is scaled to.
+    const UINT startup_dpi = ::GetDpiForSystem();
+    const HWND window = ::CreateWindowExW(
+        0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+        CW_USEDEFAULT, ::MulDiv(900, static_cast<int>(startup_dpi), 96),
+        ::MulDiv(640, static_cast<int>(startup_dpi), 96), nullptr, nullptr,
+        instance, nullptr);
+    g_main_window = window;
+    if (window == nullptr) {
+      show_failure(L"窗口创建失败。");
+      ::CoUninitialize();
+      return 1;
+    }
 
-  g_window_size_sink.restore();
+    g_window_size_sink.restore();
 
-  try {
-    initialize_application_session(window);
-    initialize_webview(window);
-    if (::SetTimer(window, 1, 100, nullptr) == 0) throw std::runtime_error("cannot schedule deferred card events");
-  } catch (const DeploymentFailure&) {
-    show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE；启动检查会在应用内给出具体原因和修复入口。");
-    ::DestroyWindow(window);
+    try {
+      initialize_application_session(window);
+      initialize_webview(window);
+      if (::SetTimer(window, 1, 100, nullptr) == 0) throw std::runtime_error("cannot schedule deferred card events");
+    } catch (const DeploymentFailure&) {
+      show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE；启动检查会在应用内给出具体原因和修复入口。");
+      ::DestroyWindow(window);
+      clear_application_session();
+      ::CoUninitialize();
+      return 1;
+    } catch (...) {
+      show_failure(L"本地界面初始化失败。");
+      ::DestroyWindow(window);
+      clear_application_session();
+      ::CoUninitialize();
+      return 1;
+    }
+
+    ::ShowWindow(window, g_window_size_sink.window_size() == 2 ? SW_MAXIMIZE : show_command);
+    static_cast<void>(::UpdateWindow(window));
+    MSG message{};
+    while (::GetMessageW(&message, nullptr, 0, 0) > 0) {
+      ::TranslateMessage(&message);
+      ::DispatchMessageW(&message);
+    }
+
     clear_application_session();
-    ::CoUninitialize();
-    return 1;
-  } catch (...) {
-    show_failure(L"本地界面初始化失败。");
-    ::DestroyWindow(window);
-    clear_application_session();
-    ::CoUninitialize();
-    return 1;
+    g_main_window = nullptr;
+    if (!g_configuration_requested) break;
+    // The previous WebView, bridge and card context are gone before credentials
+    // can change. The configuration window consumes its own WM_QUIT message.
+    if (!configuration::run_window(instance, SW_SHOWNORMAL, true)) break;
   }
-
-  ::ShowWindow(window, g_window_size_sink.window_size() == 2 ? SW_MAXIMIZE : show_command);
-  static_cast<void>(::UpdateWindow(window));
-  MSG message{};
-  while (::GetMessageW(&message, nullptr, 0, 0) > 0) {
-    ::TranslateMessage(&message);
-    ::DispatchMessageW(&message);
-  }
-
-  clear_application_session();
   ::CoUninitialize();
-  return static_cast<int>(message.wParam);
+  return 0;
 }

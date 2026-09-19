@@ -240,7 +240,7 @@ void check_environment(UiState& state, bool include_card = true) noexcept {
           }
           const std::lock_guard lock(state.mutex);
           state.report = std::move(text);
-        });
+        }, include_card);
       } catch (...) {
         const std::lock_guard lock(state.mutex);
         state.report = L"检测无法完成，请检查环境后重试。";
