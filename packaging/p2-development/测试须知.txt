@@ -2,35 +2,19 @@
 
 1. 一张 ViKeyPRO 安全卡。
 2. ViKeyPRO加密狗提供的 UserSN、API Key 和用户密码（出厂值 11111111）。
-3. VeraCrypt 1.26.29 驱动。安装程序已放在 prerequisites 文件夹。
-4. Microsoft Edge WebView2 Runtime。Windows 11 通常已自带；本包也附带 x64 离线安装器。
-5. 只使用可丢弃且另有备份的测试数据。
+3. 一台 Windows 11 x64 电脑。VeraCrypt 1.26.29 驱动与 Microsoft Edge WebView2 Runtime 都已内置在安装程序里，缺哪个装哪个，不需要另外下载。
+4. 只使用可丢弃且另有备份的测试数据。
 
 ## 首次运行
 
-1. 建议使用统一安装器 USB-Vault-Setup.exe：它会一并装好 WebView2 与 VeraCrypt。也可以把完整包解压到本机固定磁盘后双击 USB Vault.exe。
+1. 运行 USB-Vault-Setup.exe。向导会先检测 WebView2 与 VeraCrypt，缺失的才安装；需要安装 VeraCrypt 时会单独展示它的许可并要求同意。
 2. 启动时主程序先检查系统架构、随包组件、WebView2 和 VeraCrypt 驱动。缺依赖时会说明原因并退出，请重新运行安装器修复。检查不访问卡、不消耗用户密码尝试次数。
 3. 依赖齐全但当前 Windows 用户还没有凭据时，主程序直接进入配置页。填写 UserSN、API Key 和用户密码；用户密码已预填 11111111，可按需修改。已配置过的用户不会看到这一页。
-4. 保存成功会提示“凭据已保存并复读验证”，随后点击“继续进入 USB Vault”。保存失败时不要当作成功，请重新保存全部三项。
-5. 登录页“配置凭据”可重新打开配置页。切换前释放旧会话，返回后重建；关闭配置页会退出应用。已登录或仍有挂载卷时不能修改配置。
+4. 保存成功会提示“凭据已保存并复读验证”，随后点击左上角的“返回”回到登录页。保存失败时不要当作成功，请重新保存全部三项。
+5. 登录页右下角的“配置凭据”可以随时回到配置页。切换前会释放旧会话，返回后重建；关闭窗口即退出应用。已登录或仍有挂载卷时不能修改配置。
 6. 配置页不访问安全卡，也不初始化卡或操作容器。卡状态在返回登录页后才重新读取。
-7. 使用统一安装器时请选择或输入本机固定磁盘上的最终安装文件夹；点击“浏览”选择桌面时应显示类似 `D:\Desktop\USB Vault`。不能直接使用磁盘根目录，也不能使用网络盘或可移动盘；路径请不要包含中文，目标文件夹若已存在则必须为空。
-下方命令用于手动核查，日常配置不必执行。
-
-## VeraCrypt 安装程序验证（PowerShell）
-
-Get-FileHash -LiteralPath '.\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi' -Algorithm SHA256
-
-必须得到：
-5BA6426983123CFB92BC1F09BD888FDBC0F53F300D0D9C5DA52CE3AEE8D474F0
-
-Get-AuthenticodeSignature -LiteralPath '.\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi' | Format-List Status,StatusMessage
-
-Status 必须为 Valid。任一验证不符时不要运行该安装程序，请重新获取完整测试包。
-
-## 安装 VeraCrypt（PowerShell）
-
-Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -Verb RunAs -Wait -ArgumentList '/i', '.\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi'
+7. 安装向导里请选择或输入本机固定磁盘上的最终安装文件夹；点击“浏览”选择桌面时应显示类似 `D:\Desktop\USB Vault`。不能直接使用磁盘根目录，也不能使用网络盘或可移动盘；路径请不要包含中文，目标文件夹若已存在则必须为空。
+下方命令用于事后手动核查依赖是否装好，日常使用不必执行。
 
 ## VeraCrypt 驱动验证（PowerShell 或命令提示符）
 
