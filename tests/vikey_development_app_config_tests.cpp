@@ -1,6 +1,5 @@
 #include "card/vikey/vikey_development_app_config.h"
 #include "../src/platform/windows/vikey_configuration/checks.h"
-#include "../src/platform/windows/vikey_configuration/startup.h"
 
 #include <array>
 #include <cstddef>
@@ -191,36 +190,6 @@ void test_digests_and_argument_count_fail_closed() {
       "extra development argument was accepted");
 }
 
-void test_start_gate() {
-  using configuration::ready_to_start;
-  unsigned int checks = 0;
-  unsigned int setups = 0;
-  const auto counted_setup = [&](const bool answer) {
-    return [&, answer] { ++setups; return answer; };
-  };
-
-  expect(ready_to_start([&] { ++checks; return true; }, counted_setup(false)),
-         "a passing start check did not start the session");
-  expect(checks == 1 && setups == 0, "setup opened after a passing check");
-
-  expect(ready_to_start([&] { ++checks; return false; }, counted_setup(true)),
-         "setup that reported success did not start the session");
-  expect(setups == 1, "a failed check did not open setup exactly once");
-
-  expect(!ready_to_start([&] { ++checks; return false; }, counted_setup(false)),
-         "session started although the user closed setup");
-  expect(checks == 3 && setups == 2, "start gate ran a check or setup twice");
-
-  expect(!ready_to_start([]() -> bool { throw std::runtime_error("check"); },
-                         counted_setup(false)),
-         "an unusable check started the session");
-  expect(setups == 3, "an unusable check did not fall back to setup");
-
-  expect(!ready_to_start([] { return false; },
-                         []() -> bool { throw std::runtime_error("setup"); }),
-         "setup that could not run started the session");
-}
-
 }  // namespace
 
 int main() {
@@ -232,7 +201,6 @@ int main() {
     test_acknowledgement_is_mandatory();
     test_paths_must_be_absolute();
     test_digests_and_argument_count_fail_closed();
-    test_start_gate();
     std::cout << "vikey_development_app_config_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

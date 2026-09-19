@@ -147,6 +147,66 @@
       font-size: .8rem; color: var(--text-3); text-align: center;
     }
     #card-session-error { margin-top: .5rem; color: var(--danger); }
+    /* Out of the entry card and into the corner of the window: it is a way
+       out of the routine flow, not a step in it. Taken out of the card's
+       flow entirely so it cannot push the centred content off balance. */
+    body[data-view="session"] #open-configuration {
+      position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 5;
+    }
+
+    /* ================= 首次配置 ================= */
+    body[data-view="configuration"] {
+      display: grid; place-items: center;
+      background:
+        radial-gradient(90% 55% at 50% 18%, rgba(200, 169, 106, .07) 0%, transparent 60%),
+        var(--ink-900);
+    }
+    /* Wider than the session entry because an API key is 128 characters, and a
+       field that scrolls while it is masked cannot be proof-read at all. */
+    .setup-surface { width: min(33rem, calc(100vw - 3rem)); }
+    #setup-lead {
+      max-width: 27rem; margin: .9rem 0 0;
+      font-size: .82rem; line-height: 1.7; color: var(--text-2);
+    }
+    .setup-fields { width: 100%; margin-top: 1.5rem; text-align: left; }
+    .setup-fields .field label {
+      display: flex; align-items: baseline; justify-content: space-between; gap: .75rem;
+    }
+    .field-hint { font-size: .72rem; font-weight: 400; color: var(--text-3); }
+    /* Nothing sits at the right edge of these fields, so the space the
+       session route reserves for its reveal control is given back. */
+    .setup-fields input { padding-right: .85rem; }
+    .setup-fields input.mono { font-family: var(--mono); letter-spacing: .02em; }
+    /* The value itself is the only thing that says whether it will be
+       accepted, so the border carries it — and an empty field is not wrong
+       yet, only unfinished. */
+    .setup-fields input[data-valid="false"]:not(:placeholder-shown) {
+      border-color: rgba(217, 107, 98, .5);
+    }
+    .setup-fields input[data-valid="true"] { border-color: rgba(104, 190, 149, .45); }
+    #setup-save {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; height: 2.7rem; margin-top: 1.4rem; border-radius: .6rem;
+      color: #14160f; font-weight: 600; cursor: pointer;
+      background: linear-gradient(145deg, var(--gold-2), var(--gold));
+      box-shadow: 0 .4rem 1.1rem -.5rem rgba(200, 169, 106, .6);
+      transition: background-color 160ms ease, color 160ms ease;
+    }
+    #setup-save:hover:not(:disabled) { background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
+    #setup-save:disabled {
+      cursor: not-allowed; color: var(--text-3); box-shadow: none;
+      background: rgba(255, 255, 255, .05); border: 1px solid var(--line);
+    }
+    .setup-surface[data-busy="true"] #setup-save:disabled { cursor: wait; }
+    /* Always in the corner of the window, the way the entry into setup sits in
+       the opposite one. Taken out of the card's flow so it is a way back out
+       of this page rather than a step at the end of the form. */
+    body[data-view="configuration"] #setup-back {
+      position: fixed; left: 1.25rem; top: 1.25rem; z-index: 5;
+    }
+    #setup-status { color: var(--text-2); }
+    #setup-status[data-tone="ok"] { color: var(--ok); }
+    #setup-status[data-tone="error"] { color: var(--danger); }
 
     /* ================= 已认证外壳 ================= */
     .app-shell { min-height: 100vh; background: var(--ink-900); }
@@ -968,8 +1028,45 @@
     </button>
     <output id="card-session-status" aria-live="polite">正在连接安全组件</output>
     <output id="card-session-error" aria-live="polite" hidden></output>
-    <button id="open-configuration" class="shell-button" type="button" disabled>配置与检测</button>
+    <button id="open-configuration" class="shell-button" type="button" disabled>配置凭据</button>
   </main>
+
+  <section id="configuration-surface" class="session-surface setup-surface"
+           aria-label="USB Vault 配置" data-busy="false" hidden>
+    <button id="setup-back" class="shell-button" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+      返回
+    </button>
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z"></path><path d="M9 12l2 2 4-4"></path></svg>
+    </span>
+    <h1>USB Vault</h1>
+    <span class="brand-rule" aria-hidden="true"></span>
+    <p class="intro">配置安全卡凭据</p>
+    <p id="setup-lead">请填写供应方提供的三项凭据。它们只保存在当前 Windows 用户的凭据管理器中，本步骤不访问安全卡。</p>
+    <div class="setup-fields">
+      <div class="field">
+        <label for="setup-user-sn">UserSN<span class="field-hint">32 位十六进制</span></label>
+        <input id="setup-user-sn" class="mono" type="text" maxlength="32"
+               placeholder=" " autocomplete="off" autocapitalize="off"
+               spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="setup-api-key">API Key<span class="field-hint">128 位十六进制</span></label>
+        <input id="setup-api-key" class="mono" type="text" maxlength="128"
+               placeholder=" " autocomplete="off" autocapitalize="off"
+               spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="setup-user-pin">用户密码<span class="field-hint">8 位字母或数字</span></label>
+        <input id="setup-user-pin" type="text" maxlength="8"
+               placeholder=" " autocomplete="off" autocapitalize="off"
+               spellcheck="false">
+      </div>
+    </div>
+    <button id="setup-save" type="button" disabled>保存凭据</button>
+    <output id="setup-status" aria-live="polite"></output>
+  </section>
 
   <section id="authenticated-dashboard" class="app-shell" aria-label="USB Vault 仪表盘" hidden>
     <header class="topbar">

@@ -12,14 +12,14 @@
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
 #include "platform/windows/shell_container_file_chooser.h"
+#include "card/diagnostic_error.h"
 #include "platform/windows/vikey_configuration/diagnostics.h"
-#include "platform/windows/vikey_configuration/startup.h"
-#include "platform/windows/vikey_configuration/window.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_device_lifecycle_controller.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/security/offline_card_password_policy.h"
+#include "usb_vault/ui/card_configuration_webview_host_object.h"
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 #include "usb_vault/ui/card_product_webview_host_object.h"
 #include "usb_vault/application/container_layout_v1.h"
@@ -31,9 +31,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -49,8 +51,26 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 HWND g_main_window{};
 std::uint64_t g_window_generation{};
-bool g_configuration_requested{};
+// Which surface the one product window shows. Setup and the product session
+// swap inside it rather than each owning a window, but the swap is still a
+// full teardown: the card context, the bridge and the document are all gone
+// before the other surface exists, so a credential change can never reach a
+// session that was built from the previous values.
+enum class StartupView { session, configuration };
+StartupView g_view{StartupView::session};
+// Set the moment a swap is accepted and cleared when it has been applied. The
+// old surface keeps running until the posted message arrives, and it must not
+// act on a card event in that window.
+bool g_view_switch_pending{};
+constexpr UINT kShowConfigurationMessage = WM_APP + 1;
+constexpr UINT kShowSessionMessage = WM_APP + 2;
 std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
+// The page and its script are verified once and then held open for as long as
+// this window exists. The start check closes its own handles when it returns,
+// and setup builds no card session, so without these the file that receives
+// the whole credential set could be replaced between the check and the
+// navigation that loads it.
+std::vector<usb_vault::card::VerifiedLocalArtifact> g_ui_artifacts;
 class DeploymentFailure final : public std::runtime_error {
  public:
   DeploymentFailure() : std::runtime_error("invalid development deployment") {}
@@ -128,6 +148,91 @@ class MainWindowCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
 };
 
 MainWindowCloseSink g_close_sink;
+
+[[nodiscard]] usb_vault::ui::ConfigurationCredentialStatus
+stored_credential_status() noexcept {
+  using usb_vault::ui::ConfigurationCredentialStatus;
+  try {
+    static_cast<void>(
+        usb_vault::card::vikey::development::WindowsCredentialProvider{}
+            .load_credentials());
+    return ConfigurationCredentialStatus::ready;
+  } catch (const std::system_error& error) {
+    // A set that was never written reports the Windows "not found" code.
+    // Anything else is a storage or format problem, and saying "missing"
+    // there would send the user to retype values that are already stored.
+    return usb_vault::card::diagnostic_kind(error) ==
+                   static_cast<std::uint32_t>(
+                       usb_vault::card::NativeCodeKind::win32) &&
+                   usb_vault::card::diagnostic_native(error) == ERROR_NOT_FOUND
+               ? ConfigurationCredentialStatus::missing
+               : ConfigurationCredentialStatus::unreadable;
+  } catch (...) {
+    return ConfigurationCredentialStatus::unreadable;
+  }
+}
+
+// Setup writes the development credential set and hands the process back to
+// the product session. It owns no card, volume or container state: the page it
+// serves is opened before any session exists, and the session is only built
+// after this window has been destroyed.
+class ConfigurationHost final : public usb_vault::ui::IConfigurationHost {
+ public:
+  usb_vault::ui::ConfigurationCredentialStatus credential_status() noexcept
+      override {
+    return stored_credential_status();
+  }
+
+  usb_vault::ui::ConfigurationOutcome save_credentials(
+      const std::span<const std::byte> user_sn,
+      const std::span<const std::byte> api_key,
+      const std::span<const std::byte> user_pin) noexcept override {
+    namespace development = usb_vault::card::vikey::development;
+    using usb_vault::ui::ConfigurationOutcome;
+    using development::CredentialField;
+    // The set is validated whole before anything is written, so a stored set
+    // is never a mix of accepted and rejected values.
+    if (!development::valid_credential_value(CredentialField::user_sn, user_sn) ||
+        !development::valid_credential_value(CredentialField::api_key, api_key) ||
+        !development::valid_credential_value(CredentialField::user_pin, user_pin)) {
+      return ConfigurationOutcome::invalid_format;
+    }
+    try {
+      development::store_credentials({
+          .user_sn = locked_copy(user_sn),
+          .api_key = locked_copy(api_key),
+          .user_pin = locked_copy(user_pin),
+      });
+      return ConfigurationOutcome::saved;
+    } catch (...) {
+      // store_credentials reads the entry back; a failure here means the
+      // stored set could not be confirmed, which is never a success.
+      return ConfigurationOutcome::storage_failure;
+    }
+  }
+
+  bool continue_to_session() noexcept override {
+    // Leaving setup is never refused over the stored set. A session built on
+    // a missing or unreadable one cannot load credentials at all, so it fails
+    // before the card is contacted and spends no attempt; the way back into
+    // setup stays on the login page. Refusing here would instead strand a
+    // first run on a page it could not leave.
+    if (g_main_window == nullptr) return false;
+    if (!::PostMessageW(g_main_window, kShowSessionMessage, 0, 0)) return false;
+    g_view_switch_pending = true;
+    return true;
+  }
+
+ private:
+  [[nodiscard]] static usb_vault::security::SecureBuffer locked_copy(
+      const std::span<const std::byte> value) {
+    usb_vault::security::SecureBuffer result(value.size());
+    std::ranges::copy(value, result.bytes().begin());
+    return result;
+  }
+};
+
+ConfigurationHost g_configuration_host;
 
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2> g_webview;
@@ -267,6 +372,22 @@ class LocalArguments final {
   }
 }
 
+void pin_user_interface(const std::wstring& directory) {
+  namespace development = usb_vault::card::vikey::development;
+  const auto pin = [&](const wchar_t* const name, const wchar_t* const digest) {
+    g_ui_artifacts.push_back(usb_vault::card::verify_local_artifact(
+        child_path(directory, name),
+        development::parse_deployment_digest(digest), 128ULL * 1024 * 1024));
+  };
+  try {
+    pin(L"card_session.html", p2_deployment::html);
+    pin(L"card_session.js", p2_deployment::js);
+  } catch (...) {
+    g_ui_artifacts.clear();
+    throw DeploymentFailure();
+  }
+}
+
 void initialize_application_session([[maybe_unused]] const HWND window) {
   const std::wstring directory = executable_directory();
   const auto drives = unused_drive_letters();
@@ -376,8 +497,10 @@ bool MainWindowCloseSink::request_configuration() noexcept {
   if (!g_main_window || !g_ui_session || g_creation_work.running.load() ||
       g_ui_session->state() == usb_vault::ui::CardProductUiState::authenticated ||
       g_ui_session->mounted()) return false;
-  if (!::PostMessageW(g_main_window, WM_CLOSE, 0, 0)) return false;
-  g_configuration_requested = true;
+  if (!::PostMessageW(g_main_window, kShowConfigurationMessage, 0, 0)) {
+    return false;
+  }
+  g_view_switch_pending = true;
   return true;
 }
 
@@ -408,6 +531,42 @@ void notify_webview_session_changed() noexcept {
     show_failure(
         L"安全会话状态已变化，但界面刷新失败。请重新打开应用确认状态。");
   }
+}
+
+// Installs the bridge the current surface is entitled to. Setup gets one of
+// its own: the product surface is not merely hidden there, it is absent, so a
+// page shown before any credential exists cannot reach the card, a container
+// or a volume.
+[[nodiscard]] HRESULT attach_host_object() noexcept {
+  if (!g_webview) return E_FAIL;
+  ComPtr<IDispatch> host_object;
+  HRESULT result = g_view == StartupView::configuration
+      ? usb_vault::ui::create_card_configuration_webview_host_object(
+            g_configuration_host, &host_object)
+      : usb_vault::ui::create_card_product_webview_host_object(
+            *g_ui_session, &g_close_sink, &host_object, &g_window_size_sink,
+            &g_creation_work);
+  if (FAILED(result)) return result;
+  VARIANT host_value{};
+  ::VariantInit(&host_value);
+  host_value.vt = VT_DISPATCH;
+  host_value.pdispVal = host_object.Get();
+  host_value.pdispVal->AddRef();
+  result = g_webview->AddHostObjectToScript(kHostObjectName, &host_value);
+  static_cast<void>(::VariantClear(&host_value));
+  if (FAILED(result)) return result;
+  g_host_object = std::move(host_object);
+  return S_OK;
+}
+
+// Retires the running surface: the page can no longer call anything, the
+// bridge this process holds is dropped, and the document that owns the last
+// reference to it is replaced by the caller's navigation.
+void detach_host_object() noexcept {
+  if (g_webview) {
+    static_cast<void>(g_webview->RemoveHostObjectFromScript(kHostObjectName));
+  }
+  g_host_object.Reset();
 }
 
 void initialize_webview(const HWND window) {
@@ -493,26 +652,10 @@ void initialize_webview(const HWND window) {
                         return current;
                       }
 
-                      ComPtr<IDispatch> host_object;
-                      current = usb_vault::ui::
-                          create_card_product_webview_host_object(
-                              *g_ui_session, &g_close_sink, &host_object,
-                              &g_window_size_sink, &g_creation_work);
+                      current = attach_host_object();
                       if (FAILED(current)) {
                         return current;
                       }
-                      VARIANT host_value{};
-                      ::VariantInit(&host_value);
-                      host_value.vt = VT_DISPATCH;
-                      host_value.pdispVal = host_object.Get();
-                      host_value.pdispVal->AddRef();
-                      current = g_webview->AddHostObjectToScript(kHostObjectName,
-                                                                 &host_value);
-                      static_cast<void>(::VariantClear(&host_value));
-                      if (FAILED(current)) {
-                        return current;
-                      }
-                      g_host_object = std::move(host_object);
 
                       EventRegistrationToken navigation_token{};
                       current = g_webview->add_NavigationStarting(
@@ -548,11 +691,60 @@ void initialize_webview(const HWND window) {
   }
 }
 
+// The window, its WebView2 controller and its size stay exactly as they are.
+// Only the card session, the bridge and the document change, so setup is a
+// page of this application rather than a second window that replaces it.
+void show_configuration(const HWND window) noexcept {
+  g_view_switch_pending = false;
+  static_cast<void>(::KillTimer(window, 1));
+  detach_host_object();
+  // The retiring product bridge may outlive this call inside the old
+  // document, but it stopped serving when the swap was accepted, so it can no
+  // longer reach the controller released here.
+  clear_application_session();
+  g_deferred_removal = false;
+  g_deferred_arrival = false;
+  g_view = StartupView::configuration;
+  if (FAILED(attach_host_object()) ||
+      FAILED(g_webview->Navigate(g_page_uri.c_str()))) {
+    show_failure(L"无法打开凭据配置页，请重新启动 USB Vault。");
+    static_cast<void>(::DestroyWindow(window));
+  }
+}
+
+void show_session(const HWND window) noexcept {
+  g_view_switch_pending = false;
+  detach_host_object();
+  g_view = StartupView::session;
+  try {
+    // The card is probed again from here, so the session that starts is built
+    // on the credentials that were just saved rather than the ones it began
+    // with.
+    initialize_application_session(window);
+  } catch (...) {
+    show_failure(L"凭据已保存，但无法重新建立安全会话。请重新启动 USB Vault。");
+    static_cast<void>(::DestroyWindow(window));
+    return;
+  }
+  if (::SetTimer(window, 1, 100, nullptr) == 0 ||
+      FAILED(attach_host_object()) ||
+      FAILED(g_webview->Navigate(g_page_uri.c_str()))) {
+    show_failure(L"凭据已保存，但无法回到主界面。请重新启动 USB Vault。");
+    static_cast<void>(::DestroyWindow(window));
+  }
+}
+
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
+    case kShowConfigurationMessage:
+      show_configuration(window);
+      return 0;
+    case kShowSessionMessage:
+      show_session(window);
+      return 0;
     case WM_DEVICECHANGE:
-      if (g_configuration_requested) return 0;
+      if (g_view_switch_pending) return 0;
       if (g_creation_work.running.load() || g_deferred_removal || g_deferred_arrival) {
         const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
             wparam, lparam, kDevelopmentCardIdentity);
@@ -589,7 +781,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       }
       return 0;
     case WM_TIMER:
-      if (g_configuration_requested) return 0;
+      if (g_view_switch_pending) return 0;
       if (wparam == 1 && !g_creation_work.running.load() && g_card_lifecycle_controller) {
         const bool changed = g_deferred_removal || g_deferred_arrival;
         if (g_deferred_removal) {
@@ -687,19 +879,18 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
-  // Setup runs before the product window so that a missing WebView2 runtime
-  // can still be repaired: this window is plain Win32. The check itself never
-  // touches the card, and a failed one waits here for the user instead of
-  // starting an environment nobody confirmed. SW_SHOWNORMAL keeps setup
-  // visible even when the product was asked to start minimized.
-  if (packaged_deployment() &&
-      !configuration::ready_to_start(
-          [] { return configuration::environment_ready(); },
-          [instance] {
-            return configuration::run_window(instance, SW_SHOWNORMAL, true);
-          })) {
-    ::CoUninitialize();
-    return 0;
+  // One start check before any window. It never touches the card, so starting
+  // the product cannot consume a PIN attempt on its own. Missing dependencies
+  // belong to the installer and end the start here; missing credentials open
+  // the product setup page instead of the session.
+  if (packaged_deployment()) {
+    const auto startup = configuration::inspect_startup();
+    if (!startup.dependencies_ready) {
+      show_failure((L"无法启动 USB Vault。" + startup.detail).c_str());
+      ::CoUninitialize();
+      return 1;
+    }
+    if (!startup.credentials_ready) g_view = StartupView::configuration;
   }
 
   WNDCLASSEXW window_class{sizeof(window_class)};
@@ -713,62 +904,64 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
-  for (;;) {
-    g_configuration_requested = false;
-    g_deferred_removal = false;
-    g_deferred_arrival = false;
-    // The manifest makes this process per-monitor DPI aware, so these are real
-    // pixels rather than 96-DPI ones Windows would afterwards stretch. Scaling
-    // them keeps the window the size it used to look, instead of shrinking it by
-    // whatever the display is scaled to.
-    const UINT startup_dpi = ::GetDpiForSystem();
-    const HWND window = ::CreateWindowExW(
-        0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-        CW_USEDEFAULT, ::MulDiv(900, static_cast<int>(startup_dpi), 96),
-        ::MulDiv(640, static_cast<int>(startup_dpi), 96), nullptr, nullptr,
-        instance, nullptr);
-    g_main_window = window;
-    if (window == nullptr) {
-      show_failure(L"窗口创建失败。");
-      ::CoUninitialize();
-      return 1;
-    }
-
-    g_window_size_sink.restore();
-
-    try {
-      initialize_application_session(window);
-      initialize_webview(window);
-      if (::SetTimer(window, 1, 100, nullptr) == 0) throw std::runtime_error("cannot schedule deferred card events");
-    } catch (const DeploymentFailure&) {
-      show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE；启动检查会在应用内给出具体原因和修复入口。");
-      ::DestroyWindow(window);
-      clear_application_session();
-      ::CoUninitialize();
-      return 1;
-    } catch (...) {
-      show_failure(L"本地界面初始化失败。");
-      ::DestroyWindow(window);
-      clear_application_session();
-      ::CoUninitialize();
-      return 1;
-    }
-
-    ::ShowWindow(window, g_window_size_sink.window_size() == 2 ? SW_MAXIMIZE : show_command);
-    static_cast<void>(::UpdateWindow(window));
-    MSG message{};
-    while (::GetMessageW(&message, nullptr, 0, 0) > 0) {
-      ::TranslateMessage(&message);
-      ::DispatchMessageW(&message);
-    }
-
-    clear_application_session();
-    g_main_window = nullptr;
-    if (!g_configuration_requested) break;
-    // The previous WebView, bridge and card context are gone before credentials
-    // can change. The configuration window consumes its own WM_QUIT message.
-    if (!configuration::run_window(instance, SW_SHOWNORMAL, true)) break;
+  // The manifest makes this process per-monitor DPI aware, so these are real
+  // pixels rather than 96-DPI ones Windows would afterwards stretch. Scaling
+  // them keeps the window the size it used to look, instead of shrinking it by
+  // whatever the display is scaled to.
+  const UINT startup_dpi = ::GetDpiForSystem();
+  const HWND window = ::CreateWindowExW(
+      0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+      CW_USEDEFAULT, ::MulDiv(900, static_cast<int>(startup_dpi), 96),
+      ::MulDiv(640, static_cast<int>(startup_dpi), 96), nullptr, nullptr,
+      instance, nullptr);
+  g_main_window = window;
+  if (window == nullptr) {
+    show_failure(L"窗口创建失败。");
+    ::CoUninitialize();
+    return 1;
   }
+
+  g_window_size_sink.restore();
+
+  try {
+    if (packaged_deployment()) pin_user_interface(executable_directory());
+    // Setup builds no card context and registers no device notification, so
+    // an inserted card is never probed with credentials the user is still
+    // entering and no PIN attempt can be spent here.
+    if (g_view == StartupView::session) {
+      initialize_application_session(window);
+    }
+    initialize_webview(window);
+    if (g_view == StartupView::session &&
+        ::SetTimer(window, 1, 100, nullptr) == 0)
+      throw std::runtime_error("cannot schedule deferred card events");
+  } catch (const DeploymentFailure&) {
+    show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请重新运行 USB Vault 安装程序，或将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE。");
+    ::DestroyWindow(window);
+    clear_application_session();
+    ::CoUninitialize();
+    return 1;
+  } catch (...) {
+    show_failure(L"本地界面初始化失败。");
+    ::DestroyWindow(window);
+    clear_application_session();
+    ::CoUninitialize();
+    return 1;
+  }
+
+  ::ShowWindow(window,
+               g_window_size_sink.window_size() == 2 ? SW_MAXIMIZE
+                                                     : show_command);
+  static_cast<void>(::UpdateWindow(window));
+  MSG message{};
+  while (::GetMessageW(&message, nullptr, 0, 0) > 0) {
+    ::TranslateMessage(&message);
+    ::DispatchMessageW(&message);
+  }
+
+  clear_application_session();
+  g_ui_artifacts.clear();
+  g_main_window = nullptr;
   ::CoUninitialize();
   return 0;
 }

@@ -75,7 +75,6 @@ if ($CacheText -notmatch '(?m)^CMAKE_BUILD_TYPE:[^=]+=Release\s*$' -or
 
 $RequiredBuildFiles = @(
     'usb_vault_vikey_p2_development_app.exe',
-    'usb_vault_vikey_development_credentials_config.exe',
     'usb_vault_vikey_helper.exe',
     'usb_vault_volume_creator.exe',
     'VeraCryptFormat.dll',

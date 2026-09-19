@@ -58,7 +58,6 @@ $uninstall = New-Object 'Collections.Generic.List[string]'
 $directories = New-Object 'Collections.Generic.HashSet[string]'
 foreach ($file in $files | Sort-Object FullName) {
     $relative = $file.FullName.Substring($package.Length + 1)
-    if ($relative -eq 'usb_vault_vikey_development_credentials_config.exe') { continue }
     $parent = Split-Path -Parent $relative
     $destination = if ($parent) { '$INSTDIR\' + $parent } else { '$INSTDIR' }
     $install.Add('SetOutPath "' + $destination + '"')

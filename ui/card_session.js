@@ -4611,7 +4611,7 @@
     busy = true;
     passwordInput.value = "";
     confirmationInput.value = "";
-    render("正在打开配置与检测…");
+    render("正在打开凭据配置…");
     try {
       await bridge.openConfiguration();
       // The native host retires this page and builds a new session afterwards.
@@ -4684,9 +4684,190 @@
     }
   });
 
+  // ================= 首次配置 =================
+  // Setup runs on a bridge of its own: it can store the credential set and
+  // hand the process to the product session, and it can reach nothing else.
+  // The values leave the page the way the login password does, as a byte
+  // array that is wiped on every return path.
+  const setupSurface = document.getElementById("configuration-surface");
+  const setupLead = document.getElementById("setup-lead");
+  const setupSave = document.getElementById("setup-save");
+  const setupBack = document.getElementById("setup-back");
+  const setupStatus = document.getElementById("setup-status");
+  // The card ships with this user password. It is a starting value, not a
+  // secret: it is prefilled so a first run is three fields of typing rather
+  // than four, and the user can replace it here like any other value.
+  const setupDefaultUserPin = "11111111";
+  // Setup itself never touches the card, so going back is the first moment
+  // the credentials are used for real and the first place a wrong user
+  // password can cost an attempt. The user is told before they choose it.
+  const kSetupReturnNotice =
+    "返回后会用这三项访问安全卡，用户密码有误会消耗一次尝试次数。";
+  const setupCredentialStatus = Object.freeze({ ready: 0, missing: 1, unreadable: 2 });
+  const setupOutcome = Object.freeze({ saved: 0, invalidFormat: 1, storageFailure: 2 });
+  // Shown as typed rather than masked. These are supplier-issued values the
+  // user proof-reads against a document, and a masked 128-character key cannot
+  // be proof-read at all; the session password, which is the user's own
+  // secret, keeps its mask.
+  const setupFields = [
+    { id: "setup-user-sn", accepts: (value) => /^[0-9a-fA-F]{32}$/.test(value) },
+    { id: "setup-api-key", accepts: (value) => /^[0-9a-fA-F]{128}$/.test(value) },
+    { id: "setup-user-pin", accepts: (value) => /^[0-9A-Za-z]{8}$/.test(value) },
+  ].map((field) => ({ ...field, input: document.getElementById(field.id) }));
+  let setupBusy = false;
+
+  const setSetupStatus = (text, tone) => {
+    setupStatus.textContent = text;
+    if (tone === undefined) delete setupStatus.dataset.tone;
+    else setupStatus.dataset.tone = tone;
+  };
+
+  const setupSetComplete = () => setupFields.every((field) => field.accepts(field.input.value));
+
+  const updateSetupAvailability = () => {
+    for (const field of setupFields) {
+      field.input.dataset.valid = field.accepts(field.input.value) ? "true" : "false";
+    }
+    setupSave.disabled = setupBusy || !setupSetComplete();
+  };
+
+  const setSetupEnabled = (enabled) => {
+    setupSurface.dataset.busy = enabled ? "false" : "true";
+    for (const field of setupFields) field.input.disabled = !enabled;
+    // The way back is available on every route into setup and at every moment
+    // except while a save is in flight, so an unconfigured first run is never
+    // a page the user cannot leave.
+    setupBack.disabled = !enabled;
+    updateSetupAvailability();
+  };
+
+  const clearSetupFields = () => {
+    for (const field of setupFields) field.input.value = "";
+    updateSetupAvailability();
+  };
+
+  const submitSetup = async () => {
+    if (setupBusy || !setupSetComplete()) return;
+    setupBusy = true;
+    setSetupEnabled(false);
+    setSetupStatus("正在保存并复读验证…");
+    let encoded = [null, null, null];
+    let payload = [null, null, null];
+    try {
+      try {
+        const encoder = new TextEncoder();
+        for (let index = 0; index < setupFields.length; ++index) {
+          encoded[index] = encoder.encode(setupFields[index].input.value);
+          payload[index] = Array.from(encoded[index]);
+        }
+      } finally {
+        for (const value of encoded) wipe(value);
+        encoded = [null, null, null];
+      }
+      let outcome = setupOutcome.storageFailure;
+      try {
+        outcome = Number(
+          await bridge.saveCredentialBytes(payload[0], payload[1], payload[2]));
+      } finally {
+        for (const value of payload) wipe(value);
+        payload = [null, null, null];
+      }
+      setupBusy = false;
+      if (outcome === setupOutcome.saved) {
+        clearSetupFields();
+        setSetupEnabled(true);
+        setSetupStatus(`凭据已保存并复读验证。${kSetupReturnNotice}`, "ok");
+        setupBack.focus();
+        return;
+      }
+      setSetupEnabled(true);
+      setSetupStatus(outcome === setupOutcome.invalidFormat
+        ? "三项凭据的格式不符合要求，请核对后重新保存全部三项。"
+        // A read-back failure happens after the write, so the previously
+        // stored set may already be gone. Saying it did not take effect would
+        // send the user away believing the old configuration still works.
+        : "保存后无法复读确认，原有配置可能已被覆盖。请重新保存全部三项。", "error");
+    } catch (_) {
+      setupBusy = false;
+      setSetupEnabled(true);
+      setSetupStatus("保存失败，请稍后重新保存全部三项。", "error");
+    } finally {
+      for (const value of encoded) wipe(value);
+      for (const value of payload) wipe(value);
+    }
+  };
+
+  for (const field of setupFields) {
+    field.input.addEventListener("input", () => {
+      updateSetupAvailability();
+    });
+    field.input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || setupSave.disabled) return;
+      event.preventDefault();
+      void submitSetup();
+    });
+  }
+  setupSave.addEventListener("click", () => { void submitSetup(); });
+  setupBack.addEventListener("click", async () => {
+    if (setupBusy) return;
+    setupBusy = true;
+    setupBack.disabled = true;
+    setSetupStatus("正在返回…");
+    try {
+      await bridge.continueToSession();
+      // The native host retires this page and builds the product session.
+    } catch (_) {
+      setupBusy = false;
+      setupBack.disabled = false;
+      setSetupStatus("无法返回，请稍后重试。", "error");
+    }
+  });
+
+  const startConfiguration = async () => {
+    document.body.dataset.view = "configuration";
+    surface.hidden = true;
+    dashboard.hidden = true;
+    setupSurface.hidden = false;
+    let status = setupCredentialStatus.missing;
+    try {
+      status = Number(await bridge.getCredentialStatus());
+    } catch (_) {
+      status = setupCredentialStatus.unreadable;
+    }
+    // Always the shipped value, on every route into setup. A stored password
+    // that is not the factory one is therefore overwritten by a save that
+    // leaves this field untouched, which is the accepted behaviour here.
+    setupFields[2].input.value = setupDefaultUserPin;
+    setupBusy = false;
+    setSetupEnabled(true);
+    if (status === setupCredentialStatus.ready) {
+      setupLead.textContent =
+        "当前 Windows 用户已保存凭据。重新填写三项可以覆盖保存，或直接返回。";
+      setSetupStatus(kSetupReturnNotice);
+    } else if (status === setupCredentialStatus.unreadable) {
+      setSetupStatus("已保存的凭据无法读取或格式不正确，请重新填写全部三项。", "error");
+    } else {
+      setSetupStatus("");
+    }
+    setupFields[0].input.focus();
+  };
+
   (async () => {
     try {
       bridge = chrome.webview.hostObjects.nativeBridge;
+      // The host decides which surface this page opened for. Setup has no
+      // session state to read, so it must be answered before anything asks
+      // the bridge for one.
+      let startupView = "session";
+      try {
+        startupView = String(await bridge.getStartupView());
+      } catch (_) {
+        startupView = "session";
+      }
+      if (startupView === "configuration") {
+        await startConfiguration();
+        return;
+      }
       const preset = await bridge.getWindowSize();
       if (![0, 1, 2, 3].includes(preset)) throw new Error("invalid window preference");
       appliedWindowSize = String(preset);

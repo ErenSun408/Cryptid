@@ -84,11 +84,11 @@ Function .onInit
   Pop $VeraCryptState
   Pop $0
   StrCpy $INSTDIR "$LOCALAPPDATA\Programs\USB Vault"
+  ; Configuration is a page inside the product window now, so the product
+  ; window is the only one to look for.
   FindWindow $0 "UsbVaultMainWindow"
-  FindWindow $1 "UsbVaultVikeyDevelopmentCredentialsConfig"
   ${If} $0 != 0
-  ${OrIf} $1 != 0
-    MessageBox MB_ICONSTOP "请正常关闭 USB Vault 和配置窗口后重新安装。"
+    MessageBox MB_ICONSTOP "请正常关闭 USB Vault 后重新安装。"
     Abort
   ${EndIf}
   ClearErrors
@@ -331,9 +331,7 @@ Function un.onInit
     Abort
   ${EndIf}
   FindWindow $0 "UsbVaultMainWindow"
-  FindWindow $1 "UsbVaultVikeyDevelopmentCredentialsConfig"
   ${If} $0 != 0
-  ${OrIf} $1 != 0
     MessageBox MB_ICONSTOP "请正常关闭 USB Vault 后再卸载。"
     Abort
   ${EndIf}

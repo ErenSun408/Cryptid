@@ -3,11 +3,7 @@
 #include <WebView2.h>
 #include "diagnostics.h"
 #include "card_failure.h"
-#ifdef USB_VAULT_IN_APP_CONFIG
 #include "p2_deployment.h"
-#else
-#include "p2_config_deployment.h"
-#endif
 #include "card/verified_local_artifact.h"
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/vikey/vikey_development_credentials.h"
@@ -55,9 +51,8 @@ bool diagnose(const Report& report, const bool include_card) {
         return pin(root, name, digest);
       };
       try {
-#ifndef USB_VAULT_IN_APP_CONFIG
-        artifacts.push_back(check( L"usb_vault_vikey_p2_development_app.exe", p2_deployment::app));
-#endif
+        // The executable cannot pin a digest of itself, so the check covers
+        // the reviewed files beside it.
         artifacts.push_back(check( L"usb_vault_vikey_helper.exe", p2_deployment::helper));
         artifacts.push_back(check( L"usb_vault_volume_creator.exe", p2_deployment::creator));
         artifacts.push_back(check( L"VeraCryptFormat.dll", p2_deployment::format));
@@ -77,14 +72,14 @@ bool diagnose(const Report& report, const bool include_card) {
       const bool available = SUCCEEDED(result) && version && *version;
       ::CoTaskMemFree(version);
       return available ? pass(L"已安装 WebView2 Runtime。")
-          : fail(L"未找到 WebView2 Runtime；请点击“安装 WebView2（离线）”后重新检测。");
+          : fail(L"未找到 WebView2 Runtime。请重新运行 USB Vault 安装程序修复依赖。");
     },
     [] {
       try {
         return usb_vault::volume::VolumeProvider{}.driver_version() == 0x126
             ? pass(L"VeraCrypt 驱动可访问，接口版本兼容。")
-            : fail(L"驱动接口不兼容；请点击“安装 VeraCrypt（管理员）”后重新检测。");
-      } catch (...) { return fail(L"驱动未加载或不可访问；请安装并启动 VeraCrypt 后重试。"); }
+            : fail(L"VeraCrypt 驱动接口不兼容。请重新运行 USB Vault 安装程序修复依赖。");
+      } catch (...) { return fail(L"VeraCrypt 驱动未加载或不可访问。请重启 Windows，或重新运行 USB Vault 安装程序。"); }
     },
     [&] {
       try { static_cast<void>(credentials.load_credentials()); return pass(L"当前用户已保存格式有效的凭据；有效性由安全卡检查确认。"); }
@@ -117,27 +112,27 @@ bool diagnose(const Report& report, const bool include_card) {
   return run_checks(probes, report, include_card);
 }
 
-bool environment_ready() {
+StartupInspection inspect_startup() noexcept {
   try {
-    return diagnose([](unsigned int, const Result&) {}, false);
+    std::array<Result, count> results{};
+    static_cast<void>(diagnose([&](const unsigned int index, const Result& result) {
+      if (index < count) results[index] = result;
+    }, false));
+    StartupInspection inspection{true, false, {}};
+    for (unsigned int index = 0;
+         index <= static_cast<unsigned int>(Check::driver); ++index) {
+      if (results[index].state == State::passed) continue;
+      inspection.dependencies_ready = false;
+      inspection.detail = results[index].detail;
+      break;
+    }
+    inspection.credentials_ready =
+        results[static_cast<unsigned int>(Check::credentials)].state ==
+        State::passed;
+    return inspection;
   } catch (...) {
-    return false;
+    // A start check that cannot run is not a passing one.
+    return {false, false, L"启动检查无法完成。请重新运行 USB Vault 安装程序，或重新解压完整测试包。"};
   }
-}
-
-void launch_application() {
-#ifdef USB_VAULT_IN_APP_CONFIG
-  throw std::logic_error("in-app setup must continue in the current process");
-#else
-  const auto root = executable_directory();
-  const auto app = pin(root, L"usb_vault_vikey_p2_development_app.exe", p2_deployment::app);
-  std::wstring command = L"\"" + app.path().native() + L"\"";
-  STARTUPINFOW startup{}; startup.cb = sizeof(startup);
-  PROCESS_INFORMATION process{};
-  if (!::CreateProcessW(app.path().c_str(), command.data(), nullptr, nullptr, FALSE,
-                        0, nullptr, root.c_str(), &startup, &process))
-    throw usb_vault::card::DiagnosticError(usb_vault::card::make_error_code(usb_vault::card::CardError::backend_unavailable), usb_vault::card::DiagnosticStage::application_start, "start app", ::GetLastError(), usb_vault::card::NativeCodeKind::win32);
-  ::CloseHandle(process.hThread); ::CloseHandle(process.hProcess);
-#endif
 }
 }

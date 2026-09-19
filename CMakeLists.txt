@@ -394,32 +394,6 @@ target_link_libraries(usb_vault_vikey_development_credentials
 )
 usb_vault_configure_target(usb_vault_vikey_development_credentials)
 
-# Small current-user configurator for the three development-only Credential
-# Manager entries. It is explicitly built and distributed only with the ViKey
-# development package, never as part of the normal product target graph.
-add_executable(usb_vault_vikey_development_credentials_config
-  WIN32 EXCLUDE_FROM_ALL
-  tools/vikey_development_credentials_config/main.cpp
-  src/platform/windows/vikey_configuration/window.cpp
-)
-target_include_directories(
-  usb_vault_vikey_development_credentials_config PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-target_compile_definitions(
-  usb_vault_vikey_development_credentials_config PRIVATE UNICODE _UNICODE)
-target_link_options(
-  usb_vault_vikey_development_credentials_config PRIVATE
-  "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
-)
-target_link_libraries(
-  usb_vault_vikey_development_credentials_config PRIVATE
-  usb_vault_vikey_development_credentials
-)
-usb_vault_configure_target(
-  usb_vault_vikey_development_credentials_config)
-
 add_executable(usb_vault_vikey_helper WIN32
   tools/vikey_helper/main.cpp
   src/card/verified_local_artifact.cpp
@@ -624,17 +598,13 @@ if(USB_VAULT_BUILD_UI)
   # The manifest is a source, not a resource: MSVC hands a .manifest listed
   # here to mt.exe, so the DPI declaration is embedded in the executable and
   # takes effect before the process runs its first instruction.
-  # The setup window, its checks and its installers are compiled into the
-  # product itself, so a first start with no WebView2 runtime still has a
-  # native way to repair the environment. USB_VAULT_IN_APP_CONFIG keeps the
-  # package check on the shipped dependencies: the executable cannot pin a
-  # digest of itself, and it never starts a second configuration process.
+  # The start check is compiled into the product itself: the installer owns
+  # dependency repair, and setup is the product page, so there is no second
+  # configuration process and no window outside this executable.
   add_executable(usb_vault_vikey_p2_development_app WIN32 EXCLUDE_FROM_ALL
     tools/app/main.cpp
     tools/app/usb_vault_app.manifest
-    src/platform/windows/vikey_configuration/window.cpp
     src/platform/windows/vikey_configuration/diagnostics.cpp
-    src/platform/windows/vikey_configuration/installers.cpp
     src/card/vikey/vikey_hid_probe.cpp
   )
   set(p2_deployment_header "${CMAKE_CURRENT_BINARY_DIR}/generated/p2_deployment.h")
@@ -677,8 +647,6 @@ if(USB_VAULT_BUILD_UI)
     UNICODE
     _UNICODE
     USB_VAULT_VIKEY_P2_DEVELOPMENT_APP
-    USB_VAULT_CONFIG_DIAGNOSTICS
-    USB_VAULT_IN_APP_CONFIG
   )
 
   if(USB_VAULT_FORMAT_DLL)
@@ -721,38 +689,9 @@ if(USB_VAULT_BUILD_UI)
   # Explicit aggregation point for the internal P2 development package. The
   # staging script copies only these reviewed runtime outputs and never walks a
   # build directory for arbitrary DLLs or debug artifacts.
-  set(p2_config_header "${CMAKE_CURRENT_BINARY_DIR}/generated/p2_config_deployment.h")
-  add_custom_command(OUTPUT "${p2_config_header}"
-    COMMAND ${CMAKE_COMMAND}
-      "-Dhelper=$<TARGET_FILE:usb_vault_vikey_helper>"
-      "-Dcreator=$<TARGET_FILE:usb_vault_volume_creator>"
-      "-Dapp=$<TARGET_FILE:usb_vault_vikey_p2_development_app>"
-      "-Dhtml=${CMAKE_SOURCE_DIR}/ui/card_session.html"
-      "-Djs=${CMAKE_SOURCE_DIR}/ui/card_session.js"
-      "-Doutput=${p2_config_header}"
-      -P "${CMAKE_SOURCE_DIR}/tools/generate-p2-deployment.cmake"
-    DEPENDS usb_vault_vikey_p2_development_app
-      "${p2_deployment_header}"
-      "${CMAKE_SOURCE_DIR}/tools/generate-p2-deployment.cmake"
-    VERBATIM)
-  target_sources(usb_vault_vikey_development_credentials_config PRIVATE
-    "${p2_config_header}"
-    src/platform/windows/vikey_configuration/diagnostics.cpp
-    src/platform/windows/vikey_configuration/installers.cpp
-    src/card/vikey/vikey_hid_probe.cpp)
-  target_include_directories(usb_vault_vikey_development_credentials_config PRIVATE
-    "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    "${webview2_sdk_SOURCE_DIR}/build/native/include")
-  target_compile_definitions(usb_vault_vikey_development_credentials_config PRIVATE
-    USB_VAULT_CONFIG_DIAGNOSTICS)
-  target_link_libraries(usb_vault_vikey_development_credentials_config PRIVATE
-    usb_vault_verified_local_artifact usb_vault_vikey_helper_card_record_backend
-    "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-    Ole32 Setupapi Hid Shell32 Wintrust)
   add_custom_target(usb_vault_p2_development_package_binaries)
   add_dependencies(usb_vault_p2_development_package_binaries
     usb_vault_vikey_p2_development_app
-    usb_vault_vikey_development_credentials_config
   )
 endif()
 

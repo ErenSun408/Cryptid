@@ -40,7 +40,17 @@
     </button>
     <output id="card-session-status">正在连接安全组件</output>
     <output id="card-session-error" hidden></output>
+    <button id="open-configuration" type="button" disabled>配置凭据</button>
   </main>
+  <section id="configuration-surface" data-busy="false" hidden>
+    <p id="setup-lead">请填写供应方提供的三项凭据。</p>
+    <input id="setup-user-sn" type="text" maxlength="32">
+    <input id="setup-api-key" type="text" maxlength="128">
+    <input id="setup-user-pin" type="text" maxlength="8">
+    <button id="setup-back" type="button">返回</button>
+    <button id="setup-save" type="button" disabled>保存凭据</button>
+    <output id="setup-status"></output>
+  </section>
   <section id="authenticated-dashboard" hidden>
     <div id="mount-split">
       <button id="dashboard-mount" type="button" disabled>一键挂载</button>

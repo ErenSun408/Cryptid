@@ -70,6 +70,27 @@ void require(const bool condition, const char* const message) {
   return std::string(page.substr(start, end - start));
 }
 
+// Returns one top-level section so a contract can be scoped to it, and the
+// page without it so an existing contract keeps counting what it was written
+// to count.
+[[nodiscard]] std::string page_section(const std::string_view page,
+                                       const std::string_view id) {
+  const std::string opening = "<section id=\"" + std::string(id) + "\"";
+  const std::size_t start = page.find(opening);
+  require(start != std::string_view::npos, "page section is missing");
+  const std::size_t end = page.find("</section>", start);
+  require(end != std::string_view::npos, "page section is unterminated");
+  return std::string(page.substr(start, end - start));
+}
+
+[[nodiscard]] std::string page_without_section(const std::string_view page,
+                                               const std::string_view id) {
+  const std::string section = page_section(page, id);
+  const std::size_t start = page.find(section);
+  return std::string(page.substr(0, start)) +
+         std::string(page.substr(start + section.size()));
+}
+
 [[nodiscard]] std::string lower_ascii(std::string value) {
   std::ranges::transform(value, value.begin(), [](const unsigned char value) {
     return static_cast<char>(std::tolower(value));
@@ -78,7 +99,10 @@ void require(const bool condition, const char* const message) {
 }
 
 void test_page_has_route_specific_password_surfaces() {
-  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  // Setup is a surface of its own with its own contract below, so the product
+  // counts here stay about the product.
+  const std::string page = page_without_section(
+      read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE), "configuration-surface");
   // Two session inputs, two creation inputs and one read-only review preview.
   // The password the session was opened under is not among them.
   require(count_occurrences(page, "type=\"password\"") == 5,
@@ -123,6 +147,55 @@ void test_page_has_route_specific_password_surfaces() {
   require(count_occurrences(page,
                             "class=\"password-strength-segment\"") == 3,
           "product page strength meter must contain exactly three segments");
+}
+
+void test_setup_surface_takes_only_the_credential_set() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string setup = page_section(page, "configuration-surface");
+
+  // UserSN, API key and user password, and nothing else: setup must not grow
+  // a container, path or session control. These three are shown as typed, so
+  // there is nothing to mask and nothing to reveal.
+  require(count_occurrences(setup, "type=\"text\"") == 3 &&
+              setup.find("type=\"password\"") == std::string::npos &&
+              setup.find("class=\"password-visibility\"") == std::string::npos,
+          "setup must offer exactly the three credential inputs");
+  require(setup.find("id=\"setup-user-sn\"") != std::string::npos &&
+              setup.find("id=\"setup-api-key\"") != std::string::npos &&
+              setup.find("id=\"setup-user-pin\"") != std::string::npos,
+          "setup does not use the fixed credential control contract");
+  require(setup.find("maxlength=\"32\"") != std::string::npos &&
+              setup.find("maxlength=\"128\"") != std::string::npos &&
+              setup.find("maxlength=\"8\"") != std::string::npos,
+          "setup inputs must bound each credential to its stored length");
+  require(count_occurrences(setup, "autocomplete=\"off\"") == 3 &&
+              count_occurrences(setup, "spellcheck=\"false\"") == 3,
+          "every setup input must disable browser assistance");
+  require(setup.find("<form") == std::string::npos,
+          "setup inputs must not use browser form submission");
+  require(setup.find("hidden") != std::string::npos,
+          "setup must start hidden so the product page opens on the session");
+
+  // The values leave the page as wiped byte arrays on the setup bridge, never
+  // as strings and never on a product member.
+  require(script.find("bridge.saveCredentialBytes(") != std::string::npos &&
+              script.find("bridge.getCredentialStatus()") != std::string::npos &&
+              script.find("bridge.continueToSession()") != std::string::npos &&
+              script.find("bridge.getStartupView()") != std::string::npos,
+          "setup does not use the documented setup bridge members");
+  require(script.find("const setupDefaultUserPin = \"11111111\";") !=
+              std::string::npos,
+          "setup must prefill the shipped user password");
+  const std::size_t save = script.find("const submitSetup = async () => {");
+  require(save != std::string::npos, "setup save path is missing");
+  const std::size_t save_end = script.find("\n  };", save);
+  require(save_end != std::string::npos, "setup save path is unterminated");
+  const std::string body = script.substr(save, save_end - save);
+  require(count_occurrences(body, "wipe(") >= 4,
+          "setup must wipe every credential copy it made");
+  require(body.find("TextEncoder") != std::string::npos,
+          "setup must send credentials as bytes rather than as strings");
 }
 
 void test_authenticated_dashboard_is_real_state_only() {
@@ -1235,6 +1308,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
 int main() {
   try {
     test_page_has_route_specific_password_surfaces();
+    test_setup_surface_takes_only_the_credential_set();
     test_authenticated_dashboard_is_real_state_only();
     test_settings_page_is_static_and_matches_the_native_facts();
     test_five_states_are_complete_and_vendor_neutral();
