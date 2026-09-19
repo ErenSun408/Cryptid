@@ -4,6 +4,9 @@
 # checkout writes to disk.
 * text=auto eol=lf
 
+# Historical snapshot hashes cover the original bytes, including line endings.
+docs/archive/development/DEVELOPMENT_LOG_2026-09-19_full.md -text
+
 # Batch files must keep CRLF. cmd.exe mis-parses goto labels, trailing ^
 # continuations, and a final line without a terminator when a .cmd or .bat
 # is LF-only. "Start USB Vault.cmd" ships inside the customer package.
