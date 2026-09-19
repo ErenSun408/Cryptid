@@ -360,6 +360,20 @@ usb_vault_configure_target(card_product_webview_host_object_tests)
 add_test(NAME card_product_webview_host_object_tests
   COMMAND card_product_webview_host_object_tests)
 
+add_executable(card_configuration_webview_host_object_tests
+  card_configuration_webview_host_object_tests.cpp
+)
+
+target_link_libraries(card_configuration_webview_host_object_tests PRIVATE
+  usb_vault_core
+  OleAut32
+)
+
+usb_vault_configure_target(card_configuration_webview_host_object_tests)
+
+add_test(NAME card_configuration_webview_host_object_tests
+  COMMAND card_configuration_webview_host_object_tests)
+
 add_executable(card_device_lifecycle_controller_tests
   card_device_lifecycle_controller_tests.cpp
 )
