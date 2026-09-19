@@ -7,9 +7,10 @@ USB Vault P2 内部开发测试包
 --------
 
 1. Windows 11 x64。
-2. 已安装 VeraCrypt 1.26.29，并确保其驱动已加载。官方安装程序已放在
-   prerequisites\VeraCrypt Setup 1.26.29.exe；安装前请按“测试须知.txt”核验摘要和签名。
-   安装时选择 Install，不要选择 Extract。如果挂载时报驱动不可用，可先启动一次 VeraCrypt。
+2. 已安装 VeraCrypt 1.26.29，并确保其驱动已加载。官方 x64 MSI 已放在
+   prerequisites\VeraCrypt_Setup_x64_1.26.29.msi；安装前请按“测试须知.txt”核验摘要和签名。
+   统一 USB Vault 安装器会先显示完整许可，再静默调用该 MSI；直接解压运行时也可由配置入口打开官方 MSI。
+   如果挂载时报驱动不可用，可先启动一次 VeraCrypt。
 3. 已安装 Microsoft Edge WebView2 Runtime；本包附带 x64 离线安装器，可由配置器启动。
 4. 一张与本开发版本匹配的 ViKeyPRO 安全卡。
 5. 开发模式允许厂商运行库联网；防火墙不得静默替换或拦截厂商 DLL。
@@ -39,7 +40,7 @@ USB Vault P2 内部开发测试包
 
 - Start USB Vault.cmd：兼容快捷入口，仅转交主 EXE；正常使用不需要它。
 - 测试须知.txt：最短安装流程、所需条件及 VeraCrypt/WebView2 验证指令。
-- prerequisites\VeraCrypt Setup 1.26.29.exe：未经修改的 VeraCrypt 官方安装程序。
+- prerequisites\VeraCrypt_Setup_x64_1.26.29.msi：未经修改的 VeraCrypt 官方 x64 MSI。
 - usb_vault_vikey_p2_development_app.exe：可直接双击的 P2 开发主程序；以 EXE 所在目录定位组件，按构建时嵌入的 SHA-256 校验 helper、建卷后端、厂商 DLL 及页面。仍为允许厂商运行库联网的开发模式。
 - usb_vault_vikey_development_credentials_config.exe：可选的独立兼容配置器；日常使用主 EXE 即可。不要用旧版本配置器修改已迁移的配置。
 - usb_vault_vikey_helper.exe：隔离访问 ViKey 的 helper。

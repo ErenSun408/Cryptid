@@ -34,13 +34,16 @@ static usb_vault::card::VerifiedLocalArtifact verify_installer(
   return artifact;
 }
 
-static InstallResult run_installer(const usb_vault::card::VerifiedLocalArtifact& installer) {
+static InstallResult run_installer(const usb_vault::card::VerifiedLocalArtifact& installer,
+                                   const std::filesystem::path& executable,
+                                   const wchar_t* parameters = nullptr) {
   const auto parent = installer.path().parent_path();
   SHELLEXECUTEINFOW execute{};
   execute.cbSize = sizeof(execute);
   execute.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
   execute.lpVerb = L"runas";
-  execute.lpFile = installer.path().c_str();
+  execute.lpFile = executable.c_str();
+  execute.lpParameters = parameters;
   execute.lpDirectory = parent.c_str();
   execute.nShow = SW_SHOWNORMAL;
   if (!::ShellExecuteExW(&execute)) {
@@ -58,18 +61,35 @@ static InstallResult run_installer(const usb_vault::card::VerifiedLocalArtifact&
   return classify_installer_exit(exit_code);
 }
 
+static std::filesystem::path system_executable(const wchar_t* name) {
+  std::wstring directory(MAX_PATH, L'\0');
+  const UINT size = ::GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
+  if (size == 0 || size >= directory.size()) {
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable),
+        DiagnosticStage::installer_start, "resolve system installer", ::GetLastError(),
+        NativeCodeKind::win32);
+  }
+  directory.resize(size);
+  return std::filesystem::path(directory) / name;
+}
+
 usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(const std::filesystem::path& path) {
-  return verify_installer(path, L"DCA9DDEC7934FC0B1C25AC8984DB7D504BFE9F37C21861AC91C67A98ECD3964B");
+  return verify_installer(path, kVeraCryptInstallerDigest);
 }
 usb_vault::card::VerifiedLocalArtifact verify_webview_installer(const std::filesystem::path& path) {
   return verify_installer(path, kWebViewInstallerDigest);
 }
-InstallResult install_veracrypt(const std::filesystem::path& directory) {
-  const auto installer = verify_veracrypt_installer(directory / L"prerequisites" / L"VeraCrypt Setup 1.26.29.exe");
-  return run_installer(installer);
+InstallResult install_veracrypt(const std::filesystem::path& directory, const bool silent) {
+  const auto installer = verify_veracrypt_installer(
+      directory / L"prerequisites" / L"VeraCrypt_Setup_x64_1.26.29.msi");
+  std::wstring parameters = L"/i \"" + installer.path().native() + L"\"";
+  if (silent) {
+    parameters += L" /qn REBOOT=ReallySuppress MSIRESTARTMANAGERCONTROL=Disable ACCEPTLICENSE=YES";
+  }
+  return run_installer(installer, system_executable(L"msiexec.exe"), parameters.c_str());
 }
-InstallResult install_webview(const std::filesystem::path& directory) {
+InstallResult install_webview(const std::filesystem::path& directory, const bool silent) {
   const auto installer = verify_webview_installer(directory / L"prerequisites" / L"MicrosoftEdgeWebView2RuntimeInstallerX64.exe");
-  return run_installer(installer);
+  return run_installer(installer, installer.path(), silent ? L"/silent /install" : nullptr);
 }
 }

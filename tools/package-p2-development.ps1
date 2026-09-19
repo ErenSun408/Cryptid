@@ -26,7 +26,6 @@ Set-StrictMode -Version Latest
 
 $ExpectedVendorSha256 = '735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E'
 $ExpectedFormatSha256 = 'E411BB9552ACA94B1285570E45C3D77D44652519309B7D33EC0A4EF99AF28AB3'
-$ExpectedVeraCryptInstallerSha256 = 'DCA9DDEC7934FC0B1C25AC8984DB7D504BFE9F37C21861AC91C67A98ECD3964B'
 $ExpectedVeraCryptSignerThumbprint = '86E1D426731E79117452F090188A828426B29B5F'
 $ExpectedVeraCryptRevision = 'b48e31f5b47da7d41025e3f0e02751675e15005a'
 
@@ -90,8 +89,11 @@ foreach ($name in $RequiredBuildFiles) {
 
 $VendorSha256 = Require-Sha256 $ResolvedVendorDll $ExpectedVendorSha256 'ViKey.dll'
 $FormatSha256 = Require-Sha256 $ResolvedBuildFiles['VeraCryptFormat.dll'] $ExpectedFormatSha256 'VeraCryptFormat.dll'
-$VeraCryptInstallerSha256 = Require-Sha256 $ResolvedVeraCryptInstaller $ExpectedVeraCryptInstallerSha256 'VeraCrypt installer'
 $InstallerPolicy = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'src\platform\windows\vikey_configuration\installers.h') -Raw
+if ($InstallerPolicy -notmatch 'kVeraCryptInstallerDigest\[\]\s*=\s*L"([A-F0-9]{64})"') {
+    throw 'Cannot resolve reviewed VeraCrypt MSI digest'
+}
+$VeraCryptInstallerSha256 = Require-Sha256 $ResolvedVeraCryptInstaller $Matches[1] 'VeraCrypt MSI installer'
 if ($InstallerPolicy -notmatch 'kWebViewInstallerDigest\[\]\s*=\s*L"([A-F0-9]{64})"') {
     throw 'Cannot resolve reviewed WebView2 installer digest'
 }
@@ -103,11 +105,8 @@ if ($WebViewSignature.Status -ne [System.Management.Automation.SignatureStatus]:
 }
 $HelperSha256 = (Get-FileHash -LiteralPath $ResolvedBuildFiles['usb_vault_vikey_helper.exe'] -Algorithm SHA256).Hash
 
-$VeraCryptInstallerVersion = (Get-Item -LiteralPath $ResolvedVeraCryptInstaller).VersionInfo
-if ($VeraCryptInstallerVersion.ProductName -cne 'VeraCrypt' -or
-    $VeraCryptInstallerVersion.ProductVersion -cne '1.26.29' -or
-    $VeraCryptInstallerVersion.OriginalFilename -cne 'VeraCrypt Setup.exe') {
-    throw 'The VeraCrypt installer version metadata is not the reviewed 1.26.29 setup executable'
+if ([IO.Path]::GetExtension($ResolvedVeraCryptInstaller) -cne '.msi') {
+    throw 'The reviewed VeraCrypt prerequisite must be the x64 MSI package'
 }
 $VeraCryptInstallerSignature = Get-AuthenticodeSignature -LiteralPath $ResolvedVeraCryptInstaller
 if ($VeraCryptInstallerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
@@ -181,7 +180,7 @@ foreach ($name in $RequiredBuildFiles) {
     Copy-Item -LiteralPath $ResolvedBuildFiles[$name] -Destination (Join-Path $PackageDirectory $name)
 }
 Copy-Item -LiteralPath $ResolvedVendorDll -Destination (Join-Path $VendorDirectory.FullName 'ViKey.dll')
-Copy-Item -LiteralPath $ResolvedVeraCryptInstaller -Destination (Join-Path $PrerequisitesDirectory.FullName 'VeraCrypt Setup 1.26.29.exe')
+Copy-Item -LiteralPath $ResolvedVeraCryptInstaller -Destination (Join-Path $PrerequisitesDirectory.FullName 'VeraCrypt_Setup_x64_1.26.29.msi')
 Copy-Item -LiteralPath $ResolvedWebViewInstaller -Destination (Join-Path $PrerequisitesDirectory.FullName 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe')
 Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'packaging\p2-development\THIRD-PARTY-NOTICES.txt') -Destination (Join-Path $LicenseDirectory.FullName 'THIRD-PARTY-NOTICES.txt')
 Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'third_party\argon2\LICENSE') -Destination (Join-Path $Argon2LicenseDirectory.FullName 'LICENSE.txt')
@@ -216,7 +215,7 @@ Compress-Archive -LiteralPath $PackageDirectory -DestinationPath $ZipPath -Compr
 
 $StagedVendorSha = (Get-FileHash -LiteralPath (Join-Path $VendorDirectory.FullName 'ViKey.dll') -Algorithm SHA256).Hash
 $StagedFormatSha = (Get-FileHash -LiteralPath (Join-Path $PackageDirectory 'VeraCryptFormat.dll') -Algorithm SHA256).Hash
-$StagedVeraCryptInstallerSha = (Get-FileHash -LiteralPath (Join-Path $PrerequisitesDirectory.FullName 'VeraCrypt Setup 1.26.29.exe') -Algorithm SHA256).Hash
+$StagedVeraCryptInstallerSha = (Get-FileHash -LiteralPath (Join-Path $PrerequisitesDirectory.FullName 'VeraCrypt_Setup_x64_1.26.29.msi') -Algorithm SHA256).Hash
 $StagedWebViewInstallerSha = (Get-FileHash -LiteralPath (Join-Path $PrerequisitesDirectory.FullName 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe') -Algorithm SHA256).Hash
 if ($StagedVendorSha -ne $VendorSha256 -or
     $StagedFormatSha -ne $FormatSha256 -or

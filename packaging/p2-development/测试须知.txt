@@ -10,7 +10,7 @@
 
 1. 将完整包解压到本机固定磁盘，双击 usb_vault_vikey_p2_development_app.exe。缺少配置或依赖时，主程序自动显示“配置与检测”。
 2. 录入供应方提供的开发凭据并保存，点击“检查环境”；已有配置无需重新输入。环境检查不访问卡、不消耗 PIN 尝试次数。
-3. 若驱动缺失，点击“安装 VeraCrypt（管理员）”；若缺少 WebView2，点击“安装 WebView2（离线）”。应用先验证固定 SHA-256 和可信签名，成功后才请求管理员授权。VeraCrypt 安装器请选择 Install；如要求重启，先重启 Windows。
+3. 若驱动缺失，点击“安装 VeraCrypt（管理员）”；若缺少 WebView2，点击“安装 WebView2（离线）”。应用先验证固定 SHA-256 和可信签名，成功后才请求管理员授权。直接解压运行时会显示 VeraCrypt 官方 MSI；统一安装器则在自身许可页取得同意后静默安装。如要求重启，先重启 Windows。
 4. 安装完成后重新检查环境，通过后点击“继续进入 USB Vault”。安装器退出不等于依赖可用，以检测结果为准。
 5. 登录页“配置与检测”可重新打开配置入口。切换前释放旧会话，返回后重建；关闭配置窗口会退出应用。已登录或仍有挂载卷时不能修改配置。
 6. 只有点击“验证安全卡”才执行配置窗口内的卡验证；检测可能联网，错误 PIN 可能消耗尝试次数，不要反复重试。不会初始化卡或操作容器。
@@ -18,18 +18,18 @@
 
 ## VeraCrypt 安装程序验证（PowerShell）
 
-Get-FileHash -LiteralPath '.\prerequisites\VeraCrypt Setup 1.26.29.exe' -Algorithm SHA256
+Get-FileHash -LiteralPath '.\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi' -Algorithm SHA256
 
 必须得到：
-DCA9DDEC7934FC0B1C25AC8984DB7D504BFE9F37C21861AC91C67A98ECD3964B
+5BA6426983123CFB92BC1F09BD888FDBC0F53F300D0D9C5DA52CE3AEE8D474F0
 
-Get-AuthenticodeSignature -LiteralPath '.\prerequisites\VeraCrypt Setup 1.26.29.exe' | Format-List Status,StatusMessage
+Get-AuthenticodeSignature -LiteralPath '.\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi' | Format-List Status,StatusMessage
 
 Status 必须为 Valid。任一验证不符时不要运行该安装程序，请重新获取完整测试包。
 
 ## 安装 VeraCrypt（PowerShell）
 
-Start-Process -FilePath '.\prerequisites\VeraCrypt Setup 1.26.29.exe' -Verb RunAs -Wait
+Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -Verb RunAs -Wait -ArgumentList '/i', '.\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi'
 
 ## VeraCrypt 驱动验证（PowerShell 或命令提示符）
 

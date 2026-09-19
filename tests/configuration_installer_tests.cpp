@@ -1,4 +1,5 @@
 #include "../src/platform/windows/vikey_configuration/installers.h"
+#include "../src/platform/windows/vikey_configuration/setup_policy.h"
 #include <Windows.h>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +11,25 @@ int wmain(int argc, wchar_t** argv) {
       (L"usb-vault-installer-test-" + std::to_wstring(::GetCurrentProcessId()));
   bool owned = false;
   try {
+    using configuration::setup::Result;
+    using configuration::setup::ensure_dependency;
+    for (auto initial : {Result::ready, Result::incompatible, Result::unavailable}) {
+      const auto result = ensure_dependency([&] { return initial; }, []() -> Result {
+        throw std::runtime_error("setup overwrote an existing dependency");
+      });
+      if (result != initial) throw std::runtime_error("probe result changed");
+    }
+    for (auto installed : {Result::ready, Result::restart, Result::cancelled, Result::failed}) {
+      int probes = 0;
+      const auto result = ensure_dependency([&] { return ++probes == 1 ? Result::missing : Result::ready; },
+                                           [&] { return installed; });
+      if (result != installed || probes != (installed == Result::ready ? 2 : 1))
+        throw std::runtime_error("installer result or recheck was lost");
+    }
+    Result missing = Result::missing;
+    Result reported_ready = Result::ready;
+    if (ensure_dependency([&] { return missing; }, [&] { return reported_ready; }) != Result::failed)
+      throw std::runtime_error("installer success bypassed availability check");
     using configuration::InstallState;
     using configuration::classify_installer_exit;
     if (classify_installer_exit(0).state != InstallState::success ||
