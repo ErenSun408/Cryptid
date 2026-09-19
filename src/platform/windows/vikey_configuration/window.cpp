@@ -35,9 +35,9 @@ constexpr wchar_t kWindowClass[] =
     L"UsbVaultVikeyDevelopmentCredentialsConfig";
 constexpr wchar_t kWindowTitle[] =
 #ifdef USB_VAULT_CONFIG_DIAGNOSTICS
-    L"USB Vault - 配置与检测（开发版）";
+    L"USB Vault - 配置与检测";
 #else
-    L"USB Vault - ViKey 开发凭据配置";
+    L"USB Vault - ViKey 凭据配置";
 #endif
 
 constexpr int kUserSnEditId = 1001;
@@ -180,7 +180,7 @@ void save(UiState& state) noexcept {
             ? L"已保存并复读验证。请重新检查环境，需要时再验证安全卡。"
             : L"已保存并复读验证。请插卡并运行检测。"));
 #else
-        L"已保存并复读验证。现在可以启动 USB Vault 开发程序。"));
+        L"已保存并复读验证。现在可以启动 USB Vault。"));
 #endif
   } catch (const std::system_error& error) {
     std::wstring message;

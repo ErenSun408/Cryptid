@@ -3,12 +3,13 @@ Unicode true
 !include MUI2.nsh
 !include LogicLib.nsh
 !include nsDialogs.nsh
+!include FileFunc.nsh
 !include x64.nsh
 
 !ifndef PayloadDirectory
   !error "Use tools/build-windows-installer.ps1 with a verified package"
 !endif
-Name "USB Vault（开发版）"
+Name "USB Vault"
 OutFile "${OutputFile}"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\USB Vault"
@@ -20,20 +21,25 @@ ShowInstDetails show
 ShowUninstDetails show
 !define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVaultDevelopment"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TEXT "一个向导完成 USB Vault、WebView2 Runtime 和 VeraCrypt 的检测与安装。已兼容的依赖会自动跳过。$\r$\n$\r$\n安装系统依赖时会请求管理员授权，但不会再打开单独的依赖安装向导。$\r$\n$\r$\n卸载 USB Vault 会保留共享依赖、凭据、设置和容器文件。"
+!define MUI_WELCOMEPAGE_TEXT "该向导将完成 USB Vault、WebView2 Runtime 和VeraCrypt的检测与安装。已兼容的依赖将自动跳过。$\r$\n$\r$\n安装系统依赖时会请求管理员授权。卸载 USB Vault 会保留共享依赖、凭据、设置和容器文件。"
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageShow
 !insertmacro MUI_PAGE_WELCOME
 
 Page custom DependencyPageCreate DependencyPageLeave
 
 !define MUI_LICENSEPAGE_CHECKBOX
 !define MUI_LICENSEPAGE_CHECKBOX_TEXT "我已阅读并接受 USB Vault 软件包及第三方组件说明"
-!define MUI_LICENSEPAGE_TEXT_TOP "请阅读软件包说明和第三方组件条款。必须接受后才能继续。"
+!define MUI_LICENSEPAGE_TEXT_TOP "请阅读软件包说明和第三方组件条款。"
 !insertmacro MUI_PAGE_LICENSE "${PayloadDirectory}\licenses\THIRD-PARTY-NOTICES.txt"
 
 !define MUI_PAGE_CUSTOMFUNCTION_PRE VeraCryptLicensePre
 !define MUI_LICENSEPAGE_CHECKBOX_TEXT "我已阅读并接受 VeraCrypt License 的全部条款"
 !define MUI_LICENSEPAGE_TEXT_TOP "将安装 VeraCrypt 1.26.29。请阅读完整许可；不接受则不能继续安装。"
 !insertmacro MUI_PAGE_LICENSE "${PayloadDirectory}\licenses\veracrypt\License.txt"
+
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE ValidateInstallDirectory
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择USBVault的最终安装文件夹。为避免兼容问题，路径请不要包含中文。"
+!insertmacro MUI_PAGE_DIRECTORY
 
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\usb_vault_vikey_p2_development_app.exe"
@@ -50,6 +56,15 @@ Var WebViewCheck
 Var VeraCryptCheck
 Var WebViewSelection
 Var VeraCryptSelection
+Var WelcomeTitleFont
+Var WelcomeTextFont
+
+Function WelcomePageShow
+  CreateFont $WelcomeTitleFont "Microsoft YaHei UI" 12 700
+  SendMessage $mui.WelcomePage.Title ${WM_SETFONT} $WelcomeTitleFont 1
+  CreateFont $WelcomeTextFont "Microsoft YaHei UI" 9 400
+  SendMessage $mui.WelcomePage.Text ${WM_SETFONT} $WelcomeTextFont 1
+FunctionEnd
 
 Function .onInit
   IfSilent 0 +3
@@ -68,7 +83,6 @@ Function .onInit
   nsExec::ExecToStack '"$PLUGINSDIR\usb_vault_setup_helper.exe" --probe-veracrypt'
   Pop $VeraCryptState
   Pop $0
-  ; Do not honor an arbitrary /D= target for this per-user installer.
   StrCpy $INSTDIR "$LOCALAPPDATA\Programs\USB Vault"
   FindWindow $0 "UsbVaultMainWindow"
   FindWindow $1 "UsbVaultVikeyDevelopmentCredentialsConfig"
@@ -77,9 +91,72 @@ Function .onInit
     MessageBox MB_ICONSTOP "请正常关闭 USB Vault 和配置窗口后重新安装。"
     Abort
   ${EndIf}
-  IfFileExists "$INSTDIR\usb_vault_vikey_p2_development_app.exe" 0 +3
-    MessageBox MB_ICONSTOP "已安装 USB Vault。此预览安装器暂不覆盖升级，请先卸载旧版（会保留用户数据），再运行安装。"
+  ClearErrors
+  ReadRegStr $0 HKCU "${UninstallKey}" "InstallLocation"
+  ${IfNot} ${Errors}
+    ${If} $0 != ""
+      MessageBox MB_ICONSTOP "已安装 USB Vault。此预览安装器暂不覆盖升级，请先卸载旧版（会保留用户数据），再运行安装。"
+      Abort
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+Function ValidateInstallDirectory
+  ; The NSIS GetFullPathName instruction returns an empty string when the
+  ; selected final directory does not exist yet. Use the Windows API so a new
+  ; installation directory can be normalized before it is created.
+  StrCpy $0 "$INSTDIR"
+  ${GetRoot} "$0" $1
+  ${If} $1 == ""
+    MessageBox MB_ICONEXCLAMATION "请选择本机固定磁盘上的有效绝对路径。"
     Abort
+  ${EndIf}
+  StrCpy $2 "$0" 1 2
+  ${If} $2 != "\"
+    MessageBox MB_ICONEXCLAMATION "请选择本机固定磁盘上的有效绝对路径。"
+    Abort
+  ${EndIf}
+  System::Call 'kernel32::GetFullPathNameW(w r0, i ${NSIS_MAX_STRLEN}, w .r2, p 0) i .r3'
+  ${If} $3 == 0
+  ${OrIf} $3 >= ${NSIS_MAX_STRLEN}
+    MessageBox MB_ICONEXCLAMATION "安装路径无效或过长，请选择其他位置。"
+    Abort
+  ${EndIf}
+  StrCpy $INSTDIR $2
+  ${GetRoot} "$INSTDIR" $1
+  ${If} $INSTDIR == "$1\"
+    MessageBox MB_ICONEXCLAMATION "不能直接安装到磁盘根目录。请选择或输入一个名为“USB Vault”的安装文件夹。"
+    Abort
+  ${EndIf}
+  StrCpy $2 "$1\"
+  System::Call 'kernel32::GetDriveTypeW(w r2) i .r3'
+  ${If} $3 != 3
+    MessageBox MB_ICONEXCLAMATION "安装位置必须位于本机固定磁盘，不能使用网络盘或可移动磁盘。"
+    Abort
+  ${EndIf}
+  IfFileExists "$INSTDIR\usb_vault_vikey_p2_development_app.exe" 0 +3
+    MessageBox MB_ICONSTOP "所选目录中已有 USB Vault。此预览安装器暂不覆盖升级，请先卸载旧版。"
+    Abort
+
+  ; The final installation directory must be new or empty.
+  ClearErrors
+  FindFirst $3 $4 "$INSTDIR\*"
+  IfErrors directory_valid
+directory_scan:
+  StrCmp $4 "." directory_next
+  StrCmp $4 ".." directory_next
+  FindClose $3
+  MessageBox MB_ICONEXCLAMATION "所选安装文件夹已存在且不是空目录。请选择其他位置，或先清理该文件夹。"
+  Abort
+directory_next:
+  ClearErrors
+  FindNext $3 $4
+  IfErrors directory_scan_done
+  Goto directory_scan
+directory_scan_done:
+  FindClose $3
+directory_valid:
+  ClearErrors
 FunctionEnd
 
 Function DependencyPageCreate
@@ -90,11 +167,11 @@ Function DependencyPageCreate
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 24u "USB Vault 主应用始终安装。缺少的依赖已默认勾选；取消任一必需项将无法继续。已安装的兼容版本不会被覆盖。"
+  ${NSD_CreateLabel} 0 0 100% 24u "缺少的依赖已默认勾选，缺少任一必需项将无法继续。已安装的兼容版本不会被覆盖。"
   Pop $0
 
   ${If} $WebViewState == 0
-    ${NSD_CreateCheckbox} 8u 34u 94% 14u "WebView2 Runtime（已安装，将跳过）"
+    ${NSD_CreateCheckbox} 8u 34u 94% 14u "WebView2 Runtime（已安装）"
     Pop $WebViewCheck
     ${NSD_Check} $WebViewCheck
     EnableWindow $WebViewCheck 0
@@ -112,7 +189,7 @@ Function DependencyPageCreate
   ${EndIf}
 
   ${If} $VeraCryptState == 0
-    ${NSD_CreateCheckbox} 8u 56u 94% 14u "VeraCrypt 1.26.29（已安装，将跳过）"
+    ${NSD_CreateCheckbox} 8u 56u 94% 14u "VeraCrypt 1.26.29（已安装）"
     Pop $VeraCryptCheck
     ${NSD_Check} $VeraCryptCheck
     EnableWindow $VeraCryptCheck 0
@@ -133,7 +210,7 @@ Function DependencyPageCreate
     EnableWindow $VeraCryptCheck 0
   ${EndIf}
 
-  ${NSD_CreateLabel} 8u 84u 94% 34u "勾选安装即请求以管理员权限安装对应发布者的原版组件。下一页显示软件包说明；需要安装 VeraCrypt 时还会单独显示其完整许可。"
+  ${NSD_CreateLabel} 8u 84u 94% 34u "勾选安装即请求以管理员权限安装对应发布者的原版组件。"
   Pop $0
   nsDialogs::Show
 FunctionEnd
@@ -218,7 +295,7 @@ Section "USB Vault" Main
   CreateDirectory "$SMPROGRAMS\USB Vault"
   CreateShortcut "$SMPROGRAMS\USB Vault\USB Vault.lnk" "$INSTDIR\usb_vault_vikey_p2_development_app.exe"
   CreateShortcut "$SMPROGRAMS\USB Vault\卸载 USB Vault.lnk" "$INSTDIR\卸载 USB Vault.exe"
-  WriteRegStr HKCU "${UninstallKey}" "DisplayName" "USB Vault（开发版）"
+  WriteRegStr HKCU "${UninstallKey}" "DisplayName" "USB Vault"
   WriteRegStr HKCU "${UninstallKey}" "DisplayVersion" "0.2.0"
   WriteRegStr HKCU "${UninstallKey}" "UninstallString" '$\"$INSTDIR\卸载 USB Vault.exe$\"'
   WriteRegStr HKCU "${UninstallKey}" "InstallLocation" "$INSTDIR"
@@ -239,10 +316,20 @@ Function .onInstSuccess
 FunctionEnd
 
 Function un.onInit
-  ; A moved uninstaller must not remove files from a different directory.
-  StrCmp $INSTDIR "$LOCALAPPDATA\Programs\USB Vault" +3
+  ; A moved uninstaller must match the actual location recorded at install.
+  ClearErrors
+  ReadRegStr $0 HKCU "${UninstallKey}" "InstallLocation"
+  ${If} ${Errors}
     MessageBox MB_ICONSTOP "卸载程序位置无效，请从原安装目录运行。"
     Abort
+  ${EndIf}
+  GetFullPathName $0 "$0"
+  GetFullPathName $1 "$INSTDIR"
+  System::Call 'kernel32::CompareStringOrdinal(w r0, i -1, w r1, i -1, i 1) i .r2'
+  ${If} $2 != 2
+    MessageBox MB_ICONSTOP "卸载程序位置与安装记录不一致，请从原安装目录运行。"
+    Abort
+  ${EndIf}
   FindWindow $0 "UsbVaultMainWindow"
   FindWindow $1 "UsbVaultVikeyDevelopmentCredentialsConfig"
   ${If} $0 != 0

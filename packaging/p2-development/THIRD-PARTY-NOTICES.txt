@@ -1,5 +1,5 @@
-USB Vault P2 development-test third-party notices
-=================================================
+USB Vault third-party notices
+=============================
 
 This internal evaluation package is not a legal conclusion or a production
 redistribution approval.
