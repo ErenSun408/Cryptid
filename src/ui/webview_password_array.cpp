@@ -189,6 +189,18 @@ struct ArrayInfo final {
 
 }  // namespace
 
+void wipe_dispatch_text_arguments(DISPPARAMS* const parameters) noexcept {
+  if (parameters == nullptr || parameters->rgvarg == nullptr) return;
+  for (UINT index = 0; index < parameters->cArgs; ++index) {
+    VARIANT& value = parameters->rgvarg[index];
+    if (value.vt != VT_BSTR || value.bstrVal == nullptr) continue;
+    const UINT length = ::SysStringLen(value.bstrVal);
+    if (length == 0) continue;
+    static_cast<void>(
+        ::SecureZeroMemory(value.bstrVal, length * sizeof(wchar_t)));
+  }
+}
+
 void wipe_webview_password_array(VARIANT& password_bytes) noexcept {
   if (password_bytes.parray == nullptr ||
       (password_bytes.vt != (VT_ARRAY | VT_UI1) &&

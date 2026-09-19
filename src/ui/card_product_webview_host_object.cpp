@@ -123,6 +123,11 @@ constexpr DISPID kReorderContainersId = 67;
 constexpr DISPID kGetAutoMountId = 68;
 constexpr DISPID kSetAutoMountId = 69;
 constexpr DISPID kOpenConfigurationId = 70;
+constexpr DISPID kGetStartupViewId = 71;
+// The page asks one question before anything else: which surface the host
+// opened it for. This object only ever serves the product session; setup has
+// its own bridge with no card, volume or container member on it.
+constexpr wchar_t kSessionView[] = L"session";
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
@@ -258,34 +263,6 @@ class LocationArgumentsWiper final {
   VARIANT& second_;
 };
 
-// The directory a page is looking at and the name it picked are the contents
-// of an encrypted volume, so the marshalled copies go the way a container
-// location does. Every string argument of the call is cleared; anything that
-// is not a string was never read as one and is left exactly as it arrived.
-class DispatchTextWiper final {
- public:
-  explicit DispatchTextWiper(DISPPARAMS* const parameters) noexcept
-      : parameters_(parameters) {}
-
-  ~DispatchTextWiper() noexcept {
-    if (parameters_ == nullptr || parameters_->rgvarg == nullptr) return;
-    for (UINT index = 0; index < parameters_->cArgs; ++index) {
-      VARIANT& value = parameters_->rgvarg[index];
-      if (value.vt != VT_BSTR || value.bstrVal == nullptr) continue;
-      const UINT length = ::SysStringLen(value.bstrVal);
-      if (length == 0) continue;
-      static_cast<void>(
-          ::SecureZeroMemory(value.bstrVal, length * sizeof(wchar_t)));
-    }
-  }
-
-  DispatchTextWiper(const DispatchTextWiper&) = delete;
-  DispatchTextWiper& operator=(const DispatchTextWiper&) = delete;
-
- private:
-  DISPPARAMS* parameters_;
-};
-
 class PasswordArgumentsWiper final {
  public:
   PasswordArgumentsWiper(VARIANT& first, VARIANT& second) noexcept
@@ -401,6 +378,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
+    if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
     if (matches(names[0], L"setAutoMountEnabled")) { ids[0] = kSetAutoMountId; return S_OK; }
     if (matches(names[0], L"reorderContainers")) { ids[0] = kReorderContainersId; return S_OK; }
@@ -626,6 +604,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kGetForcePreferenceId: case kGetWindowSizeId:
+      case kGetStartupViewId:
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
       case kListContainerDirectoryId: break;
@@ -637,6 +616,13 @@ class CardProductWebViewHostObject final : public IDispatch {
         return begin_batch(member == kBeginMountBatchId, member == kBeginForceUnmountBatchId, parameters, result);
       case kReorderContainersId:
         return begin_batch(false, false, parameters, result, true);
+      case kGetStartupViewId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        ::VariantInit(result);
+        return complete_string(kSessionView,
+                               static_cast<UINT>(std::size(kSessionView) - 1),
+                               result);
       case kOpenConfigurationId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (controller_.state() == CardProductUiState::authenticated || controller_.mounted())
