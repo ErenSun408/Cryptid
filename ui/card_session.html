@@ -691,21 +691,64 @@
     .settings-copy b { font-size: .85rem; font-weight: 600; }
     .settings-lock { flex: 0 0 auto; color: var(--text-3); }
     .settings-lock svg { width: .9rem; height: .9rem; }
+    /* The track is glass painted rather than blurred: backdrop-filter blurs
+       what is behind an element, and behind this one is one flat card colour,
+       so a real blur would cost a compositing layer and show nothing. Layered
+       translucency with a rim and an inner shadow reads the same here. */
     .settings-switch {
       position: relative; flex: 0 0 auto; width: 2.4rem; height: 1.35rem; padding: 0;
-      border: 1px solid var(--line-2); border-radius: 999px; background: rgba(255, 255, 255, .05);
-      cursor: pointer; transition: background-color 140ms ease, border-color 140ms ease;
+      border: 1px solid var(--line-2); border-radius: 999px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .08), rgba(255, 255, 255, .02) 55%, rgba(0, 0, 0, .14));
+      box-shadow: inset 0 1px 1.5px rgba(0, 0, 0, .38), inset 0 -1px 0 rgba(255, 255, 255, .05);
+      cursor: pointer; transition: border-color 220ms ease, box-shadow 220ms ease;
     }
+    /* The lit state is its own layer faded in over the unlit one. Opacity is
+       a compositor property, so the colour change costs no repaint and cannot
+       fall out of step with the knob travelling above it. */
+    .settings-switch::before {
+      content: ""; position: absolute; inset: 0; border-radius: inherit; opacity: 0;
+      background: linear-gradient(180deg, rgba(224, 196, 140, .5), rgba(200, 169, 106, .26));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .26);
+      transition: opacity 220ms ease;
+    }
+    /* Overshoot, then settle: the spring is the whole difference between a
+       switch that slides and one that feels thrown. */
     .settings-switch::after {
-      content: ""; position: absolute; top: 50%; left: .17rem;
-      width: .93rem; height: .93rem; border-radius: 50%; background: var(--text-3);
-      transform: translateY(-50%);
-      transition: transform 140ms ease, background-color 140ms ease;
+      content: ""; position: absolute; top: 50%; left: .17rem; z-index: 1;
+      width: .93rem; height: .93rem; border-radius: 999px;
+      background: linear-gradient(180deg, var(--text), rgba(152, 161, 172, .92));
+      box-shadow: 0 1px 2.5px rgba(0, 0, 0, .5), inset 0 .5px 0 rgba(255, 255, 255, .55);
+      transform: translate(0, -50%); transform-origin: left center;
+      transition: transform 320ms cubic-bezier(.34, 1.56, .64, 1),
+                  background 220ms ease, box-shadow 220ms ease;
     }
     .settings-switch:hover:not([aria-disabled="true"]) { border-color: var(--line-3); }
-    .settings-switch[aria-checked="true"] { border-color: rgba(200, 169, 106, .5); background: rgba(200, 169, 106, .3); }
-    .settings-switch[aria-checked="true"]::after { background: var(--gold-2); transform: translate(1rem, -50%); }
+    .settings-switch[aria-checked="true"] { border-color: rgba(200, 169, 106, .5); }
+    .settings-switch[aria-checked="true"]::before { opacity: 1; }
+    .settings-switch[aria-checked="true"]::after {
+      background: linear-gradient(180deg, #fff, var(--gold-2));
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .5), inset 0 .5px 0 rgba(255, 255, 255, .8);
+      transform: translate(1rem, -50%); transform-origin: right center;
+    }
+    /* Held down, the knob stretches into the track the way a physical one
+       would resist. It grows inwards, so neither end leaves the track. */
+    .settings-switch:active:not([aria-disabled="true"])::after {
+      transform: translate(0, -50%) scaleX(1.22);
+    }
+    .settings-switch[aria-checked="true"]:active:not([aria-disabled="true"])::after {
+      transform: translate(1rem, -50%) scaleX(1.22);
+    }
     .settings-switch[aria-disabled="true"] { cursor: default; }
+    @media (prefers-reduced-motion: reduce) {
+      .settings-switch::after {
+        transition: transform 120ms linear, background 120ms linear, box-shadow 120ms linear;
+      }
+      .settings-switch:active:not([aria-disabled="true"])::after { transform: translate(0, -50%); }
+      .settings-switch[aria-checked="true"]:active:not([aria-disabled="true"])::after {
+        transform: translate(1rem, -50%);
+      }
+    }
     .settings-group.danger h3 { color: var(--danger); }
     .settings-card.danger { border-color: rgba(217, 107, 98, .32); }
     .danger-row { display: flex; align-items: flex-start; gap: 1rem; padding: .9rem 1rem; }
@@ -1280,7 +1323,7 @@
                         data-setting="remember-containers" aria-label="记住容器位置"></button>
               </div>
               <div class="settings-row">
-                <span class="settings-copy"><b>登录后自动挂载全部容器</b><small>登录后在后台依次挂载，耗时随容器数量变化。</small></span>
+                <span class="settings-copy"><b>登录后自动挂载全部容器</b><small> （根据容器数量可能造成较长耗时）</small></span>
                 <button class="settings-switch" type="button" role="switch" aria-checked="false"
                         data-setting="auto-mount" aria-label="登录后自动挂载全部容器"></button>
               </div>
