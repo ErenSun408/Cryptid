@@ -8526,3 +8526,10 @@ Q-04 与其后三项决定同属"用户自担风险／范围变更"型，此前�
 - 实现：轨道改为分层半透明渐变加内阴影与亮边；点亮态拆成独立的 `::before` 图层，用 `opacity` 淡入，颜色变化不触发重绘也不会与旋钮脱拍；旋钮改为带顶部高光与投影的玻璃球，`transform` 用 `cubic-bezier(.34, 1.56, .64, 1)` 320ms 做过冲回落；按住时 `scaleX(1.22)` 拉成胶囊，`transform-origin` 按开关状态在左右端之间切换，使拉伸只向轨道内侧发生。动画只用 `transform` 与 `opacity`，留在合成器线程。`prefers-reduced-motion` 下过冲退化为 120ms 线性且不再拉伸，与页面既有动画的处理一致。
 - 文案：自动挂载行的 `<b>` 与 `<small>` 都是行内元素且此前没有间隔，实际渲染是“登录后自动挂载全部容器登录后在后台依次挂载…”连成一句。按要求改为前置一个空格加括注“（根据容器数量可能造成较长耗时）”，顺带修掉这个粘连。
 - 验证：`card_product_ui_page_contract_tests` 通过；`card_product_ui_navigation_dom_tests.cjs` 208 项通过；`card_product_ui_setup_dom_tests.cjs` 两轮 20／7 项通过；显式重建 `usb_vault_vikey_p2_development_app`（该目标是 `EXCLUDE_FROM_ALL`，不点名就不会带上新页面摘要）。动画与文案不写任何状态，与 8.4／8.6 的痕迹约束无关。渲染效果由人工在实机确认。
+
+### 主程序可执行文件正式更名为 USB Vault（2026-09-19）
+
+- 背景与冲突：需求清单 2026-09-19「统一安装入口」一节写明“内部构建目标、可执行文件名、注册表键及协议标识可以暂时保留既有 development 命名以维持兼容”。本次按要求把用户实际双击的那个文件也改成产品名，取代该条中关于可执行文件名的部分；构建目标名、helper 与建卷器的文件名、注册表键维持不变。
+- 改动：`usb_vault_vikey_p2_development_app` 目标增加 `OUTPUT_NAME "USB Vault"`，产物变为 `USB Vault.exe`（安装目录里早已有带空格与中文的 `卸载 USB Vault.exe`，命名风格一致）。同步 NSIS 的完成页启动项、安装目录存在性判断和开始菜单快捷方式；同步打包脚本的必需文件清单与安装器脚本的载荷校验清单；同步 README 与测试须知里的文件名。打包默认名由 `usb-vault-p2-development-test-<时间戳>` 改为 `usb-vault-<时间戳>`。
+- 顺带清理：删除 `packaging/p2-development/Start USB Vault.cmd.in`。它没有被任何构建或打包脚本引用，实际不进包，内容还指向旧的可执行文件名；统一安装器已经创建开始菜单快捷方式，这个兼容入口没有存在理由。README 中对应条目一并删除。
+- 验证：显式重建 `usb_vault_vikey_p2_development_app`，产物为 `USB Vault.exe` 并可正常启动进入登录页。本轮不涉及 C++ 逻辑与页面，未重跑业务测试。

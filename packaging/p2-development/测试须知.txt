@@ -8,7 +8,7 @@
 
 ## 首次运行
 
-1. 建议使用统一安装器 USB-Vault-Setup.exe：它会一并装好 WebView2 与 VeraCrypt。也可以把完整包解压到本机固定磁盘后双击 usb_vault_vikey_p2_development_app.exe。
+1. 建议使用统一安装器 USB-Vault-Setup.exe：它会一并装好 WebView2 与 VeraCrypt。也可以把完整包解压到本机固定磁盘后双击 USB Vault.exe。
 2. 启动时主程序先检查系统架构、随包组件、WebView2 和 VeraCrypt 驱动。缺依赖时会说明原因并退出，请重新运行安装器修复。检查不访问卡、不消耗用户密码尝试次数。
 3. 依赖齐全但当前 Windows 用户还没有凭据时，主程序直接进入配置页。填写 UserSN、API Key 和用户密码；用户密码已预填 11111111，可按需修改。已配置过的用户不会看到这一页。
 4. 保存成功会提示“凭据已保存并复读验证”，随后点击“继续进入 USB Vault”。保存失败时不要当作成功，请重新保存全部三项。

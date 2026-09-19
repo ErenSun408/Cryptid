@@ -1,4 +1,0 @@
-@echo off
-setlocal
-start "" "%~dp0usb_vault_vikey_p2_development_app.exe"
-exit /b 0

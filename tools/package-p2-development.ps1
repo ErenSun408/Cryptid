@@ -74,7 +74,7 @@ if ($CacheText -notmatch '(?m)^CMAKE_BUILD_TYPE:[^=]+=Release\s*$' -or
 }
 
 $RequiredBuildFiles = @(
-    'usb_vault_vikey_p2_development_app.exe',
+    'USB Vault.exe',
     'usb_vault_vikey_helper.exe',
     'usb_vault_volume_creator.exe',
     'VeraCryptFormat.dll',
@@ -146,7 +146,7 @@ $ResolvedDestination = Resolve-ExistingDirectory $DestinationRoot 'package desti
 
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $PackageName = "usb-vault-p2-development-test-$stamp"
+    $PackageName = "usb-vault-$stamp"
 }
 if ($PackageName -notmatch '^[A-Za-z0-9._-]+$') {
     throw 'PackageName may contain only ASCII letters, digits, dot, underscore, and hyphen'

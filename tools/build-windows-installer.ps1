@@ -41,7 +41,7 @@ foreach ($file in $files) {
         throw "Unverified package file: $relative"
     }
 }
-foreach ($name in @('usb_vault_vikey_p2_development_app.exe', 'usb_vault_vikey_helper.exe',
+foreach ($name in @('USB Vault.exe', 'usb_vault_vikey_helper.exe',
                    'usb_vault_volume_creator.exe', 'VeraCryptFormat.dll', 'card_session.html', 'card_session.js',
                    'vendor\ViKey.dll', 'prerequisites\VeraCrypt_Setup_x64_1.26.29.msi',
                    'prerequisites\MicrosoftEdgeWebView2RuntimeInstallerX64.exe', 'licenses\THIRD-PARTY-NOTICES.txt')) {

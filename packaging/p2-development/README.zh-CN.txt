@@ -18,7 +18,7 @@ USB Vault 内部测试包
 首次使用
 --------
 
-1. 将完整包解压到本机固定磁盘，双击 usb_vault_vikey_p2_development_app.exe。
+1. 将完整包解压到本机固定磁盘，双击 USB Vault.exe。
 2. 主程序启动前先检查系统架构、随包组件、WebView2 与 VeraCrypt 驱动。依赖缺失时给出具体原因并退出，请重新运行 USB Vault 安装程序修复。检查不访问安全卡。
 3. 依赖可用但当前 Windows 用户还没有凭据时，主程序直接在主界面打开配置页，界面风格与产品一致。
 4. 填写供应方提供的 32 位十六进制 UserSN、128 位十六进制 API Key 和 8 位字母数字用户密码。用户密码已预填出厂值 11111111，可以按需要改写。三项作为一组保存在当前 Windows 用户、当前机器的凭据管理器中，保存后立即复读验证。
@@ -38,10 +38,9 @@ USB Vault 内部测试包
 主要文件
 --------
 
-- Start USB Vault.cmd：兼容快捷入口，仅转交主 EXE；正常使用不需要它。
 - 测试须知.txt：最短安装流程、所需条件及 VeraCrypt/WebView2 验证指令。
 - prerequisites\VeraCrypt_Setup_x64_1.26.29.msi：未经修改的 VeraCrypt 官方 x64 MSI。
-- usb_vault_vikey_p2_development_app.exe：可直接双击的 P2 开发主程序；以 EXE 所在目录定位组件，按构建时嵌入的 SHA-256 校验 helper、建卷后端、厂商 DLL 及页面。仍为允许厂商运行库联网的开发模式。
+- USB Vault.exe：主程序；以 EXE 所在目录定位组件，按构建时嵌入的 SHA-256 校验 helper、建卷后端、厂商 DLL 及页面。仍为允许厂商运行库联网的内部测试版本。
 - usb_vault_vikey_helper.exe：隔离访问 ViKey 的 helper。
 - usb_vault_volume_creator.exe：需要 UAC 的建卷 helper。
 - VeraCryptFormat.dll：已审计补丁构建的建卷后端。

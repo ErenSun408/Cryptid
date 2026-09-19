@@ -669,6 +669,11 @@ if(USB_VAULT_BUILD_UI)
     usb_vault_vikey_helper
     usb_vault_volume_creator
   )
+  # The product is called USB Vault, and the file the user double-clicks and
+  # the installer launches says so. The CMake target keeps its internal name,
+  # which the packaging scripts and presets already refer to.
+  set_target_properties(usb_vault_vikey_p2_development_app PROPERTIES
+    OUTPUT_NAME "USB Vault")
   usb_vault_configure_target(usb_vault_vikey_p2_development_app)
 
   add_custom_command(TARGET usb_vault_vikey_p2_development_app POST_BUILD

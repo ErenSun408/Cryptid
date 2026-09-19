@@ -42,7 +42,7 @@ Page custom DependencyPageCreate DependencyPageLeave
 !insertmacro MUI_PAGE_DIRECTORY
 
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\usb_vault_vikey_p2_development_app.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\USB Vault.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "打开 USB Vault"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
@@ -134,7 +134,7 @@ Function ValidateInstallDirectory
     MessageBox MB_ICONEXCLAMATION "安装位置必须位于本机固定磁盘，不能使用网络盘或可移动磁盘。"
     Abort
   ${EndIf}
-  IfFileExists "$INSTDIR\usb_vault_vikey_p2_development_app.exe" 0 +3
+  IfFileExists "$INSTDIR\USB Vault.exe" 0 +3
     MessageBox MB_ICONSTOP "所选目录中已有 USB Vault。此预览安装器暂不覆盖升级，请先卸载旧版。"
     Abort
 
@@ -293,7 +293,7 @@ Section "USB Vault" Main
   WriteUninstaller "$INSTDIR\卸载 USB Vault.exe"
   IfErrors install_failed
   CreateDirectory "$SMPROGRAMS\USB Vault"
-  CreateShortcut "$SMPROGRAMS\USB Vault\USB Vault.lnk" "$INSTDIR\usb_vault_vikey_p2_development_app.exe"
+  CreateShortcut "$SMPROGRAMS\USB Vault\USB Vault.lnk" "$INSTDIR\USB Vault.exe"
   CreateShortcut "$SMPROGRAMS\USB Vault\卸载 USB Vault.lnk" "$INSTDIR\卸载 USB Vault.exe"
   WriteRegStr HKCU "${UninstallKey}" "DisplayName" "USB Vault"
   WriteRegStr HKCU "${UninstallKey}" "DisplayVersion" "0.2.0"
