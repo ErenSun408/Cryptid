@@ -21,7 +21,8 @@ namespace {
 
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
   return operation == Operation::create_standard ||
-         operation == Operation::create_with_hidden;
+         operation == Operation::create_with_hidden ||
+         operation == Operation::scan_tail_space;
 }
 
 [[nodiscard]] bool valid_stage(const CreationStage stage) noexcept {
@@ -38,10 +39,20 @@ bool valid_request_header(const RequestHeader& header) noexcept {
   if (header.magic != kProtocolMagic ||
       header.version != kProtocolVersion ||
       header.header_size != sizeof(RequestHeader) || header.reserved != 0 ||
-      !valid_operation(header.operation) || header.outer_size_bytes == 0 ||
-      header.path_characters == 0 ||
-      header.path_characters > kMaxPathCharacters ||
-      header.first_password_bytes == 0 ||
+      !valid_operation(header.operation) || header.path_characters == 0 ||
+      header.path_characters > kMaxPathCharacters) {
+    return false;
+  }
+
+  // A measurement carries neither a size nor a password, so a request that
+  // brings one is not a measurement however it is labelled.
+  if (header.operation == Operation::scan_tail_space) {
+    return header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 &&
+           header.first_password_bytes == 0 &&
+           header.second_password_bytes == 0;
+  }
+
+  if (header.outer_size_bytes == 0 || header.first_password_bytes == 0 ||
       header.first_password_bytes > kMaxPasswordBytes ||
       header.second_password_bytes > kMaxPasswordBytes) {
     return false;
@@ -61,7 +72,13 @@ bool valid_response(const Response& response) noexcept {
   }
   if (response.type == MessageType::progress) {
     return response.error == 0 && response.native_error == 0 &&
-           response.percent <= 100 && valid_stage(response.stage);
+           response.value == 0 && response.percent <= 100 &&
+           valid_stage(response.stage);
+  }
+  // A failure measured nothing, so a number arriving with one is a protocol
+  // error rather than something to read.
+  if (response.type == MessageType::result && response.error != 0) {
+    return response.value == 0;
   }
   return response.type == MessageType::result;
 }

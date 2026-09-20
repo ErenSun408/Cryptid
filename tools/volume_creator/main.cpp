@@ -169,13 +169,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
   try {
     Request request = usb_vault::volume_creation::detail::read_request(
         pipe.get(), arguments.nonce);
-    usb_vault::volume_creation::detail::execute_request(pipe.get(), request);
+    const std::uint64_t value =
+        usb_vault::volume_creation::detail::execute_request(pipe.get(),
+                                                            request);
     request.first_password.clear();
     request.second_password.clear();
     usb_vault::volume_creation::detail::write_response(
         pipe.get(),
         Response{.type =
-                     usb_vault::volume_creation::detail::MessageType::result});
+                     usb_vault::volume_creation::detail::MessageType::result,
+                 .value = value});
     static_cast<void>(::FlushFileBuffers(pipe.get()));
     return 0;
   } catch (const std::system_error& error) {

@@ -2,6 +2,7 @@
 
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
+#include "usb_vault/volume/volume_space.h"
 #include "volume_creation/veracrypt_format_abi.h"
 
 #include <Windows.h>
@@ -229,8 +230,22 @@ class FormatBackend final {
 
 void validate_request(const Request& request) {
   if (request.target_path.empty() ||
-      !std::filesystem::path(request.target_path).is_absolute() ||
-      request.outer_size_bytes < kTotalVolumeHeadersSize ||
+      !std::filesystem::path(request.target_path).is_absolute()) {
+    fail(CreationError::invalid_request, "invalid creation request values");
+  }
+  if (request.operation == Operation::scan_tail_space) {
+    // A volume root and nothing else: a request carrying a size or a password
+    // is not a measurement, whatever it calls itself.
+    if (request.target_path.size() != 3 || request.target_path[1] != L':' ||
+        request.target_path[2] != L'\\' || request.target_path[0] < L'A' ||
+        request.target_path[0] > L'Z' || request.outer_size_bytes != 0 ||
+        request.hidden_size_bytes != 0 || !request.first_password.empty() ||
+        !request.second_password.empty()) {
+      fail(CreationError::invalid_request, "invalid tail-space request values");
+    }
+    return;
+  }
+  if (request.outer_size_bytes < kTotalVolumeHeadersSize ||
       request.outer_size_bytes % kSectorSize != 0 ||
       request.first_password.empty() ||
       request.first_password.size() > kMaxPasswordBytes ||
@@ -312,94 +327,16 @@ void as_caller(const HANDLE pipe, Action&& action) {
   fail(CreationError::mount_failed, "no temporary drive letter is available");
 }
 
-struct TailSpace final {
-  std::uint64_t bytes{};
-  std::uint32_t cluster_size{};
-};
-
-[[nodiscard]] TailSpace scan_tail_space(const wchar_t drive_letter) {
-  const wchar_t device[] = {L'\\', L'\\', L'.', L'\\', drive_letter, L':',
-                            L'\0'};
-  const wchar_t root[] = {drive_letter, L':', L'\\', L'\0'};
-
-  DWORD sectors_per_cluster = 0;
-  DWORD bytes_per_sector = 0;
-  DWORD free_clusters = 0;
-  DWORD total_clusters = 0;
-  if (::GetDiskFreeSpaceW(root, &sectors_per_cluster, &bytes_per_sector,
-                          &free_clusters, &total_clusters) == FALSE ||
-      sectors_per_cluster == 0 || bytes_per_sector == 0) {
-    fail(CreationError::bitmap_scan_failed,
-         "query mounted outer-volume geometry");
+[[nodiscard]] volume::TailSpace scan_tail_space(const wchar_t drive_letter) {
+  try {
+    return volume::scan_volume_tail_space(drive_letter);
+  } catch (const std::exception&) {
+    fail(CreationError::bitmap_scan_failed, "scan outer-volume free tail");
   }
-  const std::uint64_t cluster_size_64 =
-      static_cast<std::uint64_t>(sectors_per_cluster) * bytes_per_sector;
-  if (cluster_size_64 > std::numeric_limits<std::uint32_t>::max()) {
-    fail(CreationError::bitmap_scan_failed, "invalid cluster size");
-  }
-
-  const Handle volume_handle(::CreateFileW(
-      device, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-      OPEN_EXISTING, 0, nullptr));
-  if (volume_handle.get() == INVALID_HANDLE_VALUE) {
-    fail(CreationError::bitmap_scan_failed,
-         "open outer volume for allocation bitmap scan");
-  }
-
-  std::vector<std::byte> buffer(kBitmapBufferBytes);
-  STARTING_LCN_INPUT_BUFFER input{};
-  std::uint64_t tail_free_clusters = 0;
-  for (;;) {
-    DWORD returned = 0;
-    const BOOL success = ::DeviceIoControl(
-        volume_handle.get(), FSCTL_GET_VOLUME_BITMAP, &input, sizeof(input),
-        buffer.data(), static_cast<DWORD>(buffer.size()), &returned, nullptr);
-    const DWORD error = success != FALSE ? ERROR_SUCCESS : ::GetLastError();
-    if (success == FALSE && error != ERROR_MORE_DATA) {
-      fail(CreationError::bitmap_scan_failed,
-           "read filesystem allocation bitmap");
-    }
-    constexpr std::size_t offset =
-        offsetof(VOLUME_BITMAP_BUFFER, Buffer);
-    if (returned < offset) {
-      fail(CreationError::bitmap_scan_failed,
-           "short filesystem allocation bitmap response");
-    }
-    const auto* bitmap =
-        reinterpret_cast<const VOLUME_BITMAP_BUFFER*>(buffer.data());
-    const std::uint64_t available_bits =
-        static_cast<std::uint64_t>(returned - offset) * 8ULL;
-    const std::uint64_t bits = std::min<std::uint64_t>(
-        available_bits,
-        static_cast<std::uint64_t>(bitmap->BitmapSize.QuadPart));
-    if (bits == 0) {
-      fail(CreationError::bitmap_scan_failed,
-           "empty filesystem allocation bitmap response");
-    }
-    for (std::uint64_t index = 0; index < bits; ++index) {
-      const auto byte = std::to_integer<unsigned int>(
-          reinterpret_cast<const std::byte*>(bitmap->Buffer)[index >> 3U]);
-      const bool used = ((byte >> (index & 7U)) & 1U) != 0;
-      tail_free_clusters = used ? 0 : tail_free_clusters + 1;
-    }
-    if (error != ERROR_MORE_DATA) {
-      break;
-    }
-    input.StartingLcn.QuadPart = bitmap->StartingLcn.QuadPart +
-                                 static_cast<LONGLONG>(bits);
-  }
-
-  if (tail_free_clusters >
-      std::numeric_limits<std::uint64_t>::max() / cluster_size_64) {
-    fail(CreationError::bitmap_scan_failed,
-         "filesystem allocation bitmap size overflow");
-  }
-  return {.bytes = tail_free_clusters * cluster_size_64,
-          .cluster_size = static_cast<std::uint32_t>(cluster_size_64)};
 }
 
 [[nodiscard]] std::uint64_t safe_hidden_size(
-    const TailSpace& tail_space, const std::uint64_t host_size,
+    const volume::TailSpace& tail_space, const std::uint64_t host_size,
     const std::uint64_t requested_size) {
   const std::uint64_t reserve =
       std::min<std::uint64_t>(host_size / 200ULL, kMaxReserveBytes);
@@ -475,7 +412,7 @@ void create_with_hidden(const HANDLE pipe, Request& request,
     });
     mounted = true;
     send_stage(pipe, CreationStage::scanning_tail_space, 0);
-    const TailSpace tail = scan_tail_space(drive_letter);
+    const volume::TailSpace tail = scan_tail_space(drive_letter);
     send_stage(pipe, CreationStage::scanning_tail_space, 100);
     const std::uint64_t hidden_size = safe_hidden_size(
         tail, request.outer_size_bytes, request.hidden_size_bytes);
@@ -516,14 +453,20 @@ void create_with_hidden(const HANDLE pipe, Request& request,
 
 }  // namespace
 
-void execute_request(const HANDLE pipe, Request& request) {
+std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
+  if (request.operation == Operation::scan_tail_space) {
+    // Nothing is created, so the format backend is never loaded and there is
+    // no progress to report: the number is the whole exchange.
+    return scan_tail_space(request.target_path[0]).bytes;
+  }
   FormatBackend backend(pipe, request.nonce);
   if (request.operation == Operation::create_standard) {
     create_standard(pipe, request, backend);
   } else {
     create_with_hidden(pipe, request, backend);
   }
+  return 0;
 }
 
 }  // namespace usb_vault::volume_creation::detail

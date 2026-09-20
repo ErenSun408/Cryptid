@@ -83,6 +83,10 @@ class VolumeCreator final {
       const ProgressCallback& progress = {},
       const CancellationQuery& cancelled = {}) const;
 
+  // Free space at the end of a mounted volume, which needs a volume handle
+  // and so an elevation. The helper measures and exits; nothing stays running.
+  [[nodiscard]] std::uint64_t scan_tail_space(wchar_t drive_letter) const;
+
  private:
   std::filesystem::path helper_path_;
 };

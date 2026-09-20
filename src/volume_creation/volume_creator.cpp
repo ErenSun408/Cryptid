@@ -265,23 +265,33 @@ class Handle final {
   }
 }
 
-void invoke(const std::filesystem::path& helper_path,
-            const detail::Operation operation, const std::wstring_view path,
-            const std::uint64_t outer_size,
-            const std::uint64_t hidden_size,
-            const security::SecureBuffer& first_password,
-            const security::SecureBuffer& second_password,
-            const ProgressCallback& progress,
-            const CancellationQuery& cancelled) {
-  const std::wstring normalized_path = validated_target_path(path);
-  if (outer_size == 0 || outer_size % 512ULL != 0 ||
-      first_password.empty() ||
-      first_password.size() > detail::kMaxPasswordBytes ||
-      second_password.size() > detail::kMaxPasswordBytes ||
-      (operation == detail::Operation::create_standard &&
-       (hidden_size != 0 || !second_password.empty())) ||
-      (operation == detail::Operation::create_with_hidden &&
-       (second_password.empty() || hidden_size % 512ULL != 0))) {
+[[nodiscard]] std::uint64_t invoke(
+    const std::filesystem::path& helper_path,
+    const detail::Operation operation, const std::wstring_view path,
+    const std::uint64_t outer_size,
+    const std::uint64_t hidden_size,
+    const security::SecureBuffer& first_password,
+    const security::SecureBuffer& second_password,
+    const ProgressCallback& progress,
+    const CancellationQuery& cancelled) {
+  const bool measuring = operation == detail::Operation::scan_tail_space;
+  // A measurement names a volume root, which is not a container path and does
+  // not pass the checks meant for one.
+  const std::wstring normalized_path =
+      measuring ? std::wstring(path) : validated_target_path(path);
+  if (measuring) {
+    if (outer_size != 0 || hidden_size != 0 || !first_password.empty() ||
+        !second_password.empty()) {
+      throw std::invalid_argument("invalid volume-measurement request values");
+    }
+  } else if (outer_size == 0 || outer_size % 512ULL != 0 ||
+             first_password.empty() ||
+             first_password.size() > detail::kMaxPasswordBytes ||
+             second_password.size() > detail::kMaxPasswordBytes ||
+             (operation == detail::Operation::create_standard &&
+              (hidden_size != 0 || !second_password.empty())) ||
+             (operation == detail::Operation::create_with_hidden &&
+              (second_password.empty() || hidden_size % 512ULL != 0))) {
     throw std::invalid_argument("invalid volume-creation request values");
   }
   const auto nonce = random_nonce();
@@ -325,7 +335,7 @@ void invoke(const std::filesystem::path& helper_path,
       continue;
     }
     if (response.error == 0) {
-      return;
+      return response.value;
     }
     if (!known_error(response.error)) {
       throw_creation(CreationError::protocol_error,
@@ -355,9 +365,9 @@ void VolumeCreator::create_standard(
     const security::SecureBuffer& volume_password,
     const ProgressCallback& progress,
     const CancellationQuery& cancelled) const {
-  invoke(helper_path_, detail::Operation::create_standard, target_path,
-         size_bytes, 0, volume_password, security::SecureBuffer{}, progress,
-         cancelled);
+  static_cast<void>(invoke(helper_path_, detail::Operation::create_standard,
+                           target_path, size_bytes, 0, volume_password,
+                           security::SecureBuffer{}, progress, cancelled));
 }
 
 void VolumeCreator::create_with_hidden(
@@ -368,9 +378,23 @@ void VolumeCreator::create_with_hidden(
     const security::SecureBuffer& hidden_password,
     const ProgressCallback& progress,
     const CancellationQuery& cancelled) const {
-  invoke(helper_path_, detail::Operation::create_with_hidden, target_path,
-         outer_size_bytes, requested_hidden_bytes, outer_password,
-         hidden_password, progress, cancelled);
+  static_cast<void>(invoke(helper_path_,
+                           detail::Operation::create_with_hidden, target_path,
+                           outer_size_bytes, requested_hidden_bytes,
+                           outer_password, hidden_password, progress,
+                           cancelled));
+}
+
+std::uint64_t VolumeCreator::scan_tail_space(const wchar_t drive_letter) const {
+  const wchar_t letter = (drive_letter >= L'a' && drive_letter <= L'z')
+                             ? static_cast<wchar_t>(drive_letter - L'a' + L'A')
+                             : drive_letter;
+  if (letter < L'A' || letter > L'Z') {
+    throw std::invalid_argument("drive letter must be in the range A-Z");
+  }
+  const std::wstring root = {letter, L':', L'\\'};
+  return invoke(helper_path_, detail::Operation::scan_tail_space, root, 0, 0,
+                security::SecureBuffer{}, security::SecureBuffer{}, {}, {});
 }
 
 }  // namespace usb_vault::volume_creation

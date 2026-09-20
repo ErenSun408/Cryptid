@@ -72,6 +72,24 @@ usb_vault_configure_target(volume_provider_tests)
 
 add_test(NAME volume_provider_tests COMMAND volume_provider_tests)
 
+add_executable(volume_space_tests
+  volume_space_tests.cpp
+)
+
+target_include_directories(volume_space_tests
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(volume_space_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(volume_space_tests)
+
+add_test(NAME volume_space_tests COMMAND volume_space_tests)
+
 add_executable(mount_orchestrator_tests
   mount_orchestrator_tests.cpp
 )

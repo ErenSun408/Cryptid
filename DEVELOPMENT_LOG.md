@@ -1976,4 +1976,12 @@
 - 检查与实现：新增 `survey_decoy_maintenance`，一次派生外层口令后走完全部容器，逐个复用第 2 片的试挂事务，通过即记下并卸载。跳过规则落为「已知走标准派生的容器一律不碰」——不只是当前挂载的 A 类，未挂载但类型已知的同样跳过，因为它们没有外层可开，试了必然失败；类型只来自本会话挂载时记下的运行时事实，不读也不写任何持久化判据。释放不掉或取不到盘符的容器计入 `unreachable`，不进列表，walk 继续。派生出的外层口令在至少一个容器应答时留到登出，`open_surveyed_maintenance` 据此打开，用户不再输第二次。
 - 验证：`card_login_mount_session_tests` 全过，新增 4 组（只列应答的容器且标准容器不被释放、一次 KDF、释放失败计数后继续、取消标记与空结果不留口令、已验证容器免口令打开并随密钥释放失效）；`card_product_ui_session_controller_tests`、`card_product_webview_host_object_tests` 重建后通过。未接真实驱动，未实机。
 - 安全与风险：审计中发现 `force_unmount_active`（拔卡路径）此前内联清理两个密钥，不会清到本片新增的口令；已改为复用 `release_session_secrets` 并补测试，避免同类遗漏再出现。留存的是派生值而非用户输入的明文。`unreachable` 的 catch-all 也会吞掉分配失败一类的异常，只计数不终止，判断依据是「这不是关于口令的答案」。
-- 提交：待定（`[P3.25]survey every container with one decoy password`）。哈希由下一个切片顺延补上；未推送。
+- 提交：`8e0de0d [P3.25]survey every container with one decoy password`。首次提交的正文 107 词超出 50～90 的硬上限，已改写为 86 词并 amend，哈希随之更新。未推送。
+
+### 2026-09-19 — P3.25 第四片：容量事实
+
+- 范围与审计：按切片表实现第 4 片，落地已定的乙案（提权簇位图）。复核 8.5 对"还可添加"的要求、建卷 helper 既有的管道安全与提权边界。本片只做后端度量，页面显示归第 6 片。
+- 检查与实现：新增 `usb_vault/volume/volume_space.h`，两件事分开——`volume_space()` 走 `GetDiskFreeSpaceExW` 取总量与本调用方可写空间，不需要提权，可随时刷新；`scan_volume_tail_space()` 是从 `creator_helper_engine.cpp` 原样抽出的簇位图扫描，改抛通用异常，建卷路径的包装层仍映射为 `bitmap_scan_failed`，对外行为不变。提权通道复用既有的建卷 helper：协议新增 `Operation::scan_tail_space`，`Response` 增加 `value` 字段承载测得的字节数，协议版本 1→2。度量请求不带任何口令和尺寸，两侧都按操作分别校验；helper 侧还要求路径恰好是 `X:\` 形式的卷根。扫描不加载 VeraCrypt 格式化 DLL、不碰任何文件，测完即退，不常驻。
+- 验证：`creator_protocol_tests` 通过（新增 3 组：度量请求不得带口令或尺寸、无口令往返、测得的数字只随成功结果传输且进度报文不得携带）；新建 `volume_space_tests` 通过（真实卷的总量与可写空间、大小写盘符等价、非盘符一律拒绝、不存在的盘符报系统错误而非零值——用 `GetLogicalDrives` 挑选未占用盘符，不写死）。重建 `usb_vault_volume_creator` 与 `usb_vault_core` 通过。真实外层卷上的扫描数值准确性与提权流程仍归第 9 片实机。
+- 安全与风险：新增的提权操作不接收任何秘密，最坏情况只能让一个已经通过 UAC 的调用方读到自己指定卷的尾部空闲量；管道仍是一次性、带 nonce、DACL 只列 SYSTEM 与令牌用户。`valid_response` 拒绝"带着数字的失败"和"带着数字的进度"，恶意 helper 无法借这个字段夹带。协议版本已升，旧 helper 配新应用会在报文校验处失败并报协议错误，属失败关闭；打包脚本本就同时构建两者，需保持同版本分发。
+- 提交：待定（`[P3.25]measure what an outer volume can still take`）。哈希由下一个切片顺延补上；未推送。

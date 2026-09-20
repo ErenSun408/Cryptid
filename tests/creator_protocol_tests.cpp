@@ -181,6 +181,67 @@ void test_header_validation() {
   expect(!valid_request_header(hidden), "unknown protocol version accepted");
 }
 
+void test_a_measurement_carries_no_secret_and_no_size() {
+  RequestHeader scan{
+      .operation = Operation::scan_tail_space,
+      .path_characters = 3,
+  };
+  expect(valid_request_header(scan), "valid tail-space header rejected");
+
+  RequestHeader sized = scan;
+  sized.outer_size_bytes = 512;
+  expect(!valid_request_header(sized), "a measurement accepted a size");
+
+  RequestHeader keyed = scan;
+  keyed.first_password_bytes = 8;
+  expect(!valid_request_header(keyed), "a measurement accepted a password");
+
+  RequestHeader pathless = scan;
+  pathless.path_characters = 0;
+  expect(!valid_request_header(pathless), "a measurement accepted no volume");
+}
+
+void test_a_measurement_round_trips_with_neither_password() {
+  const Pipe pipe = make_pipe();
+  const std::wstring root = L"Z:\\";
+  std::array<std::byte, kNonceSize> nonce{};
+  nonce[2] = std::byte{0x3b};
+  const RequestHeader header{
+      .operation = Operation::scan_tail_space,
+      .path_characters = static_cast<std::uint32_t>(root.size()),
+      .nonce = nonce,
+  };
+  write_request(pipe.write.get(), header, root, SecureBuffer{},
+                SecureBuffer{});
+  const Request received = read_request(pipe.read.get(), nonce);
+  expect(received.operation == Operation::scan_tail_space,
+         "the measurement operation did not round-trip");
+  expect(received.target_path == root, "the measured volume did not arrive");
+  expect(received.first_password.empty() && received.second_password.empty(),
+         "a measurement arrived carrying a password");
+}
+
+void test_a_measured_number_travels_only_with_success() {
+  const Pipe pipe = make_pipe();
+  const Response sent{
+      .type = MessageType::result,
+      .value = 5ULL * 1024ULL * 1024ULL * 1024ULL,
+  };
+  write_response(pipe.write.get(), sent);
+  const Response received = read_response(pipe.read.get());
+  expect(received.value == sent.value, "the measured value did not arrive");
+
+  Response failed = sent;
+  failed.error = static_cast<std::int32_t>(CreationError::bitmap_scan_failed);
+  expect(!valid_response(failed), "a failure arrived carrying a number");
+
+  Response reporting{.type = MessageType::progress,
+                     .stage = CreationStage::scanning_tail_space,
+                     .percent = 10,
+                     .value = 7};
+  expect(!valid_response(reporting), "a progress report carried a number");
+}
+
 void test_nonce_mismatch_is_rejected() {
   const Pipe pipe = make_pipe();
   const SecureBuffer first = password({1});
@@ -336,6 +397,9 @@ int main() {
     test_partial_cancel_request_is_not_a_cancel();
     test_header_validation();
     test_nonce_mismatch_is_rejected();
+    test_a_measurement_carries_no_secret_and_no_size();
+    test_a_measurement_round_trips_with_neither_password();
+    test_a_measured_number_travels_only_with_success();
     test_response_round_trip();
     test_format_error_mapping();
     test_pipe_dacl_names_system_and_token_user_explicitly();

@@ -4,8 +4,11 @@
 
 #include <Windows.h>
 
+#include <cstdint>
+
 namespace usb_vault::volume_creation::detail {
 
-void execute_request(HANDLE pipe, Request& request);
+// Returns what the request measured, or zero for one that creates.
+[[nodiscard]] std::uint64_t execute_request(HANDLE pipe, Request& request);
 
 }  // namespace usb_vault::volume_creation::detail

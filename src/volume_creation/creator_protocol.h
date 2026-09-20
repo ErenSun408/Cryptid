@@ -13,7 +13,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 1;
+constexpr std::uint16_t kProtocolVersion = 2;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -21,6 +21,8 @@ constexpr std::uint32_t kMaxPasswordBytes = 128;
 enum class Operation : std::uint32_t {
   create_standard = 1,
   create_with_hidden = 2,
+  // Carries a mounted volume's root path and no secret at all.
+  scan_tail_space = 3,
 };
 
 enum class MessageType : std::uint32_t {
@@ -52,6 +54,8 @@ struct Response final {
   std::uint32_t percent{};
   std::int32_t error{};
   std::uint32_t native_error{};
+  // What the operation measured. Only a successful scan sets it.
+  std::uint64_t value{};
 };
 
 // The one message that travels from caller to helper after the request. It is
@@ -67,7 +71,7 @@ struct CancelRequest final {
 #pragma pack(pop)
 
 static_assert(sizeof(RequestHeader) == 60);
-static_assert(sizeof(Response) == 28);
+static_assert(sizeof(Response) == 36);
 static_assert(sizeof(CancelRequest) == 24);
 
 struct Request final {
