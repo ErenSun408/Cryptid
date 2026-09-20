@@ -214,7 +214,7 @@ VikeySession VikeySession::open(
       call_with_secret(api_key, [&](char* const value) {
         return functions.set_api_key(kSelectedIndex, value);
       }),
-      "configure ViKey API key");
+      "configure ViKey API key", DiagnosticStage::sdk_key);
 
   sdk::Byte current_attempt = 0;
   sdk::Byte maximum_attempt = 0;
@@ -233,7 +233,7 @@ VikeySession VikeySession::open(
       call_with_secret(user_pin, [&](char* const value) {
         return functions.user_login(kSelectedIndex, value);
       }),
-      "authenticate ViKey user PIN");
+      "authenticate ViKey user PIN", DiagnosticStage::sdk_pin);
   pending.mark_logged_in(kSelectedIndex);
 
   sdk::Byte level = 0;

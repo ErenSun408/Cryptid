@@ -1,4 +1,5 @@
 #include "card/vikey/vikey_blob_round_trip.h"
+#include "card/capture_failure.h"
 #include "card/vikey/vikey_session.h"
 
 #include "usb_vault/card/card_error.h"
@@ -1028,6 +1029,42 @@ void test_failures_cleanup_without_spurious_logoff() {
   }
 }
 
+void test_authentication_diagnostic_stages() {
+  struct Case { sdk::Status status; bool pin; std::uint32_t code; CardError reason; };
+  const std::array cases{
+      Case{sdk::kApiKey, false, 2023, CardError::api_key_invalid},
+      Case{sdk::kApiKeyCalculate1, false, 2032, CardError::api_key_calculation_failed},
+      Case{sdk::kApiKeyCalculate2, false, 2033, CardError::api_key_calculation_failed},
+      Case{sdk::kInvalidPassword, true, 2025, CardError::authentication_failed},
+      Case{sdk::kNoChance, true, 2025, CardError::authentication_locked},
+      Case{sdk::kCommunication, true, 2025, CardError::communication_failed}};
+  Credentials credentials;
+  for (const auto& item : cases) {
+    FakeSdk state;
+    if (item.pin) state.login_status = item.status;
+    else state.set_api_key_status = item.status;
+    ActiveFake activation(state);
+    bool rejected = false;
+    try {
+      static_cast<void>(VikeySession::open(fake_functions(), credentials.user_sn,
+          credentials.api_key, credentials.user_pin));
+    } catch (...) {
+      rejected = true;
+      const auto failure = usb_vault::card::capture_failure(std::current_exception());
+      require(failure.primary.code == item.code &&
+                  failure.primary.reason == static_cast<std::uint32_t>(item.reason),
+              "authentication diagnostic lost its stage or reason");
+    }
+    require(rejected, "failed authentication was accepted");
+    if (item.pin) require_calls(state,
+        {Call::set_user_sn, Call::find_ex, Call::set_api_key, Call::get_attempts,
+         Call::user_login, Call::uninitialization}, "PIN failure retried or logged off");
+    else require_calls(state,
+        {Call::set_user_sn, Call::find_ex, Call::set_api_key, Call::uninitialization},
+        "key failure reached PIN authentication or retried");
+  }
+}
+
 void test_explicit_close_reports_failure_and_still_uninitializes() {
   FakeSdk state;
   ActiveFake activation(state);
@@ -1060,6 +1097,7 @@ int main() {
     test_incomplete_functions_fail_before_vendor_calls();
     test_hardware_identity_failures_fail_closed();
     test_failures_cleanup_without_spurious_logoff();
+    test_authentication_diagnostic_stages();
     test_explicit_close_reports_failure_and_still_uninitializes();
   } catch (const std::exception& error) {
     std::cerr << "vikey_session_tests: FAIL: " << error.what() << '\n';
