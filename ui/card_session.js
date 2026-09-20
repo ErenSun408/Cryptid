@@ -1,5 +1,7 @@
 (() => {
   "use strict";
+  // Fixed, non-secret readiness result polled by the native startup watchdog.
+  window.usbVaultPageStartupStatus = 0;
 
   const nativeState = Object.freeze({
     noCard: 0,
@@ -3579,7 +3581,7 @@
     if (!Number.isInteger(nextState) || nextState < nativeState.noCard ||
         nextState > nativeState.unavailable ||
         (nextActiveVolumes !== true && nextActiveVolumes !== false)) {
-      throw new Error("invalid native session state");
+      throw Object.assign(new Error("invalid native session state"), { startupCode: 1404 });
     }
     const nextContainers = [];
     const nextOperationEvents = [];
@@ -3671,6 +3673,40 @@
     operationEvents = nextOperationEvents;
   };
 
+  const startupFailureMessage = () => {
+    const failure = window.usbVaultStartupFailure;
+    if (!failure || !Number.isInteger(failure.code) || failure.code < 1000 ||
+        failure.code > 9999) return "安全组件检查未通过，请重新打开应用；仍失败请联系支持。";
+    let reason = "安全组件检查未通过。";
+    if (failure.code === 2019 || failure.code === 2020 || failure.code === 3018)
+      reason = "等待安全组件响应超时。请检查设备连接、网络及安全软件的拦截记录。";
+    else if (failure.code === 2010 || failure.code === 2014)
+      reason = "安全卡辅助程序未能正常启动或完成。请重新打开应用。";
+    else if (failure.code === 2011)
+      reason = "无法建立安全运行环境，请联系支持。";
+    else if (failure.reason === 4)
+      reason = "安全卡用户 PIN 验证失败，请核对已配置的凭据，不要连续重试。";
+    else if (failure.reason === 5)
+      reason = "安全卡用户认证已锁定，请停止重试并联系供应方。";
+    else if (failure.code >= 4001 && failure.code <= 4005)
+      reason = "安全卡状态或兼容性检查未通过，请联系支持，不要直接重新初始化。";
+    else if (failure.code >= 2001 && failure.code <= 2003)
+      reason = "安全卡凭据无法读取或格式不正确，请检查配置。";
+    else if (failure.code >= 2005 && failure.code <= 2013)
+      reason = "安全组件文件或运行环境检查失败，请使用完整安装包修复。";
+    else if (failure.code === 2023 || failure.code === 2032 || failure.code === 2033)
+      reason = "安全卡访问配置未通过，请核对供应方配置与网络；不能仅凭此结果判断密钥错误。";
+    let message = `${reason} 错误码：${failure.code}。`;
+    if (Number.isInteger(failure.reason) && failure.reason >= 1 && failure.reason <= 18)
+      message += ` 原因码：${failure.reason}。`;
+    if ([1, 2, 3].includes(failure.nativeKind) && Number.isInteger(failure.nativeCode) &&
+        failure.nativeCode >= 0 && failure.nativeCode <= 4294967295)
+      message += ` 底层类别：${failure.nativeKind}，底层错误码：${failure.nativeCode}。`;
+    if (Number.isInteger(failure.cleanupCode) && failure.cleanupCode >= 1000 && failure.cleanupCode <= 9999)
+      message += ` 附加清理错误码：${failure.cleanupCode}。`;
+    return message;
+  };
+
   const messageForCurrentState = () => {
     switch (currentState) {
       case nativeState.noCard:
@@ -3687,7 +3723,7 @@
       default:
         return activeVolumes
           ? "安全操作未完成，请尝试一键卸载。"
-          : "请重新插入安全卡后重试。";
+          : startupFailureMessage();
     }
   };
 
@@ -5480,38 +5516,42 @@
   };
 
   (async () => {
+    let failureCode = 1401;
     try {
       bridge = chrome.webview.hostObjects.nativeBridge;
       // The host decides which surface this page opened for. Setup has no
       // session state to read, so it must be answered before anything asks
       // the bridge for one.
-      let startupView = "session";
-      try {
-        startupView = String(await bridge.getStartupView());
-      } catch (_) {
-        startupView = "session";
-      }
+      failureCode = 1402;
+      const startupView = String(await bridge.getStartupView());
+      if (!["configuration", "session"].includes(startupView)) throw new Error("invalid startup view");
       if (startupView === "configuration") {
         await startConfiguration();
+        window.usbVaultPageStartupStatus = 1;
         return;
       }
+      failureCode = 1403;
       const preset = await bridge.getWindowSize();
       if (![0, 1, 2, 3].includes(preset)) throw new Error("invalid window preference");
       appliedWindowSize = String(preset);
       windowSizeSelect.value = appliedWindowSize;
+      failureCode = 1405;
       await refreshNativeState();
       busy = false;
       render(messageForCurrentState());
       updateStrength();
       focusCurrentInput();
+      window.usbVaultPageStartupStatus = 1;
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }
-    } catch (_) {
+    } catch (error) {
+      if (error && error.startupCode === 1404) failureCode = 1404;
+      window.usbVaultPageStartupStatus = failureCode;
       currentState = nativeState.unavailable;
       activeVolumes = true;
       busy = false;
-      render("安全组件不可用，请尝试一键卸载。");
+      render(`界面启动通信失败，错误码：${failureCode}。请重新打开应用。`);
     }
   })();
 })();

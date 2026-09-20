@@ -14,6 +14,7 @@
 #include "platform/windows/installation_state.h"
 #include "platform/windows/shell_container_file_chooser.h"
 #include "card/diagnostic_error.h"
+#include "ui/webview_startup_state.h"
 #include "platform/windows/vikey_configuration/diagnostics.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_device_lifecycle_controller.h"
@@ -53,6 +54,11 @@ constexpr usb_vault::platform::windows::HidDeviceIdentity
 constexpr wchar_t kHostObjectName[] = L"nativeBridge";
 HWND g_main_window{};
 std::uint64_t g_window_generation{};
+std::uint64_t g_page_generation{};
+UINT64 g_navigation_id{};
+bool g_navigation_complete{};
+bool g_ready_poll_pending{};
+usb_vault::ui::WebviewStartupState g_webview_startup;
 // Which surface the one product window shows. Setup and the product session
 // swap inside it rather than each owning a window, but the swap is still a
 // full teardown: the card context, the bridge and the document are all gone
@@ -540,21 +546,40 @@ void resize_webview(const HWND window) noexcept {
 }
 
 void notify_webview_session_changed() noexcept {
-  if (!g_webview) return;
+  if (!g_webview || !g_webview_startup.current(g_page_generation)) return;
+  // Only the bounded numeric failure snapshot crosses this boundary. Never
+  // insert an exception message, SDK payload, file path, or card identity.
+  const auto failure = g_card_entry ? g_card_entry->startup_failure()
+                                    : usb_vault::card::FailureDiagnostic{};
+  const auto& primary = failure.primary;
+  std::wstring script;
+  try {
+    script = L"window.usbVaultStartupFailure={code:" + std::to_wstring(primary.code) +
+        L",reason:" + std::to_wstring(primary.reason) +
+        L",nativeKind:" + std::to_wstring(primary.native_kind) +
+        L",nativeCode:" + std::to_wstring(primary.native_code) +
+        L",cleanupCode:" + std::to_wstring(failure.cleanup.code) + L"};" +
+        usb_vault::ui::kWebviewSessionChangedScript;
+  } catch (...) {
+    show_failure(L"无法准备界面诊断信息。错误码：9002。请重新打开应用。");
+    return;
+  }
+  const auto page_generation = g_page_generation;
   const HRESULT result = g_webview->ExecuteScript(
-      usb_vault::ui::kWebviewSessionChangedScript,
+      script.c_str(),
       Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-          [](const HRESULT script_result, LPCWSTR) -> HRESULT {
+          [page_generation](const HRESULT script_result, LPCWSTR) -> HRESULT {
+            if (!g_webview_startup.current(page_generation)) return S_OK;
             if (FAILED(script_result)) {
               show_failure(
-                  L"安全会话状态已变化，但界面刷新失败。请重新打开应用确认状态。");
+                  L"安全会话状态已变化，但界面刷新失败。错误码：1504。请重新打开应用确认状态。");
             }
             return S_OK;
           })
           .Get());
   if (FAILED(result)) {
     show_failure(
-        L"安全会话状态已变化，但界面刷新失败。请重新打开应用确认状态。");
+        L"安全会话状态已变化，但界面刷新失败。错误码：1504。请重新打开应用确认状态。");
   }
 }
 
@@ -613,86 +638,180 @@ void detach_host_object() noexcept {
   g_host_object.Reset();
 }
 
+void report_webview_failure(const std::uint32_t code,
+                            const HRESULT result = S_OK) noexcept {
+  if (!g_webview_startup.fail(g_page_generation)) return;
+  ::KillTimer(g_main_window, 2);
+  disarm_external_drops();
+  detach_host_object();
+  const wchar_t* reason = L"界面无法完成初始化。";
+  switch (code) {
+    case 1302: case 1303: reason = L"无法创建 WebView2 运行环境。"; break;
+    case 1304: case 1305: case 1306: reason = L"无法创建网页显示窗口。"; break;
+    case 1307: reason = L"WebView2 缺少所需接口或接口不可访问。"; break;
+    case 1308: reason = L"无法启用网页安全设置，已停止加载。"; break;
+    case 1309: reason = L"无法连接界面与本地程序。"; break;
+    case 1310: case 1311: reason = L"无法建立或执行网页导航保护。"; break;
+    case 1312: case 1313: reason = L"无法加载本地界面。"; break;
+    case 1314: reason = L"网页进程异常或无法建立进程监测。"; break;
+    case 1315: reason = L"等待界面就绪超时。"; break;
+    case 1401: case 1402: case 1403: case 1404: case 1405:
+      reason = L"界面与本地程序的启动通信失败。"; break;
+  }
+  wchar_t message[512]{};
+  if (FAILED(result)) {
+    swprintf_s(message, L"%s\n错误码：%u\n系统错误类别：2\n系统错误码：%u\n请重新打开 USB Vault；仍失败请提供这些编号。",
+               reason, code, static_cast<unsigned int>(result));
+  } else {
+    swprintf_s(message, L"%s\n错误码：%u\n请重新打开 USB Vault；仍失败请提供此编号。", reason, code);
+  }
+  show_failure(message);
+  // Use the normal close guard. Never destroy an authenticated session with
+  // active volumes merely because its renderer failed.
+  if (::IsWindow(g_main_window)) ::PostMessageW(g_main_window, WM_CLOSE, 0, 0);
+}
+
+void begin_webview_watch(const HWND window) {
+  ++g_page_generation;
+  g_navigation_id = 0;
+  g_navigation_complete = false;
+  g_ready_poll_pending = false;
+  g_webview_startup.begin(g_page_generation, ::GetTickCount64());
+  if (::SetTimer(window, 2, 250, nullptr) == 0) {
+    report_webview_failure(1209, HRESULT_FROM_WIN32(::GetLastError()));
+  }
+}
+
+void poll_webview_ready() {
+  if (!g_webview_startup.current(g_page_generation)) return;
+  if (g_webview_startup.expired(g_page_generation, ::GetTickCount64())) {
+    report_webview_failure(1315);
+    return;
+  }
+  if (!g_webview || !g_navigation_complete || g_ready_poll_pending) return;
+  g_ready_poll_pending = true;
+  const auto generation = g_page_generation;
+  const HRESULT result = g_webview->ExecuteScript(
+      L"Number(window.usbVaultPageStartupStatus || 0)",
+      Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+          [generation](HRESULT status, LPCWSTR value) -> HRESULT {
+            if (!g_webview_startup.current(generation)) return S_OK;
+            g_ready_poll_pending = false;
+            if (FAILED(status)) { report_webview_failure(1401, status); return S_OK; }
+            const std::wstring_view text = value ? value : L"";
+            if (text == L"1") {
+              static_cast<void>(g_webview_startup.ready(generation));
+              ::KillTimer(g_main_window, 2);
+              notify_webview_session_changed();
+            } else if (text == L"1401" || text == L"1402" || text == L"1403" ||
+                       text == L"1404" || text == L"1405") {
+              report_webview_failure(text == L"1401" ? 1401 : text == L"1402" ? 1402 :
+                  text == L"1403" ? 1403 : text == L"1404" ? 1404 : 1405);
+            }
+            return S_OK;
+          }).Get());
+  if (FAILED(result)) {
+    g_ready_poll_pending = false;
+    report_webview_failure(1401, result);
+  }
+}
+
 void initialize_webview(const HWND window) {
   const auto generation = ++g_window_generation;
-  g_page_uri = local_page_uri();
+  begin_webview_watch(window);
+  if (!g_webview_startup.current(g_page_generation)) return;
+  try { g_page_uri = local_page_uri(); }
+  catch (...) { report_webview_failure(1301); return; }
   const HRESULT result = ::CreateCoreWebView2EnvironmentWithOptions(
       nullptr, nullptr, nullptr,
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
           [window, generation](const HRESULT environment_result,
                    ICoreWebView2Environment* const environment) -> HRESULT {
-            if (generation != g_window_generation || !::IsWindow(window)) return S_OK;
+            if (generation != g_window_generation || !::IsWindow(window) ||
+                !g_webview_startup.current(g_page_generation)) return S_OK;
             if (FAILED(environment_result) || environment == nullptr) {
-              show_failure(L"WebView2 运行时初始化失败。");
+              report_webview_failure(1303, FAILED(environment_result) ? environment_result : E_POINTER);
               return FAILED(environment_result) ? environment_result : E_FAIL;
             }
-            return environment->CreateCoreWebView2Controller(
+            const HRESULT create_result = environment->CreateCoreWebView2Controller(
                 window,
                 Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                     [window, generation](const HRESULT controller_result,
                              ICoreWebView2Controller* const controller) -> HRESULT {
-                      if (generation != g_window_generation || !::IsWindow(window)) {
+                      if (generation != g_window_generation || !::IsWindow(window) ||
+                          !g_webview_startup.current(g_page_generation)) {
                         if (controller) controller->Close();
                         return S_OK;
                       }
                       if (FAILED(controller_result) || controller == nullptr) {
-                        show_failure(L"WebView2 窗口初始化失败。");
+                        report_webview_failure(1305, FAILED(controller_result) ? controller_result : E_POINTER);
                         return FAILED(controller_result) ? controller_result
                                                          : E_FAIL;
                       }
                       g_controller = controller;
                       HRESULT current = g_controller->get_CoreWebView2(&g_webview);
                       if (FAILED(current) || !g_webview) {
+                        report_webview_failure(1306, FAILED(current) ? current : E_POINTER);
                         return FAILED(current) ? current : E_FAIL;
                       }
 
                       ComPtr<ICoreWebView2Settings> settings;
                       current = g_webview->get_Settings(&settings);
                       if (FAILED(current)) {
+                        report_webview_failure(1307, current);
                         return current;
                       }
                       current = settings->put_AreDevToolsEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
                       current =
                           settings->put_AreDefaultContextMenusEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
                       current =
                           settings->put_AreDefaultScriptDialogsEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
                       current = settings->put_IsWebMessageEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
                       current = settings->put_IsStatusBarEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
 
                       ComPtr<ICoreWebView2Settings4> restricted_settings;
                       current = settings.As(&restricted_settings);
                       if (FAILED(current)) {
+                        report_webview_failure(1307, current);
                         return current;
                       }
                       current = restricted_settings
                                     ->put_AreBrowserAcceleratorKeysEnabled(
                                         FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
                       current = restricted_settings
                                     ->put_IsPasswordAutosaveEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
                       current = restricted_settings
                                     ->put_IsGeneralAutofillEnabled(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
 
@@ -707,50 +826,96 @@ void initialize_webview(const HWND window) {
                       ComPtr<ICoreWebView2Controller4> drop_controller;
                       current = g_controller.As(&drop_controller);
                       if (FAILED(current)) {
+                        report_webview_failure(1307, current);
                         return current;
                       }
                       current =
                           drop_controller->put_AllowExternalDrop(FALSE);
                       if (FAILED(current)) {
+                        report_webview_failure(1308, current);
                         return current;
                       }
 
                       current = attach_host_object();
                       if (FAILED(current)) {
+                        report_webview_failure(1309, current);
                         return current;
                       }
 
                       EventRegistrationToken navigation_token{};
                       current = g_webview->add_NavigationStarting(
                           Callback<ICoreWebView2NavigationStartingEventHandler>(
-                              [](ICoreWebView2*,
+                              [generation](ICoreWebView2*,
                                  ICoreWebView2NavigationStartingEventArgs* args)
                                   -> HRESULT {
+                                if (generation != g_window_generation ||
+                                    !g_webview_startup.current(g_page_generation)) {
+                                  return args->put_Cancel(TRUE);
+                                }
                                 LPWSTR raw_uri = nullptr;
                                 const HRESULT uri_result = args->get_Uri(&raw_uri);
                                 if (FAILED(uri_result)) {
+                                  static_cast<void>(args->put_Cancel(TRUE));
+                                  report_webview_failure(1311, uri_result);
                                   return uri_result;
                                 }
                                 const std::wstring uri = raw_uri ? raw_uri : L"";
                                 ::CoTaskMemFree(raw_uri);
                                 if (uri != g_page_uri) {
-                                  static_cast<void>(args->put_Cancel(TRUE));
+                                  const HRESULT canceled = args->put_Cancel(TRUE);
+                                  if (FAILED(canceled)) report_webview_failure(1311, canceled);
+                                } else {
+                                  const HRESULT identified = args->get_NavigationId(&g_navigation_id);
+                                  if (FAILED(identified)) report_webview_failure(1311, identified);
                                 }
                                 return S_OK;
                               })
                               .Get(),
                           &navigation_token);
                       if (FAILED(current)) {
+                        report_webview_failure(1310, current);
                         return current;
                       }
+                      EventRegistrationToken completed_token{};
+                      current = g_webview->add_NavigationCompleted(
+                          Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                              [generation](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                if (generation != g_window_generation ||
+                                    !g_webview_startup.current(g_page_generation)) return S_OK;
+                                UINT64 navigation{};
+                                const HRESULT id_result = args->get_NavigationId(&navigation);
+                                if (FAILED(id_result)) { report_webview_failure(1313, id_result); return S_OK; }
+                                if (navigation != g_navigation_id) return S_OK;
+                                BOOL success = FALSE;
+                                const HRESULT status = args->get_IsSuccess(&success);
+                                if (FAILED(status) || !success) {
+                                  report_webview_failure(1313, status);
+                                  return S_OK;
+                                }
+                                g_navigation_complete = true;
+                                return S_OK;
+                              }).Get(), &completed_token);
+                      if (FAILED(current)) { report_webview_failure(1310, current); return current; }
+                      EventRegistrationToken failed_token{};
+                      current = g_webview->add_ProcessFailed(
+                          Callback<ICoreWebView2ProcessFailedEventHandler>(
+                              [generation](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs*) -> HRESULT {
+                                if (generation == g_window_generation) report_webview_failure(1314);
+                                return S_OK;
+                              }).Get(), &failed_token);
+                      if (FAILED(current)) { report_webview_failure(1314, current); return current; }
                       resize_webview(window);
-                      return g_webview->Navigate(g_page_uri.c_str());
+                      current = g_webview->Navigate(g_page_uri.c_str());
+                      if (FAILED(current)) report_webview_failure(1312, current);
+                      return current;
                     })
                     .Get());
+            if (FAILED(create_result)) report_webview_failure(1304, create_result);
+            return create_result;
           })
           .Get());
   if (FAILED(result)) {
-    throw std::runtime_error("cannot start WebView2 environment creation");
+    report_webview_failure(1302, result);
   }
 }
 
@@ -759,6 +924,8 @@ void initialize_webview(const HWND window) {
 // page of this application rather than a second window that replaces it.
 void show_configuration(const HWND window) noexcept {
   g_view_switch_pending = false;
+  begin_webview_watch(window);
+  if (!g_webview_startup.current(g_page_generation)) return;
   static_cast<void>(::KillTimer(window, 1));
   disarm_external_drops();
   detach_host_object();
@@ -769,15 +936,16 @@ void show_configuration(const HWND window) noexcept {
   g_deferred_removal = false;
   g_deferred_arrival = false;
   g_view = StartupView::configuration;
-  if (FAILED(attach_host_object()) ||
-      FAILED(g_webview->Navigate(g_page_uri.c_str()))) {
-    show_failure(L"无法打开凭据配置页，请重新启动 USB Vault。");
-    static_cast<void>(::DestroyWindow(window));
-  }
+  const HRESULT attached = attach_host_object();
+  if (FAILED(attached)) { report_webview_failure(1309, attached); return; }
+  const HRESULT navigated = g_webview->Navigate(g_page_uri.c_str());
+  if (FAILED(navigated)) report_webview_failure(1312, navigated);
 }
 
 void show_session(const HWND window) noexcept {
   g_view_switch_pending = false;
+  g_webview_startup.stop();
+  ::KillTimer(window, 2);
   disarm_external_drops();
   detach_host_object();
   g_view = StartupView::session;
@@ -787,16 +955,19 @@ void show_session(const HWND window) noexcept {
     // with.
     initialize_application_session(window);
   } catch (...) {
-    show_failure(L"凭据已保存，但无法重新建立安全会话。请重新启动 USB Vault。");
+    show_failure(L"无法重新建立安全会话。错误码：1210。请重新启动 USB Vault。");
     static_cast<void>(::DestroyWindow(window));
     return;
   }
-  if (::SetTimer(window, 1, 100, nullptr) == 0 ||
-      FAILED(attach_host_object()) ||
-      FAILED(g_webview->Navigate(g_page_uri.c_str()))) {
-    show_failure(L"凭据已保存，但无法回到主界面。请重新启动 USB Vault。");
-    static_cast<void>(::DestroyWindow(window));
+  begin_webview_watch(window);
+  if (!g_webview_startup.current(g_page_generation)) return;
+  if (::SetTimer(window, 1, 100, nullptr) == 0) {
+    report_webview_failure(1209, HRESULT_FROM_WIN32(::GetLastError())); return;
   }
+  const HRESULT attached = attach_host_object();
+  if (FAILED(attached)) { report_webview_failure(1309, attached); return; }
+  const HRESULT navigated = g_webview->Navigate(g_page_uri.c_str());
+  if (FAILED(navigated)) report_webview_failure(1312, navigated);
 }
 
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
@@ -851,6 +1022,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_TIMER:
       if (g_view_switch_pending) return 0;
+      if (wparam == 2) { poll_webview_ready(); return 0; }
       if (wparam == 1 && g_drop_target != nullptr) {
         notify_webview_external_drop(g_drop_target->status().state);
       }
@@ -927,7 +1099,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_DESTROY:
       ++g_window_generation;
+      g_webview_startup.stop();
       ::KillTimer(window, 1);
+      ::KillTimer(window, 2);
       // Before the session it is writing into goes: revoking stops new drags,
       // and closing waits for the copy that is already running.
       if (g_drop_target != nullptr) {

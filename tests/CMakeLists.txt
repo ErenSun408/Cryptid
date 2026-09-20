@@ -198,6 +198,11 @@ target_link_libraries(startup_failure_tests PRIVATE usb_vault_core)
 usb_vault_configure_target(startup_failure_tests)
 add_test(NAME startup_failure_tests COMMAND startup_failure_tests)
 
+add_executable(webview_startup_state_tests webview_startup_state_tests.cpp)
+target_include_directories(webview_startup_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+usb_vault_configure_target(webview_startup_state_tests)
+add_test(NAME webview_startup_state_tests COMMAND webview_startup_state_tests)
+
 add_executable(card_entry_initialization_controller_tests
   card_entry_initialization_controller_tests.cpp
 )

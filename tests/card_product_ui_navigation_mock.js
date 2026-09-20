@@ -82,6 +82,7 @@ window.navigationFixture = {
       if (fixture.failForcePreference) throw new Error("preference write failed");
       fixture.forceEnabled = value;
     },
+    getStartupView: () => "session",
     getWindowSize: () => fixture.windowPreset,
     beginMountBatch: (ids) => beginBatch(ids, true),
     beginUnmountBatch: (ids) => beginBatch(ids, false),
