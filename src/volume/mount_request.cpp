@@ -38,6 +38,35 @@ void validate_password(const security::SecureBuffer& volume_password) {
   }
 }
 
+void validate_protection(const MountOptions& options) {
+  if (!options.hidden_volume_protection.has_value()) {
+    return;
+  }
+  const HiddenVolumeProtection& protection = *options.hidden_volume_protection;
+  if (protection.password == nullptr) {
+    throw std::invalid_argument(
+        "hidden-volume protection needs the password that opens the hidden "
+        "volume");
+  }
+  if (protection.password->empty()) {
+    throw std::invalid_argument(
+        "hidden-volume protection password must not be empty");
+  }
+  if (protection.password->size() > abi::kMaxPassword) {
+    throw std::invalid_argument(
+        "hidden-volume protection password exceeds the driver ABI limit");
+  }
+  if (protection.prf != Pkcs5Prf::sha512) {
+    throw std::invalid_argument(
+        "only the explicitly validated SHA-512 PRF is allowed for the "
+        "protected hidden volume");
+  }
+  if (protection.pim < 0 || protection.pim > abi::kMaxPimValue) {
+    throw std::invalid_argument(
+        "protected hidden volume PIM is outside the VeraCrypt driver range");
+  }
+}
+
 void validate_options(const MountOptions& options) {
   static_cast<void>(drive_number(options.drive_letter));
   if (options.prf != Pkcs5Prf::sha512) {
@@ -46,6 +75,18 @@ void validate_options(const MountOptions& options) {
   if (options.pim < 0 || options.pim > abi::kMaxPimValue) {
     throw std::invalid_argument("PIM is outside the VeraCrypt driver range");
   }
+  validate_protection(options);
+}
+
+// Both driver password slots are fixed-size and already zeroed, so a shorter
+// password leaves the remainder as the terminator the driver expects.
+void copy_password(abi::Password& target,
+                   const security::SecureBuffer& password) {
+  for (std::size_t index = 0; index < password.size(); ++index) {
+    target.text[index] =
+        std::to_integer<std::uint8_t>(password.bytes()[index]);
+  }
+  target.length = static_cast<std::uint32_t>(password.size());
 }
 
 }  // namespace
@@ -74,12 +115,7 @@ void populate_mount_request(
   std::wstring driver_path(volume_path);
   std::ranges::replace(driver_path, L'/', L'\\');
   std::ranges::copy(driver_path, request.volume_path);
-  for (std::size_t index = 0; index < volume_password.size(); ++index) {
-    request.volume_password.text[index] =
-        std::to_integer<std::uint8_t>(volume_password.bytes()[index]);
-  }
-  request.volume_password.length =
-      static_cast<std::uint32_t>(volume_password.size());
+  copy_password(request.volume_password, volume_password);
 
   request.drive_number = drive_number(options.drive_letter);
   request.bytes_per_sector = 512;
@@ -91,7 +127,20 @@ void populate_mount_request(
   request.volume_pim = options.pim;
 
   // The zero-initialized ABI buffer intentionally leaves password/PIM caches,
-  // hidden-volume protection, recovery, backup headers, and removable mode off.
+  // recovery, backup headers, and removable mode off. Hidden-volume protection
+  // is the one of those a caller can ask for, and asking is the only way it is
+  // ever on: an outer volume mounted for maintenance protects what is behind
+  // it, and every other mount in the product carries the zero.
+  if (options.hidden_volume_protection.has_value()) {
+    const HiddenVolumeProtection& protection =
+        *options.hidden_volume_protection;
+    copy_password(request.protected_hidden_volume_password,
+                  *protection.password);
+    request.protected_hidden_volume_pkcs5_prf =
+        static_cast<std::int32_t>(protection.prf);
+    request.protected_hidden_volume_pim = protection.pim;
+    request.protect_hidden_volume = 1;
+  }
 }
 
 }  // namespace usb_vault::volume::detail

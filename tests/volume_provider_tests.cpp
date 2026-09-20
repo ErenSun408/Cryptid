@@ -15,6 +15,7 @@
 namespace {
 
 using usb_vault::security::SecureBuffer;
+using usb_vault::volume::HiddenVolumeProtection;
 using usb_vault::volume::MountOptions;
 using usb_vault::volume::Pkcs5Prf;
 using usb_vault::volume::detail::LockedDriverBuffer;
@@ -37,10 +38,11 @@ void require_invalid_argument(Function&& function,
   throw std::runtime_error(message);
 }
 
-SecureBuffer fixture_password(const std::size_t size) {
+SecureBuffer fixture_password(const std::size_t size,
+                              const unsigned int seed = 1U) {
   SecureBuffer password(size);
   for (std::size_t index = 0; index < size; ++index) {
-    password.bytes()[index] = static_cast<std::byte>((index + 1U) & 0xffU);
+    password.bytes()[index] = static_cast<std::byte>((index + seed) & 0xffU);
   }
   return password;
 }
@@ -167,6 +169,125 @@ void test_invalid_mount_requests() {
             request.get(), L"D:\\vault\\one.hc", valid_password, options);
       },
       "out-of-range PIM was accepted");
+
+  require_invalid_argument(
+      [&] {
+        LockedDriverBuffer<MountRequest> request;
+        MountOptions options = valid_options;
+        options.hidden_volume_protection = HiddenVolumeProtection{};
+        usb_vault::volume::detail::populate_mount_request(
+            request.get(), L"D:\\vault\\one.hc", valid_password, options);
+      },
+      "protection without a password was accepted");
+
+  require_invalid_argument(
+      [&] {
+        LockedDriverBuffer<MountRequest> request;
+        const SecureBuffer empty_password;
+        MountOptions options = valid_options;
+        options.hidden_volume_protection =
+            HiddenVolumeProtection{.password = &empty_password};
+        usb_vault::volume::detail::populate_mount_request(
+            request.get(), L"D:\\vault\\one.hc", valid_password, options);
+      },
+      "empty protection password was accepted");
+
+  require_invalid_argument(
+      [&] {
+        LockedDriverBuffer<MountRequest> request;
+        const SecureBuffer too_long_password = fixture_password(129);
+        MountOptions options = valid_options;
+        options.hidden_volume_protection =
+            HiddenVolumeProtection{.password = &too_long_password};
+        usb_vault::volume::detail::populate_mount_request(
+            request.get(), L"D:\\vault\\one.hc", valid_password, options);
+      },
+      "overlong protection password was accepted");
+
+  require_invalid_argument(
+      [&] {
+        LockedDriverBuffer<MountRequest> request;
+        MountOptions options = valid_options;
+        options.hidden_volume_protection = HiddenVolumeProtection{
+            .password = &valid_password, .prf = static_cast<Pkcs5Prf>(0)};
+        usb_vault::volume::detail::populate_mount_request(
+            request.get(), L"D:\\vault\\one.hc", valid_password, options);
+      },
+      "automatic PRF probing was accepted for the protected hidden volume");
+
+  require_invalid_argument(
+      [&] {
+        LockedDriverBuffer<MountRequest> request;
+        MountOptions options = valid_options;
+        options.hidden_volume_protection = HiddenVolumeProtection{
+            .password = &valid_password,
+            .pim = usb_vault::volume::detail::abi::kMaxPimValue + 1};
+        usb_vault::volume::detail::populate_mount_request(
+            request.get(), L"D:\\vault\\one.hc", valid_password, options);
+      },
+      "out-of-range protection PIM was accepted");
+}
+
+void test_protected_mount_request() {
+  const SecureBuffer outer_password = fixture_password(48);
+  const SecureBuffer hidden_password = fixture_password(72, 0x40U);
+
+  LockedDriverBuffer<MountRequest> locked_request;
+  MountRequest& request = locked_request.get();
+  const MountOptions options{
+      .drive_letter = L'Z',
+      .prf = Pkcs5Prf::sha512,
+      .pim = 0,
+      .read_only = false,
+      .notify_shell = false,
+      .hidden_volume_protection =
+          HiddenVolumeProtection{.password = &hidden_password},
+  };
+
+  usb_vault::volume::detail::populate_mount_request(
+      request, L"D:\\vault\\pair.hc", outer_password, options);
+
+  require(request.protect_hidden_volume == 1,
+          "a maintenance mount left hidden-volume protection off");
+  require(request.protected_hidden_volume_password.length == 72,
+          "protection password length was not preserved");
+  for (std::size_t index = 0; index < hidden_password.size(); ++index) {
+    require(request.protected_hidden_volume_password.text[index] ==
+                std::to_integer<std::uint8_t>(hidden_password.bytes()[index]),
+            "protection password bytes were not preserved");
+  }
+  require(request.protected_hidden_volume_password.text[72] == 0,
+          "protection password terminator byte was not zero");
+  require(request.protected_hidden_volume_pkcs5_prf == 1,
+          "SHA-512 PRF was not explicit for the protected hidden volume");
+
+  // The two slots carry different passwords, and the outer one is the volume
+  // the driver actually mounts. A request that put either in the other's slot
+  // would mount the wrong volume or protect nothing, and both readings are
+  // refused the same way by the driver, so nothing downstream would catch it.
+  require(request.volume_password.length == 48,
+          "the mounted volume password was displaced by the protection one");
+  for (std::size_t index = 0; index < outer_password.size(); ++index) {
+    require(request.volume_password.text[index] ==
+                std::to_integer<std::uint8_t>(outer_password.bytes()[index]),
+            "the mounted volume password bytes were not preserved");
+  }
+
+  // The product mounts with PIM 0 throughout; this pair only pins down which
+  // field each PIM reaches, because they sit 4 bytes apart in the request.
+  LockedDriverBuffer<MountRequest> locked_pim_request;
+  MountRequest& pim_request = locked_pim_request.get();
+  MountOptions pim_options = options;
+  pim_options.hidden_volume_protection =
+      HiddenVolumeProtection{.password = &hidden_password, .pim = 485};
+
+  usb_vault::volume::detail::populate_mount_request(
+      pim_request, L"D:\\vault\\pair.hc", outer_password, pim_options);
+
+  require(pim_request.protected_hidden_volume_pim == 485,
+          "protection PIM did not reach the protected hidden volume");
+  require(pim_request.volume_pim == 0,
+          "protection PIM displaced the mounted volume PIM");
 }
 
 void test_driver_error_codes() {
@@ -185,6 +306,7 @@ void test_driver_error_codes() {
 int main() {
   try {
     test_valid_mount_request();
+    test_protected_mount_request();
     test_invalid_mount_requests();
     test_driver_error_codes();
   } catch (const std::exception& error) {

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -44,12 +45,37 @@ enum class DriverError : std::int32_t {
 [[nodiscard]] const std::error_category& driver_error_category() noexcept;
 [[nodiscard]] std::error_code make_error_code(DriverError error) noexcept;
 
+// Names the hidden volume of a two-volume container so the driver can refuse
+// writes that would reach it.
+//
+// The password is the one that opens the hidden header. The driver reads that
+// header only to learn where the protected region begins: it does not mount
+// the volume behind it and reports nothing about it back. A password that
+// opens no hidden header and a container that has no hidden volume at all come
+// back the same way, as a rejected mount, which is what lets the product refuse
+// both in one sentence without first learning which of them it is looking at.
+//
+// The buffer is borrowed for the duration of the mount call. It is copied into
+// the locked request buffer and nowhere else, and that buffer is wiped on every
+// return path.
+struct HiddenVolumeProtection final {
+  const security::SecureBuffer* password{nullptr};
+  Pkcs5Prf prf{Pkcs5Prf::sha512};
+  std::int32_t pim{0};
+};
+
 struct MountOptions final {
   wchar_t drive_letter{};
   Pkcs5Prf prf{Pkcs5Prf::sha512};
   std::int32_t pim{0};
   bool read_only{false};
   bool notify_shell{true};
+  // Absent is the shape of every mount but outer-volume maintenance, and the
+  // shape a caller gets by saying nothing. Protection belongs to one mount and
+  // is never written down: no local artifact records that a container was ever
+  // mounted this way, because that would be a record of the container having
+  // something to protect.
+  std::optional<HiddenVolumeProtection> hidden_volume_protection{};
 };
 
 struct UnmountOptions final {
