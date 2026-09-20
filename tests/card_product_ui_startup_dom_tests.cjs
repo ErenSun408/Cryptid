@@ -53,7 +53,8 @@ async function run(configure, verify) {
   }, async w => {
     assert.equal(w.usbVaultPageStartupStatus, 1, "card error is not a WebView failure");
     let text = w.document.getElementById("card-session-status").textContent;
-    assert.match(text, /2019/); assert.match(text, /2015/); assert.match(text, /超时/);
+    assert.equal(text, "错误码：2019");
+    assert.equal(w.document.getElementById("card-session-status").dataset.tone, "error");
     assert.doesNotMatch(text, /12345|secret-sentinel|重新插入/);
     w.navigationFixture.state = 0;
     w.usbVaultStartupFailure = { code: 0 };
@@ -61,12 +62,13 @@ async function run(configure, verify) {
     await settle();
     text = w.document.getElementById("card-session-status").textContent;
     assert.match(text, /等待安全卡/); assert.doesNotMatch(text, /2019|2015/);
+    assert.equal(w.document.getElementById("card-session-status").dataset.tone, "");
     w.navigationFixture.state = 4;
     w.usbVaultStartupFailure = { code: 2025, reason: 5, nativeKind: 0, cleanupCode: 0 };
     w.dispatchEvent(new w.Event("usb-vault-session-changed"));
     await settle();
     text = w.document.getElementById("card-session-status").textContent;
-    assert.match(text, /2025/); assert.match(text, /锁定/); assert.doesNotMatch(text, /2019|2015/);
+    assert.equal(text, "错误码：2025");
   });
   await run((w, b) => {
     b.getStartupView = () => new Promise(() => {});
