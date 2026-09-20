@@ -2,6 +2,12 @@
   "use strict";
   // Fixed, non-secret readiness result polled by the native startup watchdog.
   window.usbVaultPageStartupStatus = 0;
+  // Do not inspect event messages, stacks, filenames, or rejected values.
+  const markStartupScriptFailure = () => {
+    if (window.usbVaultPageStartupStatus === 0) window.usbVaultPageStartupStatus = 1408;
+  };
+  window.addEventListener("error", markStartupScriptFailure);
+  window.addEventListener("unhandledrejection", markStartupScriptFailure);
 
   const nativeState = Object.freeze({
     noCard: 0,
@@ -5492,10 +5498,13 @@
     dashboard.hidden = true;
     setupSurface.hidden = false;
     let status = setupCredentialStatus.missing;
+    let queryFailed = false;
     try {
       status = Number(await bridge.getCredentialStatus());
+      if (!Object.values(setupCredentialStatus).includes(status)) throw new Error("invalid credential status");
     } catch (_) {
       status = setupCredentialStatus.unreadable;
+      queryFailed = true;
     }
     // Always the shipped value, on every route into setup. A stored password
     // that is not the factory one is therefore overwritten by a save that
@@ -5508,7 +5517,9 @@
         "当前 Windows 用户已保存凭据。重新填写三项可以覆盖保存，或直接返回。";
       setSetupStatus(kSetupReturnNotice);
     } else if (status === setupCredentialStatus.unreadable) {
-      setSetupStatus("已保存的凭据无法读取或格式不正确，请重新填写全部三项。", "error");
+      setSetupStatus(queryFailed
+        ? "无法查询凭据状态，错误码：1407。请重新打开应用，确认原因后再保存。"
+        : "已保存的凭据无法读取或格式不正确，错误码：1108。请确认原因后再保存。", "error");
     } else {
       setSetupStatus("");
     }
@@ -5527,7 +5538,7 @@
       if (!["configuration", "session"].includes(startupView)) throw new Error("invalid startup view");
       if (startupView === "configuration") {
         await startConfiguration();
-        window.usbVaultPageStartupStatus = 1;
+        if (window.usbVaultPageStartupStatus === 0) window.usbVaultPageStartupStatus = 1;
         return;
       }
       failureCode = 1403;
@@ -5541,7 +5552,7 @@
       render(messageForCurrentState());
       updateStrength();
       focusCurrentInput();
-      window.usbVaultPageStartupStatus = 1;
+      if (window.usbVaultPageStartupStatus === 0) window.usbVaultPageStartupStatus = 1;
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }

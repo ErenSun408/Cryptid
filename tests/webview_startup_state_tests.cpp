@@ -9,6 +9,12 @@ void require(bool condition, const char* message) {
 int main() {
   try {
     usb_vault::ui::WebviewStartupState state;
+    require(usb_vault::ui::page_startup_error(L"1408") == 1408 &&
+            usb_vault::ui::page_startup_error(L"1402") == 1402 &&
+            usb_vault::ui::page_startup_error(L"\"1408\"") == 0 &&
+            usb_vault::ui::page_startup_error(L"1408secret") == 0 &&
+            usb_vault::ui::page_startup_error(L"9999") == 0,
+            "untrusted page result treated as a diagnostic");
     require(!state.fail(0) && !state.ready(0), "inactive callback accepted");
     state.begin(1, 100);
     require(!state.expired(1, 30099) && state.expired(1, 30100), "timeout boundary wrong");

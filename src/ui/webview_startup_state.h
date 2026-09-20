@@ -1,7 +1,18 @@
 #pragma once
 #include <cstdint>
+#include <string_view>
 
 namespace usb_vault::ui {
+// Accept exact JSON numeric results only, never arbitrary page data or text.
+inline std::uint32_t page_startup_error(const std::wstring_view text) noexcept {
+  if (text == L"1401") return 1401;
+  if (text == L"1402") return 1402;
+  if (text == L"1403") return 1403;
+  if (text == L"1404") return 1404;
+  if (text == L"1405") return 1405;
+  if (text == L"1408") return 1408;
+  return 0;
+}
 // UI-thread state. Every navigation gets a new generation; late callbacks
 // cannot mark the replacement page ready or report its predecessor's error.
 class WebviewStartupState final {

@@ -68,5 +68,33 @@ async function run(configure, verify) {
     text = w.document.getElementById("card-session-status").textContent;
     assert.match(text, /2025/); assert.match(text, /锁定/); assert.doesNotMatch(text, /2019|2015/);
   });
-  console.log("PASS 7 startup DOM scenarios, zero authentication retries");
+  await run((w, b) => {
+    b.getStartupView = () => new Promise(() => {});
+  }, async w => {
+    w.dispatchEvent(new w.ErrorEvent("error", { message: "secret-path-and-credential" }));
+    assert.equal(w.usbVaultPageStartupStatus, 1408);
+    assert.doesNotMatch(w.document.body.textContent, /secret-path-and-credential/);
+  });
+  await run((w, b) => {
+    b.getStartupView = () => new Promise(() => {});
+  }, async w => {
+    w.dispatchEvent(new w.Event("unhandledrejection"));
+    assert.equal(w.usbVaultPageStartupStatus, 1408);
+  });
+  await run((w, b) => {
+    b.getStartupView = () => "configuration";
+    b.getCredentialStatus = () => { throw new Error("secret-credential"); };
+  }, async w => {
+    assert.equal(w.usbVaultPageStartupStatus, 1);
+    assert.match(w.document.body.textContent, /1407/);
+    assert.doesNotMatch(w.document.body.textContent, /secret-credential/);
+  });
+  await run((w, b) => {
+    b.getStartupView = () => "configuration";
+    b.getCredentialStatus = () => 99;
+  }, async w => {
+    assert.equal(w.usbVaultPageStartupStatus, 1);
+    assert.match(w.document.body.textContent, /1407/);
+  });
+  console.log("PASS 11 startup DOM scenarios, zero authentication retries");
 })().catch(error => { console.error(error); process.exitCode = 1; });
