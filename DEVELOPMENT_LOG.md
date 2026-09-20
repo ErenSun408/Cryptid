@@ -2037,4 +2037,4 @@
 - 验证：`card_product_ui_page_contract_tests` 通过；`card_product_ui_navigation_dom_tests.cjs` 227 项通过；`card_product_ui_setup_dom_tests.cjs` 两组 20／7 项通过；`usb_vault_vikey_p2_development_app` 构建成功；`git diff --check` 通过。首次直接构建因未加载 MSVC 环境找不到标准库，改在 `vcvars64.bat` 环境重跑后通过，不影响测试结论。
 - 安全与风险：页面只持有会话内容器标识、三个容量整数与临时目录条目；下拉名称用 `textContent`，容量包先做严格数字与范围校验，不接收路径、卷类型、口令或档位，不新增浏览器存储。根目录仍受原生侧条目上限约束。
 - 剩余：尚未做真实 WebView2 视觉验收、真实外层卷容量／时间显示和 UAC 切换验收；这些不冒充已完成。第 7 片外部拖入上传与第 8 片保护告警仍未开始。
-- 提交：待用户审阅决定；当前未提交，禁止推送。
+- 提交：`660c9fa [P3.25]run maintenance inside the file manager it already has`。该条记录随代码一并提交，故本行的哈希由下一笔补正。未推送。
