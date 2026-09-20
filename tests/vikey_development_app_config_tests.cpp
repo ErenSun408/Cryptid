@@ -117,7 +117,7 @@ void test_diagnostic_gates() {
   bool sanitized = false;
   expect(!run_checks(probes, [&](unsigned int index, const Result& result) {
     if (index == 3 && result.state == State::failed)
-      sanitized = result.detail.find(L"private") == std::wstring::npos;
+      sanitized = result.detail.find(L"private") == std::wstring::npos && result.failure.primary.code == 1106;
   }) && sanitized, "diagnostic error was not sanitized");
 }
 

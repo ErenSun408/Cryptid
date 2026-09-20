@@ -142,10 +142,30 @@ void test_numeric_sanitization() {
 }
 }
 
+void test_startup_fallback() {
+  using namespace usb_vault::card;
+  try { throw_startup_failure(1501, 1, 5); }
+  catch (...) {
+    const auto result = capture_startup_failure(1206).primary;
+    require(result.code == 1501 && result.native_kind == 1 && result.native_code == 5 && result.reason == 0,
+            "local startup error was overwritten or mistaken for card lockout");
+  }
+  try { throw std::runtime_error("private path and credential"); }
+  catch (...) { require(capture_startup_failure(1106).primary.code == 1106, "missing fallback stage"); }
+  try { throw std::bad_alloc(); }
+  catch (...) { require(capture_startup_failure(1206).primary.code == 9002, "allocation failure overwritten"); }
+  try { throw std::system_error(5, std::system_category(), "private"); }
+  catch (...) {
+    const auto result = capture_startup_failure(1104).primary;
+    require(result.code == 1104 && result.native_code == 5 && result.reason == 0, "driver cause lost");
+  }
+}
+
 int main() {
   try {
     test_entry_lifetime(); test_router_capture(); test_cleanup_paths();
     test_numeric_sanitization();
+    test_startup_fallback();
     std::cout << "startup_failure_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

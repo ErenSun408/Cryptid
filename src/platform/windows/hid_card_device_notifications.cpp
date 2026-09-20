@@ -1,5 +1,6 @@
 #include "platform/windows/hid_card_device_notifications.h"
 
+#include "card/capture_failure.h"
 #include <hidsdi.h>
 #include <setupapi.h>
 
@@ -36,9 +37,8 @@ class DeviceInformation final {
   HDEVINFO value_;
 };
 
-[[noreturn]] void throw_windows_error(const char* const context) {
-  throw std::system_error(static_cast<int>(::GetLastError()),
-                          std::system_category(), context);
+[[noreturn]] void throw_windows_error(const char*, std::uint32_t code = 1502) {
+  usb_vault::card::throw_startup_failure(code, 1, ::GetLastError());
 }
 
 [[nodiscard]] int hexadecimal_value(const wchar_t value) noexcept {
@@ -131,14 +131,14 @@ class DeviceInformation final {
     constexpr std::size_t name_offset =
         offsetof(SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath);
     if (required <= name_offset) {
-      throw std::runtime_error("invalid HID interface path size");
+      usb_vault::card::throw_startup_failure(1503);
     }
     const std::size_t maximum_characters =
         (static_cast<std::size_t>(required) - name_offset) / sizeof(wchar_t);
     const wchar_t* const terminator = static_cast<const wchar_t*>(
         std::wmemchr(detail->DevicePath, L'\0', maximum_characters));
     if (terminator == nullptr) {
-      throw std::runtime_error("unterminated HID interface path");
+      usb_vault::card::throw_startup_failure(1503);
     }
     if (matches_hid_device_path(
             std::wstring_view(
@@ -222,7 +222,7 @@ HidCardDeviceNotificationRegistration::
   notification_ = static_cast<HDEVNOTIFY>(::RegisterDeviceNotificationW(
       window, &filter, DEVICE_NOTIFY_WINDOW_HANDLE));
   if (notification_ == nullptr) {
-    throw_windows_error("register HID device notifications");
+    throw_windows_error("register HID device notifications", 1501);
   }
 
   try {

@@ -79,10 +79,6 @@ std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
 // the whole credential set could be replaced between the check and the
 // navigation that loads it.
 std::vector<usb_vault::card::VerifiedLocalArtifact> g_ui_artifacts;
-class DeploymentFailure final : public std::runtime_error {
- public:
-  DeploymentFailure() : std::runtime_error("invalid development deployment") {}
-};
 usb_vault::ui::CreationWorkState g_creation_work;
 // Receives shell drags onto this window. It exists for the whole life of
 // the window but stays disarmed until the maintenance page names a
@@ -281,6 +277,20 @@ void show_failure(const wchar_t* const message) noexcept {
                                   MB_OK | MB_ICONERROR));
 }
 
+void show_numeric_failure(const wchar_t* message,
+    const usb_vault::card::FailureDiagnostic failure) noexcept {
+  wchar_t text[1536]{};
+  const auto& p = failure.primary;
+  swprintf_s(text, L"%s\n错误码：%u\n原因码：%u\n底层类别：%u\n底层错误码：%u\n附加清理错误码：%u",
+      message, p.code, p.reason, p.native_kind, p.native_code, failure.cleanup.code);
+  show_failure(text);
+}
+
+void show_numeric_failure(const wchar_t* message, std::uint32_t code,
+    std::uint32_t kind = 0, std::uint32_t native = 0) noexcept {
+  show_numeric_failure(message, {.primary = {.code = code, .native_kind = kind, .native_code = native}});
+}
+
 void show_warning(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
                                   MB_OK | MB_ICONWARNING));
@@ -292,10 +302,10 @@ void show_warning(const wchar_t* const message) noexcept {
       nullptr, executable_path.data(),
       static_cast<DWORD>(executable_path.size()));
   if (length == 0 || length >= executable_path.size()) {
-    throw std::runtime_error("cannot resolve application path");
+    usb_vault::card::throw_startup_failure(1002, 1, length ? ERROR_INSUFFICIENT_BUFFER : ::GetLastError());
   }
   if (!::PathRemoveFileSpecW(executable_path.data())) {
-    throw std::runtime_error("cannot resolve application directory");
+    usb_vault::card::throw_startup_failure(1002);
   }
   return executable_path.data();
 }
@@ -304,7 +314,7 @@ void show_warning(const wchar_t* const message) noexcept {
                                       const wchar_t* const name) {
   std::vector<wchar_t> page_path(32768);
   if (!::PathCombineW(page_path.data(), directory.c_str(), name)) {
-    throw std::runtime_error("cannot resolve application child path");
+    usb_vault::card::throw_startup_failure(1205);
   }
   return page_path.data();
 }
@@ -318,7 +328,7 @@ void show_warning(const wchar_t* const message) noexcept {
   const HRESULT result =
       ::UrlCreateFromPathW(page_path.c_str(), uri.data(), &uri_size, 0);
   if (FAILED(result)) {
-    throw std::runtime_error("cannot create local UI URI");
+    usb_vault::card::throw_startup_failure(1301, 2, static_cast<std::uint32_t>(result));
   }
   return std::wstring(uri.data(), uri_size);
 }
@@ -326,7 +336,7 @@ void show_warning(const wchar_t* const message) noexcept {
 [[nodiscard]] std::array<wchar_t, 2> unused_drive_letters() {
   const DWORD drives = ::GetLogicalDrives();
   if (drives == 0) {
-    throw std::runtime_error("cannot inspect available drive letters");
+    usb_vault::card::throw_startup_failure(1203, 1, ::GetLastError());
   }
   std::array<wchar_t, 2> result{};
   std::size_t count = 0;
@@ -338,7 +348,7 @@ void show_warning(const wchar_t* const message) noexcept {
     }
   }
   if (count != result.size()) {
-    throw std::runtime_error("two unused drive letters are required");
+    usb_vault::card::throw_startup_failure(1204);
   }
   return result;
 }
@@ -348,7 +358,7 @@ class LocalArguments final {
   LocalArguments() {
     values_ = ::CommandLineToArgvW(::GetCommandLineW(), &count_);
     if (values_ == nullptr || count_ <= 0) {
-      throw std::runtime_error("cannot parse development command line");
+      usb_vault::card::throw_startup_failure(1006, 1, ::GetLastError());
     }
   }
 
@@ -376,12 +386,8 @@ class LocalArguments final {
 // The start check covers the reviewed layout beside this executable. A run
 // with explicit development arguments describes its own helper and vendor
 // files, so it keeps the behaviour it had before setup moved in here.
-[[nodiscard]] bool packaged_deployment() noexcept {
-  try {
-    return LocalArguments{}.views().size() == 1;
-  } catch (...) {
-    return false;
-  }
+[[nodiscard]] bool packaged_deployment() {
+  return LocalArguments{}.views().size() == 1;
 }
 
 void pin_user_interface(const std::wstring& directory) {
@@ -396,7 +402,7 @@ void pin_user_interface(const std::wstring& directory) {
     pin(L"card_session.js", p2_deployment::js);
   } catch (...) {
     g_ui_artifacts.clear();
-    throw DeploymentFailure();
+    throw usb_vault::card::LocalFailureError(usb_vault::card::capture_startup_failure(1207));
   }
 }
 
@@ -419,10 +425,16 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   const LocalArguments arguments;
   const std::vector<std::wstring_view> views = arguments.views();
   namespace development = usb_vault::card::vikey::development;
-  auto config = views.size() == 1
-      ? development::packaged_app_config(directory, p2_deployment::helper,
-                                         p2_deployment::vendor)
-      : development::parse_app_config(views);
+  auto config = [&] {
+    try {
+      return views.size() == 1
+          ? development::packaged_app_config(directory, p2_deployment::helper, p2_deployment::vendor)
+          : development::parse_app_config(views);
+    } catch (...) {
+      throw usb_vault::card::LocalFailureError(
+          usb_vault::card::capture_startup_failure(views.size() == 1 ? 1205 : 1006));
+    }
+  }();
   if (views.size() == 1) {
     try {
       const auto pin = [&](const wchar_t* name, const wchar_t* digest) {
@@ -438,7 +450,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
       pin(L"card_session.js", p2_deployment::js);
     } catch (...) {
       g_deployment_artifacts.clear();
-      throw DeploymentFailure();
+      throw usb_vault::card::LocalFailureError(usb_vault::card::capture_startup_failure(1207));
     }
   }
   auto credential_provider = std::make_unique<
@@ -955,7 +967,8 @@ void show_session(const HWND window) noexcept {
     // with.
     initialize_application_session(window);
   } catch (...) {
-    show_failure(L"无法重新建立安全会话。错误码：1210。请重新启动 USB Vault。");
+    show_numeric_failure(L"无法重新建立安全会话。请重新启动 USB Vault。",
+        usb_vault::card::capture_startup_failure(1210));
     static_cast<void>(::DestroyWindow(window));
     return;
   }
@@ -1126,36 +1139,41 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 }  // namespace
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
-                    _In_ LPWSTR, _In_ int show_command) {
+                    _In_ LPWSTR, _In_ int show_command) try {
   try {
     if (!usb_vault::platform::windows::installation_ready_for_start(executable_directory())) {
-      show_failure(L"USB Vault 正在安装／卸载，或上次更新尚未完成。请等待操作结束；如已中断，请重新运行同一个安装包恢复。请勿删除更新备份文件夹。");
+      show_numeric_failure(L"USB Vault 正在安装／卸载，或上次更新尚未完成。请等待操作结束；如已中断，请重新运行同一个安装包恢复。请勿删除更新备份文件夹。", 1003);
       return 1;
     }
   } catch (...) {
-    show_failure(L"无法确认 USB Vault 的安装状态，请检查安装位置和访问权限。");
+    show_numeric_failure(L"无法确认 USB Vault 的安装状态，请检查安装位置和访问权限。",
+        usb_vault::card::capture_startup_failure(1004));
     return 1;
   }
   // OLE rather than COM alone: the window registers a drop target, and
   // `RegisterDragDrop` is refused on an apartment that only initialized COM.
   const HRESULT com_result = ::OleInitialize(nullptr);
   if (FAILED(com_result)) {
-    show_failure(L"COM 初始化失败。");
+    show_numeric_failure(L"COM 初始化失败。", 1005, 2, static_cast<std::uint32_t>(com_result));
     return 1;
   }
+  struct OleScope final { ~OleScope() noexcept { ::OleUninitialize(); } } ole_scope;
 
-  // One start check before any window. It never touches the card, so starting
-  // the product cannot consume a PIN attempt on its own. Missing dependencies
+  // This preflight check never touches the card. The later session probe can
+  // authenticate an inserted card. Missing dependencies
   // belong to the installer and end the start here; missing credentials open
   // the product setup page instead of the session.
   if (packaged_deployment()) {
     const auto startup = configuration::inspect_startup();
     if (!startup.dependencies_ready) {
-      show_failure((L"无法启动 USB Vault。" + startup.detail).c_str());
-      ::OleUninitialize();
+      show_numeric_failure(startup.detail.c_str(), startup.failure);
       return 1;
     }
-    if (!startup.credentials_ready) g_view = StartupView::configuration;
+    if (!startup.credentials_ready) {
+      g_view = StartupView::configuration;
+      if (startup.credential_failure.primary.code != 1107)
+        show_numeric_failure(L"已保存凭据无法读取，将打开配置页；请先确认原因再保存。", startup.credential_failure);
+    }
   }
 
   WNDCLASSEXW window_class{sizeof(window_class)};
@@ -1164,8 +1182,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   window_class.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
   window_class.lpszClassName = kWindowClass;
   if (::RegisterClassExW(&window_class) == 0) {
-    show_failure(L"窗口类注册失败。");
-    ::OleUninitialize();
+    show_numeric_failure(L"窗口类注册失败。", 1201, 1, ::GetLastError());
     return 1;
   }
 
@@ -1181,8 +1198,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
       instance, nullptr);
   g_main_window = window;
   if (window == nullptr) {
-    show_failure(L"窗口创建失败。");
-    ::OleUninitialize();
+    show_numeric_failure(L"窗口创建失败。", 1202, 1, ::GetLastError());
     return 1;
   }
 
@@ -1193,13 +1209,13 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   // refusal rather than letting one reach the document.
   g_drop_target = new (std::nothrow) usb_vault::ui::ExternalDropTarget(
       import_dropped_entry, g_creation_work);
-  if (g_drop_target == nullptr ||
-      FAILED(::RegisterDragDrop(window, g_drop_target))) {
+  const HRESULT drop_result = g_drop_target ? ::RegisterDragDrop(window, g_drop_target) : E_OUTOFMEMORY;
+  if (FAILED(drop_result)) {
     if (g_drop_target != nullptr) {
       static_cast<void>(g_drop_target->Release());
       g_drop_target = nullptr;
     }
-    show_failure(L"无法接管窗口的拖放，拖入文件将不可用。");
+    show_numeric_failure(L"无法接管窗口的拖放，拖入文件将不可用。", 1208, 2, static_cast<std::uint32_t>(drop_result));
   }
 
   try {
@@ -1213,18 +1229,12 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     initialize_webview(window);
     if (g_view == StartupView::session &&
         ::SetTimer(window, 1, 100, nullptr) == 0)
-      throw std::runtime_error("cannot schedule deferred card events");
-  } catch (const DeploymentFailure&) {
-    show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请重新运行 USB Vault 安装程序，或将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE。");
-    ::DestroyWindow(window);
-    clear_application_session();
-    ::OleUninitialize();
-    return 1;
+      usb_vault::card::throw_startup_failure(1209, 1, ::GetLastError());
   } catch (...) {
-    show_failure(L"本地界面初始化失败。");
+    show_numeric_failure(L"本地界面或安全会话初始化失败。",
+        usb_vault::card::capture_startup_failure(1206));
     ::DestroyWindow(window);
     clear_application_session();
-    ::OleUninitialize();
     return 1;
   }
 
@@ -1233,14 +1243,21 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
                                                      : show_command);
   static_cast<void>(::UpdateWindow(window));
   MSG message{};
-  while (::GetMessageW(&message, nullptr, 0, 0) > 0) {
+  BOOL message_result{};
+  while ((message_result = ::GetMessageW(&message, nullptr, 0, 0)) > 0) {
     ::TranslateMessage(&message);
     ::DispatchMessageW(&message);
+  }
+  if (message_result == -1) {
+    show_numeric_failure(L"窗口消息循环失败。", 1211, 1, ::GetLastError());
   }
 
   clear_application_session();
   g_ui_artifacts.clear();
   g_main_window = nullptr;
-  ::OleUninitialize();
-  return 0;
+  return message_result == -1 ? 1 : 0;
+} catch (...) {
+  show_numeric_failure(L"应用启动发生未处理的异常。",
+      usb_vault::card::capture_startup_failure(9001));
+  return 1;
 }

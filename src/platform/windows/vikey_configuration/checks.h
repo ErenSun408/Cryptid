@@ -3,11 +3,13 @@
 #include <array>
 #include <functional>
 #include <string>
+#include "card/capture_failure.h"
 
 namespace configuration {
 enum class Check : unsigned int { system, package, webview, driver, credentials, device, card, count };
 enum class State { waiting, running, passed, failed, skipped };
-struct Result { State state{State::waiting}; std::wstring detail; };
+struct Result { State state{State::waiting}; std::wstring detail;
+  usb_vault::card::FailureDiagnostic failure{}; };
 constexpr auto count = static_cast<unsigned int>(Check::count);
 using Probes = std::array<std::function<Result()>, count>;
 using Report = std::function<void(unsigned int, const Result&)>;
@@ -31,9 +33,10 @@ inline bool run_checks(const Probes& probes, const Report& report,
     } else {
       report(index, {State::running, L"正在检测…"});
       try { result = probes[index](); }
-      catch (...) { result = {State::failed, L"检测失败，请检查环境后重试。"}; }
+      catch (...) { result = {State::failed, L"检测失败，请检查环境后重试。",
+          usb_vault::card::capture_startup_failure(1106)}; }
       if (result.state != State::passed && result.state != State::failed)
-        result = {State::failed, L"检测未返回有效结果。"};
+        result = {State::failed, L"检测未返回有效结果。", {.primary = {.code = 1106}}};
     }
     passed = passed && result.state == State::passed;
     report(index, result);

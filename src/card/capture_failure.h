@@ -9,6 +9,16 @@
 
 namespace usb_vault::card {
 
+// Local startup failures need no allocated exception message or secret data.
+class LocalFailureError final : public std::exception {
+ public:
+  explicit LocalFailureError(FailureDiagnostic failure) noexcept : failure_(failure) {}
+  [[nodiscard]] FailureDiagnostic failure() const noexcept { return failure_; }
+  const char* what() const noexcept override { return "local startup failure"; }
+ private:
+  FailureDiagnostic failure_;
+};
+
 // Retains only the numeric result, never the original exception or its text.
 class CapturedFailureError final : public std::system_error {
  public:
@@ -28,6 +38,8 @@ class CapturedFailureError final : public std::system_error {
   if (!failure) return {};
   try {
     std::rethrow_exception(failure);
+  } catch (const LocalFailureError& error) {
+    return error.failure();
   } catch (const CapturedFailureError& error) {
     return error.failure();
   } catch (const std::system_error& error) {
@@ -56,6 +68,20 @@ class CapturedFailureError final : public std::system_error {
   } catch (...) {
     return {.primary = {.code = 9001}};
   }
+}
+
+[[nodiscard]] inline FailureDiagnostic capture_startup_failure(
+    const std::uint32_t fallback, const std::exception_ptr& error = std::current_exception()) noexcept {
+  auto failure = capture_failure(error);
+  if (failure.primary.code == 0 || failure.primary.code == 9001)
+    failure.primary.code = fallback;
+  return failure;
+}
+
+[[noreturn]] inline void throw_startup_failure(const std::uint32_t code,
+    const std::uint32_t native_kind = 0, const std::uint32_t native_code = 0) {
+  throw LocalFailureError({.primary = {.code = code, .native_kind = native_kind,
+                                     .native_code = native_code}});
 }
 
 // Always run cleanup exactly once. A secondary error must never replace the
