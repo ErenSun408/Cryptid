@@ -169,6 +169,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
   try {
     Request request = usb_vault::volume_creation::detail::read_request(
         pipe.get(), arguments.nonce);
+    if (request.operation ==
+        usb_vault::volume_creation::detail::Operation::scan_tail_space) {
+      // One consent, one run of measurements: the caller keeps the pipe while
+      // its maintenance session lasts and this process ends when it lets go.
+      usb_vault::volume_creation::detail::serve_measurement_session(
+          pipe.get(), arguments.nonce, request);
+      static_cast<void>(::FlushFileBuffers(pipe.get()));
+      return 0;
+    }
     const std::uint64_t value =
         usb_vault::volume_creation::detail::execute_request(pipe.get(),
                                                             request);

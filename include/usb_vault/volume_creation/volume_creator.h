@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string_view>
 #include <system_error>
 
@@ -89,6 +90,34 @@ class VolumeCreator final {
 
  private:
   std::filesystem::path helper_path_;
+};
+
+// One consent for a run of measurements, so a number can be refreshed while
+// the user is still writing files without asking again.
+//
+// The helper is launched on the first measurement, not on construction, and it
+// answers nothing but measurements. Closing this ends it: the pipe going away
+// is what the helper reads as the end of the session, and it also gives up on
+// its own after sitting idle.
+class VolumeMeasurementSession final {
+ public:
+  explicit VolumeMeasurementSession(std::filesystem::path helper_path);
+  ~VolumeMeasurementSession() noexcept;
+
+  VolumeMeasurementSession(const VolumeMeasurementSession&) = delete;
+  VolumeMeasurementSession& operator=(const VolumeMeasurementSession&) = delete;
+  VolumeMeasurementSession(VolumeMeasurementSession&&) noexcept;
+  VolumeMeasurementSession& operator=(VolumeMeasurementSession&&) noexcept;
+
+  [[nodiscard]] std::uint64_t tail_space(wchar_t drive_letter);
+  // Ends the session now rather than at destruction. Calling it twice, or
+  // before anything was measured, does nothing.
+  void close() noexcept;
+  [[nodiscard]] bool open() const noexcept;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace usb_vault::volume_creation

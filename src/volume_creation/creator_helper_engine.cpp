@@ -11,12 +11,17 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <mutex>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -452,6 +457,71 @@ void create_with_hidden(const HANDLE pipe, Request& request,
 }
 
 }  // namespace
+
+void serve_measurement_session(const HANDLE pipe,
+                               const std::array<std::byte, kNonceSize>& nonce,
+                               Request& first) {
+  // Idle time is the only thing that ends this session other than the caller
+  // closing the pipe, and something has to end it if the caller never does.
+  std::atomic<std::int64_t> last_activity{
+      std::chrono::steady_clock::now().time_since_epoch().count()};
+  bool finished = false;
+  std::mutex finished_mutex;
+  std::condition_variable finished_signal;
+  std::thread watchdog([&] {
+    constexpr auto kIdleLimit = std::chrono::minutes(15);
+    std::unique_lock lock(finished_mutex);
+    while (!finished) {
+      finished_signal.wait_for(lock, std::chrono::seconds(5));
+      if (finished) break;
+      const std::chrono::steady_clock::duration idle{
+          std::chrono::steady_clock::now().time_since_epoch().count() -
+          last_activity.load()};
+      // Nothing here is worth flushing, and the caller reads a closed pipe as
+      // the end of the session either way.
+      if (idle > kIdleLimit) ::ExitProcess(0);
+    }
+  });
+
+  Request request = std::move(first);
+  for (;;) {
+    last_activity.store(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    if (request.operation != Operation::scan_tail_space) {
+      // A session that measures never creates, however the request is
+      // labelled: one consent covered measuring and nothing else.
+      write_response(pipe,
+                     Response{.type = MessageType::result,
+                              .error = static_cast<std::int32_t>(
+                                  CreationError::invalid_request)});
+      break;
+    }
+    Response response{.type = MessageType::result};
+    try {
+      validate_request(request);
+      response.value = scan_tail_space(request.target_path[0]).bytes;
+    } catch (const std::system_error& error) {
+      response.error = error.code().category() == creation_error_category()
+                           ? error.code().value()
+                           : static_cast<std::int32_t>(CreationError::io_error);
+    } catch (...) {
+      response.error = static_cast<std::int32_t>(CreationError::io_error);
+    }
+    write_response(pipe, response);
+    try {
+      request = read_request(pipe, nonce);
+    } catch (...) {
+      // The caller closed the pipe, which is how a session ends.
+      break;
+    }
+  }
+  {
+    std::lock_guard lock(finished_mutex);
+    finished = true;
+  }
+  finished_signal.notify_all();
+  watchdog.join();
+}
 
 std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);

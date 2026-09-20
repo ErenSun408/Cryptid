@@ -110,6 +110,7 @@ add_test(NAME mount_orchestrator_tests COMMAND mount_orchestrator_tests)
 
 add_executable(creator_protocol_tests
   creator_protocol_tests.cpp
+  ${PROJECT_SOURCE_DIR}/src/volume_creation/creator_helper_engine.cpp
 )
 
 target_include_directories(creator_protocol_tests

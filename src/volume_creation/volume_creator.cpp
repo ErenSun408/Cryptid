@@ -357,6 +357,97 @@ std::error_code make_error_code(const CreationError error) noexcept {
   return {static_cast<int>(error), creation_error_category()};
 }
 
+[[nodiscard]] wchar_t validated_drive_letter(const wchar_t drive_letter) {
+  const wchar_t letter = (drive_letter >= L'a' && drive_letter <= L'z')
+                             ? static_cast<wchar_t>(drive_letter - L'a' + L'A')
+                             : drive_letter;
+  if (letter < L'A' || letter > L'Z') {
+    throw std::invalid_argument("drive letter must be in the range A-Z");
+  }
+  return letter;
+}
+
+struct VolumeMeasurementSession::Impl final {
+  std::filesystem::path helper_path;
+  std::array<std::byte, detail::kNonceSize> nonce{};
+  Handle process{nullptr};
+  Handle pipe{nullptr};
+  bool connected{false};
+};
+
+VolumeMeasurementSession::VolumeMeasurementSession(
+    std::filesystem::path helper_path)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->helper_path = validated_helper_path(helper_path);
+}
+
+VolumeMeasurementSession::~VolumeMeasurementSession() noexcept { close(); }
+
+VolumeMeasurementSession::VolumeMeasurementSession(
+    VolumeMeasurementSession&&) noexcept = default;
+
+VolumeMeasurementSession& VolumeMeasurementSession::operator=(
+    VolumeMeasurementSession&&) noexcept = default;
+
+bool VolumeMeasurementSession::open() const noexcept {
+  return impl_ != nullptr && impl_->connected;
+}
+
+void VolumeMeasurementSession::close() noexcept {
+  if (impl_ == nullptr || !impl_->connected) return;
+  impl_->connected = false;
+  // Letting go of the pipe is the whole protocol for ending this: the helper
+  // reads the close and exits.
+  impl_->pipe = Handle(nullptr);
+  if (impl_->process.get() != nullptr) {
+    static_cast<void>(::WaitForSingleObject(impl_->process.get(), 5000));
+    impl_->process = Handle(nullptr);
+  }
+}
+
+std::uint64_t VolumeMeasurementSession::tail_space(
+    const wchar_t drive_letter) {
+  const wchar_t letter = validated_drive_letter(drive_letter);
+  const std::wstring root = {letter, L':', L'\\'};
+  if (impl_ == nullptr) {
+    throw std::logic_error("this measurement session has been moved from");
+  }
+  if (!impl_->connected) {
+    impl_->nonce = random_nonce();
+    const std::wstring suffix = hex_nonce(impl_->nonce);
+    const std::wstring pipe_name = L"\\\\.\\pipe\\usb-vault-create-" + suffix;
+    impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
+    impl_->pipe = connect_to_helper(pipe_name, impl_->process.get());
+    impl_->connected = true;
+  }
+
+  const detail::RequestHeader header{
+      .operation = detail::Operation::scan_tail_space,
+      .path_characters = static_cast<std::uint32_t>(root.size()),
+      .nonce = impl_->nonce,
+  };
+  try {
+    detail::write_request(impl_->pipe.get(), header, root,
+                          security::SecureBuffer{}, security::SecureBuffer{});
+    for (;;) {
+      const detail::Response response = detail::read_response(impl_->pipe.get());
+      if (response.type == detail::MessageType::progress) continue;
+      if (response.error == 0) return response.value;
+      if (!known_error(response.error)) {
+        throw_creation(CreationError::protocol_error,
+                       "helper returned an unknown error code");
+      }
+      throw_creation(static_cast<CreationError>(response.error),
+                     "volume measurement failed");
+    }
+  } catch (...) {
+    // A broken pipe means the helper is gone; the next measurement asks for
+    // consent again rather than talking to a handle nobody is reading.
+    close();
+    throw;
+  }
+}
+
 VolumeCreator::VolumeCreator(std::filesystem::path helper_path)
     : helper_path_(validated_helper_path(helper_path)) {}
 

@@ -1,3 +1,4 @@
+#include "volume_creation/creator_helper_engine.h"
 #include "volume_creation/creator_protocol.h"
 #include "volume_creation/creator_pipe_security.h"
 #include "volume_creation/veracrypt_format_abi.h"
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -286,6 +288,74 @@ void test_response_round_trip() {
   expect(!valid_response(invalid), "unknown progress stage was accepted");
 }
 
+// One consent has to cover a run of measurements, so the helper answers more
+// than one on a connection and stops when the caller lets go of it.
+void test_a_measurement_session_answers_until_the_caller_lets_go() {
+  const std::wstring name = L"\\\\.\\pipe\\usb-vault-measurement-test";
+  Handle server(::CreateNamedPipeW(
+      name.c_str(), PIPE_ACCESS_DUPLEX,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+          PIPE_REJECT_REMOTE_CLIENTS,
+      1, 4096, 4096, 0, nullptr));
+  expect(server.get() != INVALID_HANDLE_VALUE, "test pipe creation failed");
+  Request first;
+  std::thread helper;
+  {
+  Handle client(::CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                              nullptr, OPEN_EXISTING, 0, nullptr));
+  expect(client.get() != INVALID_HANDLE_VALUE, "test pipe connection failed");
+
+  std::array<std::byte, kNonceSize> nonce{};
+  nonce[0] = std::byte{0x5e};
+  // A letter nothing answers to: the measurement fails, which is the point.
+  // A session that gave up on the first failure would be useless while the
+  // user is still moving files around.
+  const std::wstring root = L"Q:\\";
+  const RequestHeader measurement{
+      .operation = Operation::scan_tail_space,
+      .path_characters = static_cast<std::uint32_t>(root.size()),
+      .nonce = nonce,
+  };
+
+  write_request(client.get(), measurement, root, SecureBuffer{},
+                SecureBuffer{});
+  first = read_request(server.get(), nonce);
+  helper = std::thread([&] {
+    serve_measurement_session(server.get(), nonce, first);
+  });
+
+  Response answer = read_response(client.get());
+  expect(answer.type == MessageType::result && answer.error != 0 &&
+             answer.value == 0,
+         "a failed measurement did not report as one");
+
+  write_request(client.get(), measurement, root, SecureBuffer{},
+                SecureBuffer{});
+  answer = read_response(client.get());
+  expect(answer.error != 0,
+         "the session stopped answering after one measurement");
+
+  // One consent covered measuring. It does not cover creating, whatever the
+  // next request calls itself.
+  const std::wstring target = L"D:\\after.hc";
+  const SecureBuffer password = ::password({1, 2, 3});
+  const RequestHeader creation{
+      .operation = Operation::create_standard,
+      .outer_size_bytes = 20ULL * 1024ULL * 1024ULL,
+      .path_characters = static_cast<std::uint32_t>(target.size()),
+      .first_password_bytes = 3,
+      .nonce = nonce,
+  };
+  write_request(client.get(), creation, target, password, SecureBuffer{});
+  answer = read_response(client.get());
+  expect(answer.error ==
+             static_cast<std::int32_t>(CreationError::invalid_request),
+         "a measurement session accepted a creation");
+
+  }  // Letting go of the pipe is how the caller ends the session.
+  helper.join();
+}
+
 void test_format_error_mapping() {
   namespace format = usb_vault::volume_creation::detail::format_abi;
   expect(format::map_error(format::kInvalidParameter) ==
@@ -401,6 +471,7 @@ int main() {
     test_a_measurement_round_trips_with_neither_password();
     test_a_measured_number_travels_only_with_success();
     test_response_round_trip();
+    test_a_measurement_session_answers_until_the_caller_lets_go();
     test_format_error_mapping();
     test_pipe_dacl_names_system_and_token_user_explicitly();
     std::cout << "creator_protocol_tests passed\n";
