@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_client.h"
 
 #include "card/vikey/vikey_helper_protocol.h"
@@ -818,11 +819,8 @@ void cleanup_app_container(
   } catch (...) {
     staged_failure = std::current_exception();
   }
-  // Always attempt profile removal even if the staged file cleanup failed.
-  // A profile cleanup failure is the more persistent condition and therefore
-  // supersedes a staged-file error.
-  app_container.remove_profile();
-  if (staged_failure) std::rethrow_exception(staged_failure);
+  cleanup_preserving_failure(staged_failure,
+      [&] { app_container.remove_profile(); });
 }
 
 void cleanup_development_directory(
@@ -837,8 +835,8 @@ void cleanup_development_directory(
   }
   // Directory cleanup is observable because a leftover development staging
   // area could otherwise be mistaken for a supported long-lived SDK install.
-  directory.remove_directories();
-  if (staged_failure) std::rethrow_exception(staged_failure);
+  cleanup_preserving_failure(staged_failure,
+      [&] { directory.remove_directories(); });
 }
 
 [[nodiscard]] helper::Response read_response_until(
@@ -1124,8 +1122,8 @@ namespace {
   } catch (...) {
     // This is still before process creation, so ephemeral resource removal is
     // synchronous and any cleanup failure remains observable.
-    cleanup_boundary();
-    throw;
+    cleanup_preserving_failure(std::current_exception(), cleanup_boundary);
+    throw;  // Unreachable: the original failure always propagates.
   }
 
   STARTUPINFOEXW startup{};
@@ -1156,10 +1154,13 @@ namespace {
   if (launched == FALSE) {
     const DWORD error = ::GetLastError();
     // Do not leave an ephemeral profile or development staging directory
-    // behind when the verified artifact cannot be started. Cleanup failure is
-    // more urgent than the launch error and therefore supersedes it.
-    cleanup_boundary();
-    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::process_start, "start helper", error, NativeCodeKind::win32);
+    // behind when the verified artifact cannot be started. Preserve both errors.
+    try {
+      throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::process_start, "start helper", error, NativeCodeKind::win32);
+    } catch (...) {
+      cleanup_preserving_failure(std::current_exception(), cleanup_boundary);
+      throw;
+    }
   }
   Handle process(process_info.hProcess);
   Handle thread(process_info.hThread);
@@ -1330,9 +1331,8 @@ namespace {
     static_cast<void>(::TerminateProcess(process.get(), 1));
     static_cast<void>(::WaitForSingleObject(process.get(), 1000));
     // Ephemeral launch resources are removed on every observed failure path.
-    // Cleanup failure supersedes the original error so persistent residue
-    // cannot go unnoticed.
-    cleanup_boundary();
+    // Keep the original reason even when removing those resources also fails.
+    cleanup_preserving_failure(failure, cleanup_boundary);
     std::rethrow_exception(failure);
   }
   cleanup_boundary();

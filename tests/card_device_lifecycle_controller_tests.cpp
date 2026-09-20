@@ -167,6 +167,17 @@ void test_source_failure_is_unavailable_but_present() {
               duplicate.entry_route == CardEntryRoute::unavailable &&
               !duplicate.entry_changed && fixture.source.calls_count == 1,
           "duplicate arrival retried a failed source");
+  require(fixture.entry.startup_failure().primary.code == 9001,
+          "duplicate arrival discarded the failure");
+  static_cast<void>(fixture.lifecycle.handle_removal());
+  require(fixture.entry.startup_failure().primary.code == 0,
+          "removal retained the failed insertion diagnostic");
+  fixture.source.fail = false;
+  const auto recovered = fixture.lifecycle.handle_arrival();
+  require(recovered.entry_route == CardEntryRoute::login_required &&
+              fixture.source.calls_count == 2 &&
+              fixture.entry.startup_failure().primary.code == 0,
+          "new insertion failed to retire the previous error");
 }
 
 void test_removal_destroys_context_before_forced_unmount() {

@@ -1,4 +1,5 @@
 #include "usb_vault/application/card_entry_context_controller.h"
+#include "card/capture_failure.h"
 
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_service.h"
@@ -40,22 +41,28 @@ CardEntryContextController::CardEntryContextController(
     : source_(source) {}
 
 CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
+  startup_failure_ = {};
   context_.reset();
   route_ = CardEntryRoute::unavailable;
 
   try {
     std::unique_ptr<IReadOnlyCardEntryInspection> candidate =
         source_.inspect_inserted_card();
-    if (!candidate) return *route_;
+    if (!candidate) {
+      startup_failure_.primary.code = 4004;
+      return *route_;
+    }
 
-    route_ = CardEntryRouter::route(*candidate);
+    route_ = CardEntryRouter::route(*candidate, &startup_failure_);
     context_ = std::move(candidate);
   } catch (...) {
+    startup_failure_ = card::capture_failure(std::current_exception());
   }
   return *route_;
 }
 
 void CardEntryContextController::handle_removal() noexcept {
+  startup_failure_ = {};
   context_.reset();
   route_.reset();
 }

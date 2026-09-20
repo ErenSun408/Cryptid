@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/card/failure_diagnostic.h"
 
 namespace usb_vault::application {
 
@@ -57,7 +58,8 @@ class CardEntryRouter final {
   // Converts one insertion inspection into a fixed UI route. Every exception
   // and every unknown enum value fails closed to unavailable.
   [[nodiscard]] static CardEntryRoute route(
-      IReadOnlyCardEntryInspection& inspection) noexcept;
+      IReadOnlyCardEntryInspection& inspection,
+      card::FailureDiagnostic* failure = nullptr) noexcept;
 };
 
 }  // namespace usb_vault::application

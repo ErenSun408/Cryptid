@@ -138,11 +138,16 @@ class CardEntryContextController final : public ICardEntryActions {
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override;
   [[nodiscard]] bool has_context() const noexcept;
+  // Last insertion's read-only failure, cleared on removal or next arrival.
+  [[nodiscard]] card::FailureDiagnostic startup_failure() const noexcept {
+    return startup_failure_;
+  }
 
  private:
   ICardEntryInspectionSource& source_;
   std::unique_ptr<IReadOnlyCardEntryInspection> context_;
   std::optional<CardEntryRoute> route_;
+  card::FailureDiagnostic startup_failure_{};
 };
 
 }  // namespace usb_vault::application

@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 
 #include "usb_vault/card/card_error.h"
@@ -10,14 +11,14 @@ namespace usb_vault::card::vikey {
 namespace {
 
 [[noreturn]] void rethrow_enrollment_failure() {
+  const auto original = std::current_exception();
   try {
     throw;
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) throw;
   } catch (...) {
   }
-  throw DiagnosticError(make_error_code(CardError::backend_unavailable),
-      DiagnosticStage::unexpected, "credential provider or helper failed");
+  throw CapturedFailureError(capture_failure(original));
 }
 
 [[nodiscard]] bool eligible_bootstrap_state(

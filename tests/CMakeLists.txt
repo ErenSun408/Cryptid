@@ -192,6 +192,12 @@ usb_vault_configure_target(card_entry_context_controller_tests)
 add_test(NAME card_entry_context_controller_tests
   COMMAND card_entry_context_controller_tests)
 
+add_executable(startup_failure_tests startup_failure_tests.cpp)
+target_include_directories(startup_failure_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(startup_failure_tests PRIVATE usb_vault_core)
+usb_vault_configure_target(startup_failure_tests)
+add_test(NAME startup_failure_tests COMMAND startup_failure_tests)
+
 add_executable(card_entry_initialization_controller_tests
   card_entry_initialization_controller_tests.cpp
 )
