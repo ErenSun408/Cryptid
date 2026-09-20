@@ -116,7 +116,8 @@
     window.dispatchEvent(new Event("usb-vault-session-changed"));
     window.navigationFixture.completeVolume();
     await wait(() => !$("#decoy-verify").hidden && !$("#decoy-verify-submit").disabled);
-    check($("#management-files").closest("#dashboard-section-files") !== null &&
+    check(
+      $("#management-files").closest("#dashboard-section-files") !== null &&
       $("#decoy-maintenance-writable").textContent === "—",
       "A session change during fact refresh restores placement and discards the stale result");
     window.navigationFixture.delayVolume = false;

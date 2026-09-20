@@ -2754,7 +2754,8 @@
       if (revision === decoyMaintenanceRevision) {
         renderDecoySection();
       } else if (externalRefreshPending) {
-        void refreshAfterExternalChange();
+        await refreshAfterExternalChange();
+        renderDecoySection();
       }
     }
   };
