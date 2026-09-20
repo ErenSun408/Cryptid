@@ -18,6 +18,13 @@ window.navigationFixture = {
   hiddenCreateCalls: 0,
   pendingCreation: null,
   creationProgress: "1,0,0,0,0",
+  surveyProgress: "2,3,3,2,0,0",
+  surveyFound: [1, 3],
+  surveyPasswords: [],
+  surveyCancels: 0,
+  failSurvey: false,
+  openedMaintenance: [],
+  failOpenMaintenance: false,
   acceptCancellation: true,
   failCancellation: false,
   containers: [
@@ -71,6 +78,21 @@ window.navigationFixture = {
     beginMountBatch: (ids) => beginBatch(ids, true),
     beginUnmountBatch: (ids) => beginBatch(ids, false),
     beginForceUnmountBatch: (ids) => beginBatch(ids, false, true),
+    beginDecoySurvey: (bytes) => {
+      if (fixture.failSurvey) throw new Error("survey refused");
+      fixture.surveyPasswords.push(Array.from(bytes));
+      return true;
+    },
+    getDecoySurveyProgress: () => fixture.surveyProgress,
+    getDecoySurveyId: (index) => fixture.surveyFound[index],
+    cancelDecoySurvey: () => {
+      fixture.surveyCancels += 1;
+      return true;
+    },
+    beginOpenDecoyMaintenance: (id) => beginVolume(() => {
+      if (fixture.failOpenMaintenance) throw new Error("simulated refusal");
+      fixture.openedMaintenance.push(id);
+    }),
     getBatchProgress: () => fixture.batchProgress,
     getBatchItemName: (index) => fixture.batchItems[index].name,
     getBatchItemId: (index) => fixture.batchItems[index].id,

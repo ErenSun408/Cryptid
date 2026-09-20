@@ -2000,4 +2000,12 @@
 - 检查与实现：桥新增 `beginDecoySurvey`、`getDecoySurveyProgress`、`getDecoySurveyId`、`cancelDecoySurvey`、`beginOpenDecoyMaintenance` 五个成员（DISPID 72～76）。遍历放在既有的工作线程上，复用卡纪元与中断机制；新增 `survey_mode_` 与 `is_survey_query`，遍历期间只有这三个读取方法应答，其余一律 `E_PENDING`，与批处理的门控并列而非嵌套。进度打包为 `状态,总数,已走,已找到,未能判定,是否中止`，结果按下标只吐标识符。打开维护挂载归入既有的 volume 操作分支，沿用其访问检查与状态位。
 - 验证：`card_product_webview_host_object_tests` 通过，新增 3 组（工作线程上走完并逐项读出标识符、遍历期间拒绝无关调用且口令数组被抹零、取消后标记为中止、非口令参数与缺参被拒、打开维护在非 UI 线程上执行并只传标识符）；`card_login_mount_session_tests`、`card_product_ui_session_controller_tests` 重跑通过。仍未接真实驱动。
 - 安全与风险：诱饵口令走与登录同一条 `consume_webview_password_array` 通道，SAFEARRAY 在所有路径抹零（测试断言），工作线程持有的副本用完即清。拔卡或纪元变化时清空已找到的列表并拒绝后续读取，无关变更调用 `clear_survey()`。过桥的只有标识符，没有名称、路径或卷类型。
-- 提交：待定（`[P3.25]walk the decoy survey from the page`）。哈希由下一个切片顺延补上；未推送。
+- 提交：`cee9c0c [P3.25]walk the decoy survey from the page`。未推送。
+
+### 2026-09-19 — P3.25 第五片 c：导航列与验证页
+
+- 范围与审计：完成第 5 片的页面段。复核 8.7.2 的恒显要求、8.3 对档一档二界面不得解释隐藏卷机制的限制，以及页面契约测试既有的口令面计数。
+- 检查与实现：侧栏「数据管理」下新增恒显的「更新诱饵内容」一列，无任何脚本决定它是否出现。该页三段：请验证（口令输入 + 显隐控件）、进行中（进度条与取消）、结果（容器列表）。提交口令先弹确认，文案按定稿原样使用，未改一字。确认后口令经 `TextEncoder` 转字节数组过桥、输入框立即清空，轮询进度直到结束再按下标取回标识符。结果行复用容器行的外观但只有「打开外层卷」一个动作，没有排序手柄、没有「从列表移除」。会话变化时整页复位，走完的结果不跨会话存在。点击行调用 `beginOpenDecoyMaintenance` 并给出状态提示，二级页面归第 6 片。
+- 验证：`card_product_ui_page_contract_tests` 通过——新增一组契约（导航项恒显且脚本不参与其显隐、确认文案逐字、该段不出现"诱饵密码／胁迫密码"、出现"请验证"），并按新增输入更新三处计数（口令输入 5→6、`autocomplete`／`spellcheck` 11→12、显隐控件 3→4）。`card_product_ui_navigation_dom_tests.cjs` 221 项通过（原 208 项，新增 13 项覆盖空口令不过桥、取消确认不触达原生、口令以字节过桥一次且清空、只列出找到的容器、行内无排序与移除、打开只传标识符、空结果与"未能验证"计数的措辞、会话变化清空）。`card_product_ui_setup_dom_tests.cjs` 20／7 项通过。WebView2 集成 fixture 页补齐新元素（该契约正是为这类遗漏而设）。显式重建 `usb_vault_vikey_p2_development_app`。渲染效果仍需人工在实机确认。
+- 安全与风险：口令只以字节数组过桥，页面侧用完即清；结果只在内存，不写任何本地产物；页面文案不出现"诱饵密码""胁迫密码"。空结果与口令错误共用同一条措辞，页面无从区分。
+- 提交：待定（`[P3.25]give the maintenance column its verification and list`）。哈希由下一个切片顺延补上；未推送。

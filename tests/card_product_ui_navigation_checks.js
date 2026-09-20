@@ -26,6 +26,87 @@
     await wait(() => !$("#authenticated-dashboard").hidden);
     check(!$("[data-section=containers]") && !$("#dashboard-section-containers"), "Old container route removed");
     check(order(home) === "1,2,3" && order(manager) === "1,2,3", "Shared container lists render");
+    // --- the maintenance column -------------------------------------------
+    const decoyNav = $("[data-section=decoy]");
+    check(decoyNav !== null && !decoyNav.hidden,
+      "The maintenance column is present under this login");
+    decoyNav.click();
+    check($("#dashboard-section-decoy").classList.contains("active") &&
+      !$("#decoy-verify").hidden && $("#decoy-progress").hidden && $("#decoy-results").hidden,
+      "The maintenance column opens on its verification panel");
+
+    $("#decoy-verify-submit").click();
+    check($("#decoy-confirm-dialog").hidden &&
+      $("#decoy-verify-status").textContent.includes("请输入密码"),
+      "An empty password never reaches the confirmation");
+
+    $("#decoy-password").value = "handover";
+    $("#decoy-verify-submit").click();
+    check(!$("#decoy-confirm-dialog").hidden,
+      "Verifying asks for confirmation before anything is dismounted");
+    check($("#decoy-confirm-dialog").textContent.includes(
+      "为挂载对应容器外层卷，需强制卸载其隐藏卷"),
+      "The confirmation states what it will dismount");
+    $("#decoy-confirm-cancel").click();
+    check($("#decoy-confirm-dialog").hidden &&
+      window.navigationFixture.surveyPasswords.length === 0,
+      "Cancelling the confirmation reaches nothing native");
+
+    $("#decoy-password").value = "handover";
+    $("#decoy-verify-submit").click();
+    $("#decoy-confirm-accept").click();
+    await wait(() => !$("#decoy-results").hidden);
+    check($("#decoy-password").value === "" &&
+      window.navigationFixture.surveyPasswords.length === 1 &&
+      window.navigationFixture.surveyPasswords[0].length === 8,
+      "The password crosses once as bytes and leaves the field empty");
+    check(all("#decoy-container-list .container-row").length === 2 &&
+      all("#decoy-container-list [data-decoy-container]")
+        .map((row) => row.dataset.decoyContainer).join(",") === "1,3",
+      "The column lists exactly the containers the walk found");
+    check(!$("#decoy-container-list [data-decoy-container='1'] .container-grab") &&
+      $("#decoy-container-list .container-row").textContent.includes("打开外层卷") &&
+      !$("#decoy-container-list .container-row").textContent.includes("从列表移除"),
+      "Found rows carry neither reordering nor removal");
+
+    $("#decoy-container-list [data-decoy-container='3'] button").click();
+    await wait(() => window.navigationFixture.openedMaintenance.length === 1);
+    check(window.navigationFixture.openedMaintenance[0] === 3,
+      "Opening a found container names only that container");
+
+    // A walk that finds nothing reads the same as one whose password was
+    // wrong: there is one outcome and one sentence for both.
+    window.navigationFixture.surveyProgress = "2,3,3,0,0,0";
+    window.navigationFixture.surveyFound = [];
+    decoyNav.click();
+    $("#decoy-password").value = "handover";
+    $("#decoy-verify-submit").click();
+    $("#decoy-confirm-accept").click();
+    await wait(() => $("#decoy-results-status").textContent !== "");
+    check(all("#decoy-container-list .container-row").length === 0 &&
+      $("#decoy-results-status").textContent.includes("没有可更新诱饵内容的容器"),
+      "A walk that finds nothing says so without saying why");
+
+    window.navigationFixture.surveyProgress = "2,4,4,0,2,0";
+    decoyNav.click();
+    $("#decoy-password").value = "handover";
+    $("#decoy-verify-submit").click();
+    $("#decoy-confirm-accept").click();
+    await wait(() => $("#decoy-results-status").textContent.includes("未能验证"));
+    check($("#decoy-results-status").textContent.includes("2 个容器未能验证"),
+      "Containers nothing was learned about are counted for the user");
+
+    window.dispatchEvent(new window.Event("usb-vault-session-changed"));
+    await tick();
+    check($("#decoy-verify").hidden === false &&
+      all("#decoy-container-list .container-row").length === 0,
+      "A session change drops what the walk found");
+    window.navigationFixture.surveyProgress = "2,3,3,2,0,0";
+    window.navigationFixture.surveyFound = [1, 3];
+    window.navigationFixture.surveyPasswords = [];
+    window.navigationFixture.openedMaintenance = [];
+    $("[data-section=dashboard]").click();
+
     const firstContainerRow = $(home + " .container-row");
     check(firstContainerRow.lastElementChild === action(home, 1, "details") &&
       !action(home, 1, "details").classList.contains("shell-button"), "Disclosure is an unframed arrow at the end of the row");

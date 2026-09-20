@@ -94,6 +94,22 @@
   const fileNameCancelButton = document.getElementById("file-name-cancel");
   const fileNameConfirmButton = document.getElementById("file-name-confirm");
   const fileDropTargets = document.getElementById("file-drop-targets");
+  const decoyVerify = document.getElementById("decoy-verify");
+  const decoyPassword = document.getElementById("decoy-password");
+  const decoyPasswordVisibility = document.getElementById("decoy-password-visibility");
+  const decoyVerifySubmit = document.getElementById("decoy-verify-submit");
+  const decoyVerifyStatus = document.getElementById("decoy-verify-status");
+  const decoyProgress = document.getElementById("decoy-progress");
+  const decoyProgressCopy = document.getElementById("decoy-progress-copy");
+  const decoyProgressBar = document.getElementById("decoy-progress-bar");
+  const decoyProgressCancel = document.getElementById("decoy-progress-cancel");
+  const decoyResults = document.getElementById("decoy-results");
+  const decoyContainerList = document.getElementById("decoy-container-list");
+  const decoyResultsStatus = document.getElementById("decoy-results-status");
+  const decoyConfirmDialog = document.getElementById("decoy-confirm-dialog");
+  const decoyConfirmClose = document.getElementById("decoy-confirm-close");
+  const decoyConfirmCancel = document.getElementById("decoy-confirm-cancel");
+  const decoyConfirmAccept = document.getElementById("decoy-confirm-accept");
   const exportContainerList = document.getElementById("export-container-list");
   const backupExportLocation =
     document.getElementById("backup-export-location");
@@ -2379,6 +2395,228 @@
     showDashboardSection("files");
   };
 
+  // Which of the three panels the maintenance column is showing. It starts
+  // over whenever the session does: the walk's findings are session facts.
+  let decoyStage = "verify";
+  let decoyFound = [];
+  let decoyUnreachable = 0;
+  let decoyCancelRequested = false;
+
+  const setDecoyStatus = (element, message, tone = "") => {
+    element.textContent = message;
+    element.dataset.tone = tone;
+    if (element === decoyResultsStatus) element.hidden = message === "";
+  };
+
+  const renderDecoySection = () => {
+    decoyVerify.hidden = decoyStage !== "verify";
+    decoyProgress.hidden = decoyStage !== "running";
+    decoyResults.hidden = decoyStage !== "results";
+    decoyVerifySubmit.disabled = busy || currentState !== nativeState.authenticated;
+    if (decoyStage === "results") renderDecoyList();
+  };
+
+  const resetDecoySection = () => {
+    decoyStage = "verify";
+    decoyFound = [];
+    decoyUnreachable = 0;
+    decoyCancelRequested = false;
+    decoyPassword.value = "";
+    decoyPassword.type = "password";
+    decoyPasswordVisibility.setAttribute("aria-pressed", "false");
+    decoyPasswordVisibility.setAttribute("aria-label", "显示密码");
+    setDecoyStatus(decoyVerifyStatus, "");
+    setDecoyStatus(decoyResultsStatus, "");
+    while (decoyContainerList.firstChild !== null) {
+      decoyContainerList.removeChild(decoyContainerList.firstChild);
+    }
+    renderDecoySection();
+  };
+
+  const renderDecoyList = () => {
+    while (decoyContainerList.firstChild !== null) {
+      decoyContainerList.removeChild(decoyContainerList.firstChild);
+    }
+    for (const id of decoyFound) {
+      const known = containers.find((container) => container.id === id);
+      const row = document.createElement("div");
+      row.className = "container-row";
+      row.dataset.decoyContainer = String(id);
+
+      const mark = document.createElement("span");
+      mark.className = "container-mark";
+      mark.appendChild(lockIcon());
+
+      const identity = document.createElement("div");
+      identity.className = "container-identity";
+      const name = document.createElement("div");
+      name.className = "container-name";
+      name.textContent = known ? known.name : "";
+      name.title = name.textContent;
+      const state = document.createElement("div");
+      state.className = "container-state";
+      state.textContent = known && known.mounted ? "已挂载" : "未挂载";
+      identity.append(name, state);
+
+      const facts = document.createElement("div");
+      facts.className = "container-facts";
+      facts.append(containerFact("盘符", known && known.mounted ? known.drive : "—"));
+
+      const actions = document.createElement("div");
+      actions.className = "container-actions";
+      const open = document.createElement("button");
+      open.className = "shell-button";
+      open.type = "button";
+      open.textContent = "打开外层卷";
+      open.disabled = busy;
+      open.addEventListener("click", () => { void openDecoyMaintenance(id); });
+      actions.appendChild(open);
+
+      row.append(mark, identity, facts, actions);
+      decoyContainerList.appendChild(row);
+    }
+  };
+
+  const closeDecoyConfirm = () => {
+    decoyConfirmDialog.hidden = true;
+    decoyVerifySubmit.disabled = busy || currentState !== nativeState.authenticated;
+    decoyVerifySubmit.focus();
+  };
+
+  const openDecoyConfirm = () => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    if (decoyPassword.value === "") {
+      setDecoyStatus(decoyVerifyStatus, "请输入密码。", "error");
+      decoyPassword.focus();
+      return;
+    }
+    setDecoyStatus(decoyVerifyStatus, "");
+    decoyConfirmDialog.hidden = false;
+    decoyConfirmAccept.focus();
+  };
+
+  const runDecoySurvey = async () => {
+    const revision = batchSessionRevision;
+    let encoded = null;
+    let passwordBytes = null;
+    decoyConfirmDialog.hidden = true;
+    decoyCancelRequested = false;
+    decoyStage = "running";
+    decoyProgressCopy.textContent = "正在逐个尝试本机记录的容器。";
+    decoyProgressBar.style.width = "0%";
+    busy = true;
+    renderDecoySection();
+    try {
+      try {
+        encoded = new TextEncoder().encode(decoyPassword.value);
+        passwordBytes = Array.from(encoded);
+      } finally {
+        decoyPassword.value = "";
+        wipe(encoded);
+        encoded = null;
+      }
+      try {
+        await bridge.beginDecoySurvey(passwordBytes);
+      } finally {
+        wipe(passwordBytes);
+        passwordBytes = null;
+      }
+      for (;;) {
+        const raw = String(await bridge.getDecoySurveyProgress());
+        if (revision !== batchSessionRevision) return;
+        if (!/^\d+,\d+,\d+,\d+,\d+,[01]$/.test(raw)) throw new Error("invalid progress");
+        const [state, total, done, found, unreachable, cancelled] =
+          raw.split(",").map(Number);
+        if (done > total || found > total) throw new Error("invalid progress");
+        if (state === 2) {
+          decoyUnreachable = unreachable;
+          decoyFound = [];
+          for (let index = 0; index < found; ++index) {
+            const id = await bridge.getDecoySurveyId(index);
+            if (revision !== batchSessionRevision) return;
+            if (!Number.isInteger(id) || id <= 0) throw new Error("invalid result");
+            decoyFound.push(id);
+          }
+          decoyStage = "results";
+          if (cancelled === 1) {
+            setDecoyStatus(decoyResultsStatus,
+              "验证已中止，下面只列出中止前确认可更新的容器。", "warn");
+          } else if (unreachable > 0) {
+            setDecoyStatus(decoyResultsStatus,
+              `有 ${unreachable} 个容器未能验证，通常是其中还有文件正在使用。`, "warn");
+          } else if (decoyFound.length === 0) {
+            setDecoyStatus(decoyResultsStatus, "没有可更新诱饵内容的容器。");
+          } else setDecoyStatus(decoyResultsStatus, "");
+          break;
+        }
+        if (state !== 1) throw new Error("survey failed");
+        decoyProgressBar.style.width = total === 0 ? "0%" : `${Math.round((done / total) * 100)}%`;
+        decoyProgressCopy.textContent = total === 0
+          ? "正在逐个尝试本机记录的容器。"
+          : `正在逐个尝试本机记录的容器（${done}/${total}）。`;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } catch (_) {
+      decoyStage = "verify";
+      setDecoyStatus(decoyVerifyStatus, "无法完成验证，请稍后重试。", "error");
+    } finally {
+      wipe(encoded);
+      wipe(passwordBytes);
+      busy = false;
+      renderDecoySection();
+      await refreshAfterExternalChange();
+    }
+  };
+
+  const openDecoyMaintenance = async (id) => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    const revision = batchSessionRevision;
+    busy = true;
+    renderDecoySection();
+    try {
+      await bridge.beginOpenDecoyMaintenance(id);
+      for (;;) {
+        const status = await bridge.getVolumeOperationStatus();
+        if (revision !== batchSessionRevision) return;
+        if (status !== 1) {
+          setDecoyStatus(decoyResultsStatus, status === 2
+            ? "外层卷已打开，可在「容器管理」中添加或替换内容。"
+            : "无法打开该容器的外层卷。", status === 2 ? "" : "error");
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } catch (_) {
+      setDecoyStatus(decoyResultsStatus, "无法打开该容器的外层卷。", "error");
+    } finally {
+      busy = false;
+      renderDecoySection();
+      await refreshAfterExternalChange();
+    }
+  };
+
+  decoyVerifySubmit.addEventListener("click", openDecoyConfirm);
+  decoyPassword.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") openDecoyConfirm();
+  });
+  decoyPasswordVisibility.addEventListener("click", () => {
+    const visible = decoyPassword.type === "text";
+    decoyPassword.type = visible ? "password" : "text";
+    decoyPasswordVisibility.setAttribute("aria-pressed", String(!visible));
+    decoyPasswordVisibility.setAttribute("aria-label", visible ? "显示密码" : "隐藏密码");
+    decoyPassword.focus();
+  });
+  decoyConfirmAccept.addEventListener("click", () => { void runDecoySurvey(); });
+  decoyConfirmCancel.addEventListener("click", closeDecoyConfirm);
+  decoyConfirmClose.addEventListener("click", closeDecoyConfirm);
+  decoyProgressCancel.addEventListener("click", async () => {
+    if (decoyCancelRequested) return;
+    decoyCancelRequested = true;
+    decoyProgressCancel.disabled = true;
+    try { await bridge.cancelDecoySurvey(); } catch (_) {}
+    decoyProgressCancel.disabled = false;
+  });
+
   const showDashboardSection = (sectionName) => {
     if (sectionName === "history" && !operationLoggingEnabled) return;
     closeFileContextMenu();
@@ -2400,6 +2638,7 @@
     // reads a directory when the user arrives at it or moves inside it.
     if (sectionName === "files") void refreshFileManager();
     if (sectionName === "backup") renderBackupCentre();
+    if (sectionName === "decoy") renderDecoySection();
   };
 
   const openCreationFlow = () => {
@@ -3107,6 +3346,8 @@
 
   window.addEventListener("usb-vault-session-changed", () => {
     ++batchSessionRevision;
+    // A walk's findings belong to the session that made them.
+    resetDecoySection();
     pendingNewContainers.clear();
     batchForceUnmount.checked = false;
     batchForceUnmount.disabled = true;

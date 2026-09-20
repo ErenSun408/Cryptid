@@ -177,6 +177,29 @@
     <button id="export-confirm-cancel" type="button">取消</button>
     <button id="export-confirm-run" type="button" disabled>开始导出</button>
   </div>
+  <section id="dashboard-section-decoy">
+    <div id="decoy-verify">
+      <input id="decoy-password" type="password" autocomplete="off" spellcheck="false">
+      <button id="decoy-password-visibility" type="button" aria-controls="decoy-password" aria-pressed="false">显示</button>
+      <button id="decoy-verify-submit" type="button">继续</button>
+      <output id="decoy-verify-status"></output>
+    </div>
+    <div id="decoy-progress" hidden>
+      <p id="decoy-progress-copy"></p>
+      <i id="decoy-progress-bar"></i>
+      <button id="decoy-progress-cancel" type="button">取消</button>
+    </div>
+    <div id="decoy-results" hidden>
+      <div id="decoy-container-list"></div>
+      <output id="decoy-results-status" hidden></output>
+    </div>
+  </section>
+  <div id="decoy-confirm-dialog" role="dialog" hidden>
+    <h3 id="decoy-confirm-title">更新诱饵内容</h3>
+    <button id="decoy-confirm-close" type="button">关闭</button>
+    <button id="decoy-confirm-cancel" type="button">取消</button>
+    <button id="decoy-confirm-accept" type="button">确定</button>
+  </div>
   <div id="forget-container-dialog" role="dialog" hidden>
     <h3 id="forget-container-title">从列表移除</h3>
     <button id="forget-container-close" type="button">关闭</button>

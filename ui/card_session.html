@@ -572,6 +572,18 @@
     .container-grab { border: 0; background: none; touch-action: none; }
     .container-grab svg { fill: currentColor; stroke: none; }
     .container-grab:disabled { cursor: default; opacity: .4; }
+    .decoy-gate { display: flex; justify-content: center; padding: 3.5rem 1rem; }
+    .decoy-gate-card { width: min(26rem, 100%); display: flex; flex-direction: column; gap: .75rem;
+      align-items: stretch; text-align: center; }
+    .decoy-gate-card h3 { margin: 0; font-size: 1.05rem; }
+    .decoy-gate-copy { margin: 0; color: var(--text-2); font-size: .84rem; line-height: 1.6; }
+    .decoy-gate-card .bar { height: .35rem; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .decoy-gate-card .bar i { display: block; height: 100%; background: var(--gold); transition: width .2s ease; }
+    .decoy-gate-card .create-button, .decoy-gate-card .shell-button { align-self: center; }
+    .decoy-gate-card .password-field { position: relative; }
+    #decoy-password { width: 100%; padding-right: 3rem; }
+    #decoy-password::-ms-reveal { display: none; }
+    .decoy-gate-card .password-visibility { border: 0; background: transparent; }
     .container-details-toggle {
       position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
       display: grid; place-items: center; width: 1.75rem; height: 2rem; padding: 0;
@@ -1162,6 +1174,10 @@
           <span class="nav-label">容器管理</span>
           <span id="nav-container-count" class="nav-count">0</span>
         </button>
+        <button class="nav-item dashboard-nav" type="button" data-section="decoy">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v6.5c0 3.9-3.3 7-8 8.5-4.7-1.5-8-4.6-8-8.5V7l8-4z"></path><path d="M8.5 12.5l2.5 2.5 4.5-4.5"></path></svg>
+          <span class="nav-label">更新诱饵内容</span>
+        </button>
         <button class="nav-item dashboard-nav" type="button" data-section="backup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12"></path><path d="M13 7l5 5-5 5"></path><path d="M20 4v16"></path></svg>
           <span class="nav-label">导出与迁移</span>
@@ -1233,6 +1249,48 @@
             </table>
           </div>
           <output id="file-list-status" class="section-note file-status" aria-live="polite" data-tone="" hidden></output>
+          </div>
+        </section>
+
+        <section id="dashboard-section-decoy" class="dashboard-section" aria-labelledby="decoy-title">
+          <div class="section-header">
+            <div><h2 id="decoy-title">更新诱饵内容</h2><p>补充或替换外层卷中的内容</p></div>
+          </div>
+
+          <div id="decoy-verify" class="decoy-gate">
+            <div class="decoy-gate-card">
+              <h3>请验证</h3>
+              <p class="decoy-gate-copy">为安全地打开外层卷，需要再次验证身份。</p>
+              <div class="password-field">
+                <input id="decoy-password" type="password" autocomplete="off" spellcheck="false"
+                       aria-label="密码" placeholder="密码">
+                <button id="decoy-password-visibility" class="password-visibility" type="button"
+                        aria-label="显示密码" aria-controls="decoy-password" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                </button>
+              </div>
+              <button id="decoy-verify-submit" class="create-button" type="button">继续</button>
+              <output id="decoy-verify-status" class="creation-status" aria-live="polite" data-tone=""></output>
+            </div>
+          </div>
+
+          <div id="decoy-progress" class="decoy-gate" hidden>
+            <div class="decoy-gate-card">
+              <h3>正在验证</h3>
+              <p id="decoy-progress-copy" class="decoy-gate-copy">正在逐个尝试本机记录的容器。</p>
+              <div class="bar"><i id="decoy-progress-bar" style="width:0%"></i></div>
+              <button id="decoy-progress-cancel" class="shell-button" type="button">取消</button>
+            </div>
+          </div>
+
+          <div id="decoy-results" hidden>
+            <div class="overview-group">
+              <div class="overview-heading">
+                <div><h3>可更新诱饵内容的容器</h3><p class="overview-sub">选择一个容器以打开它的外层卷</p></div>
+              </div>
+              <div id="decoy-container-list" class="container-list"></div>
+            </div>
+            <output id="decoy-results-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
           </div>
         </section>
 
@@ -1468,6 +1526,27 @@
       <div class="modal-footer">
         <button id="export-confirm-cancel" class="modal-button" type="button">取消</button>
         <button id="export-confirm-run" class="modal-button danger" type="button" disabled>开始导出</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="decoy-confirm-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="decoy-confirm-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="decoy-confirm-title">更新诱饵内容</h3>
+        <button id="decoy-confirm-close" class="modal-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="creation-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+          <span>为挂载对应容器外层卷，需强制卸载其隐藏卷，请确认您没有正在对隐藏卷进行写入或其他重要操作。</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="decoy-confirm-cancel" class="modal-button" type="button">取消</button>
+        <button id="decoy-confirm-accept" class="modal-button danger" type="button">确定</button>
       </div>
     </div>
   </div>

@@ -98,14 +98,46 @@ void require(const bool condition, const char* const message) {
   return value;
 }
 
+// 8.7.2: the entry is there under every login. A column that appeared only
+// when there was something behind it would be the tier itself.
+void test_the_maintenance_column_is_always_there_and_explains_nothing() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+
+  require(count_occurrences(page, "data-section=\"decoy\"") == 1 &&
+              page.find("id=\"dashboard-section-decoy\"") != std::string::npos,
+          "the maintenance column must be one fixed navigation entry");
+  require(page.find("hidden") == std::string::npos ||
+              page.find("data-section=\"decoy\" hidden") == std::string::npos,
+          "the maintenance column must not start hidden");
+  require(script.find("data-section=\"decoy\"") == std::string::npos,
+          "no script may decide whether the column is shown");
+
+  // The warning the user settled on, word for word.
+  require(page.find(
+              "为挂载对应容器外层卷，需强制卸载其隐藏卷，请确认您没有正在对隐藏"
+              "卷进行写入或其他重要操作。") != std::string::npos,
+          "the maintenance confirmation must carry the agreed wording");
+
+  // Neither word may appear anywhere on the page: which side of the two
+  // passwords the user is on is not something the product may name.
+  const std::string section = dashboard_section(page, "decoy");
+  require(section.find("诱饵密码") == std::string::npos &&
+              section.find("胁迫密码") == std::string::npos,
+          "the maintenance column must not name a password role");
+  require(section.find("请验证") != std::string::npos,
+          "the maintenance column must ask for the password it needs");
+}
+
 void test_page_has_route_specific_password_surfaces() {
   // Setup is a surface of its own with its own contract below, so the product
   // counts here stay about the product.
   const std::string page = page_without_section(
       read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE), "configuration-surface");
-  // Two session inputs, two creation inputs and one read-only review preview.
-  // The password the session was opened under is not among them.
-  require(count_occurrences(page, "type=\"password\"") == 5,
+  // Two session inputs, two creation inputs, one read-only review preview and
+  // the one the maintenance column asks for. The password the session was
+  // opened under is not among them.
+  require(count_occurrences(page, "type=\"password\"") == 6,
           "product page must have the session, creation and review inputs");
   require(page.find("id=\"card-password\"") != std::string::npos &&
               page.find("id=\"card-password-confirmation\"") !=
@@ -115,12 +147,13 @@ void test_page_has_route_specific_password_surfaces() {
               std::string::npos,
           "confirmation must start hidden outside initialization");
   // The two password controls, the two the creation forms add, the four
-  // name/save-location fields, and the file manager's name field. A remembered
-  // container path is exactly what section 8.4 forbids, so browser assistance
-  // is off on those too; a file name inside a container is the content of an
-  // encrypted volume, which is at least as good a reason.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 11 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 11,
+  // name/save-location fields, the file manager's name field, and the
+  // maintenance column's password. A remembered container path is exactly what
+  // section 8.4 forbids, so browser assistance is off on those too; a file
+  // name inside a container is the content of an encrypted volume, which is at
+  // least as good a reason.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 12 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 12,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
@@ -131,13 +164,13 @@ void test_page_has_route_specific_password_surfaces() {
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
   require(
-      count_occurrences(page, "class=\"password-visibility\"") == 3 &&
+      count_occurrences(page, "class=\"password-visibility\"") == 4 &&
           page.find("aria-controls=\"card-password\"") != std::string::npos &&
           page.find("aria-controls=\"card-password-confirmation\"") !=
               std::string::npos &&
               count_occurrences(page, "<script") == 1,
           "product page must load only its packaged controller");
-  require(count_occurrences(page, "class=\"password-visibility\"") == 3 &&
+  require(count_occurrences(page, "class=\"password-visibility\"") == 4 &&
               page.find("aria-controls=\"card-password\"") !=
                   std::string::npos &&
               page.find("aria-controls=\"card-password-confirmation\"") !=
@@ -1307,6 +1340,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
 
 int main() {
   try {
+    test_the_maintenance_column_is_always_there_and_explains_nothing();
     test_page_has_route_specific_password_surfaces();
     test_setup_surface_takes_only_the_credential_set();
     test_authenticated_dashboard_is_real_state_only();
