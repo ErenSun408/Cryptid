@@ -27,6 +27,11 @@ window.navigationFixture = {
   measuredMaintenance: [],
   endedMaintenance: [],
   maintenanceSpace: "4096,1024,512",
+  dropTargets: [],
+  dropClears: 0,
+  dropStatus: "0,0,0,0",
+  dropCancels: 0,
+  failDropTarget: false,
   failOpenMaintenance: false,
   acceptCancellation: true,
   failCancellation: false,
@@ -101,6 +106,17 @@ window.navigationFixture = {
       fixture.measuredMaintenance.push(id);
     }),
     getDecoyMaintenanceSpace: () => fixture.maintenanceSpace,
+    setExternalDropTarget: (id, directory) => {
+      if (fixture.failDropTarget) throw new Error("the window refused to arm");
+      fixture.dropTargets.push(`${id}/${directory}`);
+      if (!fixture.dropStatus.startsWith("1,")) fixture.dropStatus = "0,0,0,0";
+    },
+    clearExternalDropTarget: () => { fixture.dropClears += 1; },
+    getExternalDropStatus: () => fixture.dropStatus,
+    cancelExternalDrop: () => {
+      fixture.dropCancels += 1;
+      return true;
+    },
     beginEndDecoyMaintenance: (id) => beginVolume(() => {
       if (fixture.failEndMaintenance) throw new Error("simulated end failure");
       fixture.endedMaintenance.push(id);

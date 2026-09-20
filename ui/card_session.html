@@ -593,6 +593,14 @@
     .decoy-space-track { height: .35rem; margin-top: .65rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
     .decoy-space-track i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
     #decoy-maintenance-files-slot:empty { display: none; }
+    .decoy-drop-zone {
+      margin-bottom: 1rem; padding: .85rem 1rem; border: 1px dashed rgba(255,255,255,.18);
+      border-radius: .6rem; color: var(--text-3); font-size: .78rem; line-height: 1.6;
+    }
+    .decoy-drop-zone strong { color: var(--text-2); font-weight: 600; }
+    .decoy-drop-run { display: flex; align-items: center; gap: .75rem; margin-top: .65rem; }
+    .decoy-drop-run .bar { flex: 1 1 auto; height: .35rem; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .decoy-drop-run .bar i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
     .container-details-toggle {
       position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
       display: grid; place-items: center; width: 1.75rem; height: 2rem; padding: 0;
@@ -1333,6 +1341,16 @@
                   <div id="decoy-maintenance-freshness-detail" class="decoy-maintenance-detail">只检查外层根目录，不保存扫描结果。</div>
                 </div>
               </article>
+            </div>
+            <div id="decoy-drop-zone" class="decoy-drop-zone">
+              <strong>从资源管理器拖进来</strong>：把文件或文件夹拖到本窗口，就直接复制进当前这个文件夹。
+              <span id="decoy-drop-hint">只接受已经存在于磁盘上的文件，拖出去不行——那是明文导出。</span>
+              <div id="decoy-drop-run" class="decoy-drop-run" hidden>
+                <span id="decoy-drop-copy">正在放入…</span>
+                <span class="bar"><i id="decoy-drop-bar"></i></span>
+                <button id="decoy-drop-cancel" class="shell-button" type="button">停止</button>
+              </div>
+              <output id="decoy-drop-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
             </div>
             <div id="decoy-maintenance-files-slot"></div>
           </div>

@@ -131,6 +131,12 @@
     document.getElementById("decoy-maintenance-freshness");
   const decoyMaintenanceFreshnessDetail =
     document.getElementById("decoy-maintenance-freshness-detail");
+  const decoyDropZone = document.getElementById("decoy-drop-zone");
+  const decoyDropRun = document.getElementById("decoy-drop-run");
+  const decoyDropCopy = document.getElementById("decoy-drop-copy");
+  const decoyDropBar = document.getElementById("decoy-drop-bar");
+  const decoyDropCancel = document.getElementById("decoy-drop-cancel");
+  const decoyDropStatus = document.getElementById("decoy-drop-status");
   const decoyConfirmDialog = document.getElementById("decoy-confirm-dialog");
   const decoyConfirmClose = document.getElementById("decoy-confirm-close");
   const decoyConfirmCancel = document.getElementById("decoy-confirm-cancel");
@@ -2416,6 +2422,9 @@
       updateFileRefreshAvailability();
     }
     renderFileList();
+    // The destination a drop would land in is the directory just listed, so
+    // it is re-named after every move through the file manager.
+    await armDecoyDrop();
   };
 
   const browseContainer = (id) => {
@@ -2433,6 +2442,46 @@
   let decoyUnreachable = 0;
   let decoyCancelRequested = false;
   let decoyMaintenanceRevision = 0;
+  // What the native window was last told to accept a drop into, so the page
+  // does not re-arm it on every render. It is the destination only: the page
+  // never learns what was dropped or where it came from.
+  let decoyDropTarget = "";
+  let decoyDropWatching = false;
+  // The last status the page acted on. A small drop can begin and end between
+  // two of the window's notices, so what is read has to be enough on its own
+  // to tell a run the page has already reported from one it has not.
+  let decoyDropReported = "0,0,0,0";
+
+  const disarmDecoyDrop = () => {
+    if (bridge === null || decoyDropTarget === "") return;
+    decoyDropTarget = "";
+    void Promise.resolve(bridge.clearExternalDropTarget()).catch(() => {});
+  };
+
+  // 🔴 The page names a container and a directory and nothing else. Arming
+  // happens only from the maintenance screen, so a drag anywhere else in the
+  // product is refused by the window before the page is involved at all.
+  const armDecoyDrop = async () => {
+    if (bridge === null) return;
+    if (decoyStage !== "maintenance" || fileContainerId === 0 ||
+        currentState !== nativeState.authenticated) {
+      disarmDecoyDrop();
+      return;
+    }
+    const wanted = `${fileContainerId}/${filePath.join("/")}`;
+    if (wanted === decoyDropTarget) return;
+    try {
+      await bridge.setExternalDropTarget(fileContainerId, filePath.join("/"));
+      decoyDropTarget = wanted;
+      // Naming a destination retires the run before it on the window's side,
+      // so the page stops treating that run's numbers as already reported.
+      // Without this a second drop with the same outcome would read as the
+      // first one and go unreported.
+      decoyDropReported = "0,0,0,0";
+    } catch (_) {
+      decoyDropTarget = "";
+    }
+  };
 
   const restoreFileManagerPlacement = () => {
     if (fileBreadcrumb.parentNode !== fileBreadcrumbHome) {
@@ -2456,6 +2505,11 @@
     }
   };
 
+  const renderDecoyDropZone = () => {
+    decoyDropRun.hidden = !decoyDropWatching;
+    decoyDropCancel.disabled = !decoyDropWatching;
+  };
+
   const clearDecoyMaintenanceFacts = () => {
     decoyMaintenanceWritable.textContent = "—";
     decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
@@ -2464,6 +2518,7 @@
     decoyMaintenanceFreshnessDetail.textContent =
       "只检查外层根目录，不保存扫描结果。";
     setDecoyStatus(decoyMaintenanceStatus, "");
+    setDecoyStatus(decoyDropStatus, "");
   };
 
   const formatCapacityMib = (mib) => {
@@ -2513,7 +2568,8 @@
   const setDecoyStatus = (element, message, tone = "") => {
     element.textContent = message;
     element.dataset.tone = tone;
-    if (element === decoyResultsStatus || element === decoyMaintenanceStatus) {
+    if (element === decoyResultsStatus || element === decoyMaintenanceStatus ||
+        element === decoyDropStatus) {
       element.hidden = message === "";
     }
   };
@@ -2529,15 +2585,20 @@
       placeFileManagerInDecoyMaintenance();
       decoyMaintenanceEnd.disabled = busy || currentState !== nativeState.authenticated;
       renderDecoyMaintenanceChoices();
+      renderDecoyDropZone();
       renderManagementView();
     } else {
       restoreFileManagerPlacement();
       if (decoyStage === "results") renderDecoyList();
     }
+    void armDecoyDrop();
   };
 
   const resetDecoySection = () => {
     ++decoyMaintenanceRevision;
+    disarmDecoyDrop();
+    decoyDropWatching = false;
+    decoyDropReported = "0,0,0,0";
     decoyStage = "verify";
     decoyFound = [];
     decoyUnreachable = 0;
@@ -2692,6 +2753,80 @@
       renderDecoySection();
       await refreshAfterExternalChange();
     }
+  };
+
+  // The window tells the page a drop started; everything after that is read
+  // back as four numbers until the run ends. Nothing about the source files
+  // crosses the boundary, so what arrived is learnt by listing the directory.
+  const reportDecoyDrop = async ([state, , done, failed]) => {
+    setDecoyStatus(decoyDropStatus,
+      state === 2
+        ? `已放入 ${done} 个项目。`
+        : state === 4
+          ? `已停止，放入了 ${done} 个项目，其余没有开始。`
+          : `放入了 ${done} 个项目，${failed} 个没有放进去，可能是外层卷放不下或已有同名项目。`,
+      state === 2 ? "success" : state === 4 ? "warn" : "error");
+    renderDecoySection();
+    // Re-arming is what retires the finished run on the native side, so the
+    // destination is named again from scratch rather than through the guard.
+    decoyDropTarget = "";
+    await refreshFileManager();
+    await refreshDecoyMaintenanceFacts();
+  };
+
+  const watchDecoyDrop = async () => {
+    if (decoyDropWatching || bridge === null) return;
+    let packed = "";
+    try {
+      packed = String(await bridge.getExternalDropStatus());
+    } catch (_) {
+      return;
+    }
+    if (!/^[0-4],\d+,\d+,\d+$/.test(packed) || packed === decoyDropReported) {
+      return;
+    }
+    decoyDropReported = packed;
+    const seen = packed.split(",").map(Number);
+    if (seen[0] === 0) return;
+    if (seen[0] !== 1) {
+      await reportDecoyDrop(seen);
+      return;
+    }
+
+    const revision = batchSessionRevision;
+    decoyDropWatching = true;
+    setDecoyStatus(decoyDropStatus, "");
+    busy = true;
+    renderDecoySection();
+    renderManagementView();
+    let outcome = [3, 0, 0, 0];
+    try {
+      for (;;) {
+        const raw = String(await bridge.getExternalDropStatus());
+        if (revision !== batchSessionRevision) return;
+        if (!/^[0-4],\d+,\d+,\d+$/.test(raw)) throw new Error("invalid status");
+        const [state, total, done, failed] = raw.split(",").map(Number);
+        if (done + failed > total) throw new Error("invalid status");
+        if (state !== 1) {
+          outcome = [state, total, done, failed];
+          decoyDropReported = raw;
+          break;
+        }
+        decoyDropBar.style.width = total === 0
+          ? "0%" : `${Math.round(((done + failed) / total) * 100)}%`;
+        decoyDropCopy.textContent = `正在放入（${done + failed}/${total}）…`;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    } catch (_) {
+      outcome = [3, 0, 0, 0];
+    } finally {
+      decoyDropWatching = false;
+      decoyDropBar.style.width = "0%";
+      decoyDropCopy.textContent = "正在放入…";
+      busy = false;
+    }
+    if (revision !== batchSessionRevision) return;
+    await reportDecoyDrop(outcome);
   };
 
   const refreshDecoyMaintenanceFacts = async () => {
@@ -2852,6 +2987,10 @@
   });
   decoyMaintenanceEnd.addEventListener("click", () => {
     void endDecoyMaintenance();
+  });
+  decoyDropCancel.addEventListener("click", async () => {
+    decoyDropCancel.disabled = true;
+    try { await bridge.cancelExternalDrop(); } catch (_) {}
   });
 
   const showDashboardSection = (sectionName) => {
@@ -3583,6 +3722,12 @@
       else volumeOperationConfirm.focus();
     }
   };
+
+  // The window raises this when a drag it accepted starts or finishes. The
+  // page owns none of that work, so all it does is start reading the numbers.
+  window.addEventListener("usb-vault-external-drop-changed", () => {
+    void watchDecoyDrop();
+  });
 
   window.addEventListener("usb-vault-session-changed", () => {
     ++batchSessionRevision;

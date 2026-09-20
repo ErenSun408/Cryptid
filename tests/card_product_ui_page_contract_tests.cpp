@@ -175,6 +175,45 @@ void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
           "freshness is described or implemented as persistent state");
 }
 
+void test_a_shell_drop_is_never_read_by_the_page() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "decoy");
+
+  require(section.find("id=\"decoy-drop-zone\"") != std::string::npos &&
+              section.find("id=\"decoy-drop-cancel\"") != std::string::npos &&
+              section.find("id=\"decoy-drop-status\"") != std::string::npos,
+          "the maintenance page does not say a drop can land there");
+
+  // 🔴 The page must have no way to look at what was dropped. Every one of
+  // these would hand it a file or a path from the drag, which is the one
+  // thing the native window exists to keep on its own side of the boundary.
+  for (const char* const reader :
+       {"dataTransfer.files", "dataTransfer.items", "webkitGetAsEntry",
+        "getAsFile", "FileReader", "URL.createObjectURL"}) {
+    require(script.find(reader) == std::string::npos,
+            "the page can read what a drag is carrying");
+  }
+  require(page.find("ondrop") == std::string::npos &&
+              page.find("ondragover") == std::string::npos,
+          "the page markup takes a drop of its own");
+
+  // What it may say is the destination, and what it may read back is four
+  // numbers. A source path has no name on this side at all.
+  require(script.find("bridge.setExternalDropTarget(fileContainerId, filePath.join(\"/\"))") !=
+              std::string::npos &&
+              script.find("bridge.clearExternalDropTarget()") !=
+                  std::string::npos &&
+              script.find("bridge.getExternalDropStatus()") !=
+                  std::string::npos &&
+              script.find("bridge.cancelExternalDrop()") != std::string::npos,
+          "the drop destination or its progress is not wired to the bridge");
+  require(script.find("usb-vault-external-drop-changed") != std::string::npos,
+          "the page is never told a drop started");
+  require(section.find("明文导出") != std::string::npos,
+          "the drop zone does not say where taking files out belongs");
+}
+
 void test_page_has_route_specific_password_surfaces() {
   // Setup is a surface of its own with its own contract below, so the product
   // counts here stay about the product.
@@ -1388,6 +1427,7 @@ int main() {
   try {
     test_the_maintenance_column_is_always_there_and_explains_nothing();
     test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral();
+    test_a_shell_drop_is_never_read_by_the_page();
     test_page_has_route_specific_password_surfaces();
     test_setup_surface_takes_only_the_credential_set();
     test_authenticated_dashboard_is_real_state_only();

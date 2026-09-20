@@ -99,16 +99,73 @@
     check(window.navigationFixture.openedMaintenance.at(-1) === 1 &&
       $("#decoy-maintenance-container").value === "1",
       "The page switches maintenance through the same one-container transaction");
+    // --- dropping files in from the shell ---------------------------------
+    // The page arms the window with the destination it is showing and nothing
+    // else. No source path exists on this side of the boundary at all.
+    check(window.navigationFixture.dropTargets.at(-1) === "1/" &&
+      window.navigationFixture.dropTargets.every((target) =>
+        /^[0-9]+\/[^\\:]*$/.test(target)),
+      "The maintenance page names only a container and a directory for a drop");
+    const armedBefore = window.navigationFixture.dropTargets.length;
+    $("#file-list-body [data-file-enter]").click();
+    await wait(() => window.navigationFixture.dropTargets.length > armedBefore);
+    check(window.navigationFixture.dropTargets.at(-1) === "1/文档",
+      "Opening a folder moves where a drop would land with it");
+
+    // A run the window started: the page only reads its four numbers back.
+    window.navigationFixture.dropStatus = "1,3,0,0";
+    window.dispatchEvent(new Event("usb-vault-external-drop-changed"));
+    await wait(() => !$("#decoy-drop-run").hidden);
+    window.navigationFixture.dropStatus = "1,3,2,0";
+    await wait(() => $("#decoy-drop-copy").textContent.includes("2/3"));
+    check($("#decoy-drop-bar").style.width === "67%" &&
+      !$("#decoy-drop-cancel").disabled,
+      "A running drop shows how far it has got and offers to stop");
+    $("#decoy-drop-cancel").click();
+    check(window.navigationFixture.dropCancels === 1,
+      "Stopping a drop reaches the window rather than the session");
+
+    window.navigationFixture.dropStatus = "3,3,2,1";
+    await wait(() => $("#decoy-drop-run").hidden);
+    await wait(() => $("#decoy-drop-status").textContent !== "");
+    check($("#decoy-drop-status").textContent.includes("2 个项目") &&
+      $("#decoy-drop-status").textContent.includes("1 个没有放进去") &&
+      $("#decoy-drop-status").dataset.tone === "error",
+      "A finished drop says what arrived and what did not, on its own line");
+    // A small drop can be over before the page is told it began, and two
+    // drops can come out identical. Each is reported on its own: the evidence
+    // is the destination being named again, which is what retires the last.
+    for (const pass of [1, 2]) {
+      const armed = window.navigationFixture.dropTargets.length;
+      window.navigationFixture.dropStatus = "2,1,1,0";
+      window.dispatchEvent(new Event("usb-vault-external-drop-changed"));
+      await wait(() => window.navigationFixture.dropTargets.length > armed);
+      check($("#decoy-drop-status").textContent.includes("已放入 1 个项目") &&
+        $("#decoy-drop-status").dataset.tone === "success" &&
+        $("#decoy-drop-run").hidden &&
+        window.navigationFixture.dropStatus === "0,0,0,0",
+        `A drop the page never saw running is reported and then retired (pass ${pass})`);
+      await wait(() => !$("#decoy-maintenance-end").disabled);
+    }
+
+    window.navigationFixture.dropStatus = "0,0,0,0";
+    await wait(() => !$("#file-breadcrumb [data-file-depth='0']").disabled);
+    $("#file-breadcrumb [data-file-depth='0']").click();
+    await wait(() => window.navigationFixture.dropTargets.at(-1) === "1/");
+
+    const clearsBefore = window.navigationFixture.dropClears;
     $("#decoy-maintenance-end").click();
     await wait(() => window.navigationFixture.endedMaintenance.length === 1);
     check(window.navigationFixture.endedMaintenance[0] === 1 &&
       !$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
       $("#management-files").closest("#dashboard-section-files") !== null,
       "Ending maintenance unmounts the current container and restores the shared file manager");
+    check(window.navigationFixture.dropClears > clearsBefore,
+      "Leaving maintenance disarms the window, so a drag lands nowhere");
 
     $("#decoy-container-list [data-decoy-container='3'] button").click();
     await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
-      window.navigationFixture.measuredMaintenance.length === 3);
+      window.navigationFixture.measuredMaintenance.at(-1) === 3);
     window.navigationFixture.delayVolume = true;
     window.navigationFixture.completeVolume = null;
     $("#file-refresh").click();
