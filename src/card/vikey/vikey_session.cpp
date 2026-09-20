@@ -13,7 +13,7 @@ namespace usb_vault::card::vikey {
 namespace {
 
 [[noreturn]] void fail(const CardError error, const char* const context,
-    const DiagnosticStage stage = DiagnosticStage::none) {
+    const DiagnosticStage stage = DiagnosticStage::input_shape) {
   throw DiagnosticError(make_error_code(error), stage, context);
 }
 
@@ -73,7 +73,7 @@ void validate_functions(const sdk::Functions& functions) {
       functions.user_login == nullptr || functions.logoff == nullptr ||
       functions.read_data == nullptr || functions.write_data == nullptr) {
     fail(CardError::invalid_configuration,
-         "ViKey session function table is incomplete");
+         "ViKey session function table is incomplete", DiagnosticStage::sdk_export);
   }
 }
 
@@ -84,7 +84,7 @@ void validate_functions(const sdk::Functions& functions) {
                   "read ViKey hardware identity", DiagnosticStage::sdk_hardware);
   if (hardware_id == 0) {
     fail(CardError::device_failure,
-         "ViKey reported an unusable hardware identity");
+         "ViKey reported an unusable hardware identity", DiagnosticStage::sdk_hardware);
   }
   return hardware_id;
 }
@@ -103,7 +103,7 @@ void require_blob_capacity(const sdk::Functions& functions,
                   "read ViKey user data capacity", DiagnosticStage::sdk_capacity);
   if (bytes < kVikeyBlobBytes) {
     fail(CardError::invalid_configuration,
-         "ViKey user data area is too small for the fixed blob");
+         "ViKey user data area is too small for the fixed blob", DiagnosticStage::sdk_capacity);
   }
 }
 
@@ -200,11 +200,11 @@ VikeySession VikeySession::open(
   std::uint32_t count = 0;
   require_success(functions.find_ex(&count), "find ViKey device", DiagnosticStage::sdk_find);
   if (count == 0) {
-    fail(CardError::device_not_found, "find one ViKey device");
+    fail(CardError::device_not_found, "find one ViKey device", DiagnosticStage::sdk_find);
   }
   if (count != 1) {
     fail(CardError::multiple_devices,
-         "ViKey session requires exactly one connected device");
+         "ViKey session requires exactly one connected device", DiagnosticStage::sdk_find);
   }
   constexpr sdk::Index kSelectedIndex = 0;
   const std::uint32_t hardware_id =
@@ -226,7 +226,7 @@ VikeySession VikeySession::open(
   }
   if (maximum_attempt != 0 && current_attempt == 0) {
     fail(CardError::authentication_locked,
-         "ViKey user authentication is locked");
+         "ViKey user authentication is locked", DiagnosticStage::sdk_attempts);
   }
 
   require_success(
@@ -242,11 +242,11 @@ VikeySession VikeySession::open(
   constexpr sdk::Byte kUserLevel = 1;
   if (level != kUserLevel) {
     fail(CardError::device_failure,
-         "ViKey login succeeded without user permission level");
+         "ViKey login succeeded without user permission level", DiagnosticStage::sdk_permission);
   }
   if (read_hardware_id(functions, kSelectedIndex) != hardware_id) {
     fail(CardError::device_failure,
-         "ViKey hardware identity changed during authentication");
+         "ViKey hardware identity changed during authentication", DiagnosticStage::sdk_hardware);
   }
 
   pending.release();
@@ -366,7 +366,7 @@ void VikeySession::write_user_data(
 void VikeySession::verify_hardware_identity() const {
   if (read_hardware_id(functions_, index_) != hardware_id_) {
     fail(CardError::device_failure,
-         "ViKey hardware identity changed during the active session");
+         "ViKey hardware identity changed during the active session", DiagnosticStage::sdk_hardware);
   }
 }
 

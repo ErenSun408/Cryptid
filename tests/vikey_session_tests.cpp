@@ -5,6 +5,8 @@
 #include "usb_vault/card/card_error.h"
 
 #include <array>
+#include <algorithm>
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -1065,6 +1067,49 @@ void test_authentication_diagnostic_stages() {
   }
 }
 
+void test_startup_sdk_diagnostic_matrix() {
+  struct Case { std::function<void(FakeSdk&)> setup; std::uint32_t code; bool read; };
+  const std::array cases{
+    Case{[](auto& s) { s.set_user_sn_status = sdk::kCommunication; }, 2021, false},
+    Case{[](auto& s) { s.find_status = sdk::kCommunication; }, 2022, false},
+    Case{[](auto& s) { s.device_count = 0; }, 2022, false},
+    Case{[](auto& s) { s.device_count = 2; }, 2022, false},
+    Case{[](auto& s) { s.get_hid_status = sdk::kCommunication; }, 2030, false},
+    Case{[](auto& s) { s.hardware_id = 0; }, 2030, false},
+    Case{[](auto& s) { s.get_attempts_status = sdk::kCommunication; }, 2024, false},
+    Case{[](auto& s) { s.current_attempt = 0; }, 2024, false},
+    Case{[](auto& s) { s.current_attempt = 201; }, 2031, false},
+    Case{[](auto& s) { s.get_level_status = sdk::kCommunication; }, 2026, false},
+    Case{[](auto& s) { s.level = 0; }, 2026, false},
+    Case{[](auto& s) { s.hardware_ids = {1, 2}; }, 2030, false},
+    Case{[](auto& s) { s.get_user_data_size_status = sdk::kCommunication; }, 2029, true},
+    Case{[](auto& s) { s.user_data_size = 1; }, 2029, true},
+    Case{[](auto& s) { s.read_data_status = sdk::kCommunication; }, 2027, true},
+    Case{[](auto& s) { s.hardware_ids = {1, 1, 2}; }, 2030, true}
+  };
+  Credentials credentials;
+  for (const auto& item : cases) {
+    FakeSdk state;
+    item.setup(state);
+    ActiveFake activation(state);
+    bool rejected = false;
+    try {
+      auto session = VikeySession::open(fake_functions(), credentials.user_sn, credentials.api_key, credentials.user_pin);
+      if (item.read) static_cast<void>(session.read_user_blob());
+    } catch (...) {
+      rejected = true;
+      const auto result = usb_vault::card::capture_failure(std::current_exception()).primary;
+      require(result.code == item.code && result.reason > 0 && result.native_kind == 0 && result.native_code == 0,
+              "SDK stage missing or device detail leaked");
+    }
+    require(rejected, "SDK fault accepted");
+    require(std::count(state.calls.begin(), state.calls.end(), Call::user_login) <= 1 &&
+            std::count(state.calls.begin(), state.calls.end(), Call::uninitialization) == 1 &&
+            std::count(state.calls.begin(), state.calls.end(), Call::write_data) == 0,
+            "diagnosis retried authentication, skipped cleanup, or wrote card data");
+  }
+}
+
 void test_explicit_close_reports_failure_and_still_uninitializes() {
   FakeSdk state;
   ActiveFake activation(state);
@@ -1098,6 +1143,7 @@ int main() {
     test_hardware_identity_failures_fail_closed();
     test_failures_cleanup_without_spurious_logoff();
     test_authentication_diagnostic_stages();
+    test_startup_sdk_diagnostic_matrix();
     test_explicit_close_reports_failure_and_still_uninitializes();
   } catch (const std::exception& error) {
     std::cerr << "vikey_session_tests: FAIL: " << error.what() << '\n';

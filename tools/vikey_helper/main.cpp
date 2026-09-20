@@ -364,6 +364,7 @@ struct BlobReadResult final {
       result.diagnostic = diagnostic_stage(error);
       result.native_kind = diagnostic_kind(error);
     } catch (...) {
+      result.diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::unexpected);
       result.status =
           static_cast<std::int32_t>(CardError::backend_unavailable);
     }
@@ -374,7 +375,7 @@ struct BlobReadResult final {
       result.logical_state = 0;
       return result;
     }
-    if (close_error) return {.status = close_error.value()};
+    if (close_error) return {.status = close_error.value(), .diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::cleanup)};
     result.detail = hardware_id;
     return result;
   } catch (const std::system_error& error) {
@@ -383,10 +384,10 @@ struct BlobReadResult final {
               .diagnostic = diagnostic_stage(error), .native_kind = diagnostic_kind(error)};
     }
     return {.status =
-                static_cast<std::int32_t>(CardError::backend_unavailable)};
+                static_cast<std::int32_t>(CardError::backend_unavailable), .diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::unexpected)};
   } catch (...) {
     return {.status =
-                static_cast<std::int32_t>(CardError::backend_unavailable)};
+                static_cast<std::int32_t>(CardError::backend_unavailable), .diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::unexpected)};
   }
 }
 
