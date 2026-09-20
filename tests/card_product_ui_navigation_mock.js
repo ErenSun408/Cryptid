@@ -24,6 +24,9 @@ window.navigationFixture = {
   surveyCancels: 0,
   failSurvey: false,
   openedMaintenance: [],
+  measuredMaintenance: [],
+  endedMaintenance: [],
+  maintenanceSpace: "4096,1024,512",
   failOpenMaintenance: false,
   acceptCancellation: true,
   failCancellation: false,
@@ -92,6 +95,15 @@ window.navigationFixture = {
     beginOpenDecoyMaintenance: (id) => beginVolume(() => {
       if (fixture.failOpenMaintenance) throw new Error("simulated refusal");
       fixture.openedMaintenance.push(id);
+    }),
+    beginMeasureDecoySpace: (id) => beginVolume(() => {
+      if (fixture.failMeasureMaintenance) throw new Error("simulated measurement failure");
+      fixture.measuredMaintenance.push(id);
+    }),
+    getDecoyMaintenanceSpace: () => fixture.maintenanceSpace,
+    beginEndDecoyMaintenance: (id) => beginVolume(() => {
+      if (fixture.failEndMaintenance) throw new Error("simulated end failure");
+      fixture.endedMaintenance.push(id);
     }),
     getBatchProgress: () => fixture.batchProgress,
     getBatchItemName: (index) => fixture.batchItems[index].name,
@@ -197,7 +209,9 @@ window.navigationFixture = {
       if (fixture.delayListing) {
         return new Promise((resolve) => { fixture.pending = resolve; });
       }
-      return (directory === "" ? "0\u001e文档\u001f1\u001f0\u001f0\u001f0\u001e报告.xlsx\u001f0\u001f0\u001f188416\u001f0" : "0") + fixture.listingSuffix;
+      return (directory === "" ?
+        `0\u001e文档\u001f1\u001f0\u001f0\u001f${Date.now() - 2 * 24 * 60 * 60 * 1000}\u001e报告.xlsx\u001f0\u001f0\u001f188416\u001f${Date.now() - 24 * 60 * 60 * 1000}` :
+        "0") + fixture.listingSuffix;
     },
   };
   window.chrome = window.chrome || {};

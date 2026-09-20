@@ -73,6 +73,53 @@
     await wait(() => window.navigationFixture.openedMaintenance.length === 1);
     check(window.navigationFixture.openedMaintenance[0] === 3,
       "Opening a found container names only that container");
+    await wait(() => !$("#decoy-maintenance").hidden &&
+      window.navigationFixture.measuredMaintenance.length === 1);
+    check($("#decoy-results").hidden &&
+      $("#management-files").parentElement === $("#decoy-maintenance-files-slot") &&
+      $("#decoy-maintenance-container").value === "3",
+      "The secondary page reuses the existing file manager for the opened outer volume");
+    check(all("#decoy-maintenance-container option").map((item) => item.value).join(",") === "1,3" &&
+      $("#decoy-maintenance-writable").textContent === "512 MiB" &&
+      $("#decoy-maintenance-space-detail").textContent.includes("总量 4.0 GiB"),
+      "Maintenance shows measured capacity and offers only the surveyed containers");
+    check($("#decoy-maintenance-freshness").textContent.includes("天前有修改") &&
+      $("#decoy-maintenance-freshness-detail").textContent.includes("顶层项目") &&
+      all("#file-list-body tr").length === 2,
+      "Freshness is derived from a bounded root listing while the reused list renders its entries");
+    $("[data-section=files]").click();
+    check($("#dashboard-section-decoy").classList.contains("active") &&
+      $("#decoy-maintenance-container").value === "3",
+      "The shared manager cannot be detached through its ordinary navigation while maintenance is active");
+
+    $("#decoy-maintenance-container").value = "1";
+    $("#decoy-maintenance-container").dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(() => window.navigationFixture.openedMaintenance.length === 2 &&
+      window.navigationFixture.measuredMaintenance.at(-1) === 1);
+    check(window.navigationFixture.openedMaintenance.at(-1) === 1 &&
+      $("#decoy-maintenance-container").value === "1",
+      "The page switches maintenance through the same one-container transaction");
+    $("#decoy-maintenance-end").click();
+    await wait(() => window.navigationFixture.endedMaintenance.length === 1);
+    check(window.navigationFixture.endedMaintenance[0] === 1 &&
+      !$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
+      $("#management-files").closest("#dashboard-section-files") !== null,
+      "Ending maintenance unmounts the current container and restores the shared file manager");
+
+    $("#decoy-container-list [data-decoy-container='3'] button").click();
+    await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
+      window.navigationFixture.measuredMaintenance.length === 3);
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
+    $("#file-refresh").click();
+    await wait(() => window.navigationFixture.completeVolume !== null);
+    window.dispatchEvent(new Event("usb-vault-session-changed"));
+    window.navigationFixture.completeVolume();
+    await wait(() => !$("#decoy-verify").hidden && !$("#decoy-verify-submit").disabled);
+    check($("#management-files").closest("#dashboard-section-files") !== null &&
+      $("#decoy-maintenance-writable").textContent === "—",
+      "A session change during fact refresh restores placement and discards the stale result");
+    window.navigationFixture.delayVolume = false;
 
     // A walk that finds nothing reads the same as one whose password was
     // wrong: there is one outcome and one sentence for both.
@@ -105,6 +152,8 @@
     window.navigationFixture.surveyFound = [1, 3];
     window.navigationFixture.surveyPasswords = [];
     window.navigationFixture.openedMaintenance = [];
+    window.navigationFixture.measuredMaintenance = [];
+    window.navigationFixture.endedMaintenance = [];
     $("[data-section=dashboard]").click();
 
     const firstContainerRow = $(home + " .container-row");

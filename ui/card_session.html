@@ -584,6 +584,15 @@
     #decoy-password { width: 100%; padding-right: 3rem; }
     #decoy-password::-ms-reveal { display: none; }
     .decoy-gate-card .password-visibility { border: 0; background: transparent; }
+    .decoy-maintenance-tools { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; justify-content: flex-end; }
+    .decoy-maintenance-tools label { color: var(--text-3); font-size: .72rem; }
+    .decoy-maintenance-facts { margin-bottom: 1.25rem; }
+    .decoy-maintenance-facts .stat-card { align-items: flex-start; }
+    .decoy-maintenance-facts .stat-card > div:last-child { flex: 1 1 auto; min-width: 0; }
+    .decoy-maintenance-detail { margin-top: .35rem; color: var(--text-3); font-size: .72rem; line-height: 1.55; }
+    .decoy-space-track { height: .35rem; margin-top: .65rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
+    .decoy-space-track i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
+    #decoy-maintenance-files-slot:empty { display: none; }
     .container-details-toggle {
       position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
       display: grid; place-items: center; width: 1.75rem; height: 2rem; padding: 0;
@@ -1253,7 +1262,7 @@
         </section>
 
         <section id="dashboard-section-decoy" class="dashboard-section" aria-labelledby="decoy-title">
-          <div class="section-header">
+          <div id="decoy-overview-header" class="section-header">
             <div><h2 id="decoy-title">更新诱饵内容</h2><p>补充或替换外层卷中的内容</p></div>
           </div>
 
@@ -1291,6 +1300,41 @@
               <div id="decoy-container-list" class="container-list"></div>
             </div>
             <output id="decoy-results-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
+          </div>
+
+          <div id="decoy-maintenance" hidden>
+            <div class="section-header">
+              <div>
+                <div id="decoy-maintenance-breadcrumb-slot"></div>
+                <p>当前只挂载这一容器的外层卷。</p>
+              </div>
+              <div class="decoy-maintenance-tools">
+                <label for="decoy-maintenance-container">切换容器</label>
+                <select id="decoy-maintenance-container" class="file-select" aria-label="切换维护容器"></select>
+                <button id="decoy-maintenance-end" class="shell-button danger" type="button">结束并卸载</button>
+              </div>
+            </div>
+            <output id="decoy-maintenance-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
+            <div class="stats-row decoy-maintenance-facts">
+              <article class="stat-card">
+                <div class="stat-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5v8.5h8.5"></path></svg></div>
+                <div>
+                  <div class="stat-label">外层剩余可写</div>
+                  <div id="decoy-maintenance-writable" class="stat-value">—</div>
+                  <div id="decoy-maintenance-space-detail" class="decoy-maintenance-detail">正在读取容量…</div>
+                  <div class="decoy-space-track" aria-hidden="true"><i id="decoy-maintenance-space-bar"></i></div>
+                </div>
+              </article>
+              <article class="stat-card">
+                <div class="stat-icon neutral"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h6l2 2h8v9H4z"></path><path d="M8 13h8M12 10v6"></path></svg></div>
+                <div>
+                  <div class="stat-label">诱饵内容新鲜度</div>
+                  <div id="decoy-maintenance-freshness" class="stat-value">—</div>
+                  <div id="decoy-maintenance-freshness-detail" class="decoy-maintenance-detail">只检查外层根目录，不保存扫描结果。</div>
+                </div>
+              </article>
+            </div>
+            <div id="decoy-maintenance-files-slot"></div>
           </div>
         </section>
 

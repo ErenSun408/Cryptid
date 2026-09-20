@@ -129,6 +129,52 @@ void test_the_maintenance_column_is_always_there_and_explains_nothing() {
           "the maintenance column must ask for the password it needs");
 }
 
+void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
+  const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const std::string section = dashboard_section(page, "decoy");
+
+  require(section.find("id=\"decoy-maintenance\"") != std::string::npos &&
+              section.find("id=\"decoy-maintenance-container\"") !=
+                  std::string::npos &&
+              section.find("id=\"decoy-maintenance-end\"") !=
+                  std::string::npos &&
+              section.find("外层剩余可写") != std::string::npos &&
+              section.find("诱饵内容新鲜度") != std::string::npos,
+          "the maintenance result has no secondary page or its two facts");
+  require(section.find("完整性") == std::string::npos &&
+              section.find("写入已阻止") == std::string::npos,
+          "the deferred protection alert leaked into this slice");
+
+  require(count_occurrences(page, "id=\"management-files\"") == 1 &&
+              script.find(
+                  "decoyMaintenanceFilesSlot.appendChild(managementFiles);") !=
+                  std::string::npos &&
+              script.find(
+                  "decoyMaintenanceBreadcrumbSlot.appendChild(fileBreadcrumb);") !=
+                  std::string::npos &&
+              script.find("restoreFileManagerPlacement();") !=
+                  std::string::npos,
+          "the secondary page copied the file manager instead of reusing it");
+
+  require(script.find("bridge.beginMeasureDecoySpace(id)") !=
+              std::string::npos &&
+              script.find("bridge.getDecoyMaintenanceSpace()") !=
+                  std::string::npos &&
+              script.find("bridge.beginEndDecoyMaintenance(id)") !=
+                  std::string::npos &&
+              script.find("await readContainerRoot(id);") !=
+                  std::string::npos,
+          "capacity, bounded root freshness, or explicit ending is not wired");
+  require(script.find("for (const id of decoyFound)") != std::string::npos &&
+              script.find("option.value = String(id);") != std::string::npos,
+          "the switcher is not restricted to the survey result");
+  require(script.find("扫描结果不会保存") != std::string::npos &&
+              script.find("localStorage") == std::string::npos &&
+              script.find("sessionStorage") == std::string::npos,
+          "freshness is described or implemented as persistent state");
+}
+
 void test_page_has_route_specific_password_surfaces() {
   // Setup is a surface of its own with its own contract below, so the product
   // counts here stay about the product.
@@ -1341,6 +1387,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
 int main() {
   try {
     test_the_maintenance_column_is_always_there_and_explains_nothing();
+    test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral();
     test_page_has_route_specific_password_surfaces();
     test_setup_surface_takes_only_the_credential_set();
     test_authenticated_dashboard_is_real_state_only();

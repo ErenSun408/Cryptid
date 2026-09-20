@@ -178,6 +178,7 @@
     <button id="export-confirm-run" type="button" disabled>开始导出</button>
   </div>
   <section id="dashboard-section-decoy">
+    <div id="decoy-overview-header"></div>
     <div id="decoy-verify">
       <input id="decoy-password" type="password" autocomplete="off" spellcheck="false">
       <button id="decoy-password-visibility" type="button" aria-controls="decoy-password" aria-pressed="false">显示</button>
@@ -192,6 +193,18 @@
     <div id="decoy-results" hidden>
       <div id="decoy-container-list"></div>
       <output id="decoy-results-status" hidden></output>
+    </div>
+    <div id="decoy-maintenance" hidden>
+      <div id="decoy-maintenance-breadcrumb-slot"></div>
+      <select id="decoy-maintenance-container"></select>
+      <button id="decoy-maintenance-end" type="button">结束并卸载</button>
+      <output id="decoy-maintenance-status" hidden></output>
+      <span id="decoy-maintenance-writable"></span>
+      <span id="decoy-maintenance-space-detail"></span>
+      <i id="decoy-maintenance-space-bar"></i>
+      <span id="decoy-maintenance-freshness"></span>
+      <span id="decoy-maintenance-freshness-detail"></span>
+      <div id="decoy-maintenance-files-slot"></div>
     </div>
   </section>
   <div id="decoy-confirm-dialog" role="dialog" hidden>
