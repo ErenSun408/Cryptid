@@ -504,6 +504,18 @@ void CardProductUiSessionController::copy_container_entry(
                                        destination_relative_directory);
 }
 
+void CardProductUiSessionController::import_external_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view absolute_source,
+    const std::function<bool()>& cancelled) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "importing an external entry is not available in the current UI state");
+  }
+  volume_session_.import_external_entry(id, relative_directory,
+                                        absolute_source, cancelled);
+}
+
 bool CardProductUiSessionController::remembering_container_paths() {
   return volume_session_.remembering_container_paths();
 }

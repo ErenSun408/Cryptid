@@ -597,7 +597,13 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   }
 
   void copy_entry(const std::wstring_view absolute_source,
-                  const std::wstring_view absolute_destination) override {
+                  const std::wstring_view absolute_destination,
+                  const usb_vault::volume::TransferCancellation& cancelled) override {
+    // What the real storage layer reports when a cancellation stops a copy.
+    if (cancelled && cancelled()) {
+      throw std::system_error(std::make_error_code(
+          std::errc::operation_canceled));
+    }
     copied.emplace_back(std::wstring(absolute_source),
                         std::wstring(absolute_destination));
     if (fail_copy) throw std::runtime_error("the copy failed");
@@ -3374,6 +3380,133 @@ void test_switching_maintenance_reuses_one_measuring_run() {
           "ending after a switch did not close exactly one measuring run");
 }
 
+void test_a_shell_drop_lands_in_the_directory_the_page_named() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  const wchar_t drive_letter =
+      session.open_decoy_maintenance(id, bytes("decoy-password"));
+  const std::wstring root(1, drive_letter);
+  const std::size_t history_before = session.operation_history().size();
+
+  session.import_external_entry(id, L"", L"C:\\Users\\pictures\\2011.jpg", {});
+  session.import_external_entry(id, L"photos/2011",
+                                L"D:\\scans\\receipt.pdf", {});
+  require(runtime.copied.size() == 2, "a drop did not reach the storage layer");
+  require(runtime.copied[0].first == L"C:\\Users\\pictures\\2011.jpg" &&
+              runtime.copied[0].second == root + L":\\2011.jpg",
+          "a drop on the root did not keep the name the shell handed over");
+  require(runtime.copied[1].second == root + L":\\photos\\2011\\receipt.pdf",
+          "a drop did not land in the directory the page named");
+
+  // The source is an ordinary OS path and stays one: nothing resolves it
+  // against the volume, and nothing about it is written down.
+  require(runtime.moved.empty() && runtime.moved_by_copying.empty() &&
+              runtime.deleted.empty(),
+          "an import moved or removed something");
+  require(session.operation_history().size() == history_before,
+          "an import was written into the operation history");
+}
+
+void test_a_shell_drop_reaches_only_a_volume_open_for_maintenance() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  const std::uint32_t ordinary =
+      session.create_container(L"D:\\plain.hc", 64ULL * 1024ULL * 1024ULL);
+
+  // Mounted the ordinary way, so the file manager owns it and a drag onto the
+  // window has no business writing into it.
+  require_throws_plain_logic_error(
+      [&] {
+        session.import_external_entry(ordinary, L"", L"C:\\a\\b.txt", {});
+      },
+      "a drop reached a container mounted the ordinary way");
+  require_throws<std::invalid_argument>(
+      [&] {
+        session.import_external_entry(4242, L"", L"C:\\a\\b.txt", {});
+      },
+      "a drop reached an identifier no container answers to");
+
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+  session.end_decoy_maintenance(id);
+  require_throws_plain_logic_error(
+      [&] { session.import_external_entry(id, L"", L"C:\\a\\b.txt", {}); },
+      "a drop reached a maintenance volume that had been released");
+  require(runtime.copied.empty(), "a refused drop still copied something");
+}
+
+void test_a_shell_drop_cannot_name_anything_outside_the_directory() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+
+  // A source with no last component leaves nothing to name the copy after,
+  // and a relative directory that could climb out is refused where every
+  // other page-supplied path is.
+  for (const wchar_t* const source :
+       {L"C:\\\\", L"C:\\photos\\\\", L"C:\\photos\\..", L"C:\\photos\\a:b.txt"}) {
+    require_throws<std::invalid_argument>(
+        [&] { session.import_external_entry(id, L"", source, {}); },
+        "a drop named something that is not one entry in this directory");
+  }
+  for (const wchar_t* const directory :
+       {L"..", L"photos/../..", L"C:\\elsewhere", L"\\\\server\\share"}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          session.import_external_entry(id, directory, L"C:\\a\\b.txt", {});
+        },
+        "a drop landed outside the volume the session named");
+  }
+  require(runtime.copied.empty(), "a refused drop still reached the disk");
+}
+
+void test_a_shell_drop_carries_its_cancellation_to_the_storage_layer() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+
+  bool stop = false;
+  const usb_vault::volume::TransferCancellation cancelled = [&stop] {
+    return stop;
+  };
+  session.import_external_entry(id, L"", L"C:\\a\\b.txt", cancelled);
+  require(runtime.copied.size() == 1, "a running import did not copy");
+
+  stop = true;
+  require_throws<std::system_error>(
+      [&] {
+        session.import_external_entry(id, L"", L"C:\\a\\c.txt", cancelled);
+      },
+      "a cancelled import was reported as a copy");
+  require(runtime.copied.size() == 1, "a cancelled import still copied");
+}
+
+void test_a_shell_drop_needs_an_authenticated_session() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+  authentication.clear_authentication();
+
+  require_throws_plain_logic_error(
+      [&] { session.import_external_entry(id, L"", L"C:\\a\\b.txt", {}); },
+      "a drop was accepted after the card session ended");
+  require(runtime.copied.empty(), "a drop copied without a card session");
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -3528,6 +3661,11 @@ int main() {
     test_ending_maintenance_releases_the_volume_and_the_elevation();
     test_every_unmount_path_ends_a_measuring_run();
     test_switching_maintenance_reuses_one_measuring_run();
+    test_a_shell_drop_lands_in_the_directory_the_page_named();
+    test_a_shell_drop_reaches_only_a_volume_open_for_maintenance();
+    test_a_shell_drop_cannot_name_anything_outside_the_directory();
+    test_a_shell_drop_carries_its_cancellation_to_the_storage_layer();
+    test_a_shell_drop_needs_an_authenticated_session();
     test_no_export_leaves_a_single_local_trace();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;

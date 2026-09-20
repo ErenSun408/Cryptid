@@ -8,6 +8,7 @@
 #include <concepts>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <cstdint>
@@ -339,9 +340,29 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
              std::wstring(destination_relative_directory)});
   }
 
+  struct ImportCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+    std::wstring source;
+    bool cancellation_asked{};
+  };
+
+  void import_external_entry(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view absolute_source,
+      const std::function<bool()>& cancelled) override {
+    imported.push_back({.id = id,
+                        .directory = std::wstring(relative_directory),
+                        .source = std::wstring(absolute_source),
+                        .cancellation_asked = cancelled && cancelled()});
+  }
+
+  std::vector<ImportCall> imported;
+
   [[nodiscard]] std::size_t file_manager_calls() const noexcept {
     return listed.size() + deleted.size() + renamed.size() +
-           created_directories.size() + moved.size() + copied.size();
+           created_directories.size() + moved.size() + copied.size() +
+           imported.size();
   }
 
   usb_vault::volume::VolumeDirectoryListing listing;
@@ -1771,6 +1792,11 @@ void test_file_manager_actions_are_refused_off_the_authenticated_route() {
         fixture.controller.copy_container_entry(1, L"", L"a.txt", 2, L"");
       },
       "an unauthenticated route copied an entry");
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.import_external_entry(1, L"", L"C:\\a\\b.txt", {});
+      },
+      "an unauthenticated route took a shell drop");
 
   require(fixture.volume.file_manager_calls() == 0,
           "a refused action still reached the session");
@@ -1815,6 +1841,21 @@ void test_file_manager_actions_reach_the_session_unchanged() {
               fixture.volume.copied[0].destination_id == 3 &&
               fixture.volume.copied[0].destination_directory.empty(),
           "the copy did not carry both ends");
+
+  // A shell drop is the one file-manager action whose source is an ordinary
+  // OS path. The controller passes it through untouched, together with the
+  // cancellation the native drop target keeps asking.
+  bool stop = true;
+  fixture.controller.import_external_entry(
+      3, L"photos", L"C:\\Users\\pictures\\2011.jpg",
+      [&stop] { return stop; });
+  require(fixture.volume.imported.size() == 1 &&
+              fixture.volume.imported[0].id == 3 &&
+              fixture.volume.imported[0].directory == L"photos" &&
+              fixture.volume.imported[0].source ==
+                  L"C:\\Users\\pictures\\2011.jpg" &&
+              fixture.volume.imported[0].cancellation_asked,
+          "the shell drop did not reach the session as it was handed over");
 }
 
 void test_exports_are_refused_off_the_authenticated_route() {

@@ -260,6 +260,17 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("decoy maintenance is unavailable");
   }
 
+  // Copies one file or directory the shell handed over into the current
+  // directory of an outer volume already open for maintenance. The source is
+  // an ordinary OS path, but the destination is still named only by container
+  // id and a checked relative directory, and nothing about the source is kept.
+  // The cancellation is asked repeatedly while the copy runs.
+  virtual void import_external_entry(std::uint32_t, std::wstring_view,
+                                     std::wstring_view,
+                                     const std::function<bool()>&) {
+    throw std::logic_error("external import is unavailable");
+  }
+
   // Opens a container the survey found, with the password the survey kept.
   // Refuses the same way as the call taking a password, and throws when this
   // session has no surveyed password to use.
@@ -520,6 +531,10 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] DecoyMaintenanceSpace decoy_maintenance_space(
       std::uint32_t id) override;
   void end_decoy_maintenance(std::uint32_t id) override;
+  void import_external_entry(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view absolute_source,
+      const std::function<bool()>& cancelled) override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
   void force_unmount_user_active() override;

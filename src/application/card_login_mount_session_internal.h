@@ -15,6 +15,7 @@
 #include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_directory_listing.h"
+#include "usb_vault/volume/volume_file_operations.h"
 #include "usb_vault/volume/volume_space.h"
 
 namespace usb_vault::application::detail {
@@ -116,8 +117,13 @@ class CardLoginMountSessionRuntime {
   virtual void move_entry_by_copying(
       std::wstring_view absolute_source,
       std::wstring_view absolute_destination) = 0;
+  // 🔴 No default for the cancellation, deliberately. A default argument on a
+  // virtual is bound to the static type, so an override that disagreed about
+  // it would silently receive something the caller never wrote. Every caller
+  // says what it means, including the ones that mean "not cancellable".
   virtual void copy_entry(std::wstring_view absolute_source,
-                          std::wstring_view absolute_destination) = 0;
+                          std::wstring_view absolute_destination,
+                          const volume::TransferCancellation& cancelled) = 0;
 };
 
 // One container adopted by the session. Nothing here is persisted: a restart
@@ -209,6 +215,10 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] ::usb_vault::application::DecoyMaintenanceSpace
   decoy_maintenance_space(std::uint32_t id);
   void end_decoy_maintenance(std::uint32_t id);
+  void import_external_entry(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view absolute_source,
+      const volume::TransferCancellation& cancelled);
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,

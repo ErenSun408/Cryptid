@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -238,6 +239,15 @@ class CardProductUiSessionController final {
       std::uint32_t source_id, std::wstring_view source_relative_directory,
       std::wstring_view name, std::uint32_t destination_id,
       std::wstring_view destination_relative_directory);
+
+  // Copies one entry the shell handed the host window into the maintenance
+  // volume the page is showing. The page names only the container and the
+  // directory; the source path comes from the native drop and never crosses
+  // the page boundary in either direction.
+  void import_external_entry(std::uint32_t id,
+                             std::wstring_view relative_directory,
+                             std::wstring_view absolute_source,
+                             const std::function<bool()>& cancelled);
 
   // 🔴 Copies one entry out of a mounted container to an ordinary location:
   // the plaintext export. What it writes is no longer protected by anything

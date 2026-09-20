@@ -274,8 +274,9 @@ class ProductionCardLoginMountSessionRuntime final
   }
 
   void copy_entry(const std::wstring_view absolute_source,
-                  const std::wstring_view absolute_destination) override {
-    volume::copy_volume_entry(absolute_source, absolute_destination);
+                  const std::wstring_view absolute_destination,
+                  const volume::TransferCancellation& cancelled) override {
+    volume::copy_volume_entry(absolute_source, absolute_destination, cancelled);
   }
 
  private:
@@ -429,6 +430,14 @@ DecoyMaintenanceSpace CardLoginMountSession::decoy_maintenance_space(
 
 void CardLoginMountSession::end_decoy_maintenance(const std::uint32_t id) {
   impl_->core.end_decoy_maintenance(id);
+}
+
+void CardLoginMountSession::import_external_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view absolute_source,
+    const std::function<bool()>& cancelled) {
+  impl_->core.import_external_entry(id, relative_directory, absolute_source,
+                                    cancelled);
 }
 
 wchar_t CardLoginMountSession::open_surveyed_maintenance(
@@ -1474,6 +1483,43 @@ void CardLoginMountSessionCore::end_decoy_maintenance(const std::uint32_t id) {
   unmount_container_impl(id, false);
 }
 
+void CardLoginMountSessionCore::import_external_entry(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view absolute_source,
+    const volume::TransferCancellation& cancelled) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "external import requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  // 🔴 Only a volume this session opened for maintenance. An ordinary mount
+  // takes its files through the file manager, which the page already drives;
+  // widening this entry would give a shell drag a way into any mounted volume
+  // without the page having asked for one.
+  if (!entry->mounted || !entry->maintenance) {
+    throw std::logic_error(
+        "external import requires a volume open for maintenance");
+  }
+  // The only thing taken from the source path is the name it will have inside
+  // the volume, and that name is then checked as any other page-supplied
+  // component is. A root, a trailing separator or a `..` leaves nothing that
+  // can be named, so the import is refused instead of guessing.
+  const std::wstring name =
+      std::filesystem::path(absolute_source).filename().wstring();
+  if (name.empty()) {
+    throw std::invalid_argument("the dropped entry has no file name");
+  }
+  runtime_.copy_entry(
+      absolute_source,
+      volume::resolve_volume_child_path(entry->drive_letter,
+                                        relative_directory, name),
+      cancelled);
+}
+
 wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
     const std::uint32_t id) {
   if (!authentication_.authenticated()) {
@@ -1874,7 +1920,8 @@ void CardLoginMountSessionCore::copy_container_entry(
       volume::resolve_volume_child_path(source_drive,
                                         source_relative_directory, name),
       volume::resolve_volume_child_path(destination_drive,
-                                        destination_relative_directory, name));
+                                        destination_relative_directory, name),
+      {});
 }
 
 void CardLoginMountSessionCore::export_container_entry(
@@ -1908,7 +1955,7 @@ void CardLoginMountSessionCore::export_container_entry(
   // this product's obligation.
   runtime_.copy_entry(
       volume::resolve_volume_child_path(drive_letter, relative_directory, name),
-      destination);
+      destination, {});
 }
 
 void CardLoginMountSessionCore::export_container_file(
@@ -1939,7 +1986,8 @@ void CardLoginMountSessionCore::export_container_file(
   // and Q-04 says an export leaves no trace of itself behind.
   runtime_.copy_entry(entry->path,
                       volume::resolve_exported_entry_path(
-                          absolute_destination_directory, entry->name));
+                          absolute_destination_directory, entry->name),
+                      {});
 }
 
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
