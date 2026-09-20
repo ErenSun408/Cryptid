@@ -47,6 +47,9 @@ Var UpdateCleanupFailed
             StrCpy $UpdateFailed 1
           ${Else}
             StrCpy $UpdateOld${Id} 1
+            !ifdef UpdateTestCheckpoint
+              !insertmacro ${UpdateTestCheckpoint} old-moved
+            !endif
           ${EndIf}
         ${EndIf}
       ${EndIf}
@@ -56,6 +59,9 @@ Var UpdateCleanupFailed
           StrCpy $UpdateFailed 1
         ${Else}
           StrCpy $UpdateNew${Id} 1
+          !ifdef UpdateTestCheckpoint
+            !insertmacro ${UpdateTestCheckpoint} new-moved
+          !endif
         ${EndIf}
       ${EndIf}
     ${EndIf}
