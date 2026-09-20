@@ -10,8 +10,11 @@
 Var UpdatePathFailed
 Var UpdateDirectoryHandles
 Var UpdateLockHandle
+Var UpdateCreateMissing
+Var DirectoryReleaseStop
 
-Function UpdateGuardDirectory
+!macro UpdatePathFunctions Prefix
+Function ${Prefix}UpdateGuardDirectory
   StrCpy $UpdatePathFailed 1
   StrLen $1 $0
   IntCmp $1 3 guard_invalid guard_invalid 0
@@ -33,6 +36,13 @@ guard_open:
   ; Include FILE_LIST_DIRECTORY: metadata-only opens do not enforce the share
   ; restriction against directory rename on Windows.
   System::Call 'kernel32::CreateFileW(w r4, i 0x81, i 3, p 0, i 3, i 0x02200000, p 0) p .r6'
+  ${If} $6 == -1
+  ${AndIf} $UpdateCreateMissing == 1
+    ; Ancestors are already pinned. Creation never changes an existing entry;
+    ; the subsequent non-following open still rejects a racing junction.
+    System::Call 'kernel32::CreateDirectoryW(w r4, p 0)'
+    System::Call 'kernel32::CreateFileW(w r4, i 0x81, i 3, p 0, i 3, i 0x02200000, p 0) p .r6'
+  ${EndIf}
   StrCmp $6 -1 guard_invalid
   System::Alloc 52
   Pop $7
@@ -92,7 +102,7 @@ FunctionEnd
 ; Input $0 = lock path inside a guarded private transaction directory.
 ; Do not use an existing entry: stale lock entries are handled by recovery.
 ; Exclusive handle blocks another updater for this transaction directory.
-Function UpdateAcquireLock
+Function ${Prefix}UpdateAcquireLock
   StrCpy $UpdatePathFailed 1
   StrCmp $UpdateLockHandle "" 0 lock_done
   System::Call 'kernel32::CreateFileW(w r0, i 0xC0000000, i 0, p 0, i 1, i 0x04000080, p 0) p .r1'
@@ -102,14 +112,11 @@ Function UpdateAcquireLock
 lock_done:
 FunctionEnd
 
-Function UpdateReleasePaths
-  ${If} $UpdateLockHandle != ""
-    System::Call 'kernel32::CloseHandle(p $UpdateLockHandle)'
-    StrCpy $UpdateLockHandle ""
-  ${EndIf}
+Function ${Prefix}ReleaseDirectorySuffix
   ${Do}
     ${If} $UpdateDirectoryHandles == ""
     ${OrIf} $UpdateDirectoryHandles == 0
+    ${OrIf} $UpdateDirectoryHandles == $DirectoryReleaseStop
       ${ExitDo}
     ${EndIf}
     StrCpy $0 $UpdateDirectoryHandles
@@ -119,4 +126,18 @@ Function UpdateReleasePaths
     System::Free $0
   ${Loop}
 FunctionEnd
+
+Function ${Prefix}UpdateReleasePaths
+  ${If} $UpdateLockHandle != ""
+    System::Call 'kernel32::CloseHandle(p $UpdateLockHandle)'
+    StrCpy $UpdateLockHandle ""
+  ${EndIf}
+  StrCpy $DirectoryReleaseStop 0
+  Call ${Prefix}ReleaseDirectorySuffix
+FunctionEnd
+!macroend
+!insertmacro UpdatePathFunctions ""
+!ifdef UpdateIncludeUninstaller
+  !insertmacro UpdatePathFunctions "un."
+!endif
 !endif

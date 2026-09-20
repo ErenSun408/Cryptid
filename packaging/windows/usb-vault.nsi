@@ -1,5 +1,11 @@
 ; -*- coding: utf-8 -*-
 Unicode true
+!ifdef UpdateTestCheckpoint
+  !error "Fault injection is forbidden in the product installer"
+!endif
+!ifdef InstallerTestCheckpoint
+  !error "Fault injection is forbidden in the product installer"
+!endif
 !include MUI2.nsh
 !include LogicLib.nsh
 !include nsDialogs.nsh
@@ -21,6 +27,7 @@ SetCompressor zlib
 ShowInstDetails show
 ShowUninstDetails show
 !define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVaultDevelopment"
+!include "${__FILEDIR__}\installer-engine.nsh"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "该向导将完成 USB Vault、WebView2 Runtime 和VeraCrypt的检测与安装。已兼容的依赖将自动跳过。$\r$\n$\r$\n安装系统依赖时会请求管理员授权。卸载 USB Vault 会保留共享依赖、凭据、设置和容器文件。"
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageShow
@@ -39,7 +46,8 @@ Page custom DependencyPageCreate DependencyPageLeave
 !insertmacro MUI_PAGE_LICENSE "${PayloadDirectory}\licenses\veracrypt\License.txt"
 
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE ValidateInstallDirectory
-!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择USBVault的最终安装文件夹。为避免兼容问题，路径请不要包含中文。"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE InstallDirectoryPre
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 USB Vault 的最终安装文件夹。已有安装将在原位置更新，保留凭据、设置和容器。路径请不要包含中文。"
 !insertmacro MUI_PAGE_DIRECTORY
 
 !insertmacro MUI_PAGE_INSTFILES
@@ -75,6 +83,11 @@ Function .onInit
     MessageBox MB_ICONSTOP "当前安装包需要 Windows x64。"
     Abort
   ${EndIf}
+  Call AcquireSetupMutex
+  ${If} $UpdateFailed == 1
+    MessageBox MB_ICONSTOP "另一个 USB Vault 安装或卸载程序正在运行，请关闭后重试。"
+    Abort
+  ${EndIf}
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File "${SetupHelper}"
@@ -98,7 +111,26 @@ Function .onInit
     ${If} $0 != ""
       !insertmacro ProbeRecordedInstallation
       ${If} $1 == 10
-        MessageBox MB_ICONSTOP "USB Vault 的原安装位置仍存在。此预览安装器暂不覆盖升级，请先卸载旧版（会保留用户数据）；若程序已被手动删除，请先检查原目录及安装记录。"
+        StrCpy $RegisteredLocation $0
+        StrCpy $INSTDIR $0
+        StrCpy $0 $INSTDIR
+        Call UpdateGuardDirectory
+        Call UpdateReleasePaths
+        ${If} $UpdatePathFailed == 1
+          MessageBox MB_ICONSTOP "原安装位置不是可访问的本机普通目录，不能安全更新。"
+          Abort
+        ${EndIf}
+        StrCpy $ExistingInstall 1
+        !insertmacro UpdateInspectFile "$INSTDIR\USB Vault.exe" $R6
+        ${If} $R6 == -1
+          MessageBox MB_ICONSTOP "无法确认原主程序的文件状态，不能安全更新。"
+          Abort
+        ${ElseIf} $R6 == 0
+          StrCpy $R5 "主程序已缺失。将根据原安装记录修复："
+        ${Else}
+          StrCpy $R5 "检测到已有 USB Vault。将更新原位置："
+        ${EndIf}
+        MessageBox MB_ICONQUESTION|MB_OKCANCEL "$R5$\r$\n$INSTDIR$\r$\n$\r$\n凭据、设置、索引和容器文件会保留。继续吗？" IDOK +2
         Abort
       ${ElseIf} $1 == 20
         MessageBox MB_ICONSTOP "无法确认 USB Vault 原安装位置的状态，请检查路径和访问权限后重试。"
@@ -106,6 +138,17 @@ Function .onInit
       ${EndIf}
     ${EndIf}
   ${EndIf}
+FunctionEnd
+
+Function InstallDirectoryPre
+  ${If} $ExistingInstall == 1
+    StrCpy $INSTDIR $RegisteredLocation
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function .onGUIEnd
+  Call ReleaseSetup
 FunctionEnd
 
 Function ValidateInstallDirectory
@@ -130,6 +173,14 @@ Function ValidateInstallDirectory
     Abort
   ${EndIf}
   StrCpy $INSTDIR $2
+  ${If} $ExistingInstall == 1
+    System::Call 'kernel32::CompareStringOrdinal(w "$INSTDIR", i -1, w "$RegisteredLocation", i -1, i 1) i .r0'
+    ${If} $0 != 2
+      MessageBox MB_ICONSTOP "更新必须使用原安装位置。"
+      Abort
+    ${EndIf}
+    Return
+  ${EndIf}
   ${GetRoot} "$INSTDIR" $1
   ${If} $INSTDIR == "$1\"
     MessageBox MB_ICONEXCLAMATION "不能直接安装到磁盘根目录。请选择或输入一个名为“USB Vault”的安装文件夹。"
@@ -141,9 +192,11 @@ Function ValidateInstallDirectory
     MessageBox MB_ICONEXCLAMATION "安装位置必须位于本机固定磁盘，不能使用网络盘或可移动磁盘。"
     Abort
   ${EndIf}
-  IfFileExists "$INSTDIR\USB Vault.exe" 0 +3
-    MessageBox MB_ICONSTOP "所选目录中已有 USB Vault。此预览安装器暂不覆盖升级，请先卸载旧版。"
-    Abort
+  ; Recovery of a new installation may precede registry publication.
+  !insertmacro UpdateReadMarker "$INSTDIR\.usb-vault-update\owner-${PackageIdentity}" $R6
+  ${If} $R6 == 827741442
+    Return
+  ${EndIf}
 
   ; The final installation directory must be new or empty.
   ClearErrors
@@ -292,29 +345,13 @@ Section "USB Vault" Main
     !insertmacro EnsureDependency "--veracrypt" "VeraCrypt"
   ${EndIf}
 
-  ; Only compile-time enumerated package files are installed. No user index or
-  ; credential data is shipped, and no standalone configuration EXE is added.
-  ClearErrors
-  !include "${InstallFiles}"
-  IfErrors install_failed
-  WriteUninstaller "$INSTDIR\卸载 USB Vault.exe"
-  IfErrors install_failed
-  CreateDirectory "$SMPROGRAMS\USB Vault"
-  CreateShortcut "$SMPROGRAMS\USB Vault\USB Vault.lnk" "$INSTDIR\USB Vault.exe"
-  CreateShortcut "$SMPROGRAMS\USB Vault\卸载 USB Vault.lnk" "$INSTDIR\卸载 USB Vault.exe"
-  WriteRegStr HKCU "${UninstallKey}" "DisplayName" "USB Vault"
-  WriteRegStr HKCU "${UninstallKey}" "DisplayVersion" "0.2.0"
-  WriteRegStr HKCU "${UninstallKey}" "UninstallString" '$\"$INSTDIR\卸载 USB Vault.exe$\"'
-  WriteRegStr HKCU "${UninstallKey}" "InstallLocation" "$INSTDIR"
-  WriteRegDWORD HKCU "${UninstallKey}" "NoModify" 1
-  WriteRegDWORD HKCU "${UninstallKey}" "NoRepair" 1
-  IfErrors install_failed
-  Goto install_done
-install_failed:
-  MessageBox MB_ICONSTOP "安装文件或快捷方式失败，请检查权限和磁盘空间。未标记为成功；请保留现有数据并清理本次不完整安装后重试。"
-  SetErrorLevel 1603
-  Quit
-install_done:
+  Call InstallPackage
+  Call ReleaseSetup
+  ${If} $UpdateFailed == 1
+    MessageBox MB_ICONSTOP "安装／更新未完成。请关闭 USB Vault，检查磁盘空间、权限或文件占用后，重新运行同一个安装包。恢复记录及备份会保留；不要手动删除 .usb-vault-update 文件夹。"
+    SetErrorLevel 1603
+    Quit
+  ${EndIf}
 SectionEnd
 
 Function .onInstSuccess
@@ -323,6 +360,11 @@ Function .onInstSuccess
 FunctionEnd
 
 Function un.onInit
+  Call un.AcquireSetupMutex
+  ${If} $UpdateFailed == 1
+    MessageBox MB_ICONSTOP "另一个 USB Vault 安装或卸载程序正在运行。"
+    Abort
+  ${EndIf}
   ; A moved uninstaller must match the actual location recorded at install.
   ClearErrors
   ReadRegStr $0 HKCU "${UninstallKey}" "InstallLocation"
@@ -344,14 +386,13 @@ Function un.onInit
   ${EndIf}
 FunctionEnd
 
+Function un.onGUIEnd
+  Call un.ReleaseSetup
+FunctionEnd
+
 Section "Uninstall"
-  ; Explicit files only. Never recursively delete an application directory
-  ; that may contain container files or an encrypted user index.
-  !include "${UninstallFiles}"
-  Delete "$INSTDIR\卸载 USB Vault.exe"
-  Delete "$SMPROGRAMS\USB Vault\USB Vault.lnk"
-  Delete "$SMPROGRAMS\USB Vault\卸载 USB Vault.lnk"
-  RMDir "$SMPROGRAMS\USB Vault"
-  DeleteRegKey HKCU "${UninstallKey}"
-  RMDir "$INSTDIR"
+  Call un.UninstallPackage
+  ${If} $UpdateFailed == 1
+    MessageBox MB_ICONSTOP "卸载未完成。请关闭程序并处理文件占用；如果存在未完成的更新，请先运行对应安装包恢复。安装记录和用户数据会保留。"
+  ${EndIf}
 SectionEnd

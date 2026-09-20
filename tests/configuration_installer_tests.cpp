@@ -1,5 +1,6 @@
 #include "../src/platform/windows/vikey_configuration/installers.h"
 #include "../src/platform/windows/vikey_configuration/setup_policy.h"
+#include "../src/platform/windows/installation_state.h"
 #include <Windows.h>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +43,16 @@ int wmain(int argc, wchar_t** argv) {
       throw std::runtime_error("installer exit result misclassified");
     if (!std::filesystem::create_directory(directory)) throw std::runtime_error("fixture already exists");
     owned = true;
+    using usb_vault::platform::windows::installation_ready_for_start;
+    if (!installation_ready_for_start(directory)) throw std::runtime_error("clean install blocked");
+    const auto transaction = directory / L".usb-vault-update";
+    std::filesystem::create_directory(transaction);
+    if (installation_ready_for_start(directory)) throw std::runtime_error("pending update allowed startup");
+    std::filesystem::remove(transaction);
+    const auto lock = directory / L".usb-vault-setup.lock";
+    { std::ofstream file(lock); file << "locked"; }
+    if (installation_ready_for_start(directory)) throw std::runtime_error("installer lock allowed startup");
+    std::filesystem::remove(lock);
     for (const bool exists : {false, true}) {
       const auto fixture = directory / L"untrusted.exe";
       if (exists) { std::ofstream file(fixture, std::ios::binary); file << "untrusted installer"; }

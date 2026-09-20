@@ -11,6 +11,7 @@
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
+#include "platform/windows/installation_state.h"
 #include "platform/windows/shell_container_file_chooser.h"
 #include "card/diagnostic_error.h"
 #include "platform/windows/vikey_configuration/diagnostics.h"
@@ -952,6 +953,15 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
                     _In_ LPWSTR, _In_ int show_command) {
+  try {
+    if (!usb_vault::platform::windows::installation_ready_for_start(executable_directory())) {
+      show_failure(L"USB Vault 正在安装／卸载，或上次更新尚未完成。请等待操作结束；如已中断，请重新运行同一个安装包恢复。请勿删除更新备份文件夹。");
+      return 1;
+    }
+  } catch (...) {
+    show_failure(L"无法确认 USB Vault 的安装状态，请检查安装位置和访问权限。");
+    return 1;
+  }
   // OLE rather than COM alone: the window registers a drop target, and
   // `RegisterDragDrop` is refused on an apartment that only initialized COM.
   const HRESULT com_result = ::OleInitialize(nullptr);

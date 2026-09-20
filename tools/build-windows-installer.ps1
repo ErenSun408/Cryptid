@@ -53,27 +53,17 @@ if ($LASTEXITCODE -ne 0 -or $version -ne 'v3.12') { throw 'NSIS 3.12 is required
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 $target = Join-Path $output 'USB-Vault-Setup.exe'
 if (Test-Path -LiteralPath $target) { throw 'Installer already exists; choose a new output directory' }
-$install = New-Object 'Collections.Generic.List[string]'
-$uninstall = New-Object 'Collections.Generic.List[string]'
-$directories = New-Object 'Collections.Generic.HashSet[string]'
-foreach ($file in $files | Sort-Object FullName) {
-    $relative = $file.FullName.Substring($package.Length + 1)
-    $parent = Split-Path -Parent $relative
-    $destination = if ($parent) { '$INSTDIR\' + $parent } else { '$INSTDIR' }
-    $install.Add('SetOutPath "' + $destination + '"')
-    $install.Add('File "' + $file.FullName + '"')
-    $uninstall.Add('Delete "$INSTDIR\' + $relative + '"')
-    while ($parent) {
-        $null = $directories.Add($parent)
-        $parent = Split-Path -Parent $parent
-    }
-}
-foreach ($dir in $directories | Sort-Object Length -Descending) { $uninstall.Add('RMDir "$INSTDIR\' + $dir + '"') }
-$installFile = Join-Path $output 'install-files.nsh'
-$uninstallFile = Join-Path $output 'uninstall-files.nsh'
-Set-Content -LiteralPath $installFile -Value $install -Encoding UTF8
-Set-Content -LiteralPath $uninstallFile -Value $uninstall -Encoding UTF8
-& $compiler /NOCONFIG /INPUTCHARSET UTF8 /V2 "/DPayloadDirectory=$package" "/DSetupHelper=$helper" "/DOutputFile=$target" "/DInstallFiles=$installFile" "/DUninstallFiles=$uninstallFile" (Join-Path $root 'packaging\windows\usb-vault.nsi')
+# Bind recovery to both payload and implementation, including the generated
+# uninstaller protocol. A changed package must never interpret an old journal.
+$identityInputs = @((Get-FileHash -LiteralPath "$package.sha256sums.txt").Hash, (Get-FileHash -LiteralPath $helper).Hash)
+$identityInputs += @(Get-ChildItem -LiteralPath (Join-Path $root 'packaging\windows') -File | Where-Object Extension -in @('.nsh','.nsi') | Sort-Object Name | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName).Hash })
+$identityInputs += (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'installer-file-plan.ps1')).Hash
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $packageIdentity = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($identityInputs -join "`n")))).Replace('-','') } finally { $sha.Dispose() }
+. (Join-Path $PSScriptRoot 'installer-file-plan.ps1')
+Write-InstallerFilePlan -Package $package -Files $files -Output $output -Identity $packageIdentity
+$packagePlan = Join-Path $output 'package-plan.nsh'
+& $compiler /NOCONFIG /INPUTCHARSET UTF8 /V2 "/DPayloadDirectory=$package" "/DSetupHelper=$helper" "/DOutputFile=$target" "/DPackagePlan=$packagePlan" (Join-Path $root 'packaging\windows\usb-vault.nsi')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
 $identity = @(
     "Compiler: $version",
