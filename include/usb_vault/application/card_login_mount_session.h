@@ -111,6 +111,14 @@ class ContainerCreationCleanupError final : public std::runtime_error {
   std::exception_ptr cleanup_failure_;
 };
 
+// Every failed attempt at decoy maintenance, in one type with one message:
+// telling a wrong password from a container with no hidden volume would answer
+// the one question the product must not answer about a container.
+class DecoyMaintenanceRefused final : public std::runtime_error {
+ public:
+  DecoyMaintenanceRefused();
+};
+
 // Combined product boundary required by the native UI: a successful login
 // handoff and the lifecycle of any resulting active volumes must be the same
 // session object. It still exposes no P1 raw-card authentication entry point.
@@ -182,6 +190,23 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // implementation that cannot do this refuses rather than mounting a subset.
   virtual void mount_adopted_all() {
     throw std::logic_error("this session cannot mount every container at once");
+  }
+
+  // Opens one container's outer volume under driver protection and returns its
+  // drive letter. The password here opens the outer volume; the hidden one is
+  // opened by the login input the session still holds. A mounted container is
+  // released first, forcibly if busy, and stays released even on a refusal.
+  [[nodiscard]] virtual wchar_t open_decoy_maintenance(
+      std::uint32_t, const security::SecureBuffer&) {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
+
+  // Whether the call above would succeed, leaving nothing mounted either way.
+  // False is every refusal it throws; a container that will not release still
+  // throws, because that is not an answer about the password.
+  [[nodiscard]] virtual bool verify_decoy_maintenance(
+      std::uint32_t, const security::SecureBuffer&) {
+    throw std::logic_error("decoy maintenance is unavailable");
   }
 
   // Unmounts one adopted container. The container stays adopted and unmounted
@@ -423,6 +448,12 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
   void mount_adopted_all() override;
+  [[nodiscard]] wchar_t open_decoy_maintenance(
+      std::uint32_t id,
+      const security::SecureBuffer& decoy_password_utf8) override;
+  [[nodiscard]] bool verify_decoy_maintenance(
+      std::uint32_t id,
+      const security::SecureBuffer& decoy_password_utf8) override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
   void force_unmount_user_active() override;

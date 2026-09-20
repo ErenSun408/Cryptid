@@ -1951,7 +1951,7 @@
 - 检查与实现：`veracrypt_driver_abi.h` 早已有 `protect_hidden_volume`、`protected_hidden_volume_password/pkcs5_prf/pim` 四个字段及偏移断言（716/720/868/884），缺的只是产品侧入口——`populate_mount_request` 此前显式把它们留零。现给 `MountOptions` 增加 `std::optional<HiddenVolumeProtection>`：内含借用的隐藏卷口令指针、PRF 与 PIM，缺省即不开保护，保护是单次挂载的属性，不落任何本地产物。校验与既有边界同级：空指针、空口令、超 128 字节、非 SHA-512、PIM 越界一律拒绝；两处口令拷贝合并为 `copy_password`，请求缓冲区本就清零，短口令的终止字节自然为零。
 - 验证：`cmake --build out/build/dev --target volume_provider_tests` 通过，`volume_provider_tests.exe` 退出码 0。新增用例覆盖保护字段落位、两个口令槽互不串位（含 PIM 分别落在相距 4 字节的两个字段）、以及五种非法保护参数被拒。本片只跑这一个最小目标，未跑全套，未触碰驱动、未做实机挂载。
 - 安全与风险：保护口令随请求拷入 `LockedDriverBuffer` 的锁页 `SecureBuffer`，`SecureBuffer::release()` 释放前先 `SecureZeroMemory`，故 `mount_file` 的成功、驱动拒绝与 IOCTL 异常三条路径都会抹掉两份口令，符合 R-03。残留风险一条：`HiddenVolumeProtection` 持有裸指针，调用方必须保证口令在挂载调用期间存活，该约束只由头注释声明，编译期无法强制。统一拒绝、事务性回滚、恒显入口等否认性要求属会话层与页面层，本片不承担。
-- 提交：待定（`[P3.25]carry hidden-volume protection into the mount request`）。哈希由下一个切片顺延补上；未推送。
+- 提交：`f1d5b0b [P3.25]carry hidden-volume protection into the mount request`。未推送。
 
 ### 2026-09-19 — P3.25 阶段计划落库
 
@@ -1960,3 +1960,12 @@
 - 验证：仅文档变更，未重跑业务测试；`git diff --check` 通过。
 - 安全与风险：计划内明确记下三条已定并接受的行为——强制卸载会丢失被卸容器中未落盘的写入；过滤后的列表在内存中枚举了哪些容器带隐藏卷；验证通过的诱饵口令驻留至登出。强制卸载仍可能失败的少数容器不会进入列表，改由聚合提示说明数量。
 - 提交：`d22bfdf [docs]plan the decoy maintenance stage`。未推送。
+
+### 2026-09-19 — P3.25 第二片：单容器维护事务
+
+- 范围与审计：按 `MILESTONES.md` P3.25 切片表实现第 2 片。复核 8.5 的两个密码分工、8.6 的不存档位、8.7.2 的统一拒绝，以及 `unmount_retry.cpp` 既有的升级策略。本片只做单容器，批量遍历留给第 3 片。
+- 检查与实现：会话新增 `open_decoy_maintenance` 与 `verify_decoy_maintenance`。外层口令由调用方传入的诱饵口令派生，隐藏卷口令取会话已缓存的登录派生值，用户只输一个。已挂载的容器先释放，走既有的 `unmount_forced`（先正常卸、仅在忙时升级为强制），因为同一容器文件不能同时挂出两个卷。挂载后必须由驱动报外层类型才算成功，报其他类型（含隐藏卷本身应答）立即卸载并拒绝。运行时接口新增 `mounted_volume_type`，只在这一处调用，不持久化。试挂模式不记操作历史、不通知外壳，验证完即卸。
+- 验证：`card_login_mount_session_tests` 全部通过（含新增 4 组：成功路径的事件序列与两个口令各自落位、三种失败逐字同一条拒绝、试挂不留挂载且只记一次卸载、前置条件与释放失败不被折叠进拒绝）；顺带重建并运行 `volume_provider_tests`、`card_product_ui_session_controller_tests` 均通过。未接真实驱动，未实机。
+- 安全与风险：全部驱动失败与类型不符收敛为 `DecoyMaintenanceRefused` 单一消息，会话本身也分辨不出是哪一种。派生出的外层口令在所有返回路径清零；隐藏卷口令不复制，仅以指针交给挂载请求，由第一片的锁页缓冲区负责擦除。未新增操作历史种类，未写任何本地产物。遗留：先卸载后验证是设计使然，诱饵口令打错也会先失去已挂载的隐藏卷，由确认弹窗承担知情同意；强制释放失败的容器仍记为已挂载以便登出时回收，错误照实上抛；类型判据依赖"驱动仅在开保护时报外层"，该条仍在第 9 片实机清单首位。
+- 顺带：按本轮要求把本阶段两片的代码注释压到最多两行，包含第一片已提交文件中的长注释。
+- 提交：待定（`[P3.25]open an outer volume for decoy maintenance`）。哈希由下一个切片顺延补上；未推送。

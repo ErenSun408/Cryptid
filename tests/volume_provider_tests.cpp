@@ -261,10 +261,8 @@ void test_protected_mount_request() {
   require(request.protected_hidden_volume_pkcs5_prf == 1,
           "SHA-512 PRF was not explicit for the protected hidden volume");
 
-  // The two slots carry different passwords, and the outer one is the volume
-  // the driver actually mounts. A request that put either in the other's slot
-  // would mount the wrong volume or protect nothing, and both readings are
-  // refused the same way by the driver, so nothing downstream would catch it.
+  // A request that swapped the slots would mount the wrong volume or protect
+  // nothing, and the driver refuses both the same way.
   require(request.volume_password.length == 48,
           "the mounted volume password was displaced by the protection one");
   for (std::size_t index = 0; index < outer_password.size(); ++index) {
@@ -273,8 +271,8 @@ void test_protected_mount_request() {
             "the mounted volume password bytes were not preserved");
   }
 
-  // The product mounts with PIM 0 throughout; this pair only pins down which
-  // field each PIM reaches, because they sit 4 bytes apart in the request.
+  // The product always uses PIM 0; this pins which field each one reaches,
+  // since they sit 4 bytes apart.
   LockedDriverBuffer<MountRequest> locked_pim_request;
   MountRequest& pim_request = locked_pim_request.get();
   MountOptions pim_options = options;

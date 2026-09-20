@@ -99,6 +99,14 @@ class ProductionCardLoginMountSessionRuntime final
     return std::nullopt;
   }
 
+  [[nodiscard]] std::optional<volume::VolumeType> mounted_volume_type(
+      const wchar_t drive_letter) override {
+    for (const volume::MountedVolume& mounted : provider_.mounted_volumes()) {
+      if (mounted.drive_letter == drive_letter) return mounted.type;
+    }
+    return std::nullopt;
+  }
+
   [[nodiscard]] security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -287,6 +295,9 @@ ContainerCreationCleanupError::ContainerCreationCleanupError(
       operation_failure_(std::move(operation_failure)),
       cleanup_failure_(std::move(cleanup_failure)) {}
 
+DecoyMaintenanceRefused::DecoyMaintenanceRefused()
+    : std::runtime_error("this container cannot be opened for maintenance") {}
+
 const std::exception_ptr&
 ContainerCreationCleanupError::operation_failure() const noexcept {
   return operation_failure_;
@@ -375,6 +386,18 @@ void CardLoginMountSession::mount_adopted_container(const std::uint32_t id) {
 
 void CardLoginMountSession::mount_adopted_all() {
   impl_->core.mount_adopted_all();
+}
+
+wchar_t CardLoginMountSession::open_decoy_maintenance(
+    const std::uint32_t id,
+    const security::SecureBuffer& decoy_password_utf8) {
+  return impl_->core.open_decoy_maintenance(id, decoy_password_utf8);
+}
+
+bool CardLoginMountSession::verify_decoy_maintenance(
+    const std::uint32_t id,
+    const security::SecureBuffer& decoy_password_utf8) {
+  return impl_->core.verify_decoy_maintenance(id, decoy_password_utf8);
 }
 
 void CardLoginMountSession::unmount_container(const std::uint32_t id) {
@@ -1188,6 +1211,145 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     }
     throw;
   }
+}
+
+SessionContainer& CardLoginMountSessionCore::maintenance_target(
+    const std::uint32_t id,
+    const security::SecureBuffer& decoy_password_utf8) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "decoy maintenance requires an authenticated card session");
+  }
+  if (state_.login_password.empty()) {
+    throw std::logic_error(
+        "this session no longer holds the input it was opened with");
+  }
+  if (decoy_password_utf8.empty()) {
+    throw std::invalid_argument(
+        "the decoy volume password is required in clear text");
+  }
+  SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  return *entry;
+}
+
+wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
+    SessionContainer& entry,
+    const security::SecureBuffer& outer_password,
+    const MaintenanceMount mode) {
+  // One file cannot serve two volumes, so whatever it serves now goes first.
+  // Force is this flow's standing answer, agreed to before any of it starts.
+  if (entry.mounted) unmount_container_impl(entry.id, true);
+
+  // The hidden volume's password is the session's own, never the caller's: the
+  // driver reads that header only to learn what to refuse writes to.
+  const security::SecureBuffer& hidden_password = hidden_container_password();
+  const wchar_t drive_letter = reserve_drive_letter();
+  const auto refuse = [&]() {
+    if (mode == MaintenanceMount::open) {
+      record_operation(OperationKind::container_mounted,
+                       OperationOutcome::failed,
+                       entry.name);
+    }
+    return DecoyMaintenanceRefused();
+  };
+
+  try {
+    static_cast<void>(runtime_.mount_created(
+        entry.path,
+        outer_password,
+        {.drive_letter = drive_letter,
+         .prf = volume::Pkcs5Prf::sha512,
+         .pim = 0,
+         .read_only = false,
+         .notify_shell = false,
+         .hidden_volume_protection =
+             volume::HiddenVolumeProtection{.password = &hidden_password}}));
+  } catch (...) {
+    // Every driver rejection means the same thing to everyone above.
+    throw refuse();
+  }
+
+  // The driver reports the outer type only while protecting a hidden volume,
+  // so anything else means the wrong volume came up -- the hidden one included.
+  const std::optional<volume::VolumeType> type =
+      runtime_.mounted_volume_type(drive_letter);
+  if (!type.has_value() || *type != volume::VolumeType::outer) {
+    try {
+      static_cast<void>(runtime_.unmount_forced(drive_letter));
+    } catch (...) {
+      // Still this session's to release later, so it is recorded rather than
+      // dropped. The derivation flags stay untouched: nothing was established.
+      entry.mounted = true;
+      entry.drive_letter = drive_letter;
+      throw refuse();
+    }
+    throw refuse();
+  }
+
+  // Proven, not stored: this container has an outer volume the supplied
+  // password opens and a hidden one the session's own derivation opens.
+  entry.mounted = true;
+  entry.drive_letter = drive_letter;
+  entry.release_first = true;
+  entry.derivation_known = true;
+  if (mode == MaintenanceMount::open) {
+    record_operation(OperationKind::container_mounted,
+                     OperationOutcome::succeeded,
+                     entry.name,
+                     drive_letter);
+    runtime_.notify_mounted(drive_letter);
+  }
+  return drive_letter;
+}
+
+wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
+    const std::uint32_t id,
+    const security::SecureBuffer& decoy_password_utf8) {
+  SessionContainer& entry = maintenance_target(id, decoy_password_utf8);
+  security::SecureBuffer outer_password = runtime_.derive_container_password(
+      decoy_password_utf8, authentication_.root_secret_,
+      layout_.container_b.salt);
+  try {
+    const wchar_t drive_letter = mount_outer_for_maintenance(
+        entry, outer_password, MaintenanceMount::open);
+    outer_password.clear();
+    return drive_letter;
+  } catch (...) {
+    outer_password.clear();
+    throw;
+  }
+}
+
+bool CardLoginMountSessionCore::verify_decoy_maintenance(
+    const std::uint32_t id,
+    const security::SecureBuffer& decoy_password_utf8) {
+  SessionContainer& entry = maintenance_target(id, decoy_password_utf8);
+  security::SecureBuffer outer_password = runtime_.derive_container_password(
+      decoy_password_utf8, authentication_.root_secret_,
+      layout_.container_b.salt);
+  wchar_t drive_letter{};
+  try {
+    drive_letter = mount_outer_for_maintenance(entry, outer_password,
+                                               MaintenanceMount::trial);
+  } catch (const DecoyMaintenanceRefused&) {
+    outer_password.clear();
+    return false;
+  } catch (...) {
+    outer_password.clear();
+    throw;
+  }
+  outer_password.clear();
+
+  // Nothing stays up on the strength of having asked. A volume that will not
+  // come down stays recorded as mounted and the failure reaches the caller.
+  static_cast<void>(runtime_.unmount_forced(drive_letter));
+  entry.mounted = false;
+  entry.drive_letter = wchar_t{};
+  return true;
 }
 
 security::SecureBuffer CardLoginMountSessionCore::copy_session_password() {

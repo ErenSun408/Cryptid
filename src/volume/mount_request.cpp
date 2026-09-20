@@ -78,8 +78,8 @@ void validate_options(const MountOptions& options) {
   validate_protection(options);
 }
 
-// Both driver password slots are fixed-size and already zeroed, so a shorter
-// password leaves the remainder as the terminator the driver expects.
+// Both slots are fixed-size and already zeroed, so a shorter password leaves
+// the terminator the driver expects.
 void copy_password(abi::Password& target,
                    const security::SecureBuffer& password) {
   for (std::size_t index = 0; index < password.size(); ++index) {
@@ -126,11 +126,8 @@ void populate_mount_request(
   request.bytes_per_physical_sector = 512;
   request.volume_pim = options.pim;
 
-  // The zero-initialized ABI buffer intentionally leaves password/PIM caches,
-  // recovery, backup headers, and removable mode off. Hidden-volume protection
-  // is the one of those a caller can ask for, and asking is the only way it is
-  // ever on: an outer volume mounted for maintenance protects what is behind
-  // it, and every other mount in the product carries the zero.
+  // The zero-initialized buffer leaves caches, recovery, backup headers and
+  // removable mode off. Protection is the one a caller can ask for.
   if (options.hidden_volume_protection.has_value()) {
     const HiddenVolumeProtection& protection =
         *options.hidden_volume_protection;

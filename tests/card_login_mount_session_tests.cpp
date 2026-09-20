@@ -29,6 +29,7 @@ using usb_vault::application::ContainerStatus;
 using usb_vault::application::LoginMountPolicy;
 using usb_vault::application::detail::SessionContainer;
 using usb_vault::application::ContainerCreationCleanupError;
+using usb_vault::application::DecoyMaintenanceRefused;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::MountSessionResult;
 using usb_vault::application::OperationEvent;
@@ -110,6 +111,20 @@ void require(const bool condition, const char* const message) {
     result.bytes()[index] = static_cast<std::byte>(value[index]);
   }
   return result;
+}
+
+// Whether a password is this fake's B derivation of one particular input,
+// which is how the outer and the hidden side are told apart.
+[[nodiscard]] bool is_b_derivation(const std::span<const std::byte> password,
+                                   const std::string_view input) {
+  std::string material = "derived-b-";
+  material.append(input);
+  material.resize(28, '.');
+  if (password.size() != material.size()) return false;
+  for (std::size_t index = 0; index < material.size(); ++index) {
+    if (password[index] != static_cast<std::byte>(material[index])) return false;
+  }
+  return true;
 }
 
 [[nodiscard]] SecureBuffer root_secret(
@@ -217,6 +232,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   [[nodiscard]] usb_vault::volume::UnmountResult unmount(
       const wchar_t drive_letter) override {
     attached_volume_sizes.erase(drive_letter);
+    attached_volume_types.erase(drive_letter);
     if (drive_letter == L'Y') {
       events.emplace_back("unmount:B");
       if (fail_unmount_b) throw std::runtime_error("unmount B failed");
@@ -236,6 +252,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (fail_manual_force || drive_letter == fail_manual_force_drive)
       throw std::runtime_error("forced cleanup failed");
     attached_volume_sizes.erase(drive_letter);
+    attached_volume_types.erase(drive_letter);
     if (drive_letter == L'Y') {
       events.emplace_back("force:B");
       return {.result = {}, .forced = force_required_b};
@@ -293,6 +310,14 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     events.emplace_back("volume-size");
     const auto entry = attached_volume_sizes.find(drive_letter);
     if (entry == attached_volume_sizes.end()) return std::nullopt;
+    return entry->second;
+  }
+
+  [[nodiscard]] std::optional<usb_vault::volume::VolumeType>
+  mounted_volume_type(const wchar_t drive_letter) override {
+    events.emplace_back("volume-type");
+    const auto entry = attached_volume_types.find(drive_letter);
+    if (entry == attached_volume_types.end()) return std::nullopt;
     return entry->second;
   }
 
@@ -421,6 +446,27 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     last_mount_password.assign(volume_password.bytes().begin(),
                                volume_password.bytes().end());
     attached_volume_sizes[options.drive_letter] = volume_size_of(path);
+    if (options.hidden_volume_protection.has_value()) {
+      events.emplace_back("protect");
+      const SecureBuffer& protection =
+          *options.hidden_volume_protection->password;
+      require(is_b_derivation(protection.bytes(), "login-password"),
+              "a protected mount did not protect with the session derivation");
+      last_protection_password.assign(protection.bytes().begin(),
+                                      protection.bytes().end());
+      // One rejection covers a password that opens no outer volume and a
+      // hidden header that does not answer.
+      if (path != protected_outer_path ||
+          !is_b_derivation(volume_password.bytes(), protected_outer_input) ||
+          !protection_password_opens) {
+        throw std::system_error(
+            usb_vault::volume::make_error_code(
+                usb_vault::volume::DriverError::authentication_failed),
+            "wrong password");
+      }
+      attached_volume_types[options.drive_letter] = protected_volume_type;
+      return {};
+    }
     if (!login_derived_path.empty() && path == login_derived_path &&
         (nothing_opens_it || !derived_from_login(volume_password))) {
       // Exactly what the driver reports for a header that no candidate
@@ -558,6 +604,15 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   // `nothing_opens_it` alongside it for a file that is not one of ours.
   std::wstring login_derived_path;
   bool nothing_opens_it{};
+  // What the driver does with a protected mount: whose outer volume opens,
+  // whether the protection password reaches a hidden header, what it reports.
+  std::wstring protected_outer_path;
+  std::string protected_outer_input{"decoy-password"};
+  bool protection_password_opens{true};
+  usb_vault::volume::VolumeType protected_volume_type{
+      usb_vault::volume::VolumeType::outer};
+  std::vector<std::byte> last_protection_password;
+  std::map<wchar_t, usb_vault::volume::VolumeType> attached_volume_types;
   std::map<wchar_t, std::uint64_t> attached_volume_sizes;
   std::map<std::wstring, std::uint64_t> hidden_volume_sizes;
   std::vector<std::wstring> hidden_target_paths;
@@ -2827,6 +2882,181 @@ void test_a_migration_refuses_what_it_cannot_name() {
 // down that they made one. So this asks the question of every export entry
 // point, of successes and of failures alike, and of every place the session
 // can write to.
+// A session holding one hidden-volume container, mounted as its login left it.
+[[nodiscard]] std::uint32_t maintenance_fixture(
+    FakeRuntime& runtime, CardLoginMountSessionCore& session) {
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V'};
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container_b(
+      L"D:\\vault\\decoy.hc", 64ULL * 1024ULL * 1024ULL,
+      16ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
+  runtime.protected_outer_path = L"D:\\vault\\decoy.hc";
+  runtime.events.clear();
+  return id;
+}
+
+void test_maintenance_opens_the_outer_volume_under_protection() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+
+  const wchar_t drive_letter =
+      session.open_decoy_maintenance(id, bytes("decoy-password"));
+
+  // The hidden volume the login put up goes first: one file cannot serve two
+  // volumes, and the release is the forced one this flow agreed to.
+  require_events(runtime, {"derive:B", "force:other", "allocate",
+                           "mount-created:other", "protect", "volume-type",
+                           "notify:A"});
+  require(drive_letter == L'T', "maintenance took an unexpected drive letter");
+  require(is_b_derivation(runtime.last_mount_password, "decoy-password"),
+          "the outer volume was not opened with the password supplied here");
+  require(is_b_derivation(runtime.last_protection_password, "login-password"),
+          "the hidden volume was not protected with the session derivation");
+  const std::vector<ContainerStatus> statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].mounted &&
+              statuses[0].drive_letter == drive_letter,
+          "the container did not come back mounted for maintenance");
+}
+
+void test_maintenance_refuses_every_failure_the_same_way() {
+  const auto refusal_message = [] {
+    FakeRuntime runtime;
+    CardAuthenticationSession authentication;
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                      LoginMountPolicy::manual);
+    const std::uint32_t id = maintenance_fixture(runtime, session);
+    try {
+      static_cast<void>(session.open_decoy_maintenance(id, bytes("wrong")));
+    } catch (const DecoyMaintenanceRefused& refused) {
+      return std::string(refused.what());
+    }
+    throw std::runtime_error("a wrong decoy password was accepted");
+  }();
+
+  // A hidden header that does not answer -- a container without one, or a
+  // session on the other side of the two passwords -- reads identically.
+  {
+    FakeRuntime runtime;
+    CardAuthenticationSession authentication;
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                      LoginMountPolicy::manual);
+    const std::uint32_t id = maintenance_fixture(runtime, session);
+    runtime.protection_password_opens = false;
+    bool refused = false;
+    try {
+      static_cast<void>(
+          session.open_decoy_maintenance(id, bytes("decoy-password")));
+    } catch (const DecoyMaintenanceRefused& rejection) {
+      refused = refusal_message == rejection.what();
+    }
+    require(refused, "a container with no hidden volume read differently");
+    require(!session.container_statuses()[0].mounted,
+            "a refused maintenance left the container mounted");
+  }
+
+  // The driver bringing up the hidden volume instead is what this check is
+  // for: refused, and nothing left attached for anyone to write onto.
+  {
+    FakeRuntime runtime;
+    CardAuthenticationSession authentication;
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                      LoginMountPolicy::manual);
+    const std::uint32_t id = maintenance_fixture(runtime, session);
+    runtime.protected_volume_type = usb_vault::volume::VolumeType::hidden;
+    bool refused = false;
+    try {
+      static_cast<void>(
+          session.open_decoy_maintenance(id, bytes("decoy-password")));
+    } catch (const DecoyMaintenanceRefused& rejection) {
+      refused = refusal_message == rejection.what();
+    }
+    require(refused, "the hidden volume coming up read differently");
+    require_events(runtime, {"derive:B", "force:other", "allocate",
+                             "mount-created:other", "protect", "volume-type",
+                             "force:other"});
+    require(!session.container_statuses()[0].mounted,
+            "the wrong volume was left mounted after a refusal");
+  }
+}
+
+void test_a_trial_answers_without_leaving_anything_mounted() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  const std::size_t before = session.operation_history().size();
+
+  require(session.verify_decoy_maintenance(id, bytes("decoy-password")),
+          "a trial did not recognise the container it can maintain");
+  require_events(runtime, {"derive:B", "force:other", "allocate",
+                           "mount-created:other", "protect", "volume-type",
+                           "force:other"});
+  require(!session.container_statuses()[0].mounted,
+          "a trial left the container mounted");
+
+  // A trial is not an operation performed on the container, so only the
+  // release the user was warned about is recorded.
+  const std::vector<OperationEvent> history = session.operation_history();
+  require(history.size() == before + 1 &&
+              history.back().kind == OperationKind::container_unmounted,
+          "a trial recorded more than the release it caused");
+
+  runtime.events.clear();
+  require(!session.verify_decoy_maintenance(id, bytes("wrong")),
+          "a trial accepted the wrong decoy password");
+  require(!session.container_statuses()[0].mounted,
+          "a failed trial left the container mounted");
+}
+
+void test_maintenance_refuses_before_it_touches_anything() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(
+            session.open_decoy_maintenance(1, bytes("decoy-password")));
+      },
+      "maintenance ran without an authenticated session");
+
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  require_throws<std::invalid_argument>(
+      [&] {
+        static_cast<void>(
+            session.open_decoy_maintenance(id, SecureBuffer()));
+      },
+      "maintenance accepted an empty password");
+  require_throws<std::invalid_argument>(
+      [&] {
+        static_cast<void>(
+            session.open_decoy_maintenance(id + 99, bytes("decoy-password")));
+      },
+      "maintenance accepted an identifier no container answers to");
+  require(runtime.events.empty(),
+          "a refused precondition still reached the driver");
+
+  // A container that will not release is not an answer about the password, so
+  // it is not folded into the one refusal.
+  runtime.fail_manual_force = true;
+  bool release_failed = false;
+  try {
+    static_cast<void>(
+        session.open_decoy_maintenance(id, bytes("decoy-password")));
+  } catch (const DecoyMaintenanceRefused&) {
+    throw std::runtime_error(
+        "a container that could not be released reported as a refusal");
+  } catch (const std::runtime_error&) {
+    release_failed = true;
+  }
+  require(release_failed,
+          "a container that could not be released was still opened");
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -2969,6 +3199,10 @@ int main() {
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();
     test_a_mounted_container_is_not_migrated();
     test_a_migration_refuses_what_it_cannot_name();
+    test_maintenance_opens_the_outer_volume_under_protection();
+    test_maintenance_refuses_every_failure_the_same_way();
+    test_a_trial_answers_without_leaving_anything_mounted();
+    test_maintenance_refuses_before_it_touches_anything();
     test_no_export_leaves_a_single_local_trace();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;

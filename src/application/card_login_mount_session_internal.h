@@ -41,6 +41,10 @@ class CardLoginMountSessionRuntime {
   // its file by the header group. No value means the driver has nothing there.
   [[nodiscard]] virtual std::optional<std::uint64_t> mounted_volume_size(
       wchar_t drive_letter) = 0;
+  // Which of a container's volumes the driver says is on a drive letter. Asked
+  // only by a maintenance mount, read once and kept nowhere.
+  [[nodiscard]] virtual std::optional<volume::VolumeType> mounted_volume_type(
+      wchar_t drive_letter) = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -174,6 +178,12 @@ class CardLoginMountSessionCore final {
                                  std::uint64_t size_bytes);
   void mount_adopted_container(std::uint32_t id);
   void mount_adopted_all();
+  [[nodiscard]] wchar_t open_decoy_maintenance(
+      std::uint32_t id,
+      const security::SecureBuffer& decoy_password_utf8);
+  [[nodiscard]] bool verify_decoy_maintenance(
+      std::uint32_t id,
+      const security::SecureBuffer& decoy_password_utf8);
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,
@@ -278,6 +288,18 @@ class CardLoginMountSessionCore final {
   // and reports which one opened it along with the letter it took.
   [[nodiscard]] ProbedMount mount_with_either_derivation(
       std::wstring_view path);
+  // A trial puts the container back; an open leaves it mounted to write to.
+  // Only an open is recorded and announced to the shell.
+  enum class MaintenanceMount : std::uint8_t { trial, open };
+  // Brings up one outer volume under protection. The outer password arrives
+  // derived so that walking a list pays for the KDF once, not once per item.
+  [[nodiscard]] wchar_t mount_outer_for_maintenance(
+      SessionContainer& entry,
+      const security::SecureBuffer& outer_password,
+      MaintenanceMount mode);
+  // The checks both maintenance entry points share, and the container named.
+  [[nodiscard]] SessionContainer& maintenance_target(
+      std::uint32_t id, const security::SecureBuffer& decoy_password_utf8);
   void record_operation(::usb_vault::application::OperationKind kind,
                         ::usb_vault::application::OperationOutcome outcome,
                         std::wstring_view container_name = {},
