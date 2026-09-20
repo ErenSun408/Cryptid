@@ -12,8 +12,9 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $package = (Get-Item -LiteralPath $PackageDirectory).FullName.TrimEnd('\')
 $helper = (Get-Item -LiteralPath $SetupHelper).FullName
 $compiler = (Get-Item -LiteralPath $MakeNsis).FullName
-$output = [IO.Path]::GetFullPath($OutputDirectory)
-$installerName = 'installer-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture) + '.exe'
+$outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
+$bundleName = 'installer-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture)
+$output = Join-Path $outputRoot $bundleName
 
 # Refuse inputs that could inject NSIS script or preprocessor syntax. The
 # generated file list is independently checked against the package manifest.
@@ -51,9 +52,10 @@ foreach ($name in @('USB Vault.exe', 'usb_vault_vikey_helper.exe',
 if ((Split-Path -Leaf $helper) -cne 'usb_vault_setup_helper.exe') { throw 'Unexpected helper name' }
 $version = (& $compiler /VERSION | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $version -ne 'v3.12') { throw 'NSIS 3.12 is required' }
-New-Item -ItemType Directory -Force -Path $output | Out-Null
-$target = Join-Path $output $installerName
-if (Test-Path -LiteralPath $target) { throw 'Installer timestamp already exists; retry later or choose a new output directory' }
+New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+if (Test-Path -LiteralPath $output) { throw 'Installer bundle timestamp already exists; retry later or choose a new output directory' }
+New-Item -ItemType Directory -Path $output | Out-Null
+$target = Join-Path $output 'USB-Vault-Setup.exe'
 # Bind recovery to both payload and implementation, including the generated
 # uninstaller protocol. A changed package must never interpret an old journal.
 $identityInputs = @((Get-FileHash -LiteralPath "$package.sha256sums.txt").Hash, (Get-FileHash -LiteralPath $helper).Hash)
