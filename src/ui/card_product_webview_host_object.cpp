@@ -124,6 +124,11 @@ constexpr DISPID kGetAutoMountId = 68;
 constexpr DISPID kSetAutoMountId = 69;
 constexpr DISPID kOpenConfigurationId = 70;
 constexpr DISPID kGetStartupViewId = 71;
+constexpr DISPID kBeginDecoySurveyId = 72;
+constexpr DISPID kDecoySurveyProgressId = 73;
+constexpr DISPID kDecoySurveyIdId = 74;
+constexpr DISPID kCancelDecoySurveyId = 75;
+constexpr DISPID kBeginOpenDecoyMaintenanceId = 76;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
 // its own bridge with no card, volume or container member on it.
@@ -131,6 +136,13 @@ constexpr wchar_t kSessionView[] = L"session";
 constexpr std::size_t kMaximumBatchItems = 1024;
 bool is_batch_query(DISPID member) noexcept {
   return member >= kBatchProgressId && member <= kBatchItemOutcomeId;
+}
+
+// Readable while the survey walks the containers. Cancelling is one of them:
+// unlike a volume operation, a walk can be called off between containers.
+bool is_survey_query(DISPID member) noexcept {
+  return member == kDecoySurveyProgressId || member == kDecoySurveyIdId ||
+         member == kCancelDecoySurveyId;
 }
 constexpr DISPID kBeginForceUnmountLastId = 55;
 constexpr DISPID kBeginMountAllId = 56;
@@ -514,6 +526,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginUnmount")) { ids[0] = kBeginUnmountId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountLast")) { ids[0] = kBeginForceUnmountLastId; return S_OK; }
     if (matches(names[0], L"getVolumeOperationStatus")) { ids[0] = kVolumeOperationStatusId; return S_OK; }
+    if (matches(names[0], L"beginDecoySurvey")) { ids[0] = kBeginDecoySurveyId; return S_OK; }
+    if (matches(names[0], L"getDecoySurveyProgress")) { ids[0] = kDecoySurveyProgressId; return S_OK; }
+    if (matches(names[0], L"getDecoySurveyId")) { ids[0] = kDecoySurveyIdId; return S_OK; }
+    if (matches(names[0], L"cancelDecoySurvey")) { ids[0] = kCancelDecoySurveyId; return S_OK; }
+    if (matches(names[0], L"beginOpenDecoyMaintenance")) { ids[0] = kBeginOpenDecoyMaintenanceId; return S_OK; }
     if (matches(names[0], L"beginMountBatch")) { ids[0] = kBeginMountBatchId; return S_OK; }
     if (matches(names[0], L"beginUnmountBatch")) { ids[0] = kBeginUnmountBatchId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountBatch")) { ids[0] = kBeginForceUnmountBatchId; return S_OK; }
@@ -584,7 +601,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     // readable; cancellation belongs to creation, never volume operations.
     if (creation_work_->running.load() &&
         (creation_work_->volume_operation.load()
-             ? (batch_mode_ ? !is_batch_query(member) : member != kVolumeOperationStatusId)
+             ? (batch_mode_    ? !is_batch_query(member)
+                : survey_mode_ ? !is_survey_query(member)
+                               : member != kVolumeOperationStatusId)
              : member != kCreationProgressId && member != kCancelCreationId)) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
@@ -596,6 +615,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     switch (member) {
       case kBeginForceUnmountLastId: case kVolumeOperationStatusId:
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
+      case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
+      case kBeginOpenDecoyMaintenanceId: // Opening one is what a survey is for.
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
@@ -608,7 +629,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
       case kListContainerDirectoryId: break;
-      default: last_volume_member_ = 0; clear_batch(); break;
+      default: last_volume_member_ = 0; clear_batch(); clear_survey(); break;
     }
     switch (member) {
       case kBeginMountBatchId: case kBeginUnmountBatchId:
@@ -632,11 +653,16 @@ class CardProductWebViewHostObject final : public IDispatch {
         return S_OK;
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
         return invoke_batch_query(member, parameters, result);
+      case kBeginDecoySurveyId:
+        return begin_decoy_survey(parameters, result, argument_error);
+      case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
+        return invoke_survey_query(member, parameters, result);
       case kBeginMountAdoptedId:
       case kBeginMountAllId:
       case kBeginUnmountContainerId:
       case kBeginUnmountId:
       case kBeginForceUnmountLastId:
+      case kBeginOpenDecoyMaintenanceId:
         return begin_volume_operation(member, parameters, result, argument_error);
       case kVolumeOperationStatusId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -925,6 +951,143 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  void clear_survey() noexcept {
+    std::lock_guard lock(survey_mutex_);
+    survey_found_.clear();
+    survey_mode_ = false;
+  }
+
+  // One argument: the decoy password, as the byte array every password takes.
+  // It is wiped on every path, and what comes back is identifiers only.
+  HRESULT begin_decoy_survey(DISPPARAMS* const parameters, VARIANT* const result,
+                             UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      wipe_available_arguments(parameters, 1);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    security::SecureBuffer password;
+    try {
+      password = consume_webview_password_array(parameters->rgvarg[0]);
+    } catch (const std::invalid_argument&) {
+      wipe_available_arguments(parameters, 1);
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (const std::length_error&) {
+      wipe_available_arguments(parameters, 1);
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      wipe_available_arguments(parameters, 1);
+      return E_FAIL;
+    }
+
+    try {
+      if (creation_work_->interrupted.load() ||
+          controller_.state() != CardProductUiState::authenticated) {
+        return E_ACCESSDENIED;
+      }
+      if (creation_thread_.joinable()) creation_thread_.join();
+      const auto epoch = creation_work_->card_epoch.load();
+      {
+        std::lock_guard lock(survey_mutex_);
+        survey_found_.clear();
+        survey_epoch_ = epoch;
+        survey_state_ = 1;
+        survey_total_ = 0;
+        survey_done_ = 0;
+        survey_unreachable_ = 0;
+        survey_cancelled_ = false;
+        survey_mode_ = true;
+      }
+      survey_cancel_.store(false);
+      creation_work_->finish();
+      creation_work_->volume_operation.store(true);
+      volume_status_.store(3); // A walk is never a single-volume retry target.
+      creation_work_->running.store(true);
+      creation_thread_ = std::thread([this, password = std::move(password), epoch]() mutable {
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const auto interrupted = [this, epoch] {
+          return creation_work_->interrupted.load() ||
+                 creation_work_->card_epoch.load() != epoch;
+        };
+        unsigned int state = 3;
+        try {
+          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          const auto survey = controller_.survey_decoy_maintenance(
+              password.bytes(),
+              [this](const std::uint32_t done, const std::uint32_t total) {
+                std::lock_guard lock(survey_mutex_);
+                survey_done_ = done;
+                survey_total_ = total;
+              },
+              [this, &interrupted] {
+                return survey_cancel_.load() || interrupted();
+              });
+          std::lock_guard lock(survey_mutex_);
+          survey_found_ = survey.maintainable;
+          survey_unreachable_ = survey.unreachable;
+          survey_cancelled_ = survey.cancelled;
+          state = 2;
+        } catch (...) {
+          // Every refusal the session makes is one refusal, and so is this.
+        }
+        password.clear();
+        if (SUCCEEDED(com)) ::CoUninitialize();
+        {
+          std::lock_guard lock(survey_mutex_);
+          survey_state_ = interrupted() ? 4U : state;
+          // A removed card must not leave a list of containers behind.
+          if (interrupted()) survey_found_.clear();
+        }
+        creation_work_->running.store(false);
+      });
+      return complete_selection(true, result);
+    } catch (...) {
+      password.clear();
+      creation_work_->running.store(false);
+      clear_survey();
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_survey_query(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    const bool by_index = member == kDecoySurveyIdId;
+    if (!parameters || parameters->cNamedArgs != 0 ||
+        parameters->cArgs != (by_index ? 1U : 0U) ||
+        (by_index && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+    std::uint32_t index = 0;
+    if (by_index && !exact_uint32(parameters->rgvarg[0], index)) return DISP_E_TYPEMISMATCH;
+    if (!result) return E_POINTER;
+    try {
+      if (!survey_mode_) return E_UNEXPECTED;
+      if (survey_epoch_ != creation_work_->card_epoch.load() ||
+          creation_work_->interrupted.load() ||
+          (!creation_work_->running.load() &&
+           controller_.state() != CardProductUiState::authenticated)) {
+        if (!creation_work_->running.load()) clear_survey();
+        return E_ACCESSDENIED;
+      }
+      if (member == kCancelDecoySurveyId) {
+        survey_cancel_.store(true);
+        return complete_selection(true, result);
+      }
+      std::lock_guard lock(survey_mutex_);
+      if (by_index) {
+        if (index >= survey_found_.size()) return E_INVALIDARG;
+        ::VariantInit(result);
+        result->vt = VT_UI4;
+        result->ulVal = survey_found_[index];
+        return S_OK;
+      }
+      const std::wstring packed = std::to_wstring(survey_state_) + L"," +
+          std::to_wstring(survey_total_) + L"," + std::to_wstring(survey_done_) + L"," +
+          std::to_wstring(survey_found_.size()) + L"," +
+          std::to_wstring(survey_unreachable_) + L"," + (survey_cancelled_ ? L"1" : L"0");
+      return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+    } catch (...) { return E_FAIL; }
+  }
+
   HRESULT invoke_batch_query(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
     const bool progress = member == kBatchProgressId;
     if (!parameters || parameters->cNamedArgs != 0 || parameters->cArgs != (progress ? 0U : 1U) ||
@@ -1003,6 +1166,8 @@ class CardProductWebViewHostObject final : public IDispatch {
           if (!creation_work_->interrupted.load()) {
             if (force && member == kBeginUnmountContainerId) controller_.force_unmount_container(id);
             else if (force) controller_.force_unmount_user_active();
+            else if (member == kBeginOpenDecoyMaintenanceId)
+              static_cast<void>(controller_.open_decoy_maintenance(id));
             else if (member == kBeginMountAdoptedId) controller_.mount_container(id);
             else if (member == kBeginMountAllId) controller_.mount_all();
             else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
@@ -1960,6 +2125,16 @@ class CardProductWebViewHostObject final : public IDispatch {
   unsigned int batch_state_{};
   std::size_t batch_completed_{};
   std::size_t batch_current_{};
+  bool survey_mode_{false}; // Accessed only by the COM/window thread.
+  std::mutex survey_mutex_;
+  std::vector<std::uint32_t> survey_found_;
+  std::uint64_t survey_epoch_{};
+  unsigned int survey_state_{};
+  std::uint32_t survey_total_{};
+  std::uint32_t survey_done_{};
+  std::uint32_t survey_unreachable_{};
+  bool survey_cancelled_{};
+  std::atomic<bool> survey_cancel_{false};
   DISPID last_volume_member_{0};
   std::uint32_t last_volume_id_{0};
   std::uint64_t last_volume_epoch_{0};

@@ -188,6 +188,29 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, 64ULL * 1024ULL * 1024ULL);
   }
 
+  usb_vault::application::DecoyMaintenanceSurvey survey_decoy_maintenance(
+      const usb_vault::security::SecureBuffer& decoy_password_utf8,
+      const usb_vault::application::SurveyProgress& progress,
+      const usb_vault::application::SurveyCancellation& cancelled) override {
+    await_volume_operation();
+    survey_password.assign(decoy_password_utf8.bytes().begin(),
+                           decoy_password_utf8.bytes().end());
+    ++survey_calls;
+    for (std::uint32_t done = 1; done <= survey_total; ++done) {
+      if (cancelled && cancelled()) return {.cancelled = true};
+      if (progress) progress(done, survey_total);
+    }
+    if (survey_fails) throw std::runtime_error("survey failed");
+    return {.maintainable = survey_result, .unreachable = survey_unreachable};
+  }
+
+  wchar_t open_surveyed_maintenance(const std::uint32_t id) override {
+    await_volume_operation();
+    ++open_maintenance_calls;
+    opened_maintenance_id = id;
+    return L'Q';
+  }
+
   void mount_adopted_container(const std::uint32_t id) override {
     await_volume_operation();
     batch_calls.push_back(id);
@@ -471,6 +494,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   std::vector<Adopted> containers;
   std::vector<std::uint32_t> batch_calls;
+  std::vector<std::byte> survey_password;
+  std::vector<std::uint32_t> survey_result;
+  std::uint32_t survey_total{};
+  std::uint32_t survey_unreachable{};
+  unsigned int survey_calls{};
+  unsigned int open_maintenance_calls{};
+  std::uint32_t opened_maintenance_id{};
+  bool survey_fails{};
   std::uint32_t batch_fail_id{};
   std::uint64_t created_size_bytes{};
   std::uint32_t next_id{1};
@@ -2425,6 +2456,154 @@ void clear_arguments(VARIANTARG* const values, const UINT count) {
   }
 }
 
+void test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, nullptr, &host, nullptr, &work)),
+          "survey host creation failed");
+
+  const auto progress = [&] {
+    VARIANT value{};
+    require(invoke_named(*host.Get(), L"getDecoySurveyProgress", nullptr, 0,
+                         &value, nullptr) == S_OK && value.vt == VT_BSTR,
+            "survey progress unavailable");
+    const std::wstring text(value.bstrVal, ::SysStringLen(value.bstrVal));
+    static_cast<void>(::VariantClear(&value));
+    return text;
+  };
+
+  VARIANT unread{};
+  require(invoke_named(*host.Get(), L"getDecoySurveyProgress", nullptr, 0,
+                       &unread, nullptr) == E_UNEXPECTED,
+          "a survey was readable before one ran");
+
+  fixture.volume.survey_total = 3;
+  fixture.volume.survey_result = {2, 5};
+  fixture.volume.survey_unreachable = 1;
+  fixture.volume.pause_volume.store(true);
+  fixture.volume.volume_entered.store(false);
+
+  ByteArray password(bytes("decoy-password"));
+  VARIANT started{};
+  require(invoke_named(*host.Get(), L"beginDecoySurvey", &password.value(), 1,
+                       &started, nullptr) == S_OK,
+          "the survey did not start");
+  static_cast<void>(::VariantClear(&started));
+  password.require_wiped("the decoy password survived the bridge");
+
+  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  // The worker owns the session while it walks, so only the survey's own
+  // readers answer and the page cannot start anything else.
+  VARIANT blocked{};
+  require(invoke_named(*host.Get(), L"getSessionState", nullptr, 0, &blocked,
+                       nullptr) == E_PENDING &&
+              progress().starts_with(L"1,"),
+          "the survey admitted unrelated work or reported no state");
+
+  fixture.volume.pause_volume.store(false);
+  for (int i = 0; work.running.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(!work.running.load(), "the survey did not finish");
+
+  require(progress() == L"2,3,3,2,1,0",
+          "the survey did not report what it walked and found");
+  require(invoke_container_number(*host.Get(), L"getDecoySurveyId", 0) == 2 &&
+              invoke_container_number(*host.Get(), L"getDecoySurveyId", 1) == 5,
+          "the survey did not report the containers it found");
+  VARIANT out_of_range{};
+  require(invoke_with_number(*host.Get(), L"getDecoySurveyId", 2, &out_of_range,
+                             nullptr) == E_INVALIDARG,
+          "a container nobody found was readable");
+  require(fixture.volume.survey_password.size() == 14 &&
+              fixture.volume.survey_calls == 1,
+          "the session did not receive the password the page supplied");
+}
+
+void test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, nullptr, &host, nullptr, &work)),
+          "survey host creation failed");
+
+  UINT argument_error = 0;
+  VARIANT number{};
+  ::VariantInit(&number);
+  number.vt = VT_UI4;
+  number.ulVal = 5;
+  require(invoke_named(*host.Get(), L"beginDecoySurvey", nullptr, 0, nullptr,
+                       nullptr) == DISP_E_BADPARAMCOUNT &&
+              invoke_named(*host.Get(), L"beginDecoySurvey", &number, 1,
+                           nullptr, &argument_error) == DISP_E_TYPEMISMATCH &&
+              fixture.volume.survey_calls == 0,
+          "a survey ran on something that is not a password");
+  static_cast<void>(::VariantClear(&number));
+
+  fixture.volume.survey_total = 4;
+  fixture.volume.pause_volume.store(true);
+  fixture.volume.volume_entered.store(false);
+  ByteArray password(bytes("decoy-password"));
+  VARIANT started{};
+  require(invoke_named(*host.Get(), L"beginDecoySurvey", &password.value(), 1,
+                       &started, nullptr) == S_OK,
+          "the survey did not start");
+  static_cast<void>(::VariantClear(&started));
+  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  VARIANT cancelled{};
+  require(invoke_named(*host.Get(), L"cancelDecoySurvey", nullptr, 0, &cancelled,
+                       nullptr) == S_OK,
+          "the survey refused to be stopped");
+  static_cast<void>(::VariantClear(&cancelled));
+  fixture.volume.pause_volume.store(false);
+  for (int i = 0; work.running.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  VARIANT value{};
+  require(invoke_named(*host.Get(), L"getDecoySurveyProgress", nullptr, 0,
+                       &value, nullptr) == S_OK,
+          "a stopped survey reported nothing");
+  const std::wstring text(value.bstrVal, ::SysStringLen(value.bstrVal));
+  static_cast<void>(::VariantClear(&value));
+  require(text.starts_with(L"2,") && text.ends_with(L",1"),
+          "a stopped survey did not say it was stopped");
+}
+
+void test_opening_maintenance_runs_on_the_volume_worker() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, nullptr, &host, nullptr, &work)),
+          "maintenance host creation failed");
+
+  VARIANT started{};
+  require(invoke_with_number(*host.Get(), L"beginOpenDecoyMaintenance", 7,
+                             &started, nullptr) == S_OK,
+          "opening maintenance did not start");
+  static_cast<void>(::VariantClear(&started));
+  for (int i = 0; work.running.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(!work.running.load(), "opening maintenance did not finish");
+  require(fixture.volume.open_maintenance_calls == 1 &&
+              fixture.volume.opened_maintenance_id == 7 &&
+              fixture.volume.volume_thread != std::this_thread::get_id(),
+          "maintenance did not open the named container off the UI thread");
+}
+
 // 🔴 One call brings a whole directory back. Five hundred files through the
 // per-entry accessors above would be two thousand serialized asynchronous
 // calls, and the page would visibly stall.
@@ -2769,6 +2948,9 @@ int main() {
     test_container_query_failure_does_not_invent_facts();
     test_operation_history_is_read_only_typed_and_clearable();
     test_operation_history_query_failures_do_not_invent_facts();
+    test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
+    test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password();
+    test_opening_maintenance_runs_on_the_volume_worker();
     test_a_directory_listing_arrives_as_one_packed_string();
     test_the_file_manager_bridge_checks_its_shapes();
     test_the_bridge_carries_each_file_manager_action();

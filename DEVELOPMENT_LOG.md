@@ -1992,4 +1992,12 @@
 - 检查与实现：控制器新增 `survey_decoy_maintenance` 与 `open_decoy_maintenance`。诱饵口令以可变缓冲区进入，成功、失败、拒绝三条路径都抹零，口令本身留在会话而不是页面。向页面投影的是 `DecoyMaintenanceUiSurvey`：可维护容器的标识符、未能判定的数量、是否被中止；容器路径、卷类型、档位一律不过这层边界。两个入口都要求已认证状态，否则按既有口径抛 `CardError::invalid_operation`。
 - 验证：`card_product_ui_session_controller_tests` 通过，新增 4 组（口令原样传到会话并在成功后抹零、失败路径同样抹零、未认证时不触达会话且缓冲区抹零、打开维护只传标识符）。首轮用 `std::logic_error` 断言拒绝类型失败，实际是带 `CardError::invalid_operation` 的 `std::system_error`，已按真实类型改断言。
 - 安全与风险：本片不新增持久化、不新增线程，页面仍拿不到路径与卷类型。b 段（原生桥）要把遍历放到工作线程并复用既有的卡纪元／中断机制，c 段才是导航列与页面。
-- 提交：待定（`[P3.25]project the decoy survey onto the page boundary`）。哈希由下一个切片顺延补上；未推送。
+- 提交：`355a670 [P3.25]project the decoy survey onto the page boundary`。未推送。
+
+### 2026-09-19 — P3.25 三项决策与第五片 b：原生桥
+
+- 决策回写：二级页由 P3 既有文件管理组件接管临时挂载；诱饵新鲜度面板要做，只扫顶层并限条目数、每次现算不落地；「还可添加」改为维护会话期间常驻一个提权 helper（我原建议一次性测量加手动重算，用户选择常驻，已按其决定执行）。三条连同新增的 P3.25.4b 切片已写入 `MILESTONES.md`（`95ea802`），常驻 helper 的三条硬约束同时写死：只接受度量请求、管道关闭即退出、带超时看门狗并由应用在维护结束／登出／拔卡时收束。
+- 检查与实现：桥新增 `beginDecoySurvey`、`getDecoySurveyProgress`、`getDecoySurveyId`、`cancelDecoySurvey`、`beginOpenDecoyMaintenance` 五个成员（DISPID 72～76）。遍历放在既有的工作线程上，复用卡纪元与中断机制；新增 `survey_mode_` 与 `is_survey_query`，遍历期间只有这三个读取方法应答，其余一律 `E_PENDING`，与批处理的门控并列而非嵌套。进度打包为 `状态,总数,已走,已找到,未能判定,是否中止`，结果按下标只吐标识符。打开维护挂载归入既有的 volume 操作分支，沿用其访问检查与状态位。
+- 验证：`card_product_webview_host_object_tests` 通过，新增 3 组（工作线程上走完并逐项读出标识符、遍历期间拒绝无关调用且口令数组被抹零、取消后标记为中止、非口令参数与缺参被拒、打开维护在非 UI 线程上执行并只传标识符）；`card_login_mount_session_tests`、`card_product_ui_session_controller_tests` 重跑通过。仍未接真实驱动。
+- 安全与风险：诱饵口令走与登录同一条 `consume_webview_password_array` 通道，SAFEARRAY 在所有路径抹零（测试断言），工作线程持有的副本用完即清。拔卡或纪元变化时清空已找到的列表并拒绝后续读取，无关变更调用 `clear_survey()`。过桥的只有标识符，没有名称、路径或卷类型。
+- 提交：待定（`[P3.25]walk the decoy survey from the page`）。哈希由下一个切片顺延补上；未推送。
