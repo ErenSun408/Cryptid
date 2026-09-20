@@ -67,9 +67,8 @@ bool diagnose(const Report& report, const bool include_card) {
         artifacts.push_back(check( L"card_session.html", p2_deployment::html));
         artifacts.push_back(check( L"card_session.js", p2_deployment::js));
         return pass(L"运行组件完整，版本一致。");
-      } catch (const std::system_error& error) {
-        auto result = card_failure(error);
-        result.failure = usb_vault::card::capture_startup_failure(1102);
+      } catch (const std::system_error&) {
+        auto result = caught(L"运行组件检查失败，请使用完整安装包修复。", 1102);
         result.detail = std::wstring(component) + L"：" + result.detail;
         return result;
       } catch (...) { return caught(L"组件检查异常，请重新解压完整包。", 1102); }

@@ -3,6 +3,7 @@
 #include "card/vikey/vikey_session.h"
 
 #include "usb_vault/card/card_error.h"
+#include "card/capture_failure.h"
 #include "usb_vault/card/card_record_v1.h"
 
 #include <algorithm>
@@ -340,10 +341,13 @@ void test_read_only_media_classification() {
   state.reported_capacity =
       static_cast<sdk::Length>(kCardRecordJournalV1StorageSize - 1);
   const std::size_t reads_before = state.reads;
-  require_card_error(
-      [&] { static_cast<void>(inspect_vikey_card_media(session)); },
-      CardError::invalid_configuration,
-      "undersized ViKey media was inspected");
+  bool capacity_rejected = false;
+  try { static_cast<void>(inspect_vikey_card_media(session)); }
+  catch (...) {
+    const auto failure = usb_vault::card::capture_failure(std::current_exception()).primary;
+    capacity_rejected = failure.code == 2029 && failure.reason == 2;
+  }
+  require(capacity_rejected, "undersized startup media lost capacity diagnostic");
   require(state.reads == reads_before,
           "undersized ViKey media was read before rejection");
 

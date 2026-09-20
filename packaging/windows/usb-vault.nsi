@@ -63,8 +63,16 @@ Page custom DependencyPageCreate DependencyPageLeave
 Function LaunchInstalledApplication
   ; Cleanup leaves $OUTDIR at $TEMP. Match a direct application launch and
   ; the installed shortcuts instead of inheriting the installer's workspace.
+  ClearErrors
   SetOutPath "$INSTDIR"
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "无法进入 USB Vault 安装目录。错误码：1001。请检查目录是否存在及访问权限，然后从安装目录重新打开应用。"
+    Return
+  ${EndIf}
   Exec '$\"$INSTDIR\USB Vault.exe$\"'
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "无法启动 USB Vault。错误码：1001。请确认程序文件完整且未被安全软件阻止，然后从安装目录重新打开应用。"
+  ${EndIf}
 FunctionEnd
 
 Var WebViewState

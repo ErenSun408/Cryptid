@@ -96,5 +96,9 @@ async function run(configure, verify) {
     assert.equal(w.usbVaultPageStartupStatus, 1);
     assert.match(w.document.body.textContent, /1407/);
   });
-  console.log("PASS 11 startup DOM scenarios, zero authentication retries");
+  await run(w => { w.chrome = undefined; }, async w => {
+    assert.equal(w.usbVaultPageStartupStatus, 1401);
+    assert.match(w.document.body.textContent, /1401/);
+  });
+  console.log("PASS 12 startup DOM scenarios, zero authentication retries");
 })().catch(error => { console.error(error); process.exitCode = 1; });

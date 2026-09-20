@@ -97,6 +97,12 @@ void test_router_capture() {
   inspection.record = CardRecordState::malformed;
   require(CardEntryRouter::route(inspection, &failure) == CardEntryRoute::unavailable &&
           failure.primary.code == 4003, "malformed record became initializable");
+  inspection.record = CardRecordState::unsupported_version;
+  require(CardEntryRouter::route(inspection, &failure) == CardEntryRoute::unavailable &&
+          failure.primary.code == 4002, "unsupported record lost diagnostic");
+  inspection.media = static_cast<CardEntryMediaEvidence>(999);
+  require(CardEntryRouter::route(inspection, &failure) == CardEntryRoute::unavailable &&
+          failure.primary.code == 4005, "unknown media accepted or lost diagnostic");
 }
 
 void test_cleanup_paths() {

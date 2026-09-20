@@ -6,6 +6,7 @@
 | 文件 | 定位 |
 |---|---|
 | [启动失败与数字错误码对照表](design/startup-failure-codes.md) | 启动链路源码审计、失败出口与拟接入数字码；不代表运行时已实现 |
+| [启动诊断覆盖清单](design/startup-failure-coverage.md) | 120 个编号的实际接入、模拟验证及实机待验状态；包含明确未实现边界 |
 | [全流程 UI 设计稿](design/usb-vault_ui-design.html) | 视觉与交互参考；不代表所有内容都已实现，也不替代正式页面 |
 | [早期 UI 原型](archive/design/usb-vault_ui-disign.html) | 已归档；账号体系和分类导航已作废，保留原文件名以便追溯 |
 | [初版需求梳理](archive/requirements/需求梳理清单.txt) | 早期问题清单，已由 v2 技术文档承接 |

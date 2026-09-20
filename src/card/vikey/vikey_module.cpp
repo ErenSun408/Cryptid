@@ -36,7 +36,7 @@ void validate(const DynamicModuleApi& module_api) {
   if (module_api.load == nullptr || module_api.resolve == nullptr ||
       module_api.unload == nullptr) {
     fail(CardError::invalid_configuration,
-         "ViKey dynamic module operations are incomplete");
+          "ViKey dynamic module operations are incomplete", DiagnosticStage::sdk_export);
   }
 }
 

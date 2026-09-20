@@ -2,6 +2,7 @@
 
 #include "card/card_record_journal_v1.h"
 #include "card/vikey/vikey_session.h"
+#include "card/diagnostic_error.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 
@@ -84,8 +85,8 @@ void write_verified_zeros(ICardRecordJournalStorage& storage,
     VikeyCardRecordStorage& storage) {
   const std::size_t capacity = storage.capacity();
   if (capacity < kCardRecordJournalV1StorageSize) {
-    throw std::system_error(
-        make_error_code(CardError::invalid_configuration),
+    throw DiagnosticError(
+        make_error_code(CardError::invalid_configuration), DiagnosticStage::sdk_capacity,
         "ViKey user data area is too small for media inspection");
   }
 
