@@ -5,6 +5,7 @@ Unicode true
 !include nsDialogs.nsh
 !include FileFunc.nsh
 !include x64.nsh
+!include "${__FILEDIR__}\installation-record.nsh"
 
 !ifndef PayloadDirectory
   !error "Use tools/build-windows-installer.ps1 with a verified package"
@@ -95,8 +96,14 @@ Function .onInit
   ReadRegStr $0 HKCU "${UninstallKey}" "InstallLocation"
   ${IfNot} ${Errors}
     ${If} $0 != ""
-      MessageBox MB_ICONSTOP "已安装 USB Vault。此预览安装器暂不覆盖升级，请先卸载旧版（会保留用户数据），再运行安装。"
-      Abort
+      !insertmacro ProbeRecordedInstallation
+      ${If} $1 == 10
+        MessageBox MB_ICONSTOP "USB Vault 的原安装位置仍存在。此预览安装器暂不覆盖升级，请先卸载旧版（会保留用户数据）；若程序已被手动删除，请先检查原目录及安装记录。"
+        Abort
+      ${ElseIf} $1 == 20
+        MessageBox MB_ICONSTOP "无法确认 USB Vault 原安装位置的状态，请检查路径和访问权限后重试。"
+        Abort
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 FunctionEnd
