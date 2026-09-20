@@ -111,6 +111,21 @@ class ContainerCreationCleanupError final : public std::runtime_error {
   std::exception_ptr cleanup_failure_;
 };
 
+// What one decoy password found across every container the session holds.
+// Containers that answered are the only ones a caller may offer to open.
+struct DecoyMaintenanceSurvey final {
+  std::vector<std::uint32_t> maintainable;
+  // Containers that could not be released, so nothing was learned about them.
+  // They are not on the list above and the count is what says so.
+  std::uint32_t unreachable{};
+  bool cancelled{};
+};
+
+// Asked between containers; true stops the walk where it stands.
+using SurveyCancellation = std::function<bool()>;
+// How many containers have been tried, out of how many will be.
+using SurveyProgress = std::function<void(std::uint32_t, std::uint32_t)>;
+
 // Every failed attempt at decoy maintenance, in one type with one message:
 // telling a wrong password from a container with no hidden volume would answer
 // the one question the product must not answer about a container.
@@ -206,6 +221,27 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // throws, because that is not an answer about the password.
   [[nodiscard]] virtual bool verify_decoy_maintenance(
       std::uint32_t, const security::SecureBuffer&) {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
+
+  // Tries one decoy password against every adopted container and reports the
+  // ones whose outer volume it opens, leaving nothing mounted.
+  //
+  // A container already mounted is released first, forcibly if busy, except a
+  // standard one: those have no outer volume to open, so a working disk is
+  // never taken away to learn what is already known. The password is derived
+  // once for the whole walk, and kept for the rest of the session when at
+  // least one container answered.
+  [[nodiscard]] virtual DecoyMaintenanceSurvey survey_decoy_maintenance(
+      const security::SecureBuffer&, const SurveyProgress& = {},
+      const SurveyCancellation& = {}) {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
+
+  // Opens a container the survey found, with the password the survey kept.
+  // Refuses the same way as the call taking a password, and throws when this
+  // session has no surveyed password to use.
+  [[nodiscard]] virtual wchar_t open_surveyed_maintenance(std::uint32_t) {
     throw std::logic_error("decoy maintenance is unavailable");
   }
 
@@ -454,6 +490,11 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] bool verify_decoy_maintenance(
       std::uint32_t id,
       const security::SecureBuffer& decoy_password_utf8) override;
+  [[nodiscard]] DecoyMaintenanceSurvey survey_decoy_maintenance(
+      const security::SecureBuffer& decoy_password_utf8,
+      const SurveyProgress& progress,
+      const SurveyCancellation& cancelled) override;
+  [[nodiscard]] wchar_t open_surveyed_maintenance(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
   void force_unmount_user_active() override;

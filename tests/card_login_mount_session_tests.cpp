@@ -7,6 +7,7 @@
 #include "usb_vault/volume_creation/volume_creator.h"
 
 #include <cstddef>
+#include <algorithm>
 #include <concepts>
 #include <exception>
 #include <iostream>
@@ -30,6 +31,7 @@ using usb_vault::application::LoginMountPolicy;
 using usb_vault::application::detail::SessionContainer;
 using usb_vault::application::ContainerCreationCleanupError;
 using usb_vault::application::DecoyMaintenanceRefused;
+using usb_vault::application::DecoyMaintenanceSurvey;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::MountSessionResult;
 using usb_vault::application::OperationEvent;
@@ -456,7 +458,10 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
                                       protection.bytes().end());
       // One rejection covers a password that opens no outer volume and a
       // hidden header that does not answer.
-      if (path != protected_outer_path ||
+      const bool outer_here =
+          std::ranges::find(protected_outer_paths, std::wstring(path)) !=
+          protected_outer_paths.end();
+      if (!outer_here ||
           !is_b_derivation(volume_password.bytes(), protected_outer_input) ||
           !protection_password_opens) {
         throw std::system_error(
@@ -606,7 +611,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool nothing_opens_it{};
   // What the driver does with a protected mount: whose outer volume opens,
   // whether the protection password reaches a hidden header, what it reports.
-  std::wstring protected_outer_path;
+  std::vector<std::wstring> protected_outer_paths;
   std::string protected_outer_input{"decoy-password"};
   bool protection_password_opens{true};
   usb_vault::volume::VolumeType protected_volume_type{
@@ -2890,7 +2895,7 @@ void test_a_migration_refuses_what_it_cannot_name() {
   const std::uint32_t id = session.create_container_b(
       L"D:\\vault\\decoy.hc", 64ULL * 1024ULL * 1024ULL,
       16ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
-  runtime.protected_outer_path = L"D:\\vault\\decoy.hc";
+  runtime.protected_outer_paths.emplace_back(L"D:\\vault\\decoy.hc");
   runtime.events.clear();
   return id;
 }
@@ -3057,6 +3062,162 @@ void test_maintenance_refuses_before_it_touches_anything() {
           "a container that could not be released was still opened");
 }
 
+[[nodiscard]] bool listed(const DecoyMaintenanceSurvey& survey,
+                          const std::uint32_t id) {
+  return std::ranges::find(survey.maintainable, id) !=
+         survey.maintainable.end();
+}
+
+[[nodiscard]] bool mounted_now(CardLoginMountSessionCore& session,
+                               const std::uint32_t id) {
+  for (const ContainerStatus& status : session.container_statuses()) {
+    if (status.id == id) return status.mounted;
+  }
+  throw std::runtime_error("the container left the session");
+}
+
+void test_a_survey_lists_only_what_the_password_opens() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V', L'W', L'Z'};
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t standard =
+      session.create_container(L"D:\\plain.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t answers = session.create_container_b(
+      L"D:\\one.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  const std::uint32_t silent = session.create_container_b(
+      L"D:\\two.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  runtime.protected_outer_paths.emplace_back(L"D:\\one.hc");
+  runtime.events.clear();
+
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> reported;
+  const DecoyMaintenanceSurvey survey = session.survey_decoy_maintenance(
+      bytes("decoy-password"),
+      [&](const std::uint32_t done, const std::uint32_t total) {
+        reported.emplace_back(done, total);
+      },
+      {});
+
+  require(survey.maintainable.size() == 1 && listed(survey, answers),
+          "the survey did not list exactly the container it can maintain");
+  require(survey.unreachable == 0 && !survey.cancelled,
+          "the survey reported trouble it did not have");
+  // The standard container is somebody's working disk and has no outer volume
+  // to find, so it is neither released nor tried.
+  require(mounted_now(session, standard),
+          "the survey took away a standard container");
+  require(!mounted_now(session, answers) && !mounted_now(session, silent),
+          "the survey left a container it tried mounted");
+  require(reported.size() == 3 && reported.back().first == 3 &&
+              reported.back().second == 3,
+          "the survey did not report progress over every container");
+
+  // One password, one derivation, however many containers are walked.
+  std::size_t derivations = 0;
+  for (const std::string& event : runtime.events) {
+    if (event == "derive:B") ++derivations;
+  }
+  require(derivations == 1, "the survey paid for the KDF more than once");
+}
+
+void test_a_survey_counts_containers_it_could_not_release() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V', L'W', L'Z'};
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t stuck = session.create_container_b(
+      L"D:\\stuck.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  const std::uint32_t answers = session.create_container_b(
+      L"D:\\free.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  runtime.protected_outer_paths.emplace_back(L"D:\\stuck.hc");
+  runtime.protected_outer_paths.emplace_back(L"D:\\free.hc");
+  // The first container's drive will not come down, so nothing is learned
+  // about it and the walk carries on to the next.
+  for (const ContainerStatus& status : session.container_statuses()) {
+    if (status.id == stuck) runtime.fail_manual_force_drive = status.drive_letter;
+  }
+
+  const DecoyMaintenanceSurvey survey =
+      session.survey_decoy_maintenance(bytes("decoy-password"), {}, {});
+
+  require(survey.unreachable == 1, "a stuck container was not counted");
+  require(!listed(survey, stuck),
+          "a container nothing was learned about was offered anyway");
+  require(listed(survey, answers),
+          "one stuck container stopped the rest of the walk");
+}
+
+void test_a_survey_stops_when_asked_and_keeps_nothing_it_did_not_find() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V', L'W', L'Z'};
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  static_cast<void>(session.create_container_b(
+      L"D:\\one.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password")));
+  static_cast<void>(session.create_container_b(
+      L"D:\\two.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password")));
+
+  std::uint32_t tried = 0;
+  const DecoyMaintenanceSurvey stopped = session.survey_decoy_maintenance(
+      bytes("decoy-password"), {}, [&] { return tried++ == 1; });
+  require(stopped.cancelled, "a stopped survey did not say so");
+
+  // Nothing answered, so nothing is held: a password kept here would be one
+  // nobody can use.
+  require(stopped.maintainable.empty(), "a survey found what does not exist");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.open_surveyed_maintenance(1)); },
+      "maintenance opened without a surveyed password");
+}
+
+void test_a_surveyed_container_opens_without_asking_again() {
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U', L'V', L'W', L'Z'};
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container_b(
+      L"D:\\one.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  runtime.protected_outer_paths.emplace_back(L"D:\\one.hc");
+  static_cast<void>(
+      session.survey_decoy_maintenance(bytes("decoy-password"), {}, {}));
+  runtime.events.clear();
+
+  const wchar_t drive_letter = session.open_surveyed_maintenance(id);
+  require_events(runtime, {"allocate", "mount-created:other", "protect",
+                           "volume-type", "notify:A"});
+  require(mounted_now(session, id) && drive_letter != wchar_t{},
+          "the surveyed container did not open");
+  require(is_b_derivation(runtime.last_mount_password, "decoy-password"),
+          "the surveyed password was not the one that opened the volume");
+
+  // It goes when the rest of the session's secrets go, and the card leaving
+  // is the path that must not be the one exception.
+  static_cast<void>(session.force_unmount_active());
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.open_surveyed_maintenance(id)); },
+      "a card removal left the surveyed password behind");
+
+  session.release_session_secrets();
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.open_surveyed_maintenance(id)); },
+      "a released session still held the surveyed password");
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -3203,6 +3364,10 @@ int main() {
     test_maintenance_refuses_every_failure_the_same_way();
     test_a_trial_answers_without_leaving_anything_mounted();
     test_maintenance_refuses_before_it_touches_anything();
+    test_a_survey_lists_only_what_the_password_opens();
+    test_a_survey_counts_containers_it_could_not_release();
+    test_a_survey_stops_when_asked_and_keeps_nothing_it_did_not_find();
+    test_a_surveyed_container_opens_without_asking_again();
     test_no_export_leaves_a_single_local_trace();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;

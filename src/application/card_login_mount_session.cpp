@@ -400,6 +400,19 @@ bool CardLoginMountSession::verify_decoy_maintenance(
   return impl_->core.verify_decoy_maintenance(id, decoy_password_utf8);
 }
 
+DecoyMaintenanceSurvey CardLoginMountSession::survey_decoy_maintenance(
+    const security::SecureBuffer& decoy_password_utf8,
+    const SurveyProgress& progress,
+    const SurveyCancellation& cancelled) {
+  return impl_->core.survey_decoy_maintenance(decoy_password_utf8, progress,
+                                              cancelled);
+}
+
+wchar_t CardLoginMountSession::open_surveyed_maintenance(
+    const std::uint32_t id) {
+  return impl_->core.open_surveyed_maintenance(id);
+}
+
 void CardLoginMountSession::unmount_container(const std::uint32_t id) {
   impl_->core.unmount_container(id);
 }
@@ -1324,6 +1337,92 @@ wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
   }
 }
 
+DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
+    const security::SecureBuffer& decoy_password_utf8,
+    const SurveyProgress& progress,
+    const SurveyCancellation& cancelled) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "decoy maintenance requires an authenticated card session");
+  }
+  if (state_.login_password.empty()) {
+    throw std::logic_error(
+        "this session no longer holds the input it was opened with");
+  }
+  if (decoy_password_utf8.empty()) {
+    throw std::invalid_argument(
+        "the decoy volume password is required in clear text");
+  }
+
+  // One derivation for the whole walk: every container of this kind shares the
+  // salt, so paying per container would buy nothing.
+  security::SecureBuffer outer_password = runtime_.derive_container_password(
+      decoy_password_utf8, authentication_.root_secret_,
+      layout_.container_b.salt);
+
+  DecoyMaintenanceSurvey survey;
+  const auto total = static_cast<std::uint32_t>(state_.containers.size());
+  std::uint32_t done = 0;
+  try {
+    for (SessionContainer& entry : state_.containers) {
+      if (cancelled && cancelled()) {
+        survey.cancelled = true;
+        break;
+      }
+      // A container known to open on the standard derivation has no outer
+      // volume to find, so it is left exactly as the user is using it.
+      if (!(entry.derivation_known && !entry.release_first)) {
+        try {
+          const wchar_t drive_letter = mount_outer_for_maintenance(
+              entry, outer_password, MaintenanceMount::trial);
+          static_cast<void>(runtime_.unmount_forced(drive_letter));
+          entry.mounted = false;
+          entry.drive_letter = wchar_t{};
+          survey.maintainable.push_back(entry.id);
+        } catch (const DecoyMaintenanceRefused&) {
+          // Not one this password maintains, which is all anyone learns.
+        } catch (...) {
+          // A container that would not release, or a letter that could not be
+          // taken: nothing was learned about it, and the walk goes on.
+          ++survey.unreachable;
+        }
+      }
+      ++done;
+      if (progress) progress(done, total);
+    }
+  } catch (...) {
+    outer_password.clear();
+    throw;
+  }
+
+  // Keeping it is what spares the next page a second prompt; keeping it after
+  // finding nothing would only be holding a secret for no one.
+  if (!survey.maintainable.empty()) {
+    state_.decoy_outer_password = std::move(outer_password);
+  } else {
+    outer_password.clear();
+  }
+  return survey;
+}
+
+wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
+    const std::uint32_t id) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "decoy maintenance requires an authenticated card session");
+  }
+  if (state_.decoy_outer_password.empty()) {
+    throw std::logic_error("this session has no surveyed decoy password");
+  }
+  SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  return mount_outer_for_maintenance(*entry, state_.decoy_outer_password,
+                                     MaintenanceMount::open);
+}
+
 bool CardLoginMountSessionCore::verify_decoy_maintenance(
     const std::uint32_t id,
     const security::SecureBuffer& decoy_password_utf8) {
@@ -1359,6 +1458,7 @@ security::SecureBuffer CardLoginMountSessionCore::copy_session_password() {
 
 void CardLoginMountSessionCore::release_session_secrets() noexcept {
   state_.hidden_container_password = security::SecureBuffer();
+  state_.decoy_outer_password = security::SecureBuffer();
   state_.login_password = security::SecureBuffer();
 }
 
@@ -1840,8 +1940,7 @@ bool CardLoginMountSessionCore::force_unmount_active() {
   // Forced release is the card-removal path, so every retained secret goes
   // with it. A deliberate unmount keeps them, which is what lets the user
   // mount the container again in the same session.
-  state_.hidden_container_password = security::SecureBuffer();
-  state_.login_password = security::SecureBuffer();
+  release_session_secrets();
   clear_operation_history();
   bool forced = false;
   for (const bool release_first : {true, false}) {

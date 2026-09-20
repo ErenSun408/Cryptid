@@ -139,6 +139,9 @@ struct CardLoginMountSessionState final {
   // value opens nothing else: not the card record, not a standard container,
   // and it cannot be typed at the password prompt.
   security::SecureBuffer hidden_container_password;
+  // The outer-volume password a survey derived, kept so the pages that follow
+  // it do not ask for the decoy password again. Released with the rest.
+  security::SecureBuffer decoy_outer_password;
   std::array<OperationEvent, ::usb_vault::application::kOperationHistoryCapacity>
       operation_events;
   std::size_t operation_start{};
@@ -184,6 +187,12 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] bool verify_decoy_maintenance(
       std::uint32_t id,
       const security::SecureBuffer& decoy_password_utf8);
+  [[nodiscard]] ::usb_vault::application::DecoyMaintenanceSurvey
+  survey_decoy_maintenance(
+      const security::SecureBuffer& decoy_password_utf8,
+      const ::usb_vault::application::SurveyProgress& progress,
+      const ::usb_vault::application::SurveyCancellation& cancelled);
+  [[nodiscard]] wchar_t open_surveyed_maintenance(std::uint32_t id);
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,
