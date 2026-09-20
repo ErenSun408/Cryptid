@@ -28,8 +28,10 @@
     check(order(home) === "1,2,3" && order(manager) === "1,2,3", "Shared container lists render");
     // --- the maintenance column -------------------------------------------
     const decoyNav = $("[data-section=decoy]");
-    check(decoyNav !== null && !decoyNav.hidden,
-      "The maintenance column is present under this login");
+    check(decoyNav !== null && decoyNav.hidden,
+      "The maintenance column is withheld from every install of this build alike");
+    // The column itself is finished and stays under test: only the way in is
+    // withheld, so the checks below drive it the way the navigation would.
     decoyNav.click();
     check($("#dashboard-section-decoy").classList.contains("active") &&
       !$("#decoy-verify").hidden && $("#decoy-progress").hidden && $("#decoy-results").hidden,
