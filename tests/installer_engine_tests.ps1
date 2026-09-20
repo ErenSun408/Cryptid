@@ -60,6 +60,12 @@ function Assert-Installed($Fixture) {
     Assert-Text "$($Fixture.Root)\app\nested\asset" 'new asset'
     if (Test-Path -LiteralPath "$($Fixture.Root)\app\.usb-vault-update") { throw 'Transaction not cleaned' }
     if ((Get-ItemProperty -LiteralPath $Fixture.Key).InstallLocation -ne "$($Fixture.Root)\app") { throw 'Registration mismatch' }
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($name in @('USB Vault', '卸载 USB Vault')) {
+        $shortcut = $shell.CreateShortcut("$($Fixture.Root)\menu\$name.lnk")
+        if ($shortcut.WorkingDirectory -ne "$($Fixture.Root)\app") { throw 'Shortcut points to temporary working directory' }
+        if ($shortcut.TargetPath -ne "$($Fixture.Root)\app\$name.exe" -or $shortcut.Arguments -ne '') { throw 'Shortcut target mismatch' }
+    }
 }
 try {
     $fixture = New-Fixture 'install-update-repair-uninstall'

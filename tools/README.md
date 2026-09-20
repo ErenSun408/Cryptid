@@ -14,7 +14,7 @@
 | `configure-preset.cmd` | 切换 UTF-8 代码页并运行 CMake 配置 |
 | `generate-p2-deployment.cmake` | 生成部署完整性信息，供应用构建使用 |
 | `package-p2-development.ps1` | 校验依赖、页面和版本信息，制作交付载荷 |
-| `build-windows-installer.ps1` | 校验载荷清单并构建 NSIS 安装器 |
+| `build-windows-installer.ps1` | 校验载荷清单并构建 NSIS 安装器，文件名固定为 `installer-yyyyMMdd-HHmmss.exe`（构建开始时的本机时间，24 小时制），摘要记录为同名 `.exe.build.txt` |
 
 ## 开发验证工具
 

@@ -52,12 +52,20 @@ Page custom DependencyPageCreate DependencyPageLeave
 
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\USB Vault.exe"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalledApplication
 !define MUI_FINISHPAGE_RUN_TEXT "打开 USB Vault"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+Function LaunchInstalledApplication
+  ; Cleanup leaves $OUTDIR at $TEMP. Match a direct application launch and
+  ; the installed shortcuts instead of inheriting the installer's workspace.
+  SetOutPath "$INSTDIR"
+  Exec '$\"$INSTDIR\USB Vault.exe$\"'
+FunctionEnd
 
 Var WebViewState
 Var VeraCryptState
@@ -128,7 +136,7 @@ Function .onInit
         ${ElseIf} $R6 == 0
           StrCpy $R5 "主程序已缺失。将根据原安装记录修复："
         ${Else}
-          StrCpy $R5 "检测到已有 USB Vault。将更新原位置："
+          StrCpy $R5 "检测到当前设备已安装 USB Vault。将更新原位置："
         ${EndIf}
         MessageBox MB_ICONQUESTION|MB_OKCANCEL "$R5$\r$\n$INSTDIR$\r$\n$\r$\n凭据、设置、索引和容器文件会保留。继续吗？" IDOK +2
         Abort

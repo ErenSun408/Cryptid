@@ -168,6 +168,9 @@ FunctionEnd
 ; the transaction and its committed marker so the same package can finish it.
 Function RegisterProduct
   ClearErrors
+  ; NSIS stores $OUTDIR as each shortcut's working directory. Extraction
+  ; leaves it in the transaction tree, which is removed before first launch.
+  SetOutPath "$INSTDIR"
   CreateDirectory "${ProductMenu}"
   CreateShortcut "${ProductMenu}\USB Vault.lnk" "$INSTDIR\USB Vault.exe"
   CreateShortcut "${ProductMenu}\卸载 USB Vault.lnk" "$INSTDIR\卸载 USB Vault.exe"
