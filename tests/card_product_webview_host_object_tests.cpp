@@ -2991,6 +2991,200 @@ void test_the_export_bridge_checks_its_shapes() {
           "a rejected export still reached the session");
 }
 
+// Everything the window would do about a shell drop, recorded instead.
+class RecordingDropSink final : public usb_vault::ui::IUiExternalDropTargetSink {
+ public:
+  bool set_target(
+      const std::uint32_t id,
+      const std::wstring_view relative_directory) noexcept override {
+    ++set_calls;
+    armed_id = id;
+    armed_directory.assign(relative_directory);
+    return accepts;
+  }
+  void clear_target() noexcept override {
+    ++clear_calls;
+    armed_id = 0;
+    armed_directory.clear();
+  }
+  bool request_cancel() noexcept override {
+    ++cancel_calls;
+    return running;
+  }
+  usb_vault::ui::ExternalDropStatus status() const noexcept override {
+    return reported;
+  }
+
+  int set_calls{};
+  int clear_calls{};
+  int cancel_calls{};
+  bool accepts{true};
+  bool running{true};
+  std::uint32_t armed_id{};
+  std::wstring armed_directory;
+  usb_vault::ui::ExternalDropStatus reported{};
+};
+
+[[nodiscard]] HRESULT invoke_set_drop_target(IDispatch& host,
+                                             const std::uint32_t id,
+                                             const std::wstring& directory,
+                                             UINT* const argument_error) {
+  // COM delivers the arguments in reverse order, as everywhere else here.
+  std::array<VARIANTARG, 2> values{};
+  values[1] = number_argument(id);
+  values[0] = text_argument(directory);
+  DISPPARAMS parameters{values.data(), nullptr, 2, 0};
+  const HRESULT result =
+      host.Invoke(member_id(host, L"setExternalDropTarget"), IID_NULL,
+                  LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr,
+                  nullptr, argument_error);
+  static_cast<void>(::VariantClear(&values[0]));
+  return result;
+}
+
+[[nodiscard]] HRESULT invoke_no_arguments(IDispatch& host,
+                                          const wchar_t* const name,
+                                          VARIANT* const result) {
+  DISPPARAMS parameters{};
+  return host.Invoke(member_id(host, name), IID_NULL, LOCALE_INVARIANT,
+                     DISPATCH_METHOD, &parameters, result, nullptr, nullptr);
+}
+
+void test_the_page_names_a_drop_destination_and_reads_only_numbers() {
+  Fixture fixture;
+  RecordingDropSink sink;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, &g_close_sink, &host, nullptr, &work, &sink)),
+          "drop host creation failed");
+
+  // Off the authenticated route the window cannot be armed at all, and the
+  // attempt disarms whatever the page had armed before.
+  fixture.entry.route = CardEntryRoute::login_required;
+  require(invoke_set_drop_target(*host.Get(), 4, L"photos", nullptr) ==
+                  E_ACCESSDENIED &&
+              sink.set_calls == 0 && sink.clear_calls == 1,
+          "an unauthenticated page armed the window for a drop");
+
+  fixture.authentication.establish(root_secret());
+  require(invoke_set_drop_target(*host.Get(), 4, L"photos/2011", nullptr) ==
+                  S_OK &&
+              sink.set_calls == 1 && sink.armed_id == 4 &&
+              sink.armed_directory == L"photos/2011",
+          "the destination did not reach the window as the page named it");
+
+  // A container identifier of zero names nothing, and neither half may arrive
+  // as the wrong kind of value.
+  UINT argument_error = 99;
+  require(invoke_set_drop_target(*host.Get(), 0, L"", &argument_error) ==
+                  DISP_E_TYPEMISMATCH,
+          "the window was armed for a container nothing answers to");
+  std::array<VARIANTARG, 2> swapped{};
+  swapped[1] = text_argument(L"4");
+  swapped[0] = text_argument(L"photos");
+  DISPPARAMS swapped_parameters{swapped.data(), nullptr, 2, 0};
+  require(host->Invoke(member_id(*host.Get(), L"setExternalDropTarget"),
+                       IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD,
+                       &swapped_parameters, nullptr, nullptr,
+                       nullptr) == DISP_E_TYPEMISMATCH,
+          "a textual container identifier was accepted");
+  static_cast<void>(::VariantClear(&swapped[0]));
+  static_cast<void>(::VariantClear(&swapped[1]));
+  require(invoke_with_number(*host.Get(), L"setExternalDropTarget", 4, nullptr,
+                             nullptr) == DISP_E_BADPARAMCOUNT,
+          "a half-named destination was accepted");
+  require(sink.set_calls == 1,
+          "a refused destination still reached the window");
+
+  require(invoke_no_arguments(*host.Get(), L"clearExternalDropTarget",
+                              nullptr) == S_OK &&
+              sink.clear_calls == 2,
+          "leaving maintenance did not disarm the window");
+
+  // What comes back is four numbers and nothing else: no name, no path.
+  sink.reported = {.state = 1, .total = 7, .completed = 3, .failed = 1};
+  VARIANT status{};
+  require(invoke_no_arguments(*host.Get(), L"getExternalDropStatus", &status) ==
+                  S_OK &&
+              status.vt == VT_BSTR && status.bstrVal != nullptr &&
+              std::wstring(status.bstrVal) == L"1,7,3,1",
+          "the drop status did not arrive as four packed numbers");
+  static_cast<void>(::VariantClear(&status));
+
+  VARIANT cancelled{};
+  require(invoke_no_arguments(*host.Get(), L"cancelExternalDrop", &cancelled) ==
+                  S_OK &&
+              cancelled.vt == VT_BOOL && cancelled.boolVal == VARIANT_TRUE &&
+              sink.cancel_calls == 1,
+          "the page could not call off a running drop");
+  sink.running = false;
+  static_cast<void>(::VariantClear(&cancelled));
+  require(invoke_no_arguments(*host.Get(), L"cancelExternalDrop", &cancelled) ==
+                  S_OK &&
+              cancelled.boolVal == VARIANT_FALSE,
+          "a drop that was not running reported itself cancelled");
+  static_cast<void>(::VariantClear(&cancelled));
+
+  // A window with no drop target of its own answers the same way every time.
+  ComPtr<IDispatch> bare = make_host(fixture.controller);
+  require(invoke_set_drop_target(*bare.Get(), 4, L"", nullptr) ==
+                  E_ACCESSDENIED,
+          "a window with no drop target claimed to be armed");
+  VARIANT bare_status{};
+  require(invoke_no_arguments(*bare.Get(), L"getExternalDropStatus",
+                              &bare_status) == E_ACCESSDENIED,
+          "a window with no drop target invented a status");
+}
+
+void test_a_running_drop_answers_only_about_itself() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  RecordingDropSink sink;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, &g_close_sink, &host, nullptr, &work, &sink)),
+          "drop host creation failed");
+
+  // A drop claims the session the way a volume operation does. While it has
+  // it, the page may read its progress and call it off, and nothing else.
+  work.volume_operation.store(true);
+  work.running.store(true);
+  sink.reported = {.state = 1, .total = 2, .completed = 0, .failed = 0};
+
+  VARIANT status{};
+  require(invoke_no_arguments(*host.Get(), L"getExternalDropStatus", &status) ==
+                  S_OK &&
+              status.vt == VT_BSTR &&
+              std::wstring(status.bstrVal) == L"1,2,0,0",
+          "a running drop would not report its own progress");
+  static_cast<void>(::VariantClear(&status));
+  VARIANT cancelled{};
+  require(invoke_no_arguments(*host.Get(), L"cancelExternalDrop", &cancelled) ==
+                  S_OK,
+          "a running drop could not be called off");
+  static_cast<void>(::VariantClear(&cancelled));
+
+  require(invoke_no_arguments(*host.Get(), L"getContainerCount", nullptr) ==
+                  E_PENDING,
+          "a running drop let the page reach the session");
+  require(invoke_set_drop_target(*host.Get(), 5, L"", nullptr) == E_PENDING,
+          "a running drop let the page move its own destination");
+
+  // The same two members answer while a creation owns the session instead, so
+  // a page polling a drop never has to know what else is running.
+  work.running.store(false);
+  work.volume_operation.store(false);
+  work.running.store(true);
+  VARIANT during_creation{};
+  require(invoke_no_arguments(*host.Get(), L"getExternalDropStatus",
+                              &during_creation) == S_OK,
+          "the drop status was hidden behind an unrelated worker");
+  static_cast<void>(::VariantClear(&during_creation));
+  work.running.store(false);
+}
+
 void test_configuration_transition() {
   Fixture fixture;
   usb_vault::ui::CreationWorkState work;
@@ -3064,6 +3258,8 @@ int main() {
     test_the_bridge_carries_each_file_manager_action();
     test_the_bridge_carries_both_exports();
     test_the_export_bridge_checks_its_shapes();
+    test_the_page_names_a_drop_destination_and_reads_only_numbers();
+    test_a_running_drop_answers_only_about_itself();
     std::cout << "card_product_webview_host_object_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

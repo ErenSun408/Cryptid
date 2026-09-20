@@ -379,6 +379,21 @@ usb_vault_configure_target(card_product_webview_host_object_tests)
 add_test(NAME card_product_webview_host_object_tests
   COMMAND card_product_webview_host_object_tests)
 
+add_executable(external_drop_target_tests
+  external_drop_target_tests.cpp
+)
+
+target_link_libraries(external_drop_target_tests PRIVATE
+  usb_vault_core
+  Ole32
+  Shell32
+)
+
+usb_vault_configure_target(external_drop_target_tests)
+
+add_test(NAME external_drop_target_tests
+  COMMAND external_drop_target_tests)
+
 add_executable(card_configuration_webview_host_object_tests
   card_configuration_webview_host_object_tests.cpp
 )

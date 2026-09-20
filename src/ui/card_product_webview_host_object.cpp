@@ -132,6 +132,10 @@ constexpr DISPID kBeginOpenDecoyMaintenanceId = 76;
 constexpr DISPID kBeginMeasureDecoySpaceId = 77;
 constexpr DISPID kDecoySpaceId = 78;
 constexpr DISPID kBeginEndDecoyMaintenanceId = 79;
+constexpr DISPID kSetExternalDropTargetId = 80;
+constexpr DISPID kClearExternalDropTargetId = 81;
+constexpr DISPID kCancelExternalDropId = 82;
+constexpr DISPID kExternalDropStatusId = 83;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
 // its own bridge with no card, volume or container member on it.
@@ -188,6 +192,10 @@ constexpr wchar_t kMoveContainerEntryName[] = L"moveContainerEntry";
 constexpr wchar_t kCopyContainerEntryName[] = L"copyContainerEntry";
 constexpr wchar_t kExportContainerEntryName[] = L"exportContainerEntry";
 constexpr wchar_t kExportContainerFileName[] = L"exportContainerFile";
+constexpr wchar_t kSetExternalDropTargetName[] = L"setExternalDropTarget";
+constexpr wchar_t kClearExternalDropTargetName[] = L"clearExternalDropTarget";
+constexpr wchar_t kCancelExternalDropName[] = L"cancelExternalDrop";
+constexpr wchar_t kExternalDropStatusName[] = L"getExternalDropStatus";
 
 constexpr wchar_t kChooseContainerDirectoryName[] =
     L"chooseContainerDirectory";
@@ -338,10 +346,12 @@ class CardProductWebViewHostObject final : public IDispatch {
       CardProductUiSessionController& controller,
       IUiCloseRequestSink* const close_sink,
       IUiWindowSizeSink* const window_size_sink,
-      CreationWorkState* const creation_work) noexcept
+      CreationWorkState* const creation_work,
+      IUiExternalDropTargetSink* const external_drop_sink) noexcept
       : controller_(controller), close_sink_(close_sink),
         window_size_sink_(window_size_sink),
-        creation_work_(creation_work ? creation_work : &local_creation_work_) {}
+        creation_work_(creation_work ? creation_work : &local_creation_work_),
+        external_drop_sink_(external_drop_sink) {}
 
   ~CardProductWebViewHostObject() {
     if (creation_thread_.joinable()) creation_thread_.join();
@@ -537,6 +547,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginMeasureDecoySpace")) { ids[0] = kBeginMeasureDecoySpaceId; return S_OK; }
     if (matches(names[0], L"getDecoyMaintenanceSpace")) { ids[0] = kDecoySpaceId; return S_OK; }
     if (matches(names[0], L"beginEndDecoyMaintenance")) { ids[0] = kBeginEndDecoyMaintenanceId; return S_OK; }
+    if (matches(names[0], kSetExternalDropTargetName)) { ids[0] = kSetExternalDropTargetId; return S_OK; }
+    if (matches(names[0], kClearExternalDropTargetName)) { ids[0] = kClearExternalDropTargetId; return S_OK; }
+    if (matches(names[0], kCancelExternalDropName)) { ids[0] = kCancelExternalDropId; return S_OK; }
+    if (matches(names[0], kExternalDropStatusName)) { ids[0] = kExternalDropStatusId; return S_OK; }
     if (matches(names[0], L"beginMountBatch")) { ids[0] = kBeginMountBatchId; return S_OK; }
     if (matches(names[0], L"beginUnmountBatch")) { ids[0] = kBeginUnmountBatchId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountBatch")) { ids[0] = kBeginForceUnmountBatchId; return S_OK; }
@@ -605,12 +619,18 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
     // Workers exclusively own the session. Only their atomic progress is
     // readable; cancellation belongs to creation, never volume operations.
-    if (creation_work_->running.load() &&
+    // A drop that arrived on the window owns the session exactly as a volume
+    // operation does, so its progress and its cancel are readable throughout;
+    // they carry no session state of their own and are answered from atomics.
+    const bool external_drop_query =
+        member == kExternalDropStatusId || member == kCancelExternalDropId;
+    if (creation_work_->running.load() && !external_drop_query &&
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
                 : survey_mode_ ? !is_survey_query(member)
                                : member != kVolumeOperationStatusId)
-             : member != kCreationProgressId && member != kCancelCreationId)) {
+             : member != kCreationProgressId &&
+                   member != kCancelCreationId)) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
@@ -624,6 +644,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
       case kBeginOpenDecoyMaintenanceId: // Opening one is what a survey is for.
       case kDecoySpaceId:
+      // Arming the window is not a session mutation: it says where a drop
+      // would land and touches nothing a retry, a batch or a measurement is
+      // holding, and the maintenance page re-arms on every directory change.
+      case kSetExternalDropTargetId: case kClearExternalDropTargetId:
+      case kExternalDropStatusId: case kCancelExternalDropId:
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
@@ -781,6 +806,54 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
         if (result) { ::VariantInit(result); result->vt = VT_UI4; result->ulVal = window_size_sink_ ? window_size_sink_->window_size() : 1U; }
         return S_OK;
+      }
+      // Naming the destination is all the page does about a shell drop. It
+      // says which maintenance container and which directory it is showing;
+      // what is dropped, and where it came from, it is never told.
+      case kSetExternalDropTargetId: {
+        if (!parameters || parameters->cArgs != 2 || parameters->cNamedArgs != 0 ||
+            !parameters->rgvarg) return DISP_E_BADPARAMCOUNT;
+        const DispatchTextWiper text_wiper(parameters);
+        std::uint32_t id = 0;
+        std::wstring_view relative_directory;
+        if (!exact_uint32(parameters->rgvarg[1], id) || id == 0 ||
+            !exact_wstring(parameters->rgvarg[0], relative_directory)) {
+          if (argument_error) *argument_error = 0;
+          return DISP_E_TYPEMISMATCH;
+        }
+        // A page that is not on the authenticated route cannot arm the window
+        // to write into a volume, whatever it has cached about one.
+        if (creation_work_->interrupted.load() ||
+            controller_.state() != CardProductUiState::authenticated) {
+          if (external_drop_sink_) external_drop_sink_->clear_target();
+          return E_ACCESSDENIED;
+        }
+        return external_drop_sink_ &&
+                       external_drop_sink_->set_target(id, relative_directory)
+                   ? S_OK : E_ACCESSDENIED;
+      }
+      case kClearExternalDropTargetId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (external_drop_sink_) external_drop_sink_->clear_target();
+        return S_OK;
+      case kCancelExternalDropId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        return complete_selection(
+            external_drop_sink_ && external_drop_sink_->request_cancel(), result);
+      case kExternalDropStatusId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        ::VariantInit(result);
+        if (!external_drop_sink_) return E_ACCESSDENIED;
+        try {
+          const ExternalDropStatus status = external_drop_sink_->status();
+          const std::wstring packed = std::to_wstring(status.state) + L"," +
+              std::to_wstring(status.total) + L"," +
+              std::to_wstring(status.completed) + L"," +
+              std::to_wstring(status.failed);
+          return complete_string(packed.c_str(),
+                                 static_cast<UINT>(packed.size()), result);
+        } catch (...) { return E_FAIL; }
       }
       case kGetSessionStateId:
         return invoke_state(parameters, result);
@@ -2177,6 +2250,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   IUiCloseRequestSink* close_sink_{};
   bool configuration_pending_{};
   IUiWindowSizeSink* window_size_sink_{};
+  IUiExternalDropTargetSink* external_drop_sink_{};
   CreationWorkState local_creation_work_;
   CreationWorkState* creation_work_;
   std::thread creation_thread_;
@@ -2221,12 +2295,13 @@ HRESULT create_card_product_webview_host_object(
     IUiCloseRequestSink* const close_sink,
     IDispatch** const result,
     IUiWindowSizeSink* const window_size_sink,
-    CreationWorkState* const creation_work) noexcept {
+    CreationWorkState* const creation_work,
+    IUiExternalDropTargetSink* const external_drop_sink) noexcept {
   if (result == nullptr) return E_POINTER;
   *result = nullptr;
   auto* const object =
       new (std::nothrow) CardProductWebViewHostObject(controller, close_sink,
-                                                   window_size_sink, creation_work);
+          window_size_sink, creation_work, external_drop_sink);
   if (object == nullptr) return E_OUTOFMEMORY;
   *result = object;
   return S_OK;

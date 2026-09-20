@@ -22,6 +22,7 @@
 #include "usb_vault/ui/card_configuration_webview_host_object.h"
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 #include "usb_vault/ui/card_product_webview_host_object.h"
+#include "usb_vault/ui/external_drop_target.h"
 #include "usb_vault/application/container_layout_v1.h"
 #include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/webview_session_event.h"
@@ -76,6 +77,10 @@ class DeploymentFailure final : public std::runtime_error {
   DeploymentFailure() : std::runtime_error("invalid development deployment") {}
 };
 usb_vault::ui::CreationWorkState g_creation_work;
+// Receives shell drags onto this window. It exists for the whole life of
+// the window but stays disarmed until the maintenance page names a
+// destination, so every other surface answers a drag with a refusal.
+usb_vault::ui::ExternalDropTarget* g_drop_target{};
 bool g_deferred_removal = false;
 bool g_deferred_arrival = false;
 
@@ -477,7 +482,26 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   g_card_device_notifications = std::move(notifications);
 }
 
+// Looked up when the copy starts rather than captured: the product session
+// is torn down and rebuilt whenever the surface changes, and a drop that
+// outlived one would otherwise be writing through a released controller.
+void import_dropped_entry(const std::uint32_t id,
+                          const std::wstring_view relative_directory,
+                          const std::wstring_view absolute_source,
+                          const std::function<bool()>& cancelled) {
+  if (g_ui_session == nullptr) {
+    throw std::runtime_error("no product session is open for a shell drop");
+  }
+  g_ui_session->import_external_entry(id, relative_directory, absolute_source,
+                                      cancelled);
+}
+
+void disarm_external_drops() noexcept {
+  if (g_drop_target != nullptr) g_drop_target->clear_target();
+}
+
 void clear_application_session() noexcept {
+  disarm_external_drops();
   g_card_device_notifications.reset();
   g_card_lifecycle_controller.reset();
   g_card_presence_controller.reset();
@@ -545,7 +569,7 @@ void notify_webview_session_changed() noexcept {
             g_configuration_host, &host_object)
       : usb_vault::ui::create_card_product_webview_host_object(
             *g_ui_session, &g_close_sink, &host_object, &g_window_size_sink,
-            &g_creation_work);
+            &g_creation_work, g_drop_target);
   if (FAILED(result)) return result;
   VARIANT host_value{};
   ::VariantInit(&host_value);
@@ -562,6 +586,25 @@ void notify_webview_session_changed() noexcept {
 // Retires the running surface: the page can no longer call anything, the
 // bridge this process holds is dropped, and the document that owns the last
 // reference to it is replaced by the caller's navigation.
+// Watched from the existing card timer rather than pushed from the worker:
+// the notice has to reach the page on the UI thread anyway, and the timer is
+// already there. It repeats once a second while a drop runs so a notice the
+// page missed cannot leave it unaware that one is going.
+void notify_webview_external_drop(const unsigned int state) noexcept {
+  static unsigned int last_state = 0;
+  static unsigned int ticks = 0;
+  const bool repeat = state == 1 && ++ticks >= 10;
+  if (state == last_state && !repeat) return;
+  last_state = state;
+  ticks = 0;
+  if (!g_webview) return;
+  static_cast<void>(g_webview->ExecuteScript(
+      usb_vault::ui::kWebviewExternalDropChangedScript,
+      Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+          [](HRESULT, LPCWSTR) -> HRESULT { return S_OK; })
+          .Get()));
+}
+
 void detach_host_object() noexcept {
   if (g_webview) {
     static_cast<void>(g_webview->RemoveHostObjectFromScript(kHostObjectName));
@@ -652,6 +695,25 @@ void initialize_webview(const HWND window) {
                         return current;
                       }
 
+                      // 🔴 The page must never receive a shell drop. What a
+                      // dragged file is, and whether it may be written into a
+                      // volume, is decided in the native window, which is the
+                      // only place that has both the file and the session;
+                      // handing the document the drop would put a path from
+                      // outside onto the page boundary that exists to keep
+                      // paths off it. Refusing here is also what lets the drag
+                      // fall through to this window's own drop target.
+                      ComPtr<ICoreWebView2Controller4> drop_controller;
+                      current = g_controller.As(&drop_controller);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+                      current =
+                          drop_controller->put_AllowExternalDrop(FALSE);
+                      if (FAILED(current)) {
+                        return current;
+                      }
+
                       current = attach_host_object();
                       if (FAILED(current)) {
                         return current;
@@ -697,6 +759,7 @@ void initialize_webview(const HWND window) {
 void show_configuration(const HWND window) noexcept {
   g_view_switch_pending = false;
   static_cast<void>(::KillTimer(window, 1));
+  disarm_external_drops();
   detach_host_object();
   // The retiring product bridge may outlive this call inside the old
   // document, but it stopped serving when the swap was accepted, so it can no
@@ -714,6 +777,7 @@ void show_configuration(const HWND window) noexcept {
 
 void show_session(const HWND window) noexcept {
   g_view_switch_pending = false;
+  disarm_external_drops();
   detach_host_object();
   g_view = StartupView::session;
   try {
@@ -750,6 +814,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
             wparam, lparam, kDevelopmentCardIdentity);
         if (arrival.has_value()) {
           g_creation_work.card_epoch.fetch_add(1);
+          disarm_external_drops();
           if (!*arrival) { g_deferred_removal = true; g_creation_work.interrupted.store(true); }
           g_deferred_arrival = *arrival;
         }
@@ -765,6 +830,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         if (transition.entry_changed ||
             transition.presence != Transition::no_change) {
           g_creation_work.card_epoch.fetch_add(1);
+          // The page re-arms from the maintenance screen it rebuilds; until
+          // then a drag onto this window has nowhere it is allowed to land.
+          disarm_external_drops();
           notify_webview_session_changed();
         }
         if (transition.presence ==
@@ -782,6 +850,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_TIMER:
       if (g_view_switch_pending) return 0;
+      if (wparam == 1 && g_drop_target != nullptr) {
+        notify_webview_external_drop(g_drop_target->status().state);
+      }
       if (wparam == 1 && !g_creation_work.running.load() && g_card_lifecycle_controller) {
         const bool changed = g_deferred_removal || g_deferred_arrival;
         if (g_deferred_removal) {
@@ -856,6 +927,14 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     case WM_DESTROY:
       ++g_window_generation;
       ::KillTimer(window, 1);
+      // Before the session it is writing into goes: revoking stops new drags,
+      // and closing waits for the copy that is already running.
+      if (g_drop_target != nullptr) {
+        static_cast<void>(::RevokeDragDrop(window));
+        g_drop_target->close();
+        static_cast<void>(g_drop_target->Release());
+        g_drop_target = nullptr;
+      }
       if (g_webview) g_webview->RemoveHostObjectFromScript(kHostObjectName);
       if (g_controller) g_controller->Close();
       g_card_device_notifications.reset();
@@ -873,7 +952,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
                     _In_ LPWSTR, _In_ int show_command) {
-  const HRESULT com_result = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  // OLE rather than COM alone: the window registers a drop target, and
+  // `RegisterDragDrop` is refused on an apartment that only initialized COM.
+  const HRESULT com_result = ::OleInitialize(nullptr);
   if (FAILED(com_result)) {
     show_failure(L"COM 初始化失败。");
     return 1;
@@ -887,7 +968,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     const auto startup = configuration::inspect_startup();
     if (!startup.dependencies_ready) {
       show_failure((L"无法启动 USB Vault。" + startup.detail).c_str());
-      ::CoUninitialize();
+      ::OleUninitialize();
       return 1;
     }
     if (!startup.credentials_ready) g_view = StartupView::configuration;
@@ -900,7 +981,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   window_class.lpszClassName = kWindowClass;
   if (::RegisterClassExW(&window_class) == 0) {
     show_failure(L"窗口类注册失败。");
-    ::CoUninitialize();
+    ::OleUninitialize();
     return 1;
   }
 
@@ -917,11 +998,25 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   g_main_window = window;
   if (window == nullptr) {
     show_failure(L"窗口创建失败。");
-    ::CoUninitialize();
+    ::OleUninitialize();
     return 1;
   }
 
   g_window_size_sink.restore();
+
+  // Registered before the page exists and disarmed until the maintenance
+  // screen names a destination, so the window answers every other drag with a
+  // refusal rather than letting one reach the document.
+  g_drop_target = new (std::nothrow) usb_vault::ui::ExternalDropTarget(
+      import_dropped_entry, g_creation_work);
+  if (g_drop_target == nullptr ||
+      FAILED(::RegisterDragDrop(window, g_drop_target))) {
+    if (g_drop_target != nullptr) {
+      static_cast<void>(g_drop_target->Release());
+      g_drop_target = nullptr;
+    }
+    show_failure(L"无法接管窗口的拖放，拖入文件将不可用。");
+  }
 
   try {
     if (packaged_deployment()) pin_user_interface(executable_directory());
@@ -939,13 +1034,13 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     show_failure(L"测试包组件缺失、已损坏或所在位置不受支持。请重新运行 USB Vault 安装程序，或将完整测试包解压到本机磁盘后重新启动，不要仅复制主 EXE。");
     ::DestroyWindow(window);
     clear_application_session();
-    ::CoUninitialize();
+    ::OleUninitialize();
     return 1;
   } catch (...) {
     show_failure(L"本地界面初始化失败。");
     ::DestroyWindow(window);
     clear_application_session();
-    ::CoUninitialize();
+    ::OleUninitialize();
     return 1;
   }
 
@@ -962,6 +1057,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   clear_application_session();
   g_ui_artifacts.clear();
   g_main_window = nullptr;
-  ::CoUninitialize();
+  ::OleUninitialize();
   return 0;
 }

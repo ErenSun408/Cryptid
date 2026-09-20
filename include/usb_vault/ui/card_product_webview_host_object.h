@@ -5,6 +5,7 @@
 #include <oaidl.h>
 #include <atomic>
 #include <cstdint>
+#include <string_view>
 
 namespace usb_vault::ui {
 
@@ -45,6 +46,33 @@ class IUiWindowSizeSink {
   // Fixed presentation presets only: standard, spacious, maximized, compact.
   virtual bool set_window_size(unsigned int preset) noexcept = 0;
   virtual unsigned int window_size() const noexcept { return 1; }
+};
+
+// How a run of shell drops is going. `state` is idle, running, done, failed
+// or cancelled, in that order; the three counts are entries, not bytes, and
+// `completed + failed` never exceeds `total`. Nothing here names a file: the
+// page learns what arrived by listing the directory again.
+struct ExternalDropStatus final {
+  unsigned int state{};
+  unsigned int total{};
+  unsigned int completed{};
+  unsigned int failed{};
+};
+
+// The verified page may name only the maintenance destination it is showing.
+// Shell source paths stay in the native host and never cross this bridge, in
+// either direction: what comes back is four numbers.
+class IUiExternalDropTargetSink {
+ public:
+  virtual ~IUiExternalDropTargetSink() noexcept = default;
+  virtual bool set_target(std::uint32_t id,
+                          std::wstring_view relative_directory) noexcept = 0;
+  virtual void clear_target() noexcept = 0;
+  virtual bool request_cancel() noexcept = 0;
+  [[nodiscard]] virtual ExternalDropStatus status() const noexcept = 0;
+
+ protected:
+  IUiExternalDropTargetSink() noexcept = default;
 };
 
 // Asks the host window to close. A card returned to the provisioning marker
@@ -97,6 +125,7 @@ HRESULT create_card_product_webview_host_object(
     IUiCloseRequestSink* close_sink,
     IDispatch** result,
     IUiWindowSizeSink* window_size_sink = nullptr,
-    CreationWorkState* creation_work = nullptr) noexcept;
+    CreationWorkState* creation_work = nullptr,
+    IUiExternalDropTargetSink* external_drop_sink = nullptr) noexcept;
 
 }  // namespace usb_vault::ui
