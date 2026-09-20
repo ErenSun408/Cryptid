@@ -64,6 +64,14 @@ struct DirectoryUiListing final {
   bool truncated{};
 };
 
+// What one decoy password found, projected for the page: identifiers only.
+// Which container holds what is never part of it.
+struct DecoyMaintenanceUiSurvey final {
+  std::vector<std::uint32_t> maintainable;
+  std::uint32_t unreachable{};
+  bool cancelled{};
+};
+
 enum class OperationUiKind : std::uint8_t {
   session_opened = 0,
   container_created = 1,
@@ -148,6 +156,18 @@ class CardProductUiSessionController final {
   // Mounts every adopted container that is still closed, in one run. The page
   // names no container: which ones are missing is the session's own fact.
   void mount_all();
+
+  // Tries one decoy password against every container and reports which ones
+  // it can open for maintenance. The buffer is wiped on every path, and the
+  // password itself is kept by the session rather than by this page.
+  [[nodiscard]] DecoyMaintenanceUiSurvey survey_decoy_maintenance(
+      std::span<std::byte> mutable_password_utf8,
+      const application::SurveyProgress& progress = {},
+      const application::SurveyCancellation& cancelled = {});
+
+  // Opens one container the survey found and returns the drive letter its
+  // outer volume came up on. Nothing is asked of the user a second time.
+  [[nodiscard]] wchar_t open_decoy_maintenance(std::uint32_t id);
 
   void unmount_container(std::uint32_t id);
   void force_unmount_container(std::uint32_t id);

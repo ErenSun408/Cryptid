@@ -21,6 +21,7 @@
 namespace {
 
 using usb_vault::application::CardAuthenticationSession;
+using usb_vault::application::DecoyMaintenanceSurvey;
 using usb_vault::application::CardEntryContextController;
 using usb_vault::application::CardEntryRoute;
 using usb_vault::application::ContainerAStatus;
@@ -116,6 +117,26 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
                             decoy_password_utf8.bytes().end());
     if (reject_create_b) throw std::runtime_error("container B failed");
     return adopt(path, outer_size_bytes);
+  }
+
+  DecoyMaintenanceSurvey survey_decoy_maintenance(
+      const SecureBuffer& decoy_password_utf8,
+      const usb_vault::application::SurveyProgress& progress,
+      const usb_vault::application::SurveyCancellation& cancelled) override {
+    ++survey_calls;
+    survey_password.assign(decoy_password_utf8.bytes().begin(),
+                           decoy_password_utf8.bytes().end());
+    if (reject_survey) throw std::runtime_error("survey failed");
+    if (progress) progress(1, 1);
+    if (cancelled && cancelled()) return {.cancelled = true};
+    return {.maintainable = survey_result, .unreachable = survey_unreachable};
+  }
+
+  wchar_t open_surveyed_maintenance(const std::uint32_t id) override {
+    ++open_maintenance_calls;
+    opened_maintenance_id = id;
+    if (reject_open_maintenance) throw std::runtime_error("refused");
+    return L'Q';
   }
 
   std::uint32_t mount_container(const std::wstring_view path) override {
@@ -481,6 +502,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
 
   std::vector<std::byte> b_decoy_password;
+  unsigned int survey_calls{};
+  unsigned int open_maintenance_calls{};
+  std::uint32_t opened_maintenance_id{};
+  std::vector<std::byte> survey_password;
+  std::vector<std::uint32_t> survey_result;
+  std::uint32_t survey_unreachable{};
+  bool reject_survey{};
+  bool reject_open_maintenance{};
   std::vector<std::byte> session_password{bytes("login-password")};
   int session_password_calls{};
   int create_b_calls{};
@@ -1139,6 +1168,82 @@ void test_dropping_a_container_is_refused_off_the_authenticated_route() {
           "a wrong-route drop still reached the session");
 }
 
+void test_a_survey_passes_the_password_through_and_wipes_it() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.survey_result = {4, 9};
+  fixture.volume.survey_unreachable = 2;
+  auto password = bytes("decoy-password-value");
+
+  const usb_vault::ui::DecoyMaintenanceUiSurvey survey =
+      fixture.controller.survey_decoy_maintenance(password);
+
+  require(fixture.volume.survey_calls == 1, "the survey did not run once");
+  require(fixture.volume.survey_password.size() == 20,
+          "the survey did not receive the password the page supplied");
+  require(survey.maintainable.size() == 2 && survey.maintainable[0] == 4 &&
+              survey.maintainable[1] == 9 && survey.unreachable == 2 &&
+              !survey.cancelled,
+          "the survey was not projected as the session reported it");
+  for (const std::byte value : password) {
+    require(value == std::byte{}, "the survey left the page's buffer intact");
+  }
+}
+
+void test_a_survey_wipes_the_password_when_it_fails() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.reject_survey = true;
+  auto password = bytes("decoy-password-value");
+  bool threw = false;
+  try {
+    static_cast<void>(fixture.controller.survey_decoy_maintenance(password));
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  require(threw, "a failed survey was reported as a success");
+  for (const std::byte value : password) {
+    require(value == std::byte{}, "a failed survey left the buffer intact");
+  }
+}
+
+void test_maintenance_is_refused_outside_an_authenticated_session() {
+  Fixture fixture;
+  auto password = bytes("decoy-password-value");
+  bool refused = false;
+  try {
+    static_cast<void>(fixture.controller.survey_decoy_maintenance(password));
+  } catch (const std::system_error& error) {
+    refused = error.code() ==
+              usb_vault::card::make_error_code(
+                  usb_vault::card::CardError::invalid_operation);
+  }
+  require(refused, "a survey ran without an authenticated session");
+  require(fixture.volume.survey_calls == 0, "the session was reached anyway");
+  for (const std::byte value : password) {
+    require(value == std::byte{}, "a refused survey left the buffer intact");
+  }
+
+  refused = false;
+  try {
+    static_cast<void>(fixture.controller.open_decoy_maintenance(1));
+  } catch (const std::system_error& error) {
+    refused = error.code() ==
+              usb_vault::card::make_error_code(
+                  usb_vault::card::CardError::invalid_operation);
+  }
+  require(refused && fixture.volume.open_maintenance_calls == 0,
+          "maintenance opened without an authenticated session");
+}
+
+void test_opening_maintenance_names_only_the_container() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  const wchar_t drive_letter = fixture.controller.open_decoy_maintenance(7);
+  require(drive_letter == L'Q' && fixture.volume.opened_maintenance_id == 7,
+          "the page did not reach the container it named");
+}
+
 void test_container_b_commits_the_card_before_the_volume() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -1719,6 +1824,10 @@ int main() {
     test_browsing_for_a_directory_only_reports_the_choice();
     test_adopted_container_remounts_without_reselecting_its_file();
     test_container_b_commits_the_card_before_the_volume();
+    test_a_survey_passes_the_password_through_and_wipes_it();
+    test_a_survey_wipes_the_password_when_it_fails();
+    test_maintenance_is_refused_outside_an_authenticated_session();
+    test_opening_maintenance_names_only_the_container();
     test_container_b_rejects_unusable_requests();
     test_capacity_rounds_the_attached_volume_to_whole_mib();
     test_card_reset_releases_the_session_and_refuses_while_mounted();

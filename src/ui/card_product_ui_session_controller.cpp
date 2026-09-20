@@ -175,6 +175,39 @@ void CardProductUiSessionController::submit_login(
       volume_session_, consume_password_utf8(mutable_utf8));
 }
 
+DecoyMaintenanceUiSurvey CardProductUiSessionController::survey_decoy_maintenance(
+    const std::span<std::byte> mutable_password_utf8,
+    const application::SurveyProgress& progress,
+    const application::SurveyCancellation& cancelled) {
+  MutableInputWiper input_wiper(mutable_password_utf8);
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "decoy maintenance is not available in the current UI state");
+  }
+  security::SecureBuffer password =
+      consume_password_utf8(mutable_password_utf8);
+  try {
+    const application::DecoyMaintenanceSurvey survey =
+        volume_session_.survey_decoy_maintenance(password, progress, cancelled);
+    password.clear();
+    return {.maintainable = survey.maintainable,
+            .unreachable = survey.unreachable,
+            .cancelled = survey.cancelled};
+  } catch (...) {
+    password.clear();
+    throw;
+  }
+}
+
+wchar_t CardProductUiSessionController::open_decoy_maintenance(
+    const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "decoy maintenance is not available in the current UI state");
+  }
+  return volume_session_.open_surveyed_maintenance(id);
+}
+
 void CardProductUiSessionController::submit_initialization(
     const std::span<std::byte> mutable_password_utf8,
     const std::span<std::byte> mutable_confirmation_utf8) {

@@ -1984,4 +1984,12 @@
 - 检查与实现：新增 `usb_vault/volume/volume_space.h`，两件事分开——`volume_space()` 走 `GetDiskFreeSpaceExW` 取总量与本调用方可写空间，不需要提权，可随时刷新；`scan_volume_tail_space()` 是从 `creator_helper_engine.cpp` 原样抽出的簇位图扫描，改抛通用异常，建卷路径的包装层仍映射为 `bitmap_scan_failed`，对外行为不变。提权通道复用既有的建卷 helper：协议新增 `Operation::scan_tail_space`，`Response` 增加 `value` 字段承载测得的字节数，协议版本 1→2。度量请求不带任何口令和尺寸，两侧都按操作分别校验；helper 侧还要求路径恰好是 `X:\` 形式的卷根。扫描不加载 VeraCrypt 格式化 DLL、不碰任何文件，测完即退，不常驻。
 - 验证：`creator_protocol_tests` 通过（新增 3 组：度量请求不得带口令或尺寸、无口令往返、测得的数字只随成功结果传输且进度报文不得携带）；新建 `volume_space_tests` 通过（真实卷的总量与可写空间、大小写盘符等价、非盘符一律拒绝、不存在的盘符报系统错误而非零值——用 `GetLogicalDrives` 挑选未占用盘符，不写死）。重建 `usb_vault_volume_creator` 与 `usb_vault_core` 通过。真实外层卷上的扫描数值准确性与提权流程仍归第 9 片实机。
 - 安全与风险：新增的提权操作不接收任何秘密，最坏情况只能让一个已经通过 UAC 的调用方读到自己指定卷的尾部空闲量；管道仍是一次性、带 nonce、DACL 只列 SYSTEM 与令牌用户。`valid_response` 拒绝"带着数字的失败"和"带着数字的进度"，恶意 helper 无法借这个字段夹带。协议版本已升，旧 helper 配新应用会在报文校验处失败并报协议错误，属失败关闭；打包脚本本就同时构建两者，需保持同版本分发。
-- 提交：待定（`[P3.25]measure what an outer volume can still take`）。哈希由下一个切片顺延补上；未推送。
+- 提交：`504e479 [P3.25]measure what an outer volume can still take`。未推送。
+
+### 2026-09-19 — P3.25 第五片 a：控制器投影
+
+- 范围与审计：切片表第 5 片（桥与页面骨架）体量偏大，按 P2.15、P3.6 的先例拆为 a 控制器投影、b 原生桥、c 页面三段，先做 a。复核控制器既有的口令入口写法（`MutableInputWiper` + `consume_password_utf8`）与路由校验。
+- 检查与实现：控制器新增 `survey_decoy_maintenance` 与 `open_decoy_maintenance`。诱饵口令以可变缓冲区进入，成功、失败、拒绝三条路径都抹零，口令本身留在会话而不是页面。向页面投影的是 `DecoyMaintenanceUiSurvey`：可维护容器的标识符、未能判定的数量、是否被中止；容器路径、卷类型、档位一律不过这层边界。两个入口都要求已认证状态，否则按既有口径抛 `CardError::invalid_operation`。
+- 验证：`card_product_ui_session_controller_tests` 通过，新增 4 组（口令原样传到会话并在成功后抹零、失败路径同样抹零、未认证时不触达会话且缓冲区抹零、打开维护只传标识符）。首轮用 `std::logic_error` 断言拒绝类型失败，实际是带 `CardError::invalid_operation` 的 `std::system_error`，已按真实类型改断言。
+- 安全与风险：本片不新增持久化、不新增线程，页面仍拿不到路径与卷类型。b 段（原生桥）要把遍历放到工作线程并复用既有的卡纪元／中断机制，c 段才是导航列与页面。
+- 提交：待定（`[P3.25]project the decoy survey onto the page boundary`）。哈希由下一个切片顺延补上；未推送。
