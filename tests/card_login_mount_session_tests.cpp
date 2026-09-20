@@ -31,6 +31,7 @@ using usb_vault::application::LoginMountPolicy;
 using usb_vault::application::detail::SessionContainer;
 using usb_vault::application::ContainerCreationCleanupError;
 using usb_vault::application::DecoyMaintenanceRefused;
+using usb_vault::application::DecoyMaintenanceSpace;
 using usb_vault::application::DecoyMaintenanceSurvey;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::MountSessionResult;
@@ -314,6 +315,24 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (entry == attached_volume_sizes.end()) return std::nullopt;
     return entry->second;
   }
+
+  [[nodiscard]] usb_vault::volume::VolumeSpace volume_space(
+      const wchar_t drive_letter) override {
+    events.emplace_back("space");
+    space_drive = drive_letter;
+    return {.total_bytes = reported_total, .free_bytes = reported_free};
+  }
+
+  [[nodiscard]] std::uint64_t measure_tail_space(
+      const wchar_t drive_letter) override {
+    events.emplace_back("measure");
+    ++measure_calls;
+    measured_drive = drive_letter;
+    if (fail_measure) throw std::runtime_error("measurement refused");
+    return reported_tail;
+  }
+
+  void end_measurements() noexcept override { ++end_measure_calls; }
 
   [[nodiscard]] std::optional<usb_vault::volume::VolumeType>
   mounted_volume_type(const wchar_t drive_letter) override {
@@ -618,6 +637,14 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       usb_vault::volume::VolumeType::outer};
   std::vector<std::byte> last_protection_password;
   std::map<wchar_t, usb_vault::volume::VolumeType> attached_volume_types;
+  std::uint64_t reported_total{32ULL * 1024ULL * 1024ULL * 1024ULL};
+  std::uint64_t reported_free{9ULL * 1024ULL * 1024ULL * 1024ULL};
+  std::uint64_t reported_tail{5ULL * 1024ULL * 1024ULL * 1024ULL};
+  wchar_t space_drive{};
+  wchar_t measured_drive{};
+  unsigned int measure_calls{};
+  unsigned int end_measure_calls{};
+  bool fail_measure{};
   std::map<wchar_t, std::uint64_t> attached_volume_sizes;
   std::map<std::wstring, std::uint64_t> hidden_volume_sizes;
   std::vector<std::wstring> hidden_target_paths;
@@ -3218,6 +3245,135 @@ void test_a_surveyed_container_opens_without_asking_again() {
       "a released session still held the surveyed password");
 }
 
+void test_only_a_volume_opened_for_maintenance_is_measured() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  const std::uint32_t standard =
+      session.create_container(L"D:\\plain.hc", 64ULL * 1024ULL * 1024ULL);
+
+  // A container mounted the ordinary way is not measured: measuring asks the
+  // user for consent, and nothing else in the product spends it.
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.decoy_maintenance_space(standard)); },
+      "an ordinary mount was measured");
+  require(runtime.measure_calls == 0, "consent was spent on an ordinary mount");
+
+  const wchar_t drive_letter =
+      session.open_decoy_maintenance(id, bytes("decoy-password"));
+  runtime.listing.entries.push_back(
+      VolumeDirectoryEntry{.name = L"decoy.txt"});
+  const VolumeDirectoryListing listing =
+      session.list_container_directory(id, L"");
+  require(listing.entries.size() == 1 &&
+              listing.entries[0].name == L"decoy.txt" &&
+              runtime.listed.back() == std::wstring(1, drive_letter) + L":\\",
+          "the existing file manager did not take over the outer volume");
+  const DecoyMaintenanceSpace space = session.decoy_maintenance_space(id);
+  require(space.total_bytes == runtime.reported_total &&
+              space.free_bytes == runtime.reported_free &&
+              space.writable_bytes == runtime.reported_tail,
+          "the space report did not carry what the runtime measured");
+  require(runtime.space_drive == drive_letter &&
+              runtime.measured_drive == drive_letter,
+          "the report measured a volume other than the one opened");
+
+  runtime.fail_measure = true;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(session.decoy_maintenance_space(id)); },
+      "a failed refresh was reported as capacity");
+  require(runtime.end_measure_calls == 0,
+          "one failed refresh ended the measuring run");
+  runtime.fail_measure = false;
+  static_cast<void>(session.decoy_maintenance_space(id));
+  require(runtime.measure_calls == 3,
+          "the measuring run could not continue after one failed refresh");
+}
+
+void test_ending_maintenance_releases_the_volume_and_the_elevation() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+  const std::uint32_t ordinary =
+      session.create_container(L"D:\\plain.hc", 64ULL * 1024ULL * 1024ULL);
+  require_throws<std::logic_error>(
+      [&] { session.end_decoy_maintenance(ordinary); },
+      "ending maintenance released an ordinary mount");
+  require(mounted_now(session, ordinary) && runtime.end_measure_calls == 0,
+          "a refused end changed the ordinary mount or measuring run");
+
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+  runtime.events.clear();
+
+  session.end_decoy_maintenance(id);
+  // A deliberate release, not the forced one: ending maintenance is not an
+  // emergency and a volume still in use stays the user's to settle.
+  require_events(runtime, {"unmount:other"});
+  require(runtime.end_measure_calls == 1, "the elevated run was left open");
+  require(!mounted_now(session, id),
+          "ending maintenance left the container mounted");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.decoy_maintenance_space(id)); },
+      "a released container was still treated as open for maintenance");
+
+  // Whatever ends the session ends the run with it.
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+  session.release_session_secrets();
+  require(runtime.end_measure_calls == 2,
+          "releasing the session left an elevated run behind");
+}
+
+void test_every_unmount_path_ends_a_measuring_run() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t id = maintenance_fixture(runtime, session);
+
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+  static_cast<void>(session.decoy_maintenance_space(id));
+  session.unmount_container(id);
+  require(runtime.end_measure_calls == 1,
+          "a generic container unmount left the measuring run open");
+
+  static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy-password")));
+  static_cast<void>(session.decoy_maintenance_space(id));
+  session.unmount_active();
+  require(runtime.end_measure_calls == 2,
+          "a whole-session unmount left the measuring run open");
+}
+
+void test_switching_maintenance_reuses_one_measuring_run() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  const std::uint32_t first = maintenance_fixture(runtime, session);
+  const std::uint32_t second = session.create_container_b(
+      L"D:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL,
+      16ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
+  runtime.protected_outer_paths.emplace_back(L"D:\\vault\\second.hc");
+
+  static_cast<void>(
+      session.open_decoy_maintenance(first, bytes("decoy-password")));
+  static_cast<void>(session.decoy_maintenance_space(first));
+  static_cast<void>(
+      session.open_decoy_maintenance(second, bytes("decoy-password")));
+
+  require(!mounted_now(session, first) && mounted_now(session, second),
+          "switching maintenance left two outer volumes current");
+  require(runtime.end_measure_calls == 0,
+          "switching containers discarded the measuring run");
+  static_cast<void>(session.decoy_maintenance_space(second));
+  session.end_decoy_maintenance(second);
+  require(runtime.end_measure_calls == 1,
+          "ending after a switch did not close exactly one measuring run");
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -3368,6 +3524,10 @@ int main() {
     test_a_survey_counts_containers_it_could_not_release();
     test_a_survey_stops_when_asked_and_keeps_nothing_it_did_not_find();
     test_a_surveyed_container_opens_without_asking_again();
+    test_only_a_volume_opened_for_maintenance_is_measured();
+    test_ending_maintenance_releases_the_volume_and_the_elevation();
+    test_every_unmount_path_ends_a_measuring_run();
+    test_switching_maintenance_reuses_one_measuring_run();
     test_no_export_leaves_a_single_local_trace();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;

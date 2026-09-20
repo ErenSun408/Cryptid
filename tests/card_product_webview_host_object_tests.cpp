@@ -211,6 +211,21 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return L'Q';
   }
 
+  usb_vault::application::DecoyMaintenanceSpace decoy_maintenance_space(
+      const std::uint32_t id) override {
+    await_volume_operation();
+    ++maintenance_space_calls;
+    maintenance_space_id = id;
+    if (fail_maintenance_space) throw std::runtime_error("measure failed");
+    return maintenance_space;
+  }
+
+  void end_decoy_maintenance(const std::uint32_t id) override {
+    await_volume_operation();
+    ++end_maintenance_calls;
+    ended_maintenance_id = id;
+  }
+
   void mount_adopted_container(const std::uint32_t id) override {
     await_volume_operation();
     batch_calls.push_back(id);
@@ -501,6 +516,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   unsigned int survey_calls{};
   unsigned int open_maintenance_calls{};
   std::uint32_t opened_maintenance_id{};
+  usb_vault::application::DecoyMaintenanceSpace maintenance_space;
+  unsigned int maintenance_space_calls{};
+  unsigned int end_maintenance_calls{};
+  std::uint32_t maintenance_space_id{};
+  std::uint32_t ended_maintenance_id{};
+  bool fail_maintenance_space{};
   bool survey_fails{};
   std::uint32_t batch_fail_id{};
   std::uint64_t created_size_bytes{};
@@ -2604,6 +2625,92 @@ void test_opening_maintenance_runs_on_the_volume_worker() {
           "maintenance did not open the named container off the UI thread");
 }
 
+void test_maintenance_facts_are_async_current_and_session_scoped() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.volume.maintenance_space = {
+      .total_bytes = 4096ULL * 1024ULL * 1024ULL,
+      .free_bytes = 1024ULL * 1024ULL * 1024ULL,
+      .writable_bytes = 512ULL * 1024ULL * 1024ULL,
+  };
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, nullptr, &host, nullptr, &work)),
+          "maintenance fact host creation failed");
+
+  VARIANT result{};
+  require(invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr, 0,
+                       &result, nullptr) == E_UNEXPECTED,
+          "capacity was readable before it was measured");
+
+  const auto wait_done = [&] {
+    for (int i = 0; work.running.load() && i < 2000; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(!work.running.load(), "maintenance fact operation did not finish");
+  };
+  require(invoke_with_number(*host.Get(), L"beginMeasureDecoySpace", 7,
+                             nullptr, nullptr) == S_OK,
+          "capacity measurement did not start");
+  wait_done();
+  ::VariantInit(&result);
+  require(invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr, 0,
+                       &result, nullptr) == S_OK && result.vt == VT_BSTR &&
+              std::wstring(result.bstrVal, ::SysStringLen(result.bstrVal)) ==
+                  L"4096,1024,512",
+          "capacity did not return as the three bounded MiB facts");
+  static_cast<void>(::VariantClear(&result));
+  require(fixture.volume.maintenance_space_calls == 1 &&
+              fixture.volume.maintenance_space_id == 7 &&
+              fixture.volume.volume_thread != std::this_thread::get_id(),
+          "capacity did not measure the named container off the UI thread");
+
+  fixture.volume.fail_maintenance_space = true;
+  require(invoke_with_number(*host.Get(), L"beginMeasureDecoySpace", 7,
+                             nullptr, nullptr) == S_OK,
+          "failing capacity refresh did not start");
+  wait_done();
+  require(invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr, 0,
+                       &result, nullptr) == E_UNEXPECTED,
+          "a failed refresh exposed the previous capacity as current");
+  fixture.volume.fail_maintenance_space = false;
+
+  fixture.volume.pause_volume.store(true);
+  fixture.volume.volume_entered.store(false);
+  require(invoke_with_number(*host.Get(), L"beginMeasureDecoySpace", 7,
+                             nullptr, nullptr) == S_OK,
+          "capacity refresh did not start");
+  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr, 0,
+                       &result, nullptr) == E_PENDING,
+          "a refresh exposed the previous capacity as current");
+  fixture.volume.pause_volume.store(false);
+  wait_done();
+
+  require(invoke_with_number(*host.Get(), L"beginEndDecoyMaintenance", 7,
+                             nullptr, nullptr) == S_OK,
+          "ending maintenance did not start");
+  wait_done();
+  require(fixture.volume.end_maintenance_calls == 1 &&
+              fixture.volume.ended_maintenance_id == 7 &&
+              invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr,
+                           0, &result, nullptr) == E_UNEXPECTED,
+          "ending maintenance retained a capacity snapshot");
+
+  require(invoke_with_number(*host.Get(), L"beginMeasureDecoySpace", 7,
+                             nullptr, nullptr) == S_OK,
+          "second capacity measurement did not start");
+  wait_done();
+  work.card_epoch.fetch_add(1);
+  work.interrupted.store(true);
+  require(invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr, 0,
+                       &result, nullptr) == E_ACCESSDENIED,
+          "a removed card exposed the previous session's capacity");
+}
+
 // 🔴 One call brings a whole directory back. Five hundred files through the
 // per-entry accessors above would be two thousand serialized asynchronous
 // calls, and the page would visibly stall.
@@ -2951,6 +3058,7 @@ int main() {
     test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
     test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password();
     test_opening_maintenance_runs_on_the_volume_worker();
+    test_maintenance_facts_are_async_current_and_session_scoped();
     test_a_directory_listing_arrives_as_one_packed_string();
     test_the_file_manager_bridge_checks_its_shapes();
     test_the_bridge_carries_each_file_manager_action();

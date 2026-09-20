@@ -72,6 +72,15 @@ struct DecoyMaintenanceUiSurvey final {
   bool cancelled{};
 };
 
+// Room left in a container opened for maintenance, in the same MiB the rest
+// of the page speaks. `writable_mib` is what can be added before reaching
+// what is behind the outer volume.
+struct DecoyMaintenanceUiSpace final {
+  std::uint32_t total_mib{};
+  std::uint32_t free_mib{};
+  std::uint32_t writable_mib{};
+};
+
 enum class OperationUiKind : std::uint8_t {
   session_opened = 0,
   container_created = 1,
@@ -168,6 +177,15 @@ class CardProductUiSessionController final {
   // Opens one container the survey found and returns the drive letter its
   // outer volume came up on. Nothing is asked of the user a second time.
   [[nodiscard]] wchar_t open_decoy_maintenance(std::uint32_t id);
+
+  // Reports the room left in that container. Measuring what is still writable
+  // needs consent, which is asked once for a run of maintenance.
+  [[nodiscard]] DecoyMaintenanceUiSpace decoy_maintenance_space(
+      std::uint32_t id);
+
+  // Closes maintenance: the outer volume is released and the measuring run
+  // ends with it.
+  void end_decoy_maintenance(std::uint32_t id);
 
   void unmount_container(std::uint32_t id);
   void force_unmount_container(std::uint32_t id);

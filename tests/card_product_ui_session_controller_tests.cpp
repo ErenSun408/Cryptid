@@ -139,6 +139,19 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return L'Q';
   }
 
+  usb_vault::application::DecoyMaintenanceSpace decoy_maintenance_space(
+      const std::uint32_t id) override {
+    ++maintenance_space_calls;
+    maintenance_space_id = id;
+    if (reject_maintenance_space) throw std::runtime_error("measure failed");
+    return maintenance_space;
+  }
+
+  void end_decoy_maintenance(const std::uint32_t id) override {
+    ++end_maintenance_calls;
+    ended_maintenance_id = id;
+  }
+
   std::uint32_t mount_container(const std::wstring_view path) override {
     ++mount_calls;
     mounted_path.assign(path);
@@ -505,6 +518,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   unsigned int survey_calls{};
   unsigned int open_maintenance_calls{};
   std::uint32_t opened_maintenance_id{};
+  usb_vault::application::DecoyMaintenanceSpace maintenance_space;
+  unsigned int maintenance_space_calls{};
+  unsigned int end_maintenance_calls{};
+  std::uint32_t maintenance_space_id{};
+  std::uint32_t ended_maintenance_id{};
+  bool reject_maintenance_space{};
   std::vector<std::byte> survey_password;
   std::vector<std::uint32_t> survey_result;
   std::uint32_t survey_unreachable{};
@@ -1234,6 +1253,18 @@ void test_maintenance_is_refused_outside_an_authenticated_session() {
   }
   require(refused && fixture.volume.open_maintenance_calls == 0,
           "maintenance opened without an authenticated session");
+
+  require_throws<std::system_error>(
+      [&] {
+        static_cast<void>(fixture.controller.decoy_maintenance_space(1));
+      },
+      "maintenance capacity was measured without an authenticated session");
+  require_throws<std::system_error>(
+      [&] { fixture.controller.end_decoy_maintenance(1); },
+      "maintenance ended without an authenticated session");
+  require(fixture.volume.maintenance_space_calls == 0 &&
+              fixture.volume.end_maintenance_calls == 0,
+          "a refused maintenance fact still reached the session");
 }
 
 void test_opening_maintenance_names_only_the_container() {
@@ -1242,6 +1273,31 @@ void test_opening_maintenance_names_only_the_container() {
   const wchar_t drive_letter = fixture.controller.open_decoy_maintenance(7);
   require(drive_letter == L'Q' && fixture.volume.opened_maintenance_id == 7,
           "the page did not reach the container it named");
+}
+
+void test_maintenance_capacity_is_projected_conservatively_and_can_end() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  constexpr std::uint64_t mib = 1024ULL * 1024ULL;
+  fixture.volume.maintenance_space = {
+      .total_bytes = (static_cast<std::uint64_t>(UINT32_MAX) + 10ULL) * mib,
+      .free_bytes = 9ULL * mib + mib / 2ULL,
+      .writable_bytes = 5ULL * mib + mib - 1ULL,
+  };
+
+  const usb_vault::ui::DecoyMaintenanceUiSpace space =
+      fixture.controller.decoy_maintenance_space(7);
+  require(space.total_mib == UINT32_MAX && space.free_mib == 9 &&
+              space.writable_mib == 5,
+          "maintenance capacity rounded up or overflowed its page shape");
+  require(fixture.volume.maintenance_space_calls == 1 &&
+              fixture.volume.maintenance_space_id == 7,
+          "capacity was measured for a container the page did not name");
+
+  fixture.controller.end_decoy_maintenance(7);
+  require(fixture.volume.end_maintenance_calls == 1 &&
+              fixture.volume.ended_maintenance_id == 7,
+          "ending maintenance did not name only its container");
 }
 
 void test_container_b_commits_the_card_before_the_volume() {
@@ -1828,6 +1884,7 @@ int main() {
     test_a_survey_wipes_the_password_when_it_fails();
     test_maintenance_is_refused_outside_an_authenticated_session();
     test_opening_maintenance_names_only_the_container();
+    test_maintenance_capacity_is_projected_conservatively_and_can_end();
     test_container_b_rejects_unusable_requests();
     test_capacity_rounds_the_attached_volume_to_whole_mib();
     test_card_reset_releases_the_session_and_refuses_while_mounted();

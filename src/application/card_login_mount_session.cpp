@@ -38,7 +38,8 @@ class ProductionCardLoginMountSessionRuntime final
       const volume::VolumeProvider& provider,
       std::filesystem::path volume_creator_helper_path)
       : provider_(provider),
-        creator_(std::move(volume_creator_helper_path)) {}
+        creator_(volume_creator_helper_path),
+        measurements_(std::move(volume_creator_helper_path)) {}
 
   [[nodiscard]] MountSessionResult mount_authenticated(
       const ContainerLayout& layout,
@@ -106,6 +107,18 @@ class ProductionCardLoginMountSessionRuntime final
     }
     return std::nullopt;
   }
+
+  [[nodiscard]] volume::VolumeSpace volume_space(
+      const wchar_t drive_letter) override {
+    return volume::volume_space(drive_letter);
+  }
+
+  [[nodiscard]] std::uint64_t measure_tail_space(
+      const wchar_t drive_letter) override {
+    return measurements_.tail_space(drive_letter);
+  }
+
+  void end_measurements() noexcept override { measurements_.close(); }
 
   [[nodiscard]] security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
@@ -283,6 +296,7 @@ class ProductionCardLoginMountSessionRuntime final
   }
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
+  volume_creation::VolumeMeasurementSession measurements_;
 };
 
 }  // namespace
@@ -406,6 +420,15 @@ DecoyMaintenanceSurvey CardLoginMountSession::survey_decoy_maintenance(
     const SurveyCancellation& cancelled) {
   return impl_->core.survey_decoy_maintenance(decoy_password_utf8, progress,
                                               cancelled);
+}
+
+DecoyMaintenanceSpace CardLoginMountSession::decoy_maintenance_space(
+    const std::uint32_t id) {
+  return impl_->core.decoy_maintenance_space(id);
+}
+
+void CardLoginMountSession::end_decoy_maintenance(const std::uint32_t id) {
+  impl_->core.end_decoy_maintenance(id);
 }
 
 wchar_t CardLoginMountSession::open_surveyed_maintenance(
@@ -1309,6 +1332,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   entry.drive_letter = drive_letter;
   entry.release_first = true;
   entry.derivation_known = true;
+  entry.maintenance = mode == MaintenanceMount::open;
   if (mode == MaintenanceMount::open) {
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -1323,16 +1347,20 @@ wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
     const std::uint32_t id,
     const security::SecureBuffer& decoy_password_utf8) {
   SessionContainer& entry = maintenance_target(id, decoy_password_utf8);
-  security::SecureBuffer outer_password = runtime_.derive_container_password(
-      decoy_password_utf8, authentication_.root_secret_,
-      layout_.container_b.salt);
+  if (entry.mounted && entry.maintenance) return entry.drive_letter;
+  const bool switched = release_other_maintenance(id);
+  security::SecureBuffer outer_password;
   try {
+    outer_password = runtime_.derive_container_password(
+        decoy_password_utf8, authentication_.root_secret_,
+        layout_.container_b.salt);
     const wchar_t drive_letter = mount_outer_for_maintenance(
         entry, outer_password, MaintenanceMount::open);
     outer_password.clear();
     return drive_letter;
   } catch (...) {
     outer_password.clear();
+    if (switched) runtime_.end_measurements();
     throw;
   }
 }
@@ -1377,6 +1405,7 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
               entry, outer_password, MaintenanceMount::trial);
           static_cast<void>(runtime_.unmount_forced(drive_letter));
           entry.mounted = false;
+          entry.maintenance = false;
           entry.drive_letter = wchar_t{};
           survey.maintainable.push_back(entry.id);
         } catch (const DecoyMaintenanceRefused&) {
@@ -1405,6 +1434,46 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
   return survey;
 }
 
+DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
+    const std::uint32_t id) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "decoy maintenance requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  // Only a volume opened for maintenance is measured: measuring asks for
+  // consent, and nothing else in the product has a reason to spend it.
+  if (!entry->mounted || !entry->maintenance) {
+    throw std::logic_error("this container is not open for maintenance");
+  }
+  const volume::VolumeSpace space = runtime_.volume_space(entry->drive_letter);
+  return {.total_bytes = space.total_bytes,
+          .free_bytes = space.free_bytes,
+          .writable_bytes = runtime_.measure_tail_space(entry->drive_letter)};
+}
+
+void CardLoginMountSessionCore::end_decoy_maintenance(const std::uint32_t id) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "decoy maintenance requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  if (!entry->mounted || !entry->maintenance) {
+    throw std::logic_error("this container is not open for maintenance");
+  }
+  // The deliberate unmount, not the forced one: ending maintenance is not an
+  // emergency, and a volume still in use is the user's to settle.
+  unmount_container_impl(id, false);
+}
+
 wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
     const std::uint32_t id) {
   if (!authentication_.authenticated()) {
@@ -1419,8 +1488,26 @@ wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
     throw std::invalid_argument(
         "no container is adopted under that identifier");
   }
-  return mount_outer_for_maintenance(*entry, state_.decoy_outer_password,
-                                     MaintenanceMount::open);
+  if (entry->mounted && entry->maintenance) return entry->drive_letter;
+  const bool switched = release_other_maintenance(id);
+  try {
+    return mount_outer_for_maintenance(*entry, state_.decoy_outer_password,
+                                       MaintenanceMount::open);
+  } catch (...) {
+    if (switched) runtime_.end_measurements();
+    throw;
+  }
+}
+
+bool CardLoginMountSessionCore::release_other_maintenance(
+    const std::uint32_t next_id) {
+  bool released = false;
+  for (const SessionContainer& container : state_.containers) {
+    if (container.id == next_id || !container.maintenance) continue;
+    unmount_container_impl(container.id, false, false);
+    released = true;
+  }
+  return released;
 }
 
 bool CardLoginMountSessionCore::verify_decoy_maintenance(
@@ -1447,6 +1534,7 @@ bool CardLoginMountSessionCore::verify_decoy_maintenance(
   // come down stays recorded as mounted and the failure reaches the caller.
   static_cast<void>(runtime_.unmount_forced(drive_letter));
   entry.mounted = false;
+  entry.maintenance = false;
   entry.drive_letter = wchar_t{};
   return true;
 }
@@ -1460,6 +1548,8 @@ void CardLoginMountSessionCore::release_session_secrets() noexcept {
   state_.hidden_container_password = security::SecureBuffer();
   state_.decoy_outer_password = security::SecureBuffer();
   state_.login_password = security::SecureBuffer();
+  // The elevated run belonged to the session that opened it.
+  runtime_.end_measurements();
 }
 
 void CardLoginMountSessionCore::mount_adopted_container(
@@ -1650,16 +1740,20 @@ void CardLoginMountSessionCore::force_unmount_user_active() {
 }
 
 void CardLoginMountSessionCore::unmount_container_impl(
-    const std::uint32_t id, const bool allow_force) {
+    const std::uint32_t id, const bool allow_force,
+    const bool end_measurements) {
   for (SessionContainer& container : state_.containers) {
     if (container.id != id) continue;
     if (!container.mounted) return;
     const wchar_t drive_letter = container.drive_letter;
+    const bool ended_maintenance = container.maintenance;
     try {
       if (allow_force) static_cast<void>(runtime_.unmount_forced(drive_letter));
       else static_cast<void>(runtime_.unmount(drive_letter));
       container.mounted = false;
+      container.maintenance = false;
       container.drive_letter = wchar_t{};
+      if (ended_maintenance && end_measurements) runtime_.end_measurements();
       record_operation(OperationKind::container_unmounted,
                        OperationOutcome::succeeded,
                        container.name,
@@ -1917,10 +2011,13 @@ void CardLoginMountSessionCore::unmount_active() {
         continue;
       }
       const wchar_t drive_letter = container.drive_letter;
+      const bool ended_maintenance = container.maintenance;
       try {
         static_cast<void>(runtime_.unmount(drive_letter));
         container.mounted = false;
+        container.maintenance = false;
         container.drive_letter = wchar_t{};
+        if (ended_maintenance) runtime_.end_measurements();
         record_operation(OperationKind::container_unmounted,
                          OperationOutcome::succeeded,
                          container.name,
@@ -1951,6 +2048,7 @@ bool CardLoginMountSessionCore::force_unmount_active() {
       forced = runtime_.unmount_forced(container.drive_letter).forced ||
                forced;
       container.mounted = false;
+      container.maintenance = false;
       container.drive_letter = wchar_t{};
     }
   }

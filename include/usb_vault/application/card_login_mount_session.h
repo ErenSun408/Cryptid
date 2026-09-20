@@ -111,6 +111,15 @@ class ContainerCreationCleanupError final : public std::runtime_error {
   std::exception_ptr cleanup_failure_;
 };
 
+// How much room an outer volume under maintenance still has. `writable_bytes`
+// is what can be added before reaching what is behind it, which free space
+// alone cannot say.
+struct DecoyMaintenanceSpace final {
+  std::uint64_t total_bytes{};
+  std::uint64_t free_bytes{};
+  std::uint64_t writable_bytes{};
+};
+
 // What one decoy password found across every container the session holds.
 // Containers that answered are the only ones a caller may offer to open.
 struct DecoyMaintenanceSurvey final {
@@ -235,6 +244,19 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   [[nodiscard]] virtual DecoyMaintenanceSurvey survey_decoy_maintenance(
       const security::SecureBuffer&, const SurveyProgress& = {},
       const SurveyCancellation& = {}) {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
+
+  // Reports the room left in a container opened for maintenance. Measuring
+  // what is still writable asks for consent once per run of maintenance.
+  [[nodiscard]] virtual DecoyMaintenanceSpace decoy_maintenance_space(
+      std::uint32_t) {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
+
+  // Releases the container maintenance was done on and ends the measuring run
+  // it opened. A container still in use is refused, as any unmount is.
+  virtual void end_decoy_maintenance(std::uint32_t) {
     throw std::logic_error("decoy maintenance is unavailable");
   }
 
@@ -495,6 +517,9 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       const SurveyProgress& progress,
       const SurveyCancellation& cancelled) override;
   [[nodiscard]] wchar_t open_surveyed_maintenance(std::uint32_t id) override;
+  [[nodiscard]] DecoyMaintenanceSpace decoy_maintenance_space(
+      std::uint32_t id) override;
+  void end_decoy_maintenance(std::uint32_t id) override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
   void force_unmount_user_active() override;

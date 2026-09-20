@@ -394,7 +394,7 @@ bool VolumeMeasurementSession::open() const noexcept {
 }
 
 void VolumeMeasurementSession::close() noexcept {
-  if (impl_ == nullptr || !impl_->connected) return;
+  if (impl_ == nullptr) return;
   impl_->connected = false;
   // Letting go of the pipe is the whole protocol for ending this: the helper
   // reads the close and exits.
@@ -413,12 +413,19 @@ std::uint64_t VolumeMeasurementSession::tail_space(
     throw std::logic_error("this measurement session has been moved from");
   }
   if (!impl_->connected) {
-    impl_->nonce = random_nonce();
-    const std::wstring suffix = hex_nonce(impl_->nonce);
-    const std::wstring pipe_name = L"\\\\.\\pipe\\usb-vault-create-" + suffix;
-    impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
-    impl_->pipe = connect_to_helper(pipe_name, impl_->process.get());
-    impl_->connected = true;
+    try {
+      impl_->nonce = random_nonce();
+      const std::wstring suffix = hex_nonce(impl_->nonce);
+      const std::wstring pipe_name =
+          L"\\\\.\\pipe\\usb-vault-create-" + suffix;
+      impl_->process =
+          launch_elevated_helper(impl_->helper_path, suffix, suffix);
+      impl_->pipe = connect_to_helper(pipe_name, impl_->process.get());
+      impl_->connected = true;
+    } catch (...) {
+      close();
+      throw;
+    }
   }
 
   const detail::RequestHeader header{
@@ -426,26 +433,29 @@ std::uint64_t VolumeMeasurementSession::tail_space(
       .path_characters = static_cast<std::uint32_t>(root.size()),
       .nonce = impl_->nonce,
   };
+  detail::Response answer{};
   try {
     detail::write_request(impl_->pipe.get(), header, root,
                           security::SecureBuffer{}, security::SecureBuffer{});
     for (;;) {
-      const detail::Response response = detail::read_response(impl_->pipe.get());
-      if (response.type == detail::MessageType::progress) continue;
-      if (response.error == 0) return response.value;
-      if (!known_error(response.error)) {
-        throw_creation(CreationError::protocol_error,
-                       "helper returned an unknown error code");
-      }
-      throw_creation(static_cast<CreationError>(response.error),
-                     "volume measurement failed");
+      answer = detail::read_response(impl_->pipe.get());
+      if (answer.type != detail::MessageType::progress) break;
     }
   } catch (...) {
-    // A broken pipe means the helper is gone; the next measurement asks for
-    // consent again rather than talking to a handle nobody is reading.
+    // Transport and framing failures mean the helper can no longer be trusted.
     close();
     throw;
   }
+  if (answer.error == 0) return answer.value;
+  if (!known_error(answer.error)) {
+    close();
+    throw_creation(CreationError::protocol_error,
+                   "helper returned an unknown error code");
+  }
+  // A measurement may fail while the pipe remains sound. The helper keeps
+  // serving the run, so the next refresh must not ask for consent again.
+  throw_creation(static_cast<CreationError>(answer.error),
+                 "volume measurement failed");
 }
 
 VolumeCreator::VolumeCreator(std::filesystem::path helper_path)

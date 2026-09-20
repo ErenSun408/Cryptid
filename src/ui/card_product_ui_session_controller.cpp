@@ -5,6 +5,7 @@
 #include "usb_vault/ui/container_target_path.h"
 #include "usb_vault/ui/password_ingress.h"
 
+#include <algorithm>
 #include <Windows.h>
 
 #include <cstdint>
@@ -206,6 +207,34 @@ wchar_t CardProductUiSessionController::open_decoy_maintenance(
         "decoy maintenance is not available in the current UI state");
   }
   return volume_session_.open_surveyed_maintenance(id);
+}
+
+DecoyMaintenanceUiSpace CardProductUiSessionController::decoy_maintenance_space(
+    const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "decoy maintenance is not available in the current UI state");
+  }
+  const application::DecoyMaintenanceSpace space =
+      volume_session_.decoy_maintenance_space(id);
+  // Rounded down, as capacity is everywhere on this page: a number that
+  // rounded up would invite the write that gets refused.
+  constexpr std::uint64_t kMib = 1024ULL * 1024ULL;
+  return {.total_mib = static_cast<std::uint32_t>(
+              std::min<std::uint64_t>(space.total_bytes / kMib, UINT32_MAX)),
+          .free_mib = static_cast<std::uint32_t>(
+              std::min<std::uint64_t>(space.free_bytes / kMib, UINT32_MAX)),
+          .writable_mib = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+              space.writable_bytes / kMib, UINT32_MAX))};
+}
+
+void CardProductUiSessionController::end_decoy_maintenance(
+    const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "decoy maintenance is not available in the current UI state");
+  }
+  volume_session_.end_decoy_maintenance(id);
 }
 
 void CardProductUiSessionController::submit_initialization(

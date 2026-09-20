@@ -15,6 +15,7 @@
 #include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_directory_listing.h"
+#include "usb_vault/volume/volume_space.h"
 
 namespace usb_vault::application::detail {
 
@@ -45,6 +46,15 @@ class CardLoginMountSessionRuntime {
   // only by a maintenance mount, read once and kept nowhere.
   [[nodiscard]] virtual std::optional<volume::VolumeType> mounted_volume_type(
       wchar_t drive_letter) = 0;
+  // What the filesystem says about a mounted volume. Any user may ask.
+  [[nodiscard]] virtual volume::VolumeSpace volume_space(
+      wchar_t drive_letter) = 0;
+  // What can still be written before reaching the volume behind this one.
+  // Reading it needs a volume handle, so the first call of a run asks for
+  // consent and the run lasts until `end_measurements`.
+  [[nodiscard]] virtual std::uint64_t measure_tail_space(
+      wchar_t drive_letter) = 0;
+  virtual void end_measurements() noexcept = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -128,6 +138,9 @@ struct SessionContainer final {
   // from the index has said nothing, and mounting it has to try both
   // derivations exactly as an import does.
   bool derivation_known{};
+  // Mounted as an outer volume for maintenance rather than the ordinary way.
+  // Runtime only, like everything else here.
+  bool maintenance{};
 };
 
 struct CardLoginMountSessionState final {
@@ -193,6 +206,9 @@ class CardLoginMountSessionCore final {
       const ::usb_vault::application::SurveyProgress& progress,
       const ::usb_vault::application::SurveyCancellation& cancelled);
   [[nodiscard]] wchar_t open_surveyed_maintenance(std::uint32_t id);
+  [[nodiscard]] ::usb_vault::application::DecoyMaintenanceSpace
+  decoy_maintenance_space(std::uint32_t id);
+  void end_decoy_maintenance(std::uint32_t id);
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,
@@ -203,7 +219,8 @@ class CardLoginMountSessionCore final {
   void unmount_container(std::uint32_t id);
   void force_unmount_container(std::uint32_t id);
   void force_unmount_user_active();
-  void unmount_container_impl(std::uint32_t id, bool allow_force);
+  void unmount_container_impl(std::uint32_t id, bool allow_force,
+                              bool end_measurements = true);
   void forget_container(std::uint32_t id);
   [[nodiscard]] bool remembering_container_paths();
   void set_remembering_container_paths(bool remember);
@@ -309,6 +326,9 @@ class CardLoginMountSessionCore final {
   // The checks both maintenance entry points share, and the container named.
   [[nodiscard]] SessionContainer& maintenance_target(
       std::uint32_t id, const security::SecureBuffer& decoy_password_utf8);
+  // A maintenance page has one current outer volume. Switching releases the
+  // old one without dropping the measuring connection the new one will use.
+  [[nodiscard]] bool release_other_maintenance(std::uint32_t next_id);
   void record_operation(::usb_vault::application::OperationKind kind,
                         ::usb_vault::application::OperationOutcome outcome,
                         std::wstring_view container_name = {},

@@ -129,6 +129,9 @@ constexpr DISPID kDecoySurveyProgressId = 73;
 constexpr DISPID kDecoySurveyIdId = 74;
 constexpr DISPID kCancelDecoySurveyId = 75;
 constexpr DISPID kBeginOpenDecoyMaintenanceId = 76;
+constexpr DISPID kBeginMeasureDecoySpaceId = 77;
+constexpr DISPID kDecoySpaceId = 78;
+constexpr DISPID kBeginEndDecoyMaintenanceId = 79;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
 // its own bridge with no card, volume or container member on it.
@@ -531,6 +534,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getDecoySurveyId")) { ids[0] = kDecoySurveyIdId; return S_OK; }
     if (matches(names[0], L"cancelDecoySurvey")) { ids[0] = kCancelDecoySurveyId; return S_OK; }
     if (matches(names[0], L"beginOpenDecoyMaintenance")) { ids[0] = kBeginOpenDecoyMaintenanceId; return S_OK; }
+    if (matches(names[0], L"beginMeasureDecoySpace")) { ids[0] = kBeginMeasureDecoySpaceId; return S_OK; }
+    if (matches(names[0], L"getDecoyMaintenanceSpace")) { ids[0] = kDecoySpaceId; return S_OK; }
+    if (matches(names[0], L"beginEndDecoyMaintenance")) { ids[0] = kBeginEndDecoyMaintenanceId; return S_OK; }
     if (matches(names[0], L"beginMountBatch")) { ids[0] = kBeginMountBatchId; return S_OK; }
     if (matches(names[0], L"beginUnmountBatch")) { ids[0] = kBeginUnmountBatchId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountBatch")) { ids[0] = kBeginForceUnmountBatchId; return S_OK; }
@@ -617,6 +623,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
       case kBeginOpenDecoyMaintenanceId: // Opening one is what a survey is for.
+      case kDecoySpaceId:
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
@@ -629,7 +636,12 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
       case kListContainerDirectoryId: break;
-      default: last_volume_member_ = 0; clear_batch(); clear_survey(); break;
+      default:
+        last_volume_member_ = 0;
+        clear_batch();
+        clear_survey();
+        clear_space();
+        break;
     }
     switch (member) {
       case kBeginMountBatchId: case kBeginUnmountBatchId:
@@ -663,7 +675,28 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kBeginUnmountId:
       case kBeginForceUnmountLastId:
       case kBeginOpenDecoyMaintenanceId:
+      case kBeginMeasureDecoySpaceId:
+      case kBeginEndDecoyMaintenanceId:
         return begin_volume_operation(member, parameters, result, argument_error);
+      case kDecoySpaceId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        if (creation_work_->interrupted.load() ||
+            controller_.state() != CardProductUiState::authenticated) {
+          clear_space();
+          return E_ACCESSDENIED;
+        }
+        std::lock_guard lock(space_mutex_);
+        if (space_epoch_ != creation_work_->card_epoch.load()) {
+          space_ready_ = false;
+          space_id_ = 0;
+          return E_ACCESSDENIED;
+        }
+        if (!space_ready_ || space_id_ == 0) return E_UNEXPECTED;
+        const std::wstring packed = std::to_wstring(space_total_) + L"," +
+            std::to_wstring(space_free_) + L"," + std::to_wstring(space_writable_);
+        return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+      }
       case kVolumeOperationStatusId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (!result) return E_POINTER;
@@ -957,6 +990,12 @@ class CardProductWebViewHostObject final : public IDispatch {
     survey_mode_ = false;
   }
 
+  void clear_space() noexcept {
+    std::lock_guard lock(space_mutex_);
+    space_ready_ = false;
+    space_id_ = 0;
+  }
+
   // One argument: the decoy password, as the byte array every password takes.
   // It is wiped on every path, and what comes back is identifiers only.
   HRESULT begin_decoy_survey(DISPPARAMS* const parameters, VARIANT* const result,
@@ -1151,14 +1190,21 @@ class CardProductWebViewHostObject final : public IDispatch {
       if (creation_work_->interrupted.load()) return E_PENDING;
       if (!all && controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
       if (creation_thread_.joinable()) creation_thread_.join();
+      if (member == kBeginOpenDecoyMaintenanceId ||
+          member == kBeginMeasureDecoySpaceId ||
+          member == kBeginEndDecoyMaintenanceId) {
+        clear_space();
+      }
       last_volume_member_ = member;
       last_volume_id_ = id;
       last_volume_epoch_ = creation_work_->card_epoch.load();
+      const std::uint64_t operation_epoch = last_volume_epoch_;
       creation_work_->finish(); // Volume operations cannot be cancelled.
       creation_work_->volume_operation.store(true);
       volume_status_.store(1);
       creation_work_->running.store(true);
-      creation_thread_ = std::thread([this, member, id, force] {
+      creation_thread_ = std::thread([this, member, id, force,
+                                      operation_epoch] {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         unsigned int status = 3;
         try {
@@ -1168,6 +1214,21 @@ class CardProductWebViewHostObject final : public IDispatch {
             else if (force) controller_.force_unmount_user_active();
             else if (member == kBeginOpenDecoyMaintenanceId)
               static_cast<void>(controller_.open_decoy_maintenance(id));
+            else if (member == kBeginMeasureDecoySpaceId) {
+              const auto space = controller_.decoy_maintenance_space(id);
+              std::lock_guard lock(space_mutex_);
+              space_total_ = space.total_mib;
+              space_free_ = space.free_mib;
+              space_writable_ = space.writable_mib;
+              space_id_ = id;
+              space_epoch_ = operation_epoch;
+              space_ready_ = true;
+            }
+            else if (member == kBeginEndDecoyMaintenanceId) {
+              controller_.end_decoy_maintenance(id);
+              std::lock_guard lock(space_mutex_);
+              space_ready_ = false;
+            }
             else if (member == kBeginMountAdoptedId) controller_.mount_container(id);
             else if (member == kBeginMountAllId) controller_.mount_all();
             else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
@@ -1180,7 +1241,10 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (SUCCEEDED(com)) ::CoUninitialize();
         // A removal during an IOCTL is handled by the deferred lifecycle path.
         // Do not present its late result as a successful user operation.
-        if (creation_work_->interrupted.load()) status = 10;
+        if (creation_work_->interrupted.load()) {
+          status = 10;
+          clear_space();
+        }
         volume_status_.store(status);
         creation_work_->running.store(false);
       });
@@ -2125,6 +2189,13 @@ class CardProductWebViewHostObject final : public IDispatch {
   unsigned int batch_state_{};
   std::size_t batch_completed_{};
   std::size_t batch_current_{};
+  std::mutex space_mutex_;
+  std::uint32_t space_total_{};
+  std::uint32_t space_free_{};
+  std::uint32_t space_writable_{};
+  std::uint32_t space_id_{};
+  std::uint64_t space_epoch_{};
+  bool space_ready_{false};
   bool survey_mode_{false}; // Accessed only by the COM/window thread.
   std::mutex survey_mutex_;
   std::vector<std::uint32_t> survey_found_;
