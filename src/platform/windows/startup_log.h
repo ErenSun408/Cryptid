@@ -30,7 +30,6 @@ class StartupLog final {
     finish();
     error_ = 0;
     sequence_ = 0;
-    started_ = ::GetTickCount64();
     try {
       const DWORD attributes = ::GetFileAttributesW(directory.c_str());
       if (attributes == INVALID_FILE_ATTRIBUTES) { error_ = ::GetLastError(); return false; }
@@ -53,7 +52,7 @@ class StartupLog final {
         if (error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) { error_ = error; return false; }
       }
       if (file_ == INVALID_HANDLE_VALUE) { error_ = ERROR_FILE_EXISTS; return false; }
-      constexpr char header[] = "USB Vault startup log; format=1; filename_time=local\r\n";
+      constexpr char header[] = "\xEF\xBB\xBFUSB Vault 启动日志（格式 2，设备本地时间，精确到毫秒）\r\n";
       write(header, static_cast<DWORD>(sizeof(header) - 1));
       record(StartupStep::entry, StartupOutcome::begin);
       return error_ == 0;
@@ -78,14 +77,36 @@ class StartupLog final {
     const auto cleanup = clean(failure.cleanup);
     if (event_kind > 2) { event_kind = 0; event_code = 0; }
     if (!event_kind) event_code = 0;
+    SYSTEMTIME time{};
+    ::GetLocalTime(&time);
     char text[512]{};
-    const int length = sprintf_s(text,
-        "seq=%u elapsed_ms=%llu step=%u outcome=%u code=%u reason=%u native_kind=%u native_code=%u cleanup_code=%u cleanup_reason=%u cleanup_kind=%u cleanup_native=%u event_kind=%u event_code=%u substep=%u\r\n",
-        sequence_++, ::GetTickCount64() - started_, static_cast<unsigned int>(step),
-        static_cast<unsigned int>(outcome), primary.code, primary.reason, primary.native_kind,
-        primary.native_code, cleanup.code, cleanup.reason, cleanup.native_kind,
-        cleanup.native_code, event_kind, event_code, substep);
-    if (length > 0) write(text, static_cast<DWORD>(length));
+    size_t used = 0;
+    bool valid = true;
+    const auto append = [&](const char* format, auto... args) noexcept {
+      if (!valid) return;
+      const int length = std::snprintf(text + used, sizeof(text) - used, format, args...);
+      if (length < 0 || static_cast<size_t>(length) >= sizeof(text) - used) valid = false;
+      else used += static_cast<size_t>(length);
+    };
+    append("[%04u-%02u-%02u %02u:%02u:%02u.%03u] [%s] %s",
+        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
+        time.wMilliseconds, outcome == StartupOutcome::begin ? "开始" :
+        outcome == StartupOutcome::failed ? "失败" : "完成", stage_name(step, substep));
+    const auto detail = [&](const card::FailureDetail& value, const char* label) noexcept {
+      if (!value.code) return;
+      append("；%s：%u", label, value.code);
+      if (value.reason) append("；原因码：%u", value.reason);
+      if (value.native_kind) append("；%s：%u", value.native_kind == 1 ? "Win32 错误" :
+          value.native_kind == 2 ? "HRESULT" : "进程退出码", value.native_code);
+    };
+    detail(primary, "错误码");
+    detail(cleanup, "附加清理错误码");
+    if (event_kind) append("；事件类别：%u；事件码：%u", event_kind, event_code);
+    if (step == StartupStep::webview && substep && substep != 1305 && substep != 1313)
+      append("；步骤码：%u", substep);
+    append("\r\n");
+    ++sequence_;
+    if (valid) write(text, static_cast<DWORD>(used));
     else { error_ = ERROR_INVALID_DATA; close(); }
   }
   void finish() noexcept {
@@ -95,6 +116,33 @@ class StartupLog final {
   }
   [[nodiscard]] DWORD error() const noexcept { return error_; }
  private:
+  static const char* stage_name(StartupStep step, unsigned int substep) noexcept {
+    switch (step) {
+      case StartupStep::entry: return "应用启动";
+      case StartupStep::maintenance: return "安装与维护状态检查";
+      case StartupStep::ole: return "OLE 初始化";
+      case StartupStep::preflight:
+        switch (substep) {
+          case 1: return "系统检查";
+          case 2: return "应用组件检查";
+          case 3: return "WebView 运行环境检查";
+          case 4: return "驱动检查";
+          case 5: return "凭据检查";
+          default: return "启动前置检查";
+        }
+      case StartupStep::window: return "应用窗口创建";
+      case StartupStep::artifacts: return "界面文件准备";
+      case StartupStep::session: return "会话初始化与首次安全卡探测";
+      case StartupStep::webview:
+        if (substep == 1305) return "WebView 控制器创建";
+        if (substep == 1313) return "页面导航";
+        return "WebView 页面初始化";
+      case StartupStep::ready: return "页面就绪";
+      case StartupStep::failure: return "启动错误";
+      case StartupStep::end: return "启动日志结束（不代表此前没有错误）";
+    }
+    return "未知启动阶段";
+  }
   void write(const char* bytes, DWORD size) noexcept {
     DWORD written{};
     if (!::WriteFile(file_, bytes, size, &written, nullptr)) error_ = ::GetLastError();
@@ -112,6 +160,5 @@ class StartupLog final {
   HANDLE file_{INVALID_HANDLE_VALUE};
   DWORD error_{};
   unsigned int sequence_{};
-  ULONGLONG started_{};
 };
 }  // namespace usb_vault::platform::windows

@@ -4,6 +4,8 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <regex>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 using namespace usb_vault::platform::windows;
@@ -31,8 +33,11 @@ int main() {
         {.primary = {.code = 2019, .reason = 18, .native_kind = 0, .native_code = 0xdeadbeef},
          .cleanup = {.code = 2015, .reason = 1, .native_kind = 1, .native_code = 5}});
     const auto flushed = read(first);
-    require(flushed.find("code=2019 reason=18 native_kind=0 native_code=0") != std::string::npos &&
-            flushed.find("cleanup_code=2015 cleanup_reason=1 cleanup_kind=1 cleanup_native=5") != std::string::npos,
+    require(flushed.starts_with("\xEF\xBB\xBF") &&
+            std::regex_search(flushed, std::regex(R"(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\])")),
+            "UTF-8 BOM or local millisecond timestamp missing");
+    require(flushed.find("[失败] 会话初始化与首次安全卡探测；错误码：2019；原因码：18") != std::string::npos &&
+            flushed.find("附加清理错误码：2015；原因码：1；Win32 错误：5") != std::string::npos,
             "failure diagnostics not flushed or cleanup overwritten");
     require(flushed.find("3735928559") == std::string::npos, "untyped IPC detail leaked");
     log.record(StartupStep::session, StartupOutcome::completed,
@@ -40,6 +45,9 @@ int main() {
     require(read(first).find("3735928559") == std::string::npos, "success payload leaked into diagnostics");
     log.finish();
     const auto finished = read(first);
+    require(finished.find("code=") == std::string::npos && finished.find("错误码：0") == std::string::npos &&
+            finished.find("[完成] 会话初始化与首次安全卡探测\r\n") != std::string::npos,
+            "successful events contain numeric diagnostic clutter");
     log.record(StartupStep::failure, StartupOutcome::failed, {.primary = {.code = 3005}});
     log.finish();
     require(read(first) == finished, "runtime activity appended after startup ended");
@@ -49,8 +57,8 @@ int main() {
     bounded.finish();
     const auto third = root / L"startup-log-20260920-171234-02.txt";
     const auto limited = read(third);
-    require(limited.size() < 65536 && limited.find("seq=127 ") != std::string::npos &&
-            limited.find("seq=128 ") == std::string::npos, "log exceeded fixed record budget");
+    require(limited.size() < 65536 && std::count(limited.begin(), limited.end(), '\n') == 129,
+            "log exceeded fixed record budget");
     StartupLog unavailable;
     require(!unavailable.open(root / L"missing", time) && unavailable.error() != 0,
             "unwritable destination falsely reported success");
