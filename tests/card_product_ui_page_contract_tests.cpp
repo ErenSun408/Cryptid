@@ -141,8 +141,8 @@ void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
                   std::string::npos &&
               section.find("id=\"decoy-maintenance-end\"") !=
                   std::string::npos &&
-              section.find("外层剩余可写") != std::string::npos &&
-              section.find("诱饵内容新鲜度") != std::string::npos,
+              section.find("id=\"decoy-maintenance-writable\"") != std::string::npos &&
+              section.find("id=\"decoy-maintenance-freshness\"") != std::string::npos,
           "the maintenance result has no secondary page or its two facts");
   require(section.find("id=\"decoy-protection-warning\"") != std::string::npos &&
               section.find("role=\"alert\"") != std::string::npos &&
@@ -173,8 +173,7 @@ void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
   require(script.find("for (const id of decoyFound)") != std::string::npos &&
               script.find("option.value = String(id);") != std::string::npos,
           "the switcher is not restricted to the survey result");
-  require(script.find("扫描结果不会保存") != std::string::npos &&
-              script.find("localStorage") == std::string::npos &&
+  require(script.find("localStorage") == std::string::npos &&
               script.find("sessionStorage") == std::string::npos,
           "freshness is described or implemented as persistent state");
 }
@@ -214,8 +213,8 @@ void test_a_shell_drop_is_never_read_by_the_page() {
           "the drop destination or its progress is not wired to the bridge");
   require(script.find("usb-vault-external-drop-changed") != std::string::npos,
           "the page is never told a drop started");
-  require(section.find("明文导出") != std::string::npos,
-          "the drop zone does not say where taking files out belongs");
+  require(page.find("明文导出") != std::string::npos,
+          "the page lost its separate plaintext export entry");
 }
 
 void test_page_has_route_specific_password_surfaces() {
@@ -493,9 +492,11 @@ void test_five_states_are_complete_and_vendor_neutral() {
     require(combined.find(marker) == std::string::npos,
             "product page exposed a forbidden or legacy state marker");
   }
-  require(combined.find("忘记密码") == std::string::npos &&
-              combined.find("遗忘后果") == std::string::npos,
-          "deferred password-forgetting confirmation leaked into the page");
+  require(page.find("id=\"forgot-password-acknowledge\"") != std::string::npos &&
+              script.find("bridge.beginLoginResetPreparation()") != std::string::npos &&
+              script.find("bridge.beginConfirmLoginReset(forgotTicket, force)") != std::string::npos &&
+              script.find("bridge.cancelLoginReset(ticket)") != std::string::npos,
+          "approved login reset lacks its separate confirmation lifecycle");
   require(page.find("default-src 'none'") != std::string::npos &&
               page.find("form-action 'none'") != std::string::npos &&
               page.find("script-src 'self'") != std::string::npos &&

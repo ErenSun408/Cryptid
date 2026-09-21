@@ -823,6 +823,33 @@ void test_invalid_inputs_do_not_touch_storage() {
 }
 
 
+void test_reset_preserves_bytes_outside_application_region() {
+  class GuardedStorage final : public ICardRecordJournalStorage {
+   public:
+    std::array<std::byte, kCardRecordJournalV1StorageSize + 64> data{};
+    std::size_t capacity() override { return data.size(); }
+    SecureBuffer read(std::size_t offset, std::size_t length) override {
+      expect(offset <= data.size() && length <= data.size() - offset, "out-of-range read");
+      SecureBuffer result(length);
+      std::ranges::copy(std::span(data).subspan(offset, length), result.bytes().begin());
+      return result;
+    }
+    void write(std::size_t offset, std::span<const std::byte> value) override {
+      expect(offset <= data.size() && value.size() <= data.size() - offset, "out-of-range write");
+      std::ranges::copy(value, data.begin() + offset);
+    }
+  } storage;
+  std::ranges::fill(std::span(storage.data).subspan(kCardRecordJournalV1StorageSize), std::byte{0xA5});
+  const auto marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(storage, marker.bytes());
+  const auto record = framed_record(std::byte{0x37});
+  commit_card_record_journal_v1(storage, record.bytes());
+  const auto snapshot = usb_vault::card::snapshot_card_record_journal_v1(storage);
+  usb_vault::card::reset_card_record_journal_v1(storage, snapshot.bytes());
+  expect(std::ranges::all_of(std::span(storage.data).subspan(kCardRecordJournalV1StorageSize),
+      [](std::byte value) { return value == std::byte{0xA5}; }), "reset changed unrelated card data");
+}
+
 void test_confirmed_reset_snapshot_and_fault_recovery() {
   using usb_vault::card::snapshot_card_record_journal_v1;
   using usb_vault::card::reset_card_record_journal_v1;
@@ -896,6 +923,7 @@ int main() {
     test_corruption_fails_closed_without_credential_rollback();
     test_invalid_inputs_do_not_touch_storage();
     test_confirmed_reset_snapshot_and_fault_recovery();
+    test_reset_preserves_bytes_outside_application_region();
     std::cout << "card record journal v1 tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception &error) {

@@ -681,7 +681,13 @@ class FakeEntry final : public ICardEntryActions {
     ++reset_calls;
   }
 
-  std::uint32_t prepare_login_reset() override { reset_ticket = ++reset_serial; return reset_ticket; }
+  std::atomic<bool> delay_reset_prepare{false}, reset_prepare_entered{false};
+  std::uint32_t prepare_login_reset() override {
+    reset_prepare_entered.store(true);
+    for (int i = 0; delay_reset_prepare.load() && i < 1000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    reset_ticket = ++reset_serial; return reset_ticket;
+  }
   void cancel_login_reset() noexcept override { reset_ticket = 0; }
   bool login_reset_pending(std::uint32_t ticket) const noexcept override {
     return ticket != 0 && ticket == reset_ticket && route == CardEntryRoute::login_required;
@@ -3317,7 +3323,7 @@ void test_configuration_transition() {
       "retiring bridge still accessed old context");
 }
 void test_login_reset_bridge_lifecycle() {
-  for (int scenario = 0; scenario < 4; ++scenario) {
+  for (int scenario = 0; scenario < 5; ++scenario) {
     Fixture fixture;
     fixture.entry.route = CardEntryRoute::login_required;
     RecordingCloseSink sink;
@@ -3333,6 +3339,7 @@ void test_login_reset_bridge_lifecycle() {
     work.running.store(true);
     require(invoke_no_arguments(*host.Get(), L"beginLoginResetPreparation", &result) == E_PENDING, "busy preparation accepted");
     work.running.store(false);
+    fixture.entry.delay_reset_prepare.store(scenario == 4);
     require(SUCCEEDED(invoke_no_arguments(*host.Get(), L"beginLoginResetPreparation", &result)), "prepare failed");
     const auto wait = [&] {
       for (int i = 0; i < 1000; ++i) {
@@ -3342,6 +3349,15 @@ void test_login_reset_bridge_lifecycle() {
       }
       throw std::runtime_error("reset worker timeout");
     };
+    if (scenario == 4) {
+      for (int i = 0; !fixture.entry.reset_prepare_entered.load() && i < 1000; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      work.card_epoch.fetch_add(1);
+      fixture.entry.delay_reset_prepare.store(false);
+      require(wait() == 6 && fixture.entry.reset_ticket == 0 && sink.close_calls == 0,
+              "late prepare restored a retired card confirmation");
+      continue;
+    }
     require(wait() == 2, "preparation did not finish");
     require(SUCCEEDED(invoke_no_arguments(*host.Get(), L"getLoginResetTicket", &result)), "ticket missing");
     args[1].ulVal = result.ulVal;

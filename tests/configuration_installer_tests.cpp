@@ -15,9 +15,11 @@ int wmain(int argc, wchar_t** argv) {
     using configuration::setup::Result;
     using configuration::setup::ensure_dependency;
     for (auto initial : {Result::ready, Result::incompatible, Result::unavailable}) {
-      const auto result = ensure_dependency([&] { return initial; }, []() -> Result {
-        throw std::runtime_error("setup overwrote an existing dependency");
+      int installs = 0;
+      const auto result = ensure_dependency([&] { return initial; }, [&]() -> Result {
+        ++installs; return Result::failed;
       });
+      if (installs != 0) throw std::runtime_error("setup overwrote an existing dependency");
       if (result != initial) throw std::runtime_error("probe result changed");
     }
     for (auto installed : {Result::ready, Result::restart, Result::cancelled, Result::failed}) {

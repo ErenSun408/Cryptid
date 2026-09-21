@@ -257,6 +257,8 @@ void test_reset_returns_the_card_to_the_provisioning_marker() {
       service.initialize_and_authenticate(secure_text("service-new-daily-v1"));
   require(fresh.size() == kCardRecordV1RootSecretSize,
           "a reset card could not be initialized again");
+  require(!std::ranges::equal(root.bytes(), fresh.bytes()),
+          "reinitialization reused the old root secret");
 }
 
 void test_reset_requires_an_initialized_record() {

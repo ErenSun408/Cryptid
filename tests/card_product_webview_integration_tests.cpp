@@ -495,6 +495,17 @@ class FakeEntry final : public ICardEntryActions {
     route = CardEntryRoute::unavailable;
   }
 
+  std::uint32_t prepare_login_reset() override { reset_pending = true; return 1; }
+  void cancel_login_reset() noexcept override { reset_pending = false; }
+  bool login_reset_pending(std::uint32_t ticket) const noexcept override {
+    return reset_pending && ticket == 1 && route == CardEntryRoute::login_required;
+  }
+  void confirm_login_reset(std::uint32_t ticket) override {
+    if (!login_reset_pending(ticket)) throw std::runtime_error("expired reset");
+    reset_pending = false; ++login_reset_calls; route = CardEntryRoute::unavailable;
+  }
+  bool reset_pending{};
+  int login_reset_calls{};
   int reset_calls{};
   bool second_password_existing_matched{};
   bool second_password_new_matched{};
@@ -615,7 +626,7 @@ void fail_and_close(const HWND window) noexcept {
 }
 
 [[nodiscard]] bool product_flow_matched() noexcept {
-  return g_entry.initialization_calls == 1 &&
+  return g_entry.login_reset_calls == 1 && g_entry.initialization_calls == 1 &&
          g_entry.initialization_payload_matched &&
          g_entry.login_calls == 2 && g_entry.credential_rejections == 1 &&
          g_entry.second_password_calls == 1 &&
@@ -634,7 +645,7 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.containers.size() == 2 &&
          g_volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL &&
          g_volume.consume_calls == 1 && g_volume.login_payload_matched &&
-         g_volume.clear_operation_calls == 1 && g_volume.unmount_calls == 1 &&
+         g_volume.clear_operation_calls == 2 && g_volume.unmount_calls == 1 &&
          // The remember switch went off and back on, and the import switch
          // came on, each of them taking its position from the session rather
          // than from the click.

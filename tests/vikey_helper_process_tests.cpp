@@ -603,6 +603,26 @@ void test_formal_card_record_backend_staging(
                  usb_vault::card::CardRecordState::initialized_v1,
          "card media probe did not classify the initialized fixture record");
 
+  auto snapshot = usb_vault::card::vikey::read_vikey_development_card_record_with_network_access(
+      helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
+      media.hardware_id, user_sn, api_key, initialized_user_pin, 5s, true);
+  expect(usb_vault::card::inspect_card_record(snapshot.bytes()) ==
+             usb_vault::card::CardRecordState::initialized_v1,
+         "reset preparation did not return the initialized snapshot");
+  usb_vault::card::vikey::write_vikey_development_card_record_with_network_access(
+      helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
+      media.hardware_id, user_sn, api_key, initialized_user_pin, snapshot, 5s, true);
+  // Fixture PIN R recreates a deterministic initialized card per helper process.
+  // A changed expected record must therefore fail before any reset write.
+  snapshot.bytes().back() ^= std::byte{1};
+  bool stale_rejected = false;
+  try {
+    usb_vault::card::vikey::write_vikey_development_card_record_with_network_access(
+        helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
+        media.hardware_id, user_sn, api_key, initialized_user_pin, snapshot, 5s, true);
+  } catch (const std::system_error&) { stale_rejected = true; }
+  expect(stale_rejected, "helper reset accepted a stale record snapshot");
+
   SecureBuffer short_record(usb_vault::card::kCardRecordV1Size - 1);
   try {
     store.put_blob(short_record);

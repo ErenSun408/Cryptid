@@ -602,6 +602,16 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-final-no-card");
     return;
   }
+  request("request-login");
+  if (!await waitForState("login-required")) throw new Error("reset login route");
+  const resetElement = name => document.getElementById("forgot-password-" + name);
+  resetElement("open").click();
+  resetElement("acknowledge").checked = true;
+  resetElement("acknowledge").dispatchEvent(new Event("change"));
+  resetElement("confirm").click();
+  if (!await waitFor(() => !resetElement("skip").hidden)) throw new Error("unknown mount skip missing");
+  resetElement("skip").click();
+  if (!await waitFor(() => resetElement("status").textContent.includes("正在关闭应用"))) throw new Error("reset not completed");
   request("pass");
 })().catch(() => {
   chrome.webview.postMessage("fail-driver-exception");
