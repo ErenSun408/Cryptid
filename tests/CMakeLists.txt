@@ -1125,3 +1125,8 @@ add_executable(import_unique_name_tests import_unique_name_tests.cpp)
 target_include_directories(import_unique_name_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 usb_vault_configure_target(import_unique_name_tests)
 add_test(NAME import_unique_name_tests COMMAND import_unique_name_tests)
+
+add_executable(card_reset_confirmation_tests card_reset_confirmation_tests.cpp)
+target_include_directories(card_reset_confirmation_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+usb_vault_configure_target(card_reset_confirmation_tests)
+add_test(NAME card_reset_confirmation_tests COMMAND card_reset_confirmation_tests)
