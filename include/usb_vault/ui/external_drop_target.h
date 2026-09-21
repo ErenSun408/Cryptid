@@ -21,7 +21,8 @@ namespace usb_vault::ui {
 // is asked repeatedly through `cancelled` while a large entry is in flight.
 using ExternalImportStep = std::function<void(
     std::uint32_t id, std::wstring_view relative_directory,
-    std::wstring_view absolute_source, const std::function<bool()>& cancelled)>;
+    std::wstring_view absolute_source, const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int)>& progress)>;
 
 // The paths a shell data object carries, or nothing.
 //
@@ -81,6 +82,7 @@ class ExternalDropTarget final : public IDropTarget,
   void clear_target() noexcept override;
   bool request_cancel() noexcept override;
   bool select_files() noexcept override;
+  unsigned int file_progress() const noexcept override { return file_percent_.load(); }
   [[nodiscard]] ExternalDropStatus status() const noexcept override;
 
   // Stops a run in flight and waits for it. The window is going away, so the
@@ -115,6 +117,7 @@ class ExternalDropTarget final : public IDropTarget,
   std::atomic<unsigned int> total_{0};
   std::atomic<unsigned int> completed_{0};
   std::atomic<unsigned int> failed_{0};
+  std::atomic<unsigned int> file_percent_{0};
   std::thread worker_;
 };
 

@@ -521,12 +521,12 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
 void import_dropped_entry(const std::uint32_t id,
                           const std::wstring_view relative_directory,
                           const std::wstring_view absolute_source,
-                          const std::function<bool()>& cancelled) {
+                          const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress) {
   if (g_ui_session == nullptr) {
     throw std::runtime_error("no product session is open for a shell drop");
   }
   g_ui_session->import_external_entry(id, relative_directory, absolute_source,
-                                      cancelled);
+                                      cancelled, progress);
 }
 
 void disarm_external_drops() noexcept {

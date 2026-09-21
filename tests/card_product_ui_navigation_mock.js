@@ -35,6 +35,7 @@ window.navigationFixture = {
   dropClears: 0,
   dropStatus: "0,0,0,0",
   dropCancels: 0,
+  filePercent: 0,
     selectFilesCalls: 0,
   failDropTarget: false,
   failOpenMaintenance: false,
@@ -124,6 +125,7 @@ window.navigationFixture = {
       if (!fixture.dropStatus.startsWith("1,")) fixture.dropStatus = "0,0,0,0";
     },
     clearExternalDropTarget: () => { fixture.dropClears += 1; fixture.dropArmed = false; },
+    getExternalFileProgress: () => fixture.filePercent,
     getExternalDropStatus: () => fixture.dropStatus,
     selectExternalFiles: () => { fixture.selectFilesCalls += 1; return false; },
     cancelExternalDrop: () => {

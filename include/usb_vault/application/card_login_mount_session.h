@@ -272,7 +272,7 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // The cancellation is asked repeatedly while the copy runs.
   virtual void import_external_entry(std::uint32_t, std::wstring_view,
                                      std::wstring_view,
-                                     const std::function<bool()>&) {
+                                     const std::function<bool()>&, const std::function<void(unsigned int)>& = {}) {
     throw std::logic_error("external import is unavailable");
   }
 
@@ -540,7 +540,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void import_external_entry(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view absolute_source,
-      const std::function<bool()>& cancelled) override;
+      const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress = {}) override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
   void force_unmount_user_active() override;

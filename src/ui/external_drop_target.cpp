@@ -205,6 +205,7 @@ bool ExternalDropTarget::start_sources(std::vector<std::wstring> sources) noexce
   total_.store(static_cast<unsigned int>(sources.size()));
   completed_.store(0);
   failed_.store(0);
+  file_percent_.store(0);
   work_.finish();  // A drop is not the creation gate's kind of cancellable.
   work_.volume_operation.store(true);
   work_.running.store(true);
@@ -235,7 +236,9 @@ void ExternalDropTarget::run(const std::uint32_t id,
   for (const std::wstring& source : sources) {
     if (stop()) break;
     try {
-      if (step_) step_(id, relative_directory, source, stop);
+      file_percent_.store(0);
+      if (step_) step_(id, relative_directory, source, stop,
+          [this](unsigned int percent) { file_percent_.store((std::min)(percent,99U)); });
       ++completed;
     } catch (...) {
       // A failed protected write may leave metadata awaiting recovery.
@@ -244,6 +247,7 @@ void ExternalDropTarget::run(const std::uint32_t id,
       failed_.store(failed);
       break;
     }
+    file_percent_.store(0);
     completed_.store(completed);
     failed_.store(failed);
   }

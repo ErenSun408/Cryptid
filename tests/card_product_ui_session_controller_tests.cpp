@@ -350,7 +350,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   void import_external_entry(
       const std::uint32_t id, const std::wstring_view relative_directory,
       const std::wstring_view absolute_source,
-      const std::function<bool()>& cancelled) override {
+      const std::function<bool()>& cancelled, const std::function<void(unsigned int)>&) override {
     imported.push_back({.id = id,
                         .directory = std::wstring(relative_directory),
                         .source = std::wstring(absolute_source),

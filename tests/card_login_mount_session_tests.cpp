@@ -359,10 +359,11 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   void end_imports() noexcept override { ++end_import_calls; }
   void import_protected(std::wstring_view container, const usb_vault::volume::MountIdentity& identity,
       const SecureBuffer& outer, const SecureBuffer& hidden, std::wstring_view source,
-      std::wstring_view destination, const usb_vault::volume::TransferCancellation& cancelled) override {
+      std::wstring_view destination, const usb_vault::volume::TransferCancellation& cancelled, const std::function<void(unsigned int)>& progress) override {
     require(container==identity.volume_path && identity==mount_identity(identity.drive_letter),"import received wrong identity");
     require(is_b_derivation(outer.bytes(),protected_outer_input)&&is_b_derivation(hidden.bytes(),"login-password"),"import missing authenticated credentials");
     ++protected_import_calls;
+    if(progress)progress(50);
     copy_entry(source,std::wstring(1,identity.drive_letter)+L":\\"+std::wstring(destination),cancelled);
     if(change_identity_during_import) ++identities.at(identity.drive_letter).unique_id;
   }
@@ -3487,7 +3488,9 @@ void test_a_shell_drop_lands_in_the_directory_the_page_named() {
   const std::wstring root(1, drive_letter);
   const std::size_t history_before = session.operation_history().size();
 
-  session.import_external_entry(id, L"", L"C:\\Users\\pictures\\2011.jpg", {});
+  unsigned int percent=0;
+  session.import_external_entry(id, L"", L"C:\\Users\\pictures\\2011.jpg", {}, [&](unsigned int value){percent=value;});
+  require(percent==50,"protected import progress was not forwarded");
   session.import_external_entry(id, L"photos/2011",
                                 L"D:\\scans\\receipt.pdf", {});
   require(runtime.copied.size() == 2, "a drop did not reach the storage layer");

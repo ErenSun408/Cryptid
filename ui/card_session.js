@@ -2886,9 +2886,12 @@
           decoyDropReported = raw;
           break;
         }
+        const percent = Number(await bridge.getExternalFileProgress());
+        if (revision !== batchSessionRevision) return;
+        if (!Number.isInteger(percent) || percent < 0 || percent > 99) throw new Error("invalid file progress");
         decoyDropBar.style.width = total === 0
-          ? "0%" : `${Math.round(((done + failed) / total) * 100)}%`;
-        decoyDropCopy.textContent = `正在放入（${done + failed}/${total}）…`;
+          ? "0%" : `${Math.min(99, Math.round(((done + percent / 100) / total) * 100))}%`;
+        decoyDropCopy.textContent = `正在放入（${done}/${total}），当前文件 ${percent}%…`;
         await new Promise((resolve) => setTimeout(resolve, 150));
       }
     } catch (_) {

@@ -120,15 +120,17 @@
     window.navigationFixture.dropStatus = "1,3,0,0";
     window.dispatchEvent(new Event("usb-vault-external-drop-changed"));
     await wait(() => !$("#decoy-drop-run").hidden);
+    window.navigationFixture.filePercent = 50;
     window.navigationFixture.dropStatus = "1,3,2,0";
     await wait(() => $("#decoy-drop-copy").textContent.includes("2/3"));
-    check($("#decoy-drop-bar").style.width === "67%" &&
+    check($("#decoy-drop-bar").style.width === "83%" && $("#decoy-drop-copy").textContent.includes("当前文件 50%") &&
       !$("#decoy-drop-cancel").disabled,
       "A running drop shows how far it has got and offers to stop");
     $("#decoy-drop-cancel").click();
     check(window.navigationFixture.dropCancels === 1,
       "Stopping a drop reaches the window rather than the session");
 
+    window.navigationFixture.filePercent = 0;
     window.navigationFixture.dropStatus = "3,3,2,1";
     await wait(() => $("#decoy-drop-run").hidden);
     await wait(() => $("#decoy-drop-status").textContent !== "");

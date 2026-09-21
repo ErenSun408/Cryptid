@@ -247,7 +247,7 @@ class CardProductUiSessionController final {
   void import_external_entry(std::uint32_t id,
                              std::wstring_view relative_directory,
                              std::wstring_view absolute_source,
-                             const std::function<bool()>& cancelled);
+                             const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress = {});
 
   // 🔴 Copies one entry out of a mounted container to an ordinary location:
   // the plaintext export. What it writes is no longer protected by anything

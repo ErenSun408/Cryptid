@@ -512,13 +512,13 @@ void CardProductUiSessionController::copy_container_entry(
 void CardProductUiSessionController::import_external_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view absolute_source,
-    const std::function<bool()>& cancelled) {
+    const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress) {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route(
         "importing an external entry is not available in the current UI state");
   }
   volume_session_.import_external_entry(id, relative_directory,
-                                        absolute_source, cancelled);
+                                        absolute_source, cancelled, progress);
 }
 
 bool CardProductUiSessionController::remembering_container_paths() {

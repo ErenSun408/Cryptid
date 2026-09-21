@@ -131,9 +131,9 @@ class ProductionCardLoginMountSessionRuntime final
   void import_protected(std::wstring_view container, const volume::MountIdentity& identity,
       const security::SecureBuffer& outer, const security::SecureBuffer& hidden,
       std::wstring_view source, std::wstring_view destination,
-      const volume::TransferCancellation& cancelled) override {
+      const volume::TransferCancellation& cancelled, const std::function<void(unsigned int)>& progress) override {
     imports_.copy(container, identity.drive_letter, identity.unique_id, identity.disk_length,
-                  outer, hidden, source, destination, {}, cancelled);
+                  outer, hidden, source, destination, [&](const auto& value) { if (progress) progress(value.percent); }, cancelled);
   }
 
   [[nodiscard]] security::SecureBuffer derive_container_password(
@@ -456,9 +456,9 @@ void CardLoginMountSession::end_decoy_maintenance(const std::uint32_t id) {
 void CardLoginMountSession::import_external_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view absolute_source,
-    const std::function<bool()>& cancelled) {
+    const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress) {
   impl_->core.import_external_entry(id, relative_directory, absolute_source,
-                                    cancelled);
+                                    cancelled, progress);
 }
 
 wchar_t CardLoginMountSession::open_surveyed_maintenance(
@@ -1551,7 +1551,7 @@ void CardLoginMountSessionCore::end_decoy_maintenance(const std::uint32_t id) {
 void CardLoginMountSessionCore::import_external_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view absolute_source,
-    const volume::TransferCancellation& cancelled) {
+    const volume::TransferCancellation& cancelled, const std::function<void(unsigned int)>& progress) {
   if (!authentication_.authenticated()) {
     throw std::logic_error(
         "external import requires an authenticated card session");
@@ -1588,7 +1588,7 @@ void CardLoginMountSessionCore::import_external_entry(
     };
     verify();
     runtime_.import_protected(entry->path, *entry->maintenance_identity, state_.decoy_outer_password,
-        hidden_container_password(), absolute_source, destination, cancelled);
+        hidden_container_password(), absolute_source, destination, cancelled, progress);
     verify();
   } catch (...) {
     entry->maintenance_recovery_required = true;

@@ -3022,6 +3022,7 @@ class RecordingDropSink final : public usb_vault::ui::IUiExternalDropTargetSink 
   }
 
   bool select_files() noexcept override { ++select_calls; return armed_id != 0; }
+  unsigned int file_progress() const noexcept override { return 142; }
   int select_calls{};
   int set_calls{};
   int clear_calls{};
@@ -3176,6 +3177,9 @@ void test_a_running_drop_answers_only_about_itself() {
               std::wstring(status.bstrVal) == L"1,2,0,0",
           "a running drop would not report its own progress");
   static_cast<void>(::VariantClear(&status));
+  VARIANT percent{};
+  require(invoke_no_arguments(*host.Get(),L"getExternalFileProgress",&percent)==S_OK && percent.vt==VT_UI4 && percent.ulVal==99,"active file progress was blocked or unbounded");
+  static_cast<void>(::VariantClear(&percent));
   VARIANT cancelled{};
   require(invoke_no_arguments(*host.Get(), L"cancelExternalDrop", &cancelled) ==
                   S_OK,

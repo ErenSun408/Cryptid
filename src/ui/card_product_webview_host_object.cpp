@@ -138,6 +138,7 @@ constexpr DISPID kCancelExternalDropId = 82;
 constexpr DISPID kExternalDropStatusId = 83;
 constexpr DISPID kDecoyWriteBlockedId = 84;
 constexpr DISPID kSelectExternalFilesId = 85;
+constexpr DISPID kExternalFileProgressId = 86;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
 // its own bridge with no card, volume or container member on it.
@@ -550,6 +551,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getDecoyMaintenanceSpace")) { ids[0] = kDecoySpaceId; return S_OK; }
     if (matches(names[0], L"getDecoyMaintenanceWriteBlocked")) { ids[0] = kDecoyWriteBlockedId; return S_OK; }
     if (matches(names[0], L"beginEndDecoyMaintenance")) { ids[0] = kBeginEndDecoyMaintenanceId; return S_OK; }
+    if (matches(names[0], L"getExternalFileProgress")) { ids[0] = kExternalFileProgressId; return S_OK; }
     if (matches(names[0], L"selectExternalFiles")) { ids[0] = kSelectExternalFilesId; return S_OK; }
     if (matches(names[0], kSetExternalDropTargetName)) { ids[0] = kSetExternalDropTargetId; return S_OK; }
     if (matches(names[0], kClearExternalDropTargetName)) { ids[0] = kClearExternalDropTargetId; return S_OK; }
@@ -627,7 +629,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     // operation does, so its progress and its cancel are readable throughout;
     // they carry no session state of their own and are answered from atomics.
     const bool external_drop_query =
-        member == kExternalDropStatusId || member == kCancelExternalDropId;
+        member == kExternalDropStatusId || member == kCancelExternalDropId || member == kExternalFileProgressId;
     if (creation_work_->running.load() && !external_drop_query &&
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
@@ -653,7 +655,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       // would land and touches nothing a retry, a batch or a measurement is
       // holding, and the maintenance page re-arms on every directory change.
       case kSetExternalDropTargetId: case kClearExternalDropTargetId:
-      case kExternalDropStatusId: case kCancelExternalDropId:
+      case kExternalDropStatusId: case kCancelExternalDropId: case kExternalFileProgressId:
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
@@ -860,6 +862,13 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         return complete_selection(
             external_drop_sink_ && external_drop_sink_->request_cancel(), result);
+      case kExternalFileProgressId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        if (!external_drop_sink_) return E_ACCESSDENIED;
+        ::VariantInit(result); result->vt = VT_UI4;
+        result->ulVal = (std::min)(external_drop_sink_->file_progress(),99U);
+        return S_OK;
       case kExternalDropStatusId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (!result) return E_POINTER;

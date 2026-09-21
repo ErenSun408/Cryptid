@@ -61,7 +61,7 @@ class CardLoginMountSessionRuntime {
   virtual void import_protected(std::wstring_view container_path, const volume::MountIdentity& identity,
       const security::SecureBuffer& outer, const security::SecureBuffer& hidden,
       std::wstring_view source, std::wstring_view destination_relative,
-      const volume::TransferCancellation& cancelled) = 0;
+      const volume::TransferCancellation& cancelled, const std::function<void(unsigned int)>& progress) = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -227,7 +227,7 @@ class CardLoginMountSessionCore final {
   void import_external_entry(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view absolute_source,
-      const volume::TransferCancellation& cancelled);
+      const volume::TransferCancellation& cancelled, const std::function<void(unsigned int)>& progress = {});
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,

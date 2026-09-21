@@ -155,7 +155,7 @@ struct ImportLog final {
   return [&log](const std::uint32_t id,
                 const std::wstring_view relative_directory,
                 const std::wstring_view absolute_source,
-                const std::function<bool()>& cancelled) {
+                const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress) {
     {
       const std::lock_guard lock(log.mutex);
       log.calls.push_back({.id = id,
@@ -163,6 +163,7 @@ struct ImportLog final {
                            .source = std::wstring(absolute_source)});
     }
     if (!log.hold_source.empty() && absolute_source == log.hold_source) {
+      progress(42);
       log.holding.store(true);
       while (!log.release_hold.load()) {
         if (cancelled && cancelled()) log.hold_saw_cancellation.store(true);
@@ -321,6 +322,7 @@ void test_a_drop_owns_the_session_while_it_runs() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   require(log.holding.load(), "the run never reached the entry it holds");
+  require(target->file_progress()==42 && target->status().completed==0,"in-flight progress lost or counted as completion");
   require(work.running.load(), "a running drop did not claim the session");
   require(work.volume_operation.load(),
           "a running drop was not declared a volume operation");
