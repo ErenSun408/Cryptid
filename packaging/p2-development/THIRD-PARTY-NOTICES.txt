@@ -19,8 +19,8 @@ acceptance before invoking the official MSI in unattended mode. Its SHA-256
 and Authenticode signature are checked by the packaging script.
 
 VeraCryptFormat.dll is built from VeraCrypt 1.26.29 commit
-b48e31f5b47da7d41025e3f0e02751675e15005a with the narrow USB Vault patch
-included under licenses\veracrypt. The upstream license and NOTICE are also
+b48e31f5b47da7d41025e3f0e02751675e15005a with the USB Vault patches and read-only geometry include
+included under licenses\veracrypt, together with their build and ABI notes. The upstream license and NOTICE are also
 included there. Final distribution and source-offer obligations remain subject
 to the planned legal review.
 

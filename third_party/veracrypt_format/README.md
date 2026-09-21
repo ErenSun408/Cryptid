@@ -44,17 +44,21 @@ boundary described by L-01. The patched FormatDLL and the helper distribution
 must satisfy VeraCrypt/TrueCrypt license and source-offer obligations; final
 distribution still requires the planned legal review.
 
-## Candidate read-only geometry boundary (P3.25 capacity slice 1)
+## Read-only geometry boundary (P3.25)
 
-This is a separate candidate, not the DLL currently allowlisted for packaging.
-After applying the existing patch to a clean pinned source tree, apply
+The reviewed packaging binary now includes the read-only geometry export.
+Apply the existing patch to the pinned source tree, then apply
 `veracrypt-1.26.29-geometry.patch` and copy `UsbVaultGeometry.inl` beside
-`src/FormatDLL/VeraCryptFormatSDK.cpp`. Build the x64 Release Crypto and Zip
-projects, generate `Format/FormatCom_h.h` from `FormatCom.idl` with MIDL
+`src/FormatDLL/VeraCryptFormatSDK.cpp`. Build x64 Release Crypto and Zip,
+generate `Format/FormatCom_h.h` from `FormatCom.idl` with MIDL
 (`/env x64 /h FormatCom_h.h /iid FormatCom_i.c`, working directory `src/Format`),
-then build FormatDLL. All candidate sources and outputs belong in a separate
-build directory. Do not replace the reviewed local dependency or its digest
-until the helper integration and distribution slice has been reviewed.
+then build FormatDLL. Keep the reviewed DLL in local dependency storage,
+separate from disposable build outputs.
+
+Reviewed SHA-256: `416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184`.
+The distribution includes both patches, the geometry include, this README,
+and upstream License/NOTICE. A rebuilt binary must be reviewed before changing
+the allowlist; compiler/build metadata may change its digest.
 
 `VeraCryptReadHiddenGeometry` is synchronous and requires SDK initialization.
 Its ABI is mirrored in `src/volume_creation/veracrypt_format_abi.h`: two encrypted
@@ -67,7 +71,7 @@ host file length, and a 32-byte output of four `uint64_t` values:
 4. Hidden protection length (the header's `hiddenVolumeSize`, not the requested
    creation size, which also includes a trailing filesystem reserve).
 
-The future helper must read both primary headers from the same validated,
+The helper must read both primary headers from the same validated,
 caller-accessible open file and keep the result bound to that container and
 authenticated maintenance session. This function cannot establish file identity
 from header bytes. It does not open files, mount volumes, write data, or export
@@ -94,10 +98,12 @@ host/header/password/output lengths, and successful reuse after failure. It does
 not authenticate a security card or mount a volume.
 
 
-The protected-space helper now uses this export through protocol v3. It opens
+The protected-space and upload helper use this export through protocol v4. It opens
 both headers under caller impersonation, matches file identity and the mounted
 protection-header digest, and rechecks mount identity and headers after scanning.
 The pinned driver records the last authenticated header digest; for a protected
 outer mount this is the hidden protection header. Geometry stays inside the
-helper. The packaged DLL allowlist has not been changed by this integration;
-application lifecycle wiring and reviewed distribution remain separate slices.
+helper. The allowlist was updated after source comparison against the pinned
+upstream and reviewed patches, geometry boundary tests, and authenticated
+measurement/upload integration on disposable containers. Full application
+hardware acceptance remains a separate requirement.
