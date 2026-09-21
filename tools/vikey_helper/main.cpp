@@ -661,7 +661,7 @@ bootstrap_media_state(const CardMediaState state) {
 }
 
 [[nodiscard]] BlobReadResult card_record_read(
-    const CardRecordSessionRequest& request) {
+    const CardRecordSessionRequest& request, bool snapshot) {
   try {
     const std::filesystem::path staged = staged_vendor_dll();
     auto verified = usb_vault::card::vikey::verify_vikey_dll(
@@ -677,7 +677,8 @@ bootstrap_media_state(const CardMediaState state) {
     usb_vault::security::SecureBuffer record;
     OperationResult result{};
     try {
-      record = usb_vault::card::vikey::read_vikey_card_record(session);
+      record = snapshot ? usb_vault::card::vikey::snapshot_vikey_card_record(session)
+                        : usb_vault::card::vikey::read_vikey_card_record(session);
     } catch (const std::system_error& error) {
       result.status = error.code().category() == card_error_category()
                           ? error.code().value()
@@ -714,7 +715,7 @@ bootstrap_media_state(const CardMediaState state) {
 }
 
 [[nodiscard]] OperationResult card_record_write(
-    const CardRecordWriteRequest& request) {
+    const CardRecordWriteRequest& request, bool reset) {
   try {
     const std::filesystem::path staged = staged_vendor_dll();
     auto verified = usb_vault::card::vikey::verify_vikey_dll(
@@ -729,8 +730,8 @@ bootstrap_media_state(const CardMediaState state) {
 
     OperationResult result{};
     try {
-      usb_vault::card::vikey::write_vikey_card_record(session,
-                                                      request.record);
+      if (reset) usb_vault::card::vikey::reset_vikey_card_record(session, request.record);
+      else usb_vault::card::vikey::write_vikey_card_record(session, request.record);
     } catch (const std::system_error& error) {
       result.status = error.code().category() == card_error_category()
                           ? error.code().value()
@@ -808,7 +809,9 @@ bootstrap_media_state(const CardMediaState state) {
     case Operation::development_blob_read:
     case Operation::development_blob_write:
     case Operation::card_record_read:
+    case Operation::card_record_snapshot:
     case Operation::card_record_write:
+    case Operation::card_record_reset:
     case Operation::card_media_bootstrap:
     case Operation::development_media_reset:
       return {.status =
@@ -847,8 +850,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                 Operation::development_blob_round_trip_probe ||
             request.operation == Operation::development_blob_read ||
             request.operation == Operation::development_blob_write ||
-            request.operation == Operation::card_record_read ||
-            request.operation == Operation::card_record_write ||
+            is_record_read(request.operation) ||
+            is_record_write(request.operation) ||
             request.operation == Operation::card_identity_probe ||
             request.operation == Operation::card_media_probe ||
             request.operation == Operation::card_media_bootstrap ||
@@ -908,17 +911,17 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                     read_development_blob_write_request(request_handle,
                                                         request);
                 result = development_blob_write(blob_request);
-              } else if (request.operation == Operation::card_record_read) {
+              } else if (is_record_read(request.operation)) {
                 CardRecordSessionRequest record_request =
                     read_card_record_read_request(request_handle, request);
                 BlobReadResult read_result =
-                    card_record_read(record_request);
+                    card_record_read(record_request, request.operation == Operation::card_record_snapshot);
                 result = read_result.operation;
                 response_blob = std::move(read_result.blob);
               } else {
                 CardRecordWriteRequest record_request =
                     read_card_record_write_request(request_handle, request);
-                result = card_record_write(record_request);
+                result = card_record_write(record_request, request.operation == Operation::card_record_reset);
               }
             }
             // The scoped request above wipes all helper-side credential
@@ -946,7 +949,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         if (request.operation == Operation::development_blob_read) {
           response.payload_bytes =
               static_cast<std::uint32_t>(response_blob.size());
-        } else if (request.operation == Operation::card_record_read) {
+        } else if (is_record_read(request.operation)) {
           response.payload_bytes =
               static_cast<std::uint32_t>(response_blob.size());
         }
@@ -966,7 +969,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         response.status == 0) {
       write_development_blob_response(response_handle, response,
                                       response_blob);
-    } else if (request.operation == Operation::card_record_read &&
+    } else if (is_record_read(request.operation) &&
                response.status == 0) {
       write_card_record_response(response_handle, response, response_blob);
     } else {

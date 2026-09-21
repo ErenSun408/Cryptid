@@ -224,7 +224,8 @@ read_vikey_development_card_record_with_network_access(
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
-    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+    std::chrono::milliseconds timeout = std::chrono::seconds(5),
+    const bool snapshot = false);
 
 void write_vikey_development_card_record_with_network_access(
     const std::filesystem::path& helper_path,
@@ -236,6 +237,7 @@ void write_vikey_development_card_record_with_network_access(
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
     const security::SecureBuffer& record,
-    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+    std::chrono::milliseconds timeout = std::chrono::seconds(5),
+    const bool reset = false);
 
 }  // namespace usb_vault::card::vikey

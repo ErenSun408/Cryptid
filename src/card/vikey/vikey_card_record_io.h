@@ -51,4 +51,7 @@ void reset_vikey_development_legacy_media(
 void write_vikey_card_record(VikeySession& session,
                              const security::SecureBuffer& record);
 
+[[nodiscard]] security::SecureBuffer snapshot_vikey_card_record(VikeySession& session);
+void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected);
+
 }  // namespace usb_vault::card::vikey

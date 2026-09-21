@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 12;
+constexpr std::uint16_t kVersion = 13;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -58,7 +58,16 @@ enum class Operation : std::uint32_t {
   card_media_probe = 11,
   card_media_bootstrap = 12,
   development_media_reset = 13,
+  card_record_snapshot = 14,
+  card_record_reset = 15,
 };
+
+[[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
+  return op == Operation::card_record_read || op == Operation::card_record_snapshot;
+}
+[[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
+  return op == Operation::card_record_write || op == Operation::card_record_reset;
+}
 
 enum class CardMediaState : std::uint32_t {
   blank = 1,

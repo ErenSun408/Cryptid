@@ -574,4 +574,26 @@ void commit_card_record_journal_v1(
   }
 }
 
+security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage& storage) {
+  return std::move(load_journal(storage).record);
+}
+
+void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
+    const std::span<const std::byte> expected) {
+  const auto current = snapshot_card_record_journal_v1(storage);
+  if (inspect_card_record(expected) != CardRecordState::initialized_v1 ||
+      !equal_bytes(current.bytes(), expected))
+    fail(CardError::invalid_operation, "confirmed card record changed");
+  const auto marker = provision_uninitialized_card_record_v1();
+  std::exception_ptr write_failure;
+  try { commit_card_record_journal_v1(storage, marker.bytes()); }
+  catch (...) { write_failure = std::current_exception(); }
+  // A read completes cleanup if commit became authoritative before interruption.
+  const auto observed = read_card_record_journal_v1(storage);
+  if (!equal_bytes(observed.bytes(), marker.bytes())) {
+    if (write_failure) std::rethrow_exception(write_failure);
+    fail(CardError::device_failure, "reset did not verify");
+  }
+}
+
 } // namespace usb_vault::card

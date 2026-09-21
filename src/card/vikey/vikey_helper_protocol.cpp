@@ -72,8 +72,8 @@ bool valid_request(const Request& request) noexcept {
       request.operation == Operation::development_blob_round_trip_probe ||
       request.operation == Operation::development_blob_read ||
       request.operation == Operation::development_blob_write ||
-      request.operation == Operation::card_record_read ||
-      request.operation == Operation::card_record_write ||
+      is_record_read(request.operation) ||
+      is_record_write(request.operation) ||
       request.operation == Operation::card_identity_probe ||
       request.operation == Operation::card_media_probe ||
       request.operation == Operation::card_media_bootstrap ||
@@ -88,9 +88,9 @@ bool valid_request(const Request& request) noexcept {
                  Operation::development_blob_round_trip_probe ||
              request.operation == Operation::development_blob_write) {
     required_payload = kDevelopmentBlobRoundTripPayloadBytes;
-  } else if (request.operation == Operation::card_record_read) {
+  } else if (is_record_read(request.operation)) {
     required_payload = kCardRecordReadPayloadBytes;
-  } else if (request.operation == Operation::card_record_write) {
+  } else if (is_record_write(request.operation)) {
     required_payload = kCardRecordWritePayloadBytes;
   } else if (request.operation == Operation::card_media_bootstrap) {
     required_payload = kCardMediaBootstrapPayloadBytes;
@@ -119,7 +119,7 @@ bool valid_response(const Response& response,
     std::uint32_t required_payload = 0;
     if (expected_operation == Operation::development_blob_read) {
       required_payload = static_cast<std::uint32_t>(kVikeyBlobBytes);
-    } else if (expected_operation == Operation::card_record_read) {
+    } else if (is_record_read(expected_operation)) {
       required_payload = static_cast<std::uint32_t>(kCardRecordV1Size);
     }
     if (response.payload_bytes != required_payload) return false;
@@ -515,7 +515,7 @@ void write_card_record_read_request(
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin) {
   if (!valid_request(request) ||
-      request.operation != Operation::card_record_read ||
+      !is_record_read(request.operation) ||
       expected_hardware_id == 0 ||
       user_sn.size() != kVikeyUserSnBytes ||
       api_key.size() != kVikeyApiKeyBytes ||
@@ -533,7 +533,7 @@ void write_card_record_read_request(
 CardRecordSessionRequest read_card_record_read_request(
     const HANDLE pipe, const Request& request) {
   if (!valid_request(request) ||
-      request.operation != Operation::card_record_read) {
+      !is_record_read(request.operation)) {
     throw_protocol("reject invalid ViKey card record read request");
   }
   CardRecordSessionRequest result;
@@ -557,7 +557,7 @@ void write_card_record_write_request(
     const security::SecureBuffer& user_pin,
     const security::SecureBuffer& record) {
   if (!valid_request(request) ||
-      request.operation != Operation::card_record_write ||
+      !is_record_write(request.operation) ||
       expected_hardware_id == 0 ||
       user_sn.size() != kVikeyUserSnBytes ||
       api_key.size() != kVikeyApiKeyBytes ||
@@ -577,7 +577,7 @@ void write_card_record_write_request(
 CardRecordWriteRequest read_card_record_write_request(
     const HANDLE pipe, const Request& request) {
   if (!valid_request(request) ||
-      request.operation != Operation::card_record_write) {
+      !is_record_write(request.operation)) {
     throw_protocol("reject invalid ViKey card record write request");
   }
   CardRecordWriteRequest result;

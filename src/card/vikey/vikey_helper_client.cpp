@@ -930,7 +930,7 @@ void cleanup_development_directory(
       throw_card(CardError::communication_failed, "inspect ViKey helper secret response", DiagnosticStage::ipc_read);
     }
     if (available >= expected_bytes) {
-      return operation == helper::Operation::card_record_read
+      return helper::is_record_read(operation)
                  ? helper::read_card_record_response_payload(pipe, response)
                  : helper::read_development_blob_response_payload(pipe,
                                                                     response);
@@ -951,7 +951,7 @@ void cleanup_development_directory(
       if (::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) !=
               FALSE &&
           available >= expected_bytes) {
-        return operation == helper::Operation::card_record_read
+        return helper::is_record_read(operation)
                    ? helper::read_card_record_response_payload(pipe,
                                                                 response)
                    : helper::read_development_blob_response_payload(
@@ -1028,21 +1028,21 @@ namespace {
           helper::Operation::development_blob_round_trip_probe ||
       operation == helper::Operation::development_blob_read ||
       operation == helper::Operation::development_blob_write ||
-      operation == helper::Operation::card_record_read ||
-      operation == helper::Operation::card_record_write;
+      helper::is_record_read(operation) ||
+      helper::is_record_write(operation);
   const bool blob_input_required =
       operation == helper::Operation::development_blob_round_trip_probe ||
       operation == helper::Operation::development_blob_write ||
-      operation == helper::Operation::card_record_write;
+      helper::is_record_write(operation);
   const bool blob_output_required =
       operation == helper::Operation::development_blob_read ||
-      operation == helper::Operation::card_record_read;
+      helper::is_record_read(operation);
   const bool vendor_required =
       operation == helper::Operation::vendor_runtime_probe ||
       session_required;
   const bool expected_identity_required =
-      operation == helper::Operation::card_record_read ||
-      operation == helper::Operation::card_record_write ||
+      helper::is_record_read(operation) ||
+      helper::is_record_write(operation) ||
       operation == helper::Operation::card_media_bootstrap ||
       operation == helper::Operation::development_media_reset;
   const bool expected_media_state_required =
@@ -1087,7 +1087,7 @@ namespace {
        blob_input_required != (session_inputs->blob != nullptr) ||
        (session_inputs->blob != nullptr &&
         session_inputs->blob->size() !=
-            (operation == helper::Operation::card_record_write
+            (helper::is_record_write(operation)
                  ? kCardRecordV1Size
                  : kVikeyBlobBytes)))) {
     throw_card(CardError::invalid_configuration, "ViKey development session credential size is invalid", DiagnosticStage::input_shape);
@@ -1293,14 +1293,14 @@ namespace {
             request_pipe.parent_end.get(), request, *vendor_digest,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin, *session_inputs->blob);
-      } else if (operation == helper::Operation::card_record_read) {
+      } else if (helper::is_record_read(operation)) {
         request.payload_bytes = helper::kCardRecordReadPayloadBytes;
         helper::write_card_record_read_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
             session_inputs->expected_hardware_id,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin);
-      } else if (operation == helper::Operation::card_record_write) {
+      } else if (helper::is_record_write(operation)) {
         request.payload_bytes = helper::kCardRecordWritePayloadBytes;
         helper::write_card_record_write_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
@@ -1380,7 +1380,7 @@ namespace {
     }
     if (blob_response != nullptr) {
       const DWORD expected_bytes =
-          operation == helper::Operation::card_record_read
+          helper::is_record_read(operation)
               ? static_cast<DWORD>(kCardRecordV1Size)
               : static_cast<DWORD>(kVikeyBlobBytes);
       *blob_response = read_secret_payload_until(
@@ -1792,7 +1792,8 @@ read_vikey_development_card_record_with_network_access(
     const security::SecureBuffer& user_sn,
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
-    const std::chrono::milliseconds timeout) {
+    const std::chrono::milliseconds timeout,
+    const bool snapshot) {
   const std::filesystem::path vendor_path =
       vendor_directory / kVendorDllName;
   const DevelopmentSessionInputs inputs{
@@ -1804,7 +1805,7 @@ read_vikey_development_card_record_with_network_access(
   security::SecureBuffer record;
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
-      helper::Operation::card_record_read, &vendor_path,
+      (snapshot ? helper::Operation::card_record_snapshot : helper::Operation::card_record_read), &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout, &record));
   return record;
@@ -1820,7 +1821,8 @@ void write_vikey_development_card_record_with_network_access(
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
     const security::SecureBuffer& record,
-    const std::chrono::milliseconds timeout) {
+    const std::chrono::milliseconds timeout,
+    const bool reset) {
   const std::filesystem::path vendor_path =
       vendor_directory / kVendorDllName;
   const DevelopmentSessionInputs inputs{
@@ -1831,7 +1833,7 @@ void write_vikey_development_card_record_with_network_access(
       .expected_hardware_id = expected_hardware_id};
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
-      helper::Operation::card_record_write, &vendor_path,
+      (reset ? helper::Operation::card_record_reset : helper::Operation::card_record_write), &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout));
 }

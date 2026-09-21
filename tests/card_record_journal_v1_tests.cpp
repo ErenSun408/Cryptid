@@ -822,6 +822,63 @@ void test_invalid_inputs_do_not_touch_storage() {
   }
 }
 
+
+void test_confirmed_reset_snapshot_and_fault_recovery() {
+  using usb_vault::card::snapshot_card_record_journal_v1;
+  using usb_vault::card::reset_card_record_journal_v1;
+  const auto marker = provision_uninitialized_card_record_v1();
+  const auto original = framed_record(std::byte{0x62});
+  const auto other = framed_record(std::byte{0x63});
+  FakeStorage storage;
+  provision(storage, marker);
+  commit_card_record_journal_v1(storage, original.bytes());
+  storage.reset_observation();
+  const auto snapshot = snapshot_card_record_journal_v1(storage);
+  expect(same(snapshot, original) && storage.write_calls_ == 0,
+         "confirmation snapshot wrote or changed the record");
+  expect_card_error([&] { reset_card_record_journal_v1(storage, other.bytes()); },
+                    CardError::invalid_operation, "stale confirmation accepted");
+  expect(storage.write_calls_ == 0, "stale confirmation wrote storage");
+  reset_card_record_journal_v1(storage, snapshot.bytes());
+  expect(same(snapshot_card_record_journal_v1(storage), marker),
+         "reset did not leave the provisioning marker");
+  expect(!same_record_at(storage.data_, kCardRecordJournalV1Slot0Offset, original) &&
+         !same_record_at(storage.data_, kCardRecordJournalV1Slot1Offset, original),
+         "successful reset retained an old credential slot");
+  storage.reset_observation();
+  expect_card_error([&] { reset_card_record_journal_v1(storage, snapshot.bytes()); },
+                    CardError::invalid_operation, "reset replay accepted");
+  expect(storage.write_calls_ == 0, "reset replay wrote storage");
+
+  for (std::size_t call = 0; call < 4; ++call) {
+    for (const std::size_t torn : {0U, 75U, 216U}) {
+      FakeStorage faulted;
+      provision(faulted, marker);
+      commit_card_record_journal_v1(faulted, original.bytes());
+      faulted.reset_observation();
+      faulted.write_fault_ = {call, torn};
+      bool succeeded = false;
+      try {
+        reset_card_record_journal_v1(faulted, original.bytes());
+        succeeded = true;
+      } catch (const std::system_error&) {}
+      const auto before = faulted.data_;
+      const auto writes = faulted.write_calls_;
+      const auto observed = snapshot_card_record_journal_v1(faulted);
+      expect(faulted.data_ == before && faulted.write_calls_ == writes,
+             "snapshot normalized a torn journal");
+      expect(same(observed, marker) || same(observed, original),
+             "torn reset lost both valid states");
+      if (succeeded) {
+        expect(same(observed, marker), "failed reset reported success");
+        expect(!same_record_at(faulted.data_, kCardRecordJournalV1Slot0Offset, original) &&
+               !same_record_at(faulted.data_, kCardRecordJournalV1Slot1Offset, original),
+               "recovered reset retained old envelopes");
+      }
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -838,6 +895,7 @@ int main() {
     test_staging_cleanup_recovery_can_resume();
     test_corruption_fails_closed_without_credential_rollback();
     test_invalid_inputs_do_not_touch_storage();
+    test_confirmed_reset_snapshot_and_fault_recovery();
     std::cout << "card record journal v1 tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception &error) {

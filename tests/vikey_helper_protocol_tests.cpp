@@ -480,7 +480,7 @@ void test_development_blob_read_write_requests() {
                       "blob write changed caller data");
 }
 
-void test_card_record_read_write_requests() {
+void test_card_record_read_write_requests(const bool reset = false) {
   const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
   const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
   const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
@@ -491,7 +491,7 @@ void test_card_record_read_write_requests() {
 
   const Pipe read_pipe = make_pipe();
   Request read_header{};
-  read_header.operation = Operation::card_record_read;
+  read_header.operation = (reset ? Operation::card_record_snapshot : Operation::card_record_read);
   read_header.payload_bytes = kCardRecordReadPayloadBytes;
   write_card_record_read_request(read_pipe.write.get(), read_header, digest,
                                  kExpectedHardwareId, user_sn, api_key,
@@ -508,7 +508,7 @@ void test_card_record_read_write_requests() {
 
   const Pipe write_pipe = make_pipe();
   Request write_header{};
-  write_header.operation = Operation::card_record_write;
+  write_header.operation = (reset ? Operation::card_record_reset : Operation::card_record_write);
   write_header.payload_bytes = kCardRecordWritePayloadBytes;
   write_card_record_write_request(write_pipe.write.get(), write_header,
                                   digest, kExpectedHardwareId, user_sn,
@@ -816,6 +816,7 @@ int main() {
     test_development_blob_request_rejects_wrong_sizes();
     test_development_blob_read_write_requests();
     test_card_record_read_write_requests();
+    test_card_record_read_write_requests(true);
     test_response_round_trip();
     test_card_media_response_round_trip();
     test_development_blob_response_round_trip();

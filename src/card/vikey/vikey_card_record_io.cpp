@@ -204,4 +204,13 @@ void write_vikey_card_record(VikeySession& session,
   commit_card_record_journal_v1(storage, record.bytes());
 }
 
+security::SecureBuffer snapshot_vikey_card_record(VikeySession& session) {
+  VikeyCardRecordStorage storage(session);
+  return snapshot_card_record_journal_v1(storage);
+}
+void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected) {
+  VikeyCardRecordStorage storage(session);
+  reset_card_record_journal_v1(storage, expected.bytes());
+}
+
 }  // namespace usb_vault::card::vikey

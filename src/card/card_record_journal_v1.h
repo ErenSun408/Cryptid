@@ -58,6 +58,11 @@ protected:
   ICardRecordJournalStorage() noexcept = default;
 };
 
+// Snapshot and conditional destructive reset used only after native confirmation.
+[[nodiscard]] security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage& storage);
+void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
+    std::span<const std::byte> expected);
+
 // Reads both descriptors and both record slots before resolving the random
 // commit-ID link. A torn descriptor can fall back during commit, but a complete
 // newest descriptor whose referenced record is damaged fails closed instead
