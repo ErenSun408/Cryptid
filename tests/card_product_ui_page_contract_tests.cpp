@@ -148,9 +148,11 @@ void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
               section.find("外层剩余可写") != std::string::npos &&
               section.find("诱饵内容新鲜度") != std::string::npos,
           "the maintenance result has no secondary page or its two facts");
-  require(section.find("完整性") == std::string::npos &&
-              section.find("写入已阻止") == std::string::npos,
-          "the deferred protection alert leaked into this slice");
+  require(section.find("id=\"decoy-protection-warning\"") != std::string::npos &&
+              section.find("role=\"alert\"") != std::string::npos &&
+              section.find("保留源文件") != std::string::npos &&
+              script.find("bridge.getDecoyMaintenanceWriteBlocked(id)") != std::string::npos,
+          "maintenance protection warning or query is missing");
 
   require(count_occurrences(page, "id=\"management-files\"") == 1 &&
               script.find(

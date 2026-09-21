@@ -155,6 +155,26 @@
     $("#file-breadcrumb [data-file-depth='0']").click();
     await wait(() => window.navigationFixture.dropTargets.at(-1) === "1/");
 
+    const protectionTick = () => new Promise(resolve => setTimeout(resolve, 1150));
+    window.navigationFixture.protectionBlocked = "invalid";
+    await protectionTick();
+    check(!$("#decoy-protection-status").hidden && $("#decoy-protection-warning").hidden,
+      "Invalid protection results are unknown rather than safe or triggered");
+    window.navigationFixture.protectionBlocked = true;
+    await protectionTick();
+    check(!$("#decoy-protection-warning").hidden && $("#decoy-protection-status").hidden &&
+      $("#decoy-maintenance-writable").textContent === "写入已阻止" &&
+      window.navigationFixture.protectionQueries.at(-1) === 1,
+      "Protection polling warns for the current container and replaces writable capacity");
+    window.navigationFixture.protectionBlocked = false;
+    await protectionTick();
+    check(!$("#decoy-protection-warning").hidden,
+      "A triggered warning remains latched until maintenance ends");
+    $("#file-refresh").click();
+    await wait(() => !$("#decoy-maintenance-end").disabled);
+    check(!$("#decoy-protection-warning").hidden && $("#decoy-maintenance-writable").textContent === "写入已阻止",
+      "Capacity and directory refresh do not erase protection warnings");
+
     const clearsBefore = window.navigationFixture.dropClears;
     $("#decoy-maintenance-end").click();
     await wait(() => window.navigationFixture.endedMaintenance.length === 1);
@@ -168,17 +188,24 @@
     $("#decoy-container-list [data-decoy-container='3'] button").click();
     await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 3);
+    check($("#decoy-protection-warning").hidden, "Reopening maintenance clears the old mount warning");
+    window.navigationFixture.delayProtection = true;
+    await protectionTick();
+    check(typeof window.navigationFixture.completeProtection === "function", "A protection query can be pending during a session change");
     window.navigationFixture.delayVolume = true;
     window.navigationFixture.completeVolume = null;
     $("#file-refresh").click();
     await wait(() => window.navigationFixture.completeVolume !== null);
     window.dispatchEvent(new Event("usb-vault-session-changed"));
+    window.navigationFixture.completeProtection(true);
+    window.navigationFixture.delayProtection = false;
     window.navigationFixture.completeVolume();
     await wait(() => !$("#decoy-verify").hidden && !$("#decoy-verify-submit").disabled);
     check(
       $("#management-files").closest("#dashboard-section-files") !== null &&
       $("#decoy-maintenance-writable").textContent === "—",
       "A session change during fact refresh restores placement and discards the stale result");
+    check($("#decoy-protection-warning").hidden, "A late protection result from the previous card cannot restore the warning");
     window.navigationFixture.delayVolume = false;
 
     // A walk that finds nothing reads the same as one whose password was

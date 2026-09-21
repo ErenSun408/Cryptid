@@ -201,6 +201,8 @@
       background: rgba(255, 255, 255, .05); border: 1px solid var(--line);
     }
     .setup-surface[data-busy="true"] #setup-save:disabled { cursor: wait; }
+    #decoy-protection-warning, #decoy-protection-status { color: var(--danger); }
+    #decoy-protection-warning { padding: 1rem; border: 1px solid var(--danger); border-radius: .6rem; }
     #setup-status { color: var(--text-2); }
     #setup-status[data-tone="ok"] { color: var(--ok); }
     #setup-status[data-tone="error"] { color: var(--danger); }
@@ -1327,6 +1329,12 @@
               </div>
             </div>
             <output id="decoy-maintenance-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
+            <div id="decoy-protection-warning" class="section-note" role="alert" hidden>
+              <strong>保护已触发，当前外层卷已停止接受写入。</strong>
+              <p>本次复制或修改可能未完整保存，页面显示完成也不代表数据已落盘。请停止复制、删除和修改，保留源文件，关闭占用该卷的程序，然后点击“结束并卸载”。</p>
+              <p>卸载后重新进入维护并核对文件；不要关闭保护或反复重试原来的写入。此提示不代表完成了文件完整性校验。</p>
+            </div>
+            <output id="decoy-protection-status" class="section-note" aria-live="polite" hidden></output>
             <div class="stats-row decoy-maintenance-facts">
               <article class="stat-card">
                 <div class="stat-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5v8.5h8.5"></path></svg></div>

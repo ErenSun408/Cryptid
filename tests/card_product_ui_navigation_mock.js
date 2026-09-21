@@ -27,6 +27,10 @@ window.navigationFixture = {
   measuredMaintenance: [],
   endedMaintenance: [],
   maintenanceSpace: "4096,1024,512",
+  protectionBlocked: false,
+  protectionQueries: [],
+  delayProtection: false,
+  completeProtection: null,
   dropTargets: [],
   dropClears: 0,
   dropStatus: "0,0,0,0",
@@ -107,6 +111,11 @@ window.navigationFixture = {
       fixture.measuredMaintenance.push(id);
     }),
     getDecoyMaintenanceSpace: () => fixture.maintenanceSpace,
+    getDecoyMaintenanceWriteBlocked: (id) => {
+      fixture.protectionQueries.push(id);
+      if (fixture.delayProtection) return new Promise(resolve => { fixture.completeProtection = resolve; });
+      return fixture.protectionBlocked;
+    },
     setExternalDropTarget: (id, directory) => {
       if (fixture.failDropTarget) throw new Error("the window refused to arm");
       fixture.dropTargets.push(`${id}/${directory}`);

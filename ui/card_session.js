@@ -2450,6 +2450,57 @@
   let decoyUnreachable = 0;
   let decoyCancelRequested = false;
   let decoyMaintenanceRevision = 0;
+  const decoyProtectionWarning = document.getElementById("decoy-protection-warning");
+  const decoyProtectionStatus = document.getElementById("decoy-protection-status");
+  let decoyProtectionTimer = null;
+  let decoyProtectionPending = false;
+  let decoyProtectionGeneration = 0;
+  let decoyWriteBlocked = false;
+  let decoyProtectionDisposed = false;
+
+  const scheduleDecoyProtection = () => {
+    if (decoyProtectionDisposed || decoyProtectionTimer !== null || decoyStage !== "maintenance") return;
+    decoyProtectionTimer = setTimeout(() => {
+      decoyProtectionTimer = null;
+      void pollDecoyProtection();
+    }, 1000);
+  };
+  const pollDecoyProtection = async () => {
+    if (decoyStage !== "maintenance" || currentState !== nativeState.authenticated) return;
+    if (busy || decoyProtectionPending || bridge === null) {
+      scheduleDecoyProtection();
+      return;
+    }
+    const id = fileContainerId;
+    const revision = batchSessionRevision;
+    const generation = decoyProtectionGeneration;
+    const current = () => !decoyProtectionDisposed && revision === batchSessionRevision &&
+      generation === decoyProtectionGeneration && id === fileContainerId &&
+      decoyStage === "maintenance" && currentState === nativeState.authenticated;
+    decoyProtectionPending = true;
+    try {
+      const blocked = await bridge.getDecoyMaintenanceWriteBlocked(id);
+      if (!current()) return;
+      if (typeof blocked !== "boolean") throw new Error("invalid protection status");
+      decoyWriteBlocked = decoyWriteBlocked || blocked;
+      decoyProtectionWarning.hidden = !decoyWriteBlocked;
+      decoyProtectionStatus.hidden = true;
+      if (decoyWriteBlocked) decoyMaintenanceWritable.textContent = "写入已阻止";
+    } catch (_) {
+      if (!current()) return;
+      decoyProtectionStatus.textContent = "暂时无法确认写入保护状态，请暂停修改并稍后重试；无法确认不代表可以继续写入。";
+      decoyProtectionStatus.hidden = false;
+    } finally {
+      decoyProtectionPending = false;
+      scheduleDecoyProtection();
+    }
+  };
+  window.addEventListener("pagehide", () => {
+    decoyProtectionDisposed = true;
+    ++decoyProtectionGeneration;
+    clearTimeout(decoyProtectionTimer);
+    decoyProtectionTimer = null;
+  });
   // What the native window was last told to accept a drop into, so the page
   // does not re-arm it on every render. It is the destination only: the page
   // never learns what was dropped or where it came from.
@@ -2519,6 +2570,12 @@
   };
 
   const clearDecoyMaintenanceFacts = () => {
+    ++decoyProtectionGeneration;
+    clearTimeout(decoyProtectionTimer);
+    decoyProtectionTimer = null;
+    decoyWriteBlocked = false;
+    decoyProtectionWarning.hidden = true;
+    decoyProtectionStatus.hidden = true;
     decoyMaintenanceWritable.textContent = "—";
     decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
     decoyMaintenanceSpaceBar.style.width = "0%";
@@ -2590,6 +2647,7 @@
     decoyOverviewHeader.hidden = decoyStage === "maintenance";
     decoyVerifySubmit.disabled = busy || currentState !== nativeState.authenticated;
     if (decoyStage === "maintenance") {
+      scheduleDecoyProtection();
       placeFileManagerInDecoyMaintenance();
       decoyMaintenanceEnd.disabled = busy || currentState !== nativeState.authenticated;
       renderDecoyMaintenanceChoices();
@@ -2861,7 +2919,7 @@
         if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
             decoyStage !== "maintenance") return;
         const used = total - free;
-        decoyMaintenanceWritable.textContent = formatCapacityMib(writable);
+        decoyMaintenanceWritable.textContent = decoyWriteBlocked ? "写入已阻止" : formatCapacityMib(writable);
         decoyMaintenanceSpaceDetail.textContent =
           `已用 ${formatCapacityMib(used)} / 总量 ${formatCapacityMib(total)}`;
         decoyMaintenanceSpaceBar.style.width = total === 0
@@ -2870,7 +2928,7 @@
         if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
             decoyStage !== "maintenance") return;
         capacityFailed = true;
-        decoyMaintenanceWritable.textContent = "无法读取";
+        decoyMaintenanceWritable.textContent = decoyWriteBlocked ? "写入已阻止" : "无法读取";
         decoyMaintenanceSpaceDetail.textContent = "容量事实暂不可用，请稍后刷新。";
         decoyMaintenanceSpaceBar.style.width = "0%";
       }
