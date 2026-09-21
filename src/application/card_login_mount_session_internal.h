@@ -50,11 +50,12 @@ class CardLoginMountSessionRuntime {
   // What the filesystem says about a mounted volume. Any user may ask.
   [[nodiscard]] virtual volume::VolumeSpace volume_space(
       wchar_t drive_letter) = 0;
-  // What can still be written before reaching the volume behind this one.
-  // Reading it needs a volume handle, so the first call of a run asks for
-  // consent and the run lasts until `end_measurements`.
-  [[nodiscard]] virtual std::uint64_t measure_tail_space(
-      wchar_t drive_letter) = 0;
+  [[nodiscard]] virtual volume::MountIdentity mount_identity(wchar_t drive_letter) = 0;
+  // Only the current authenticated maintenance mount may reach this boundary.
+  [[nodiscard]] virtual std::uint64_t measure_protected_space(
+      std::wstring_view path, const volume::MountIdentity& identity,
+      const security::SecureBuffer& outer_password,
+      const security::SecureBuffer& hidden_password) = 0;
   virtual void end_measurements() noexcept = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
@@ -147,6 +148,7 @@ struct SessionContainer final {
   // Mounted as an outer volume for maintenance rather than the ordinary way.
   // Runtime only, like everything else here.
   bool maintenance{};
+  std::optional<volume::MountIdentity> maintenance_identity;
 };
 
 struct CardLoginMountSessionState final {
@@ -158,8 +160,8 @@ struct CardLoginMountSessionState final {
   // value opens nothing else: not the card record, not a standard container,
   // and it cannot be typed at the password prompt.
   security::SecureBuffer hidden_container_password;
-  // The outer-volume password a survey derived, kept so the pages that follow
-  // it do not ask for the decoy password again. Released with the rest.
+  // Derived outer credential for this authenticated maintenance flow, retained
+  // for survey navigation and protected measurement. Released with the session.
   security::SecureBuffer decoy_outer_password;
   std::array<OperationEvent, ::usb_vault::application::kOperationHistoryCapacity>
       operation_events;

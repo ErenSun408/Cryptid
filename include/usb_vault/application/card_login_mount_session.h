@@ -111,12 +111,14 @@ class ContainerCreationCleanupError final : public std::runtime_error {
   std::exception_ptr cleanup_failure_;
 };
 
-// Filesystem facts only. Tail free space can INCLUDE the protected hidden
-// region; it is not a safe write budget for outer-volume maintenance.
+// Snapshot, not a guaranteed file payload allowance. Protected free bytes are
+// whole free clusters before the authenticated boundary. Measurement failures
+// throw instead of returning an old value. The legacy tail field stays zero.
 struct DecoyMaintenanceSpace final {
   std::uint64_t total_bytes{};
   std::uint64_t free_bytes{};
   std::uint64_t tail_free_bytes{};
+  std::uint64_t safe_free_bytes{};
 };
 
 // What one decoy password found across every container the session holds.

@@ -323,13 +323,33 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     return {.total_bytes = reported_total, .free_bytes = reported_free};
   }
 
-  [[nodiscard]] std::uint64_t measure_tail_space(
-      const wchar_t drive_letter) override {
+  std::map<wchar_t, usb_vault::volume::MountIdentity> identities;
+  std::int32_t next_mount_id{};
+  bool fail_identity{};
+  bool change_identity_during_measure{};
+  [[nodiscard]] usb_vault::volume::MountIdentity mount_identity(wchar_t drive) override {
+    if (fail_identity || !attached_volume_sizes.contains(drive))
+      throw std::runtime_error("identity unavailable");
+    auto result=identities.at(drive);
+    result.protected_outer_writable = attached_volume_types.contains(drive) &&
+        attached_volume_types.at(drive)==usb_vault::volume::VolumeType::outer;
+    return result;
+  }
+  [[nodiscard]] std::uint64_t measure_protected_space(
+      std::wstring_view path, const usb_vault::volume::MountIdentity& identity,
+      const SecureBuffer& outer, const SecureBuffer& hidden) override {
+    const auto drive_letter=identity.drive_letter;
+    require(path==identity.volume_path && identity==mount_identity(drive_letter),
+            "measurement received another mount identity");
+    require(is_b_derivation(outer.bytes(), protected_outer_input) &&
+            is_b_derivation(hidden.bytes(), "login-password"),
+            "measurement did not receive authenticated derived credentials");
     events.emplace_back("measure");
     ++measure_calls;
     measured_drive = drive_letter;
     if (fail_measure) throw std::runtime_error("measurement refused");
-    return reported_tail;
+    if(change_identity_during_measure) ++identities.at(drive_letter).unique_id;
+    return reported_safe;
   }
 
   void end_measurements() noexcept override { ++end_measure_calls; }
@@ -489,6 +509,10 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "wrong password");
       }
       attached_volume_types[options.drive_letter] = protected_volume_type;
+      identities[options.drive_letter] = {.drive_letter=options.drive_letter,
+          .unique_id=next_mount_id++, .volume_path=std::wstring(path),
+          .disk_length=attached_volume_sizes[options.drive_letter],
+          .protected_outer_writable=protected_volume_type==usb_vault::volume::VolumeType::outer};
       return {};
     }
     if (!login_derived_path.empty() && path == login_derived_path &&
@@ -645,7 +669,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::map<wchar_t, usb_vault::volume::VolumeType> attached_volume_types;
   std::uint64_t reported_total{32ULL * 1024ULL * 1024ULL * 1024ULL};
   std::uint64_t reported_free{9ULL * 1024ULL * 1024ULL * 1024ULL};
-  std::uint64_t reported_tail{5ULL * 1024ULL * 1024ULL * 1024ULL};
+  std::uint64_t reported_safe{5ULL * 1024ULL * 1024ULL * 1024ULL};
   wchar_t space_drive{};
   wchar_t measured_drive{};
   unsigned int measure_calls{};
@@ -3298,7 +3322,7 @@ void test_only_a_volume_opened_for_maintenance_is_measured() {
   const DecoyMaintenanceSpace space = session.decoy_maintenance_space(id);
   require(space.total_bytes == runtime.reported_total &&
               space.free_bytes == runtime.reported_free &&
-              space.tail_free_bytes == runtime.reported_tail,
+              space.safe_free_bytes == runtime.reported_safe && space.tail_free_bytes == 0,
           "the space report did not carry what the runtime measured");
   require(runtime.space_drive == drive_letter &&
               runtime.measured_drive == drive_letter,
@@ -3314,6 +3338,47 @@ void test_only_a_volume_opened_for_maintenance_is_measured() {
   static_cast<void>(session.decoy_maintenance_space(id));
   require(runtime.measure_calls == 3,
           "the measuring run could not continue after one failed refresh");
+}
+
+void test_measurement_rejects_replaced_mounts() {
+  for (const bool during : {false, true}) {
+    FakeRuntime runtime;
+    CardAuthenticationSession authentication;
+    CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+    const auto id=maintenance_fixture(runtime, session);
+    const auto drive=session.open_decoy_maintenance(id,bytes("decoy-password"));
+    static_cast<void>(session.decoy_maintenance_space(id));
+    if(during) runtime.change_identity_during_measure=true;
+    else ++runtime.identities.at(drive).unique_id;
+    require_throws<std::runtime_error>([&]{static_cast<void>(session.decoy_maintenance_space(id));},
+                                      "stale mount returned capacity");
+    require(runtime.measure_calls==(during?2U:1U) && runtime.end_measure_calls==1,
+            "stale binding was used or its helper session remained open");
+  }
+}
+
+void test_measurement_requires_live_authentication() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication,runtime,layout(),LoginMountPolicy::manual);
+  const auto id=maintenance_fixture(runtime,session);
+  static_cast<void>(session.open_decoy_maintenance(id,bytes("decoy-password")));
+  authentication.clear_authentication();
+  require_throws<std::logic_error>([&]{static_cast<void>(session.decoy_maintenance_space(id));},
+                                  "expired authentication reached measurement");
+  require(runtime.measure_calls==0,"credentials sent after authentication expired");
+}
+
+void test_maintenance_identity_failure_releases_new_mount() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  const auto id=maintenance_fixture(runtime, session);
+  runtime.fail_identity=true;
+  require_throws<DecoyMaintenanceRefused>([&]{static_cast<void>(session.open_decoy_maintenance(id,bytes("decoy-password")));},
+                                         "maintenance accepted missing identity");
+  require(!mounted_now(session,id) && runtime.measure_calls==0,
+          "failed identity left a usable maintenance mount");
 }
 
 void test_ending_maintenance_releases_the_volume_and_the_elevation() {
@@ -3677,6 +3742,9 @@ int main() {
     test_a_surveyed_container_opens_without_asking_again();
     test_maintenance_protection_query_is_scoped_and_never_invents_safety();
     test_only_a_volume_opened_for_maintenance_is_measured();
+    test_measurement_rejects_replaced_mounts();
+    test_measurement_requires_live_authentication();
+    test_maintenance_identity_failure_releases_new_mount();
     test_ending_maintenance_releases_the_volume_and_the_elevation();
     test_every_unmount_path_ends_a_measuring_run();
     test_switching_maintenance_reuses_one_measuring_run();
