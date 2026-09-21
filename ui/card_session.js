@@ -25,6 +25,27 @@
   ]);
   const surface = document.getElementById("card-session-surface");
   const configurationButton = document.getElementById("open-configuration");
+  const sessionTools = document.getElementById("session-tools");
+  const sessionToolsToggle = document.getElementById("session-tools-toggle");
+  const sessionToolsMenu = document.getElementById("session-tools-menu");
+  const closeSessionTools = () => {
+    sessionToolsMenu.hidden = true;
+    sessionToolsToggle.setAttribute("aria-expanded", "false");
+  };
+  sessionToolsToggle.addEventListener("click", () => {
+    if (sessionToolsToggle.disabled) return;
+    const open = sessionToolsMenu.hidden;
+    sessionToolsMenu.hidden = !open;
+    sessionToolsToggle.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", event => {
+    if (!sessionTools.contains(event.target)) closeSessionTools();
+  });
+  sessionTools.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault(); closeSessionTools(); sessionToolsToggle.focus();
+    }
+  });
   const stateTitle = document.getElementById("card-state-title");
   const passwordFields = document.getElementById("password-fields");
   const passwordLabel = document.getElementById("card-password-label");
@@ -3658,6 +3679,9 @@
   };
 
   const render = (message, error = "") => {
+    sessionTools.hidden = currentState === nativeState.authenticated;
+    sessionToolsToggle.disabled = busy || currentState === null || bridge === null;
+    if (busy || sessionTools.hidden) closeSessionTools();
     forgotOpen.hidden = !forgotAvailable;
     forgotOpen.disabled = busy || !forgotAvailable;
     configurationButton.hidden = currentState === nativeState.authenticated;
@@ -3974,6 +3998,7 @@
   };
 
   const refreshAfterExternalChange = async () => {
+    closeSessionTools();
     ++forgotRevision;
     if (!forgotDialog.hidden && !forgotRunning) await closeForgotPassword();
     externalRefreshPending = true;
@@ -4769,7 +4794,7 @@
     forgotDialog.hidden = true; forgotAcknowledge.checked = false;
     if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (_) {} }
     busy = false; render(messageForCurrentState());
-    if (!forgotOpen.hidden) forgotOpen.focus();
+    if (!sessionTools.hidden) sessionToolsToggle.focus();
   };
   const pollForgotPassword = async revision => {
     for (;;) {

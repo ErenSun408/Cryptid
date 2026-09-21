@@ -151,11 +151,23 @@
     /* Out of the entry card and into the corner of the window: it is a way
        out of the routine flow, not a step in it. Taken out of the card's
        flow entirely so it cannot push the centred content off balance. */
-    body[data-view="session"] #open-configuration,
     body[data-view="configuration"] #setup-back {
       position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 5;
       width: 7rem; justify-content: center;
     }
+
+    .session-tools { position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 5; display: flex; flex-direction: column; align-items: flex-end; gap: .7rem; }
+    .session-tools-toggle { display: grid; place-items: center; width: 2.8rem; height: 2.8rem; border: none; border-radius: 50%; color: var(--text-2); background: transparent; cursor: pointer; }
+    .session-tools-toggle:hover:not(:disabled) { color: var(--gold); }
+    .session-tools-toggle:disabled { opacity: .45; cursor: default; }
+    .session-tools-toggle svg { width: 1.35rem; height: 1.35rem; stroke-width: 2.2; transition: transform 240ms ease; }
+    .session-tools-toggle[aria-expanded="true"] svg { transform: rotate(135deg); }
+    .session-tools-menu { display: flex; flex-direction: column; gap: .5rem; align-items: stretch; min-width: 8rem; padding: .55rem; border: 1px solid var(--line-2); border-radius: .8rem; background: var(--ink-800); box-shadow: 0 .6rem 2rem rgba(0, 0, 0, .3); transform-origin: bottom right; animation: session-tools-open 220ms ease both; }
+    .session-tools-menu .shell-button { justify-content: center; }
+    .session-tools-menu #forgot-password-open { color: var(--danger); border-color: rgba(217, 107, 98, .32); }
+    .session-tools-menu #forgot-password-open:hover:not(:disabled) { color: #fff; }
+    @keyframes session-tools-open { from { opacity: 0; transform: translateY(.7rem) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @media (prefers-reduced-motion: reduce) { .session-tools-toggle svg { transition: none; } .session-tools-menu { animation: none; } }
 
     /* ================= 首次配置 ================= */
     body[data-view="configuration"] {
@@ -837,6 +849,8 @@
     }
     .modal-close:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
     .modal-close svg { width: .9rem; height: .9rem; }
+    #forgot-password-close, #reset-card-close { width: 2.2rem; height: 2.2rem; }
+    #forgot-password-close svg, #reset-card-close svg { width: 1.35rem; height: 1.35rem; stroke-width: 2; }
     .modal-body { padding: 1.25rem; max-height: calc(100vh - 9rem); overflow-y: auto; }
     .modal-body > p { margin: 0 0 1.1rem; font-size: .8rem; line-height: 1.7; color: var(--text-2); }
     #volume-operation-dialog .modal { width: min(23rem, 100%); min-height: 13rem; display: flex; flex-direction: column; text-align: center; }
@@ -1121,10 +1135,17 @@
       <span id="card-session-spinner" class="spinner" aria-hidden="true" hidden></span>
       <span id="card-session-action-label">正在初始化</span>
     </button>
-    <button id="forgot-password-open" class="shell-button" type="button" hidden>忘记密码</button>
     <output id="card-session-status" aria-live="polite">正在连接安全组件</output>
     <output id="card-session-error" aria-live="polite" hidden></output>
-    <button id="open-configuration" class="shell-button" type="button" disabled>配置凭据</button>
+    <div id="session-tools" class="session-tools">
+      <div id="session-tools-menu" class="session-tools-menu" aria-label="登录选项" hidden>
+        <button id="forgot-password-open" class="shell-button danger" type="button" hidden>忘记密码</button>
+        <button id="open-configuration" class="shell-button" type="button" disabled>配置凭据</button>
+      </div>
+      <button id="session-tools-toggle" class="session-tools-toggle" type="button" aria-label="登录选项" aria-expanded="false" aria-controls="session-tools-menu" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.6 2.2-1.7 1L5 5.6 2.5 9.9l1.6 1.6v2L2.5 15 5 19.3l2.2-.6 1.7 1 .6 2.3h5l.6-2.3 1.7-1 2.2.6 2.5-4.3-1.6-1.5v-2l1.6-1.6L19 5.6l-2.2.6-1.7-1L14.5 3z"></path><circle cx="12" cy="12.5" r="3.2"></circle></svg>
+      </button>
+    </div>
   </main>
 
   <section id="configuration-surface" class="session-surface setup-surface"
@@ -1571,14 +1592,14 @@
     <div class="modal">
       <div class="modal-header">
         <h3 id="forgot-password-title">重新初始化安全卡</h3>
-        <button id="forgot-password-close" class="modal-close" type="button" aria-label="关闭">×</button>
+        <button id="forgot-password-close" class="modal-close" type="button" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
       </div>
       <div class="modal-body">
         <div id="forgot-password-intro">
           <p>忘记应用登录密码后，可重新初始化这张安全卡。此操作会销毁本应用保存在卡上的认证密钥，且不可撤销。</p>
           <p>现有容器文件和安全卡的其他数据不会被删除。重置后，旧容器将无法凭重新初始化后的安全卡打开。</p>
           <p>重置不能撤销其他程序已保留的访问权限。完成后应用会关闭，请重新插卡并设置新的登录密码。</p>
-          <label class="creation-check"><input id="forgot-password-acknowledge" type="checkbox"><span>我已理解旧容器无法凭重新初始化后的安全卡打开，并确认重置。</span></label>
+          <label class="creation-check"><input id="forgot-password-acknowledge" type="checkbox"><span>我已知晓重置安全卡可能带来的所有影响，并确认重置。</span></label>
         </div>
         <div id="forgot-password-mounts" hidden>
           <p id="forgot-password-mount-lead"></p>
