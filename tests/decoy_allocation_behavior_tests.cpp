@@ -157,7 +157,11 @@ void seed_file(const std::wstring& path) {
 int recovery_run(int argc,wchar_t** argv);
 int placement_run(int argc,wchar_t** argv);
 int sequential_run(int argc,wchar_t** argv);
+int fault_run(wchar_t** argv);
+int abrupt_test_writer(wchar_t* path);
 int wmain(int argc,wchar_t** argv) {
+  if(argc==3 && std::wstring_view(argv[1])==L"--abrupt-disposable-writer") return abrupt_test_writer(argv[2]);
+  if(argc==5 && std::wstring_view(argv[1])==L"--fault-disposable-run") return fault_run(argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--sequential-disposable-run") return sequential_run(argc,argv);
   if(argc==5 && (std::wstring_view(argv[1])==L"--placement-disposable-run" || std::wstring_view(argv[1])==L"--multirun-disposable-run")) return placement_run(argc,argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--recover-disposable-run") return recovery_run(argc,argv);
@@ -666,5 +670,88 @@ int sequential_run(int argc,wchar_t** argv) {
       need(m.type()==volume::VolumeType::outer,"protection triggered before close");need(!m.close(),"protection trigger at unmount");need(digest(m.path,g[2],g[3])==hidden,"hidden region changed");record(0,"hidden_unchanged",true);
     }
     std::ofstream(output/L"complete.txt")<<"PASS two sequential first-fit trials, exact five-hole placement, leftovers, exhaustion and safe rejection verified."<<std::endl;return 0;
+  } catch(const std::exception& e){std::cerr<<e.what()<<std::endl;if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
+}
+
+int abrupt_test_writer(wchar_t* value) {
+  // Only the test parent's inherited, already-open partial-file handle is used.
+  wchar_t* end=nullptr;const auto numeric=std::wcstoull(value,&end,10);
+  if(!end||*end||!numeric)return 97;
+  const auto file=reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(numeric));
+  LARGE_INTEGER length{};wchar_t path[32768]{};
+  if(::GetFileType(file)!=FILE_TYPE_DISK||!::GetFileSizeEx(file,&length)||length.QuadPart!=8*MiB||
+     !::GetFinalPathNameByHandleW(file,path,32768,FILE_NAME_NORMALIZED)||fs::path(path).filename()!=L"partial.bin")return 97;
+  ::TerminateProcess(::GetCurrentProcess(),99);return 98;
+}
+int fault_run(wchar_t** argv) {
+  bool created=false;
+  try {
+    const fs::path dll=argv[2],source=argv[3],output=argv[4];
+    need(dll.is_absolute()&&source.is_absolute()&&output.is_absolute()&&!fs::exists(output)&&fs::is_directory(output.parent_path()),"fault run requires new absolute output");
+    const auto base=source/L"triggered-1.hc";need(fs::is_regular_file(source/L"complete.txt")&&fs::file_size(base)==128*MiB,"completed recovery fixture required");
+    need(fs::create_directory(output),"create fault output");created=true;
+    std::ofstream log(output/L"results.csv");log<<"case,stage,ok,error,value,triggered"<<std::endl;
+    Backend backend;backend.module=::LoadLibraryExW(dll.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);need(backend.module!=nullptr,"load DLL");need(backend.symbol<abi::Initialize>("VeraCryptFormat_Initialize")()==0,"initialize DLL");backend.shutdown=backend.symbol<abi::Shutdown>("VeraCryptFormat_Shutdown");
+    std::ifstream headers(base,std::ios::binary);std::array<unsigned char,512>a{},b{};headers.read(reinterpret_cast<char*>(a.data()),512);headers.seekg(65536);headers.read(reinterpret_cast<char*>(b.data()),512);need(headers.good(),"headers");headers.close();
+    const std::string op="DisposableOuterP3259",hp="DisposableHiddenP3259";std::array<std::uint64_t,4>g{};
+    need(backend.symbol<abi::ReadHiddenGeometry>("VeraCryptReadHiddenGeometry")(a.data(),512,b.data(),512,reinterpret_cast<const unsigned char*>(op.data()),static_cast<std::uint32_t>(op.size()),reinterpret_cast<const unsigned char*>(hp.data()),static_cast<std::uint32_t>(hp.size()),128*MiB,g.data(),32)==0,"geometry");
+    const auto hidden=digest(base,g[2],g[3]);
+    for(unsigned scenario=0;scenario<6;++scenario) {
+      Mounted m;m.path=output/(L"fault-"+std::to_wstring(scenario)+L".hc");need(fs::copy_file(base,m.path,fs::copy_options::none),"copy fault fixture");choose_drive(m);m.open();
+      auto record=[&](const char* stage,bool ok,DWORD error=0,std::uint64_t value=0) {log<<scenario<<','<<stage<<','<<ok<<','<<error<<','<<value<<','<<(m.active&&m.type()==volume::VolumeType::outer_write_prevented)<<std::endl;};
+      const auto l=layout(m.drive,g[2]-g[0]);const auto original=existing_files(m.root());
+      auto total=[&](){std::uint64_t count=0;for(const auto& r:safe_free_runs(m,l))count+=(r.second-r.first)*l.cluster;return count;};
+      const auto before=total();record("free_before",true,0,before);
+      const auto path=m.root()+L"partial.bin",rivalPath=m.root()+L"rival.bin";
+      Handle f;f.h=::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"new partial file");
+      if(scenario==0) {f.close();f.h=::CreateFileW(path.c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"read-only reopen");}
+      LARGE_INTEGER end{};end.QuadPart=8*MiB;need(::SetFilePointerEx(f.h,end,nullptr,FILE_BEGIN),"seek EOF");
+      const BOOL allocated=::SetEndOfFile(f.h);const DWORD allocationError=allocated?0 : ::GetLastError();record("preallocate",allocated!=FALSE,allocationError);
+      if(scenario==0)need(!allocated&&allocationError==ERROR_ACCESS_DENIED,"allocation failure injection did not fire");
+      else {
+        need(allocated,"preallocate");auto vol=raw(m.drive);std::uint64_t vcn=0;
+        const auto parts=scenario==1||scenario==5?2U:scenario==2?0U:scenario==4?0U:8U;
+        for(unsigned part=0;part<parts;++part) {
+          auto runs=safe_free_runs(m,l);need(!runs.empty()&&runs[0].second-runs[0].first>=MiB/l.cluster,"missing one MiB destination");
+          MOVE_FILE_DATA move{};move.FileHandle=f.h;move.StartingVcn.QuadPart=static_cast<LONGLONG>(vcn);move.StartingLcn.QuadPart=static_cast<LONGLONG>(runs[0].first);move.ClusterCount=static_cast<DWORD>(MiB/l.cluster);DWORD bytes=0;
+          need(::DeviceIoControl(vol.h,FSCTL_MOVE_FILE,&move,sizeof(move),nullptr,0,&bytes,nullptr),"move safe part");vcn+=move.ClusterCount;record("moved_part",true,0,vcn*l.cluster);
+        }
+        if(scenario==1)record("cancel_after_two_parts",true);
+        if(scenario==2) {
+          auto runs=safe_free_runs(m,l);need(!runs.empty(),"rival target");
+          Handle rival;rival.h=::CreateFileW(rivalPath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);need(rival.h!=INVALID_HANDLE_VALUE,"rival create");
+          LARGE_INTEGER e{};e.QuadPart=MiB;need(::SetFilePointerEx(rival.h,e,nullptr,FILE_BEGIN)&&::SetEndOfFile(rival.h),"rival allocation");
+          MOVE_FILE_DATA move{};move.FileHandle=rival.h;move.StartingLcn.QuadPart=static_cast<LONGLONG>(runs[0].first);move.ClusterCount=static_cast<DWORD>(MiB/l.cluster);DWORD bytes=0;
+          need(::DeviceIoControl(vol.h,FSCTL_MOVE_FILE,&move,sizeof(move),nullptr,0,&bytes,nullptr),"occupy destination");
+          LARGE_INTEGER zero{};need(::SetFilePointerEx(rival.h,zero,nullptr,FILE_BEGIN),"rival rewind");std::vector<unsigned char> data(MiB,0x75);need(::WriteFile(rival.h,data.data(),static_cast<DWORD>(data.size()),&bytes,nullptr)&&bytes==data.size()&&::FlushFileBuffers(rival.h),"rival write");
+          move.FileHandle=f.h;const BOOL moved=::DeviceIoControl(vol.h,FSCTL_MOVE_FILE,&move,sizeof(move),nullptr,0,&bytes,nullptr);const DWORD error=moved?0 : ::GetLastError();record("occupied_destination_rejected",!moved,error);need(!moved,"occupied target overwritten");
+          rival.close();need(verify_upload(rivalPath,MiB),"rival contents damaged");record("rival_unchanged",true);
+        }
+        if(scenario==3||scenario==4) {
+          if(scenario==3){const auto extents=extent_ranges(f.h);for(const auto& r:extents)need(l.data+r.second*l.cluster<=l.boundary,"unsafe prefix target");}
+          LARGE_INTEGER zero{};need(::SetFilePointerEx(f.h,zero,nullptr,FILE_BEGIN),"prefix rewind");std::vector<unsigned char> data(65536,0x75);DWORD bytes=0;
+          const BOOL wrote=::WriteFile(f.h,data.data(),static_cast<DWORD>(data.size()),&bytes,nullptr);const DWORD error=wrote?0 : ::GetLastError();record("prefix_write",wrote!=FALSE,error,bytes);
+          if(scenario==4)need(!wrote&&m.type()==volume::VolumeType::outer_write_prevented,"real protection failure not reproduced");
+          else {need(wrote&&bytes==data.size()&&::FlushFileBuffers(f.h),"prefix write");f.close();f.h=::CreateFileW(path.c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"read-only write injection");const BOOL denied=::WriteFile(f.h,data.data(),static_cast<DWORD>(data.size()),&bytes,nullptr);const DWORD deniedError=denied?0 : ::GetLastError();record("write_failure_injected",!denied,deniedError);need(!denied&&deniedError==ERROR_ACCESS_DENIED,"write injection failed");}
+        }
+        if(scenario==5) {
+          need(::SetHandleInformation(f.h,HANDLE_FLAG_INHERIT,HANDLE_FLAG_INHERIT),"inherit partial handle");wchar_t exe[32768]{};need(::GetModuleFileNameW(nullptr,exe,32768)>0,"self path");std::wstring command=L"\""+std::wstring(exe)+L"\" --abrupt-disposable-writer "+std::to_wstring(reinterpret_cast<std::uintptr_t>(f.h));
+          STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};need(::CreateProcessW(exe,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process),"start abrupt child");
+          f.close();Handle child,thread;child.h=process.hProcess;thread.h=process.hThread;
+          if(::WaitForSingleObject(child.h,30000)!=WAIT_OBJECT_0){::TerminateProcess(child.h,100);::WaitForSingleObject(child.h,5000);throw std::runtime_error("abrupt child timed out");}
+          DWORD code=0;need(::GetExitCodeProcess(child.h,&code)&&code==99,"child did not terminate at injected point");record("abrupt_process_exit",true,0,code);
+        }
+      }
+      f.close();
+      if(scenario==5){m.close();m.open();need(fs::is_regular_file(path),"interrupted partial file unexpectedly absent");record("partial_survives_process_exit",true,0,fs::file_size(path));}
+      const BOOL removed=::DeleteFileW(path.c_str());const DWORD cleanupError=removed?0 : ::GetLastError();record("cleanup_attempt",removed!=FALSE,cleanupError);
+      if(scenario!=4)need(removed,"cleanup should succeed on writable test volume");
+      m.close();m.open();
+      if(fs::exists(path)){need(::DeleteFileW(path.c_str()),"retry cleanup after remount");record("cleanup_after_remount",true);}
+      if(scenario==2){need(verify_upload(rivalPath,MiB),"rival persistence");need(::DeleteFileW(rivalPath.c_str()),"remove own rival fixture");}
+      m.close();m.open();need(unchanged_files(original,existing_files(m.root())),"original files or file set changed");record("originals_unchanged",true,0,original.size());
+      const auto after=total();record("free_after",after==before,0,after);need(after==before,"safe space leaked after cleanup");need(m.type()==volume::VolumeType::outer,"protection latch persisted across remount");m.close();need(digest(m.path,g[2],g[3])==hidden,"hidden region changed");record("hidden_unchanged",true);
+    }
+    std::ofstream(output/L"complete.txt")<<"PASS six failure scenarios; original files, reclaimed space and hidden hashes verified."<<std::endl;return 0;
   } catch(const std::exception& e){std::cerr<<e.what()<<std::endl;if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
 }
