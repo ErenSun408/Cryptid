@@ -35,6 +35,7 @@ window.navigationFixture = {
   dropClears: 0,
   dropStatus: "0,0,0,0",
   dropCancels: 0,
+    selectFilesCalls: 0,
   failDropTarget: false,
   failOpenMaintenance: false,
   acceptCancellation: true,
@@ -124,6 +125,7 @@ window.navigationFixture = {
     },
     clearExternalDropTarget: () => { fixture.dropClears += 1; fixture.dropArmed = false; },
     getExternalDropStatus: () => fixture.dropStatus,
+    selectExternalFiles: () => { fixture.selectFilesCalls += 1; return false; },
     cancelExternalDrop: () => {
       fixture.dropCancels += 1;
       return true;

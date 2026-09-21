@@ -3021,6 +3021,8 @@ class RecordingDropSink final : public usb_vault::ui::IUiExternalDropTargetSink 
     return reported;
   }
 
+  bool select_files() noexcept override { ++select_calls; return armed_id != 0; }
+  int select_calls{};
   int set_calls{};
   int clear_calls{};
   int cancel_calls{};
@@ -3073,12 +3075,20 @@ void test_the_page_names_a_drop_destination_and_reads_only_numbers() {
               sink.set_calls == 0 && sink.clear_calls == 1,
           "an unauthenticated page armed the window for a drop");
 
+  VARIANT selected{};
+  require(invoke_no_arguments(*host.Get(),L"selectExternalFiles",&selected)==E_ACCESSDENIED&&sink.select_calls==0,"unauthenticated picker reached native host");
   fixture.authentication.establish(root_secret());
   require(invoke_set_drop_target(*host.Get(), 4, L"photos/2011", nullptr) ==
                   S_OK &&
               sink.set_calls == 1 && sink.armed_id == 4 &&
               sink.armed_directory == L"photos/2011",
           "the destination did not reach the window as the page named it");
+
+  require(invoke_no_arguments(*host.Get(),L"selectExternalFiles",&selected)==S_OK&&selected.vt==VT_BOOL&&selected.boolVal==VARIANT_TRUE&&sink.select_calls==1,"file picker did not reach armed native host");
+  static_cast<void>(::VariantClear(&selected));
+  work.running.store(true);
+  require(FAILED(invoke_no_arguments(*host.Get(),L"selectExternalFiles",&selected))&&sink.select_calls==1,"picker opened during active work");
+  work.running.store(false);
 
   // A container identifier of zero names nothing, and neither half may arrive
   // as the wrong kind of value.

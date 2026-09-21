@@ -107,6 +107,9 @@
       window.navigationFixture.dropTargets.every((target) =>
         /^[0-9]+\/[^\\:]*$/.test(target)),
       "The maintenance page names only a container and a directory for a drop");
+    $("#decoy-select-files").click();
+    await wait(() => window.navigationFixture.selectFilesCalls === 1);
+    check(!$("#decoy-select-files").disabled,"File selection uses the native picker and cancellation leaves maintenance ready");
     const armedBefore = window.navigationFixture.dropTargets.length;
     $("#file-list-body [data-file-enter]").click();
     await wait(() => window.navigationFixture.dropTargets.length > armedBefore);
@@ -137,7 +140,7 @@
     await wait(() => !$("#decoy-maintenance-end").disabled);
     $("#file-refresh").click();
     await wait(() => !$("#decoy-maintenance-end").disabled);
-    check(window.navigationFixture.dropTargets.length === stoppedArms &&
+    check(window.navigationFixture.dropTargets.length === stoppedArms && $("#decoy-select-files").disabled &&
       $("#decoy-drop-status").textContent.includes("重新进入维护"),
       "A failed upload stays disarmed across refresh until maintenance ends");
     $("#decoy-maintenance-end").click();

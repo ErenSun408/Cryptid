@@ -80,6 +80,7 @@ class ExternalDropTarget final : public IDropTarget,
                   std::wstring_view relative_directory) noexcept override;
   void clear_target() noexcept override;
   bool request_cancel() noexcept override;
+  bool select_files() noexcept override;
   [[nodiscard]] ExternalDropStatus status() const noexcept override;
 
   // Stops a run in flight and waits for it. The window is going away, so the
@@ -92,6 +93,7 @@ class ExternalDropTarget final : public IDropTarget,
   // Whether a drag arriving now would be taken. Asked on every `DragOver`, so
   // the cursor answers while the user is still deciding.
   [[nodiscard]] bool accepts(IDataObject* data) const noexcept;
+  bool start_sources(std::vector<std::wstring> sources) noexcept;
   void run(std::uint32_t id, std::wstring relative_directory,
            std::vector<std::wstring> sources) noexcept;
 

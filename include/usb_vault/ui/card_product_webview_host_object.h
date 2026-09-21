@@ -69,6 +69,7 @@ class IUiExternalDropTargetSink {
                           std::wstring_view relative_directory) noexcept = 0;
   virtual void clear_target() noexcept = 0;
   virtual bool request_cancel() noexcept = 0;
+  virtual bool select_files() noexcept { return false; }
   [[nodiscard]] virtual ExternalDropStatus status() const noexcept = 0;
 
  protected:

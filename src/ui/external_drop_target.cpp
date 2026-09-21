@@ -1,6 +1,9 @@
 #include "usb_vault/ui/external_drop_target.h"
 
 #include <shellapi.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
+#include <memory>
 
 #include <algorithm>
 #include <utility>
@@ -150,6 +153,41 @@ HRESULT STDMETHODCALLTYPE ExternalDropTarget::Drop(
   std::vector<std::wstring> sources = shell_drop_paths(data);
   if (sources.empty()) return S_OK;
 
+  if (start_sources(std::move(sources)) && effect != nullptr) *effect = DROPEFFECT_COPY;
+  return S_OK;
+}
+
+bool ExternalDropTarget::select_files() noexcept {
+  if (!armed_.load() || work_.running.load() || work_.interrupted.load()) return false;
+  const auto epoch = work_.card_epoch.load();
+  try {
+    Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+    if (FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return false;
+    FILEOPENDIALOGOPTIONS options{};
+    if (FAILED(dialog->GetOptions(&options)) || FAILED(dialog->SetOptions(options |
+        FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM |
+        FOS_DONTADDTORECENT | FOS_NOCHANGEDIR))) return false;
+    static_cast<void>(dialog->SetTitle(L"选择要放入的文件"));
+    if (dialog->Show(::GetActiveWindow()) != S_OK || work_.card_epoch.load() != epoch) return false;
+    Microsoft::WRL::ComPtr<IShellItemArray> items;
+    DWORD count=0;
+    if (FAILED(dialog->GetResults(&items)) || FAILED(items->GetCount(&count)) || count==0 || count>kMaximumDroppedEntries) return false;
+    std::vector<std::wstring> sources;
+    sources.reserve(count);
+    for(DWORD n=0;n<count;++n) {
+      Microsoft::WRL::ComPtr<IShellItem> item;PWSTR raw=nullptr;
+      if (FAILED(items->GetItemAt(n,&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH,&raw))) return false;
+      const std::unique_ptr<wchar_t,decltype(&::CoTaskMemFree)> path(raw, &::CoTaskMemFree);
+      sources.emplace_back(path.get());
+    }
+    if(work_.card_epoch.load()!=epoch) return false;
+    return start_sources(std::move(sources));
+  } catch(...) { return false; }
+}
+
+bool ExternalDropTarget::start_sources(std::vector<std::wstring> sources) noexcept {
+  try {
+  if (!armed_.load() || work_.running.load() || work_.interrupted.load() || sources.empty() || sources.size()>kMaximumDroppedEntries) return false;
   std::uint32_t id = 0;
   std::wstring directory;
   {
@@ -157,7 +195,7 @@ HRESULT STDMETHODCALLTYPE ExternalDropTarget::Drop(
     id = target_id_;
     directory = target_directory_;
   }
-  if (id == 0) return S_OK;
+  if (id == 0) return false;
 
   // The shell's drag loop and the bridge are both on this thread, so the claim
   // below cannot race the page; the worker is what makes it necessary at all.
@@ -176,10 +214,10 @@ HRESULT STDMETHODCALLTYPE ExternalDropTarget::Drop(
   } catch (...) {
     state_.store(kFailed);
     work_.running.store(false);
-    return S_OK;
+    return false;
   }
-  if (effect != nullptr) *effect = DROPEFFECT_COPY;
-  return S_OK;
+  return true;
+  } catch (...) { return false; }
 }
 
 void ExternalDropTarget::run(const std::uint32_t id,

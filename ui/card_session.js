@@ -2457,6 +2457,7 @@
   let decoyProtectionGeneration = 0;
   let decoyWriteBlocked = false;
   let decoyUploadRecovery = false;
+  const decoySelectFiles = document.getElementById("decoy-select-files");
   let decoyProtectionDisposed = false;
 
   const scheduleDecoyProtection = () => {
@@ -2566,6 +2567,7 @@
   };
 
   const renderDecoyDropZone = () => {
+    decoySelectFiles.disabled = busy || decoyUploadRecovery || decoyWriteBlocked || currentState !== nativeState.authenticated;
     decoyDropRun.hidden = !decoyDropWatching;
     decoyDropCancel.disabled = !decoyDropWatching;
   };
@@ -3062,6 +3064,12 @@
   });
   decoyMaintenanceEnd.addEventListener("click", () => {
     void endDecoyMaintenance();
+  });
+  decoySelectFiles.addEventListener("click", async () => {
+    if (busy || decoyUploadRecovery || decoyWriteBlocked || decoyStage !== "maintenance") return;
+    await armDecoyDrop();
+    try { if (await bridge.selectExternalFiles()) await watchDecoyDrop(); }
+    catch (_) { setDecoyStatus(decoyDropStatus, "无法选择文件，请稍后重试。", "error"); }
   });
   decoyDropCancel.addEventListener("click", async () => {
     decoyDropCancel.disabled = true;

@@ -137,6 +137,7 @@ constexpr DISPID kClearExternalDropTargetId = 81;
 constexpr DISPID kCancelExternalDropId = 82;
 constexpr DISPID kExternalDropStatusId = 83;
 constexpr DISPID kDecoyWriteBlockedId = 84;
+constexpr DISPID kSelectExternalFilesId = 85;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
 // its own bridge with no card, volume or container member on it.
@@ -549,6 +550,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getDecoyMaintenanceSpace")) { ids[0] = kDecoySpaceId; return S_OK; }
     if (matches(names[0], L"getDecoyMaintenanceWriteBlocked")) { ids[0] = kDecoyWriteBlockedId; return S_OK; }
     if (matches(names[0], L"beginEndDecoyMaintenance")) { ids[0] = kBeginEndDecoyMaintenanceId; return S_OK; }
+    if (matches(names[0], L"selectExternalFiles")) { ids[0] = kSelectExternalFilesId; return S_OK; }
     if (matches(names[0], kSetExternalDropTargetName)) { ids[0] = kSetExternalDropTargetId; return S_OK; }
     if (matches(names[0], kClearExternalDropTargetName)) { ids[0] = kClearExternalDropTargetId; return S_OK; }
     if (matches(names[0], kCancelExternalDropName)) { ids[0] = kCancelExternalDropId; return S_OK; }
@@ -845,6 +847,11 @@ class CardProductWebViewHostObject final : public IDispatch {
                        external_drop_sink_->set_target(id, relative_directory)
                    ? S_OK : E_ACCESSDENIED;
       }
+      case kSelectExternalFilesId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (creation_work_->running.load() || creation_work_->interrupted.load() ||
+            controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        return complete_selection(external_drop_sink_ && external_drop_sink_->select_files(), result);
       case kClearExternalDropTargetId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (external_drop_sink_) external_drop_sink_->clear_target();
