@@ -23,7 +23,7 @@ namespace {
   return operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
-         operation == Operation::scan_protected_space || operation == Operation::import_protected_file;
+         operation == Operation::scan_protected_space || operation == Operation::scan_maintenance_space || operation == Operation::import_protected_file;
 }
 
 [[nodiscard]] bool valid_stage(const CreationStage stage) noexcept {
@@ -49,7 +49,7 @@ bool valid_request_header(const RequestHeader& header) noexcept {
     if (header.source_characters == 0 || header.source_characters > kMaxPathCharacters ||
         header.destination_characters == 0 || header.destination_characters > 256) return false;
   } else if (header.source_characters != 0 || header.destination_characters != 0) return false;
-  if (header.operation == Operation::scan_protected_space || header.operation == Operation::import_protected_file) {
+  if (header.operation == Operation::scan_protected_space || header.operation == Operation::scan_maintenance_space || header.operation == Operation::import_protected_file) {
     return header.mounted_drive >= 1 && header.mounted_drive <= 26 &&
            header.mount_id >= 0 && header.outer_size_bytes > 0 &&
            header.hidden_size_bytes == 0 && header.first_password_bytes > 0 &&

@@ -93,12 +93,16 @@ class VolumeCreator final {
   std::filesystem::path helper_path_;
 };
 
-// Dedicated upload consent, bound to one maintenance mount. A failure closes
-// the pipe; another mount cannot reuse it. It accepts no measurement or creation.
+// Consent bound to one maintenance mount. Starting with protected_space allows
+// measurement and upload on the same pipe; copy alone opens upload-only consent.
+// Any failure closes the pipe; another mount cannot reuse it. No creation.
 class VolumeImportSession final {
  public:
   explicit VolumeImportSession(std::filesystem::path helper_path);
   ~VolumeImportSession() noexcept;
+  [[nodiscard]] std::uint64_t protected_space(std::wstring_view container_path,
+      wchar_t drive, std::int32_t mount_id, std::uint64_t mounted_bytes,
+      const security::SecureBuffer& outer_password, const security::SecureBuffer& hidden_password);
   VolumeImportSession(const VolumeImportSession&) = delete;
   VolumeImportSession& operator=(const VolumeImportSession&) = delete;
   void copy(std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,

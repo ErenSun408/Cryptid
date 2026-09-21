@@ -868,8 +868,8 @@ void initialize_webview(const HWND window) {
                       // only place that has both the file and the session;
                       // handing the document the drop would put a path from
                       // outside onto the page boundary that exists to keep
-                      // paths off it. Refusing here is also what lets the drag
-                      // fall through to this window's own drop target.
+                      // paths off it. A dedicated native child covers only the armed drop region;
+                      // rejecting WebView drops does not forward them to its parent.
                       ComPtr<ICoreWebView2Controller4> drop_controller;
                       current = g_controller.As(&drop_controller);
                       if (FAILED(current)) {
@@ -1166,7 +1166,6 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       // Before the session it is writing into goes: revoking stops new drags,
       // and closing waits for the copy that is already running.
       if (g_drop_target != nullptr) {
-        static_cast<void>(::RevokeDragDrop(window));
         g_drop_target->close();
         static_cast<void>(g_drop_target->Release());
         g_drop_target = nullptr;
@@ -1290,9 +1289,17 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   // refusal rather than letting one reach the document.
   g_drop_target = new (std::nothrow) usb_vault::ui::ExternalDropTarget(
       import_dropped_entry, g_creation_work);
-  const HRESULT drop_result = g_drop_target ? ::RegisterDragDrop(window, g_drop_target) : E_OUTOFMEMORY;
+  if (g_drop_target) g_drop_target->set_hover_callback([](unsigned state) {
+    if (!g_webview) return;
+    const auto script = L"window.dispatchEvent(new CustomEvent('usb-vault-drop-hover',{detail:" +
+        std::to_wstring(state) + L"}));";
+    static_cast<void>(g_webview->ExecuteScript(script.c_str(), nullptr));
+  });
+  const HRESULT drop_result = g_drop_target && g_drop_target->attach_window(window)
+      ? S_OK : E_FAIL;
   if (FAILED(drop_result)) {
     if (g_drop_target != nullptr) {
+      g_drop_target->close();
       static_cast<void>(g_drop_target->Release());
       g_drop_target = nullptr;
     }

@@ -70,6 +70,8 @@ class IUiExternalDropTargetSink {
   virtual void clear_target() noexcept = 0;
   virtual bool request_cancel() noexcept = 0;
   virtual bool select_files() noexcept { return false; }
+  virtual bool set_drop_bounds(int, int, int, int) noexcept { return false; }
+  virtual bool set_drop_button_bounds(int, int, int, int) noexcept { return false; }
   virtual unsigned int file_progress() const noexcept { return 0; }
   [[nodiscard]] virtual ExternalDropStatus status() const noexcept = 0;
 

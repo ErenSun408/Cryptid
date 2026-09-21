@@ -392,6 +392,44 @@ void VolumeImportSession::close() noexcept {
   impl_->process=Handle{};
   impl_->container.clear();
 }
+std::uint64_t VolumeImportSession::protected_space(std::wstring_view container_path,
+    wchar_t drive, std::int32_t mount_id, std::uint64_t mounted_bytes,
+    const security::SecureBuffer& outer_password, const security::SecureBuffer& hidden_password) {
+  if (impl_->failed) throw std::logic_error("maintenance session requires recovery");
+  try {
+    const auto container = validated_target_path(container_path);
+    const auto letter = validated_drive_letter(drive);
+    detail::RequestHeader header{.operation = detail::Operation::scan_maintenance_space,
+        .outer_size_bytes = mounted_bytes,
+        .path_characters = static_cast<std::uint32_t>(container.size()),
+        .first_password_bytes = static_cast<std::uint32_t>(outer_password.size()),
+        .second_password_bytes = static_cast<std::uint32_t>(hidden_password.size()),
+        .mounted_drive = static_cast<std::uint32_t>(letter - L'A' + 1),
+        .mount_id = mount_id, .nonce = impl_->nonce};
+    if (!detail::valid_request_header(header)) throw std::invalid_argument("invalid maintenance measurement");
+    if (impl_->connected && (impl_->container != container || impl_->drive != letter ||
+        impl_->mount_id != mount_id || impl_->mounted_bytes != mounted_bytes))
+      throw std::logic_error("maintenance session cannot change mounts");
+    if (!impl_->connected) {
+      impl_->nonce = random_nonce(); header.nonce = impl_->nonce;
+      const auto suffix = hex_nonce(impl_->nonce);
+      impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
+    impl_->pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, impl_->process.get());
+      impl_->container = container; impl_->drive = letter;
+      impl_->mount_id = mount_id; impl_->mounted_bytes = mounted_bytes;
+      impl_->connected = true;
+    }
+    detail::write_request(impl_->pipe.get(), header, container, outer_password, hidden_password);
+    for (;;) {
+      const auto response = detail::read_response(impl_->pipe.get());
+      if (response.type == detail::MessageType::progress) continue;
+      if (response.error == 0) return response.value;
+      if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid maintenance measurement result");
+      throw_creation(static_cast<CreationError>(response.error), "maintenance measurement failed");
+    }
+  } catch (...) { close(); throw; }
+}
+
 void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
     std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
     const security::SecureBuffer& hidden_password, std::wstring_view source_path,

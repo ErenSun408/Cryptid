@@ -265,7 +265,7 @@ void validate_request(const Request& request) {
       !std::filesystem::path(request.target_path).is_absolute()) {
     fail(CreationError::invalid_request, "invalid creation request values");
   }
-  if (request.operation == Operation::scan_protected_space || request.operation == Operation::import_protected_file) {
+  if (request.operation == Operation::scan_protected_space || request.operation == Operation::scan_maintenance_space || request.operation == Operation::import_protected_file) {
     if (request.mounted_drive < 1 || request.mounted_drive > 26 || request.mount_id < 0 ||
         request.outer_size_bytes == 0 || request.hidden_size_bytes != 0 ||
         request.first_password.empty() || request.second_password.empty() ||
@@ -838,7 +838,7 @@ void create_with_hidden(const HANDLE pipe, Request& request,
 
 static void serve_session(const HANDLE pipe,
                                const std::array<std::byte, kNonceSize>& nonce,
-                               Request& first, bool importing) {
+                               Request& first, bool importing, bool maintenance = false) {
   // Idle time is the only thing that ends this session other than the caller
   // closing the pipe, and something has to end it if the caller never does.
   std::atomic<std::int64_t> last_activity{
@@ -870,9 +870,14 @@ static void serve_session(const HANDLE pipe,
   for (;;) {
     last_activity.store(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    if (importing ? (request.operation != Operation::import_protected_file || request.target_path != bound_path ||
-                      request.mounted_drive != bound_drive || request.mount_id != bound_id || request.outer_size_bytes != bound_bytes)
-                  : (request.operation != Operation::scan_tail_space && request.operation != Operation::scan_protected_space)) {
+    const bool allowed = maintenance
+        ? matches_maintenance_binding(request, bound_path, bound_drive, bound_id, bound_bytes)
+        : importing
+            ? request.operation == Operation::import_protected_file &&
+                request.target_path == bound_path && request.mounted_drive == bound_drive &&
+                request.mount_id == bound_id && request.outer_size_bytes == bound_bytes
+            : request.operation == Operation::scan_tail_space || request.operation == Operation::scan_protected_space;
+    if (!allowed) {
       // A session that measures never creates, however the request is
       // labelled: one consent covered measuring and nothing else.
       write_response(pipe,
@@ -884,7 +889,7 @@ static void serve_session(const HANDLE pipe,
     Response response{.type = MessageType::result};
     try {
       validate_request(request);
-      response.value = importing ? import_protected(pipe, request) : request.operation == Operation::scan_protected_space
+      response.value = request.operation == Operation::import_protected_file ? import_protected(pipe, request) : (request.operation == Operation::scan_protected_space || request.operation == Operation::scan_maintenance_space)
           ? scan_protected_space(pipe, request) : scan_tail_space(request.target_path[0]).bytes;
     } catch (const std::system_error& error) {
       response.error = error.code().category() == creation_error_category()
@@ -922,6 +927,10 @@ void serve_import_session(HANDLE pipe, const std::array<std::byte, kNonceSize>& 
   serve_session(pipe, nonce, first, true);
 }
 
+void serve_maintenance_session(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce, Request& first) {
+  serve_session(pipe, nonce, first, true, true);
+}
+
 std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
   if (request.operation == Operation::scan_tail_space) {
@@ -929,7 +938,7 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     // no progress to report: the number is the whole exchange.
     return scan_tail_space(request.target_path[0]).bytes;
   }
-  if (request.operation == Operation::scan_protected_space)
+  if (request.operation == Operation::scan_protected_space || request.operation == Operation::scan_maintenance_space)
     return scan_protected_space(pipe, request);
   if (request.operation == Operation::import_protected_file)
     return import_protected(pipe, request);

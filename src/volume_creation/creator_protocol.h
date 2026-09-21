@@ -13,7 +13,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 4;
+constexpr std::uint16_t kProtocolVersion = 5;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -25,6 +25,8 @@ enum class Operation : std::uint32_t {
   scan_tail_space = 3,
   scan_protected_space = 4,
   import_protected_file = 5,
+  // Explicit consent for measurement and import within one bound mount.
+  scan_maintenance_space = 6,
 };
 
 enum class MessageType : std::uint32_t {

@@ -2573,6 +2573,28 @@
   // 🔴 The page names a container and a directory and nothing else. Arming
   // happens only from the maintenance screen, so a drag anywhere else in the
   // product is refused by the window before the page is involved at all.
+  const syncDecoyDropBounds = async () => {
+    if (!bridge || typeof bridge.setExternalDropBounds !== "function") return;
+    const ready = inDecoyFileView() && !busy && !decoyUploadRecovery && !decoyWriteBlocked &&
+      currentState === nativeState.authenticated && decoyDropTarget !== "";
+    const rect = decoyDropZone.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+    const right = Math.min(window.innerWidth, rect.right), bottom = Math.min(window.innerHeight, rect.bottom);
+    const bounds = ready && right > left && bottom > top
+      ? [Math.ceil(left * scale), Math.ceil(top * scale), Math.max(0, Math.floor(right * scale) - Math.ceil(left * scale)), Math.max(0, Math.floor(bottom * scale) - Math.ceil(top * scale))]
+      : [0, 0, 0, 0];
+    try {
+      await bridge.setExternalDropBounds(...bounds);
+      if (typeof bridge.setExternalDropButtonBounds === "function") {
+        const button = decoySelectFiles.getBoundingClientRect();
+        await bridge.setExternalDropButtonBounds(
+          Math.max(0, Math.round(button.left * scale)), Math.max(0, Math.round(button.top * scale)),
+          Math.max(0, Math.round(button.width * scale)), Math.max(0, Math.round(button.height * scale)));
+      }
+    } catch (_) {}
+  };
+
   const armDecoyDrop = async () => {
     if (bridge === null) return;
     if (!inDecoyFileView() || fileContainerId !== decoyMaintenanceId || decoyMaintenanceId === 0 || decoyUploadRecovery || decoyWriteBlocked ||
@@ -2581,7 +2603,7 @@
       return;
     }
     const wanted = `${fileContainerId}/${filePath.join("/")}`;
-    if (wanted === decoyDropTarget) return;
+    if (wanted === decoyDropTarget) { void syncDecoyDropBounds(); return; }
     try {
       await bridge.setExternalDropTarget(fileContainerId, filePath.join("/"));
       if (!inDecoyFileView() || `${fileContainerId}/${filePath.join("/")}` !== wanted) {
@@ -2590,6 +2612,7 @@
         return;
       }
       decoyDropTarget = wanted;
+      void syncDecoyDropBounds();
       // Naming a destination retires the run before it on the window's side,
       // so the page stops treating that run's numbers as already reported.
       // Without this a second drop with the same outcome would read as the
@@ -2631,6 +2654,7 @@
       decoyDropZone.classList.remove("drop-hover");
       decoySelectFiles.classList.remove("drop-button-hover");
     }
+    void syncDecoyDropBounds();
   };
 
   const clearDecoyMaintenanceFacts = () => {
@@ -3194,6 +3218,9 @@
     decoyDropZone.classList.toggle("drop-hover", enabled && (event.detail === 1 || event.detail === 3));
     decoySelectFiles.classList.toggle("drop-button-hover", enabled && event.detail === 2);
   });
+  window.addEventListener("resize", () => { void syncDecoyDropBounds(); });
+  document.addEventListener("scroll", () => { void syncDecoyDropBounds(); }, true);
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => { void syncDecoyDropBounds(); }).observe(decoyDropZone);
   decoyDropCancel.addEventListener("click", async () => {
     decoyDropCancel.disabled = true;
     try { await bridge.cancelExternalDrop(); } catch (_) {}
@@ -3937,6 +3964,7 @@
         await refreshNativeState();
         busy = false;
         render(messageForCurrentState());
+        renderDecoySection();
         updateStrength();
         focusCurrentInput();
       } catch (_) {

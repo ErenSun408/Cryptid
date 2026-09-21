@@ -3057,6 +3057,8 @@ class RecordingDropSink final : public usb_vault::ui::IUiExternalDropTargetSink 
 
   bool select_files() noexcept override { ++select_calls; return armed_id != 0; }
   unsigned int file_progress() const noexcept override { return 142; }
+  bool set_drop_bounds(int, int, int, int) noexcept override { ++bounds_calls; return true; }
+  int bounds_calls{};
   int select_calls{};
   int set_calls{};
   int clear_calls{};
@@ -3122,6 +3124,14 @@ void test_the_page_names_a_drop_destination_and_reads_only_numbers() {
   require(invoke_no_arguments(*host.Get(),L"selectExternalFiles",&selected)==S_OK&&selected.vt==VT_BOOL&&selected.boolVal==VARIANT_TRUE&&sink.select_calls==1,"file picker did not reach armed native host");
   static_cast<void>(::VariantClear(&selected));
   work.running.store(true);
+  VARIANT bounds[4]{};
+  for (auto& value : bounds) { value.vt=VT_UI4; value.ulVal=0; }
+  require(invoke_named(*host.Get(),L"setExternalDropBounds",bounds,4,&selected,nullptr)==S_OK && sink.bounds_calls==1,
+          "busy worker blocked hiding the native drop region");
+  bounds[0].ulVal=32769;
+  require(invoke_named(*host.Get(),L"setExternalDropBounds",bounds,4,&selected,nullptr)==DISP_E_TYPEMISMATCH && sink.bounds_calls==1,
+          "unbounded drop rectangle reached the window");
+
   require(FAILED(invoke_no_arguments(*host.Get(),L"selectExternalFiles",&selected))&&sink.select_calls==1,"picker opened during active work");
   work.running.store(false);
 

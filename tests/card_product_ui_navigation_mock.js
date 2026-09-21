@@ -107,6 +107,9 @@ window.navigationFixture = {
     beginOpenDecoyMaintenance: (id) => beginVolume(() => {
       if (fixture.failOpenMaintenance) throw new Error("simulated refusal");
       fixture.openedMaintenance.push(id);
+      const container = fixture.containers.find(item => item.id === id);
+      container.mounted = true;
+      container.drive = id === 1 ? "X:" : "Y:";
     }),
     beginMeasureDecoySpace: (id) => beginVolume(() => {
       if (fixture.failMeasureMaintenance) throw new Error("simulated measurement failure");
@@ -136,6 +139,7 @@ window.navigationFixture = {
     beginEndDecoyMaintenance: (id) => beginVolume(() => {
       if (fixture.failEndMaintenance) throw new Error("simulated end failure");
       fixture.endedMaintenance.push(id);
+      bridge.unmountContainer(id);
     }),
     getBatchProgress: () => fixture.batchProgress,
     getBatchItemName: (index) => fixture.batchItems[index].name,

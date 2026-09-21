@@ -201,6 +201,38 @@ void test_protected_measurement_contract() {
       decoded.second_password.bytes()[1]==std::byte{0}, "protected request round trip changed");
 }
 
+void test_maintenance_binding() {
+  Request request;
+  request.operation = Operation::scan_maintenance_space;
+  request.target_path = L"bound-container";
+  request.mounted_drive = 24;
+  request.mount_id = 19;
+  request.outer_size_bytes = 4096;
+  const auto matches = [&] { return matches_maintenance_binding(request, L"bound-container", 24, 19, 4096); };
+  expect(matches(), "maintenance scan rejected its bound identity");
+  request.operation = Operation::import_protected_file;
+  expect(matches(), "maintenance upload rejected its bound identity");
+  for (const auto operation : {Operation::create_standard, Operation::create_with_hidden, Operation::scan_tail_space, Operation::scan_protected_space}) {
+    request.operation = operation;
+    expect(!matches(), "maintenance accepted an unrelated operation");
+  }
+  request.operation = Operation::import_protected_file;
+  request.target_path = L"other-container"; expect(!matches(), "maintenance accepted a different path");
+  request.target_path = L"bound-container";
+  ++request.mounted_drive; expect(!matches(), "maintenance accepted a different drive"); --request.mounted_drive;
+  ++request.mount_id; expect(!matches(), "maintenance accepted a remounted drive"); --request.mount_id;
+  ++request.outer_size_bytes; expect(!matches(), "maintenance accepted a different disk length");
+  RequestHeader header{.operation = Operation::scan_maintenance_space,
+      .outer_size_bytes = 4096, .path_characters = 15, .first_password_bytes = 3,
+      .second_password_bytes = 3, .mounted_drive = 24, .mount_id = 19};
+  expect(valid_request_header(header), "maintenance scan header rejected");
+  header.source_characters = 1; expect(!valid_request_header(header), "maintenance scan accepted a source path");
+  header.source_characters = 0; header.second_password_bytes = 0;
+  expect(!valid_request_header(header), "maintenance scan accepted missing credentials");
+  header.second_password_bytes = 3; header.version = 4;
+  expect(!valid_request_header(header), "maintenance accepted an old helper protocol");
+}
+
 void test_header_validation() {
   RequestHeader standard{
       .operation = Operation::create_standard,
@@ -332,7 +364,7 @@ void test_response_round_trip() {
 
 // One consent has to cover a run of measurements, so the helper answers more
 // than one on a connection and stops when the caller lets go of it.
-void test_a_measurement_session_answers_until_the_caller_lets_go(bool import_attempt = false) {
+void test_a_measurement_session_answers_until_the_caller_lets_go(int attempt = 0) {
   const std::wstring name = L"\\\\.\\pipe\\usb-vault-measurement-test";
   Handle server(::CreateNamedPipeW(
       name.c_str(), PIPE_ACCESS_DUPLEX,
@@ -397,7 +429,10 @@ void test_a_measurement_session_answers_until_the_caller_lets_go(bool import_att
       .first_password_bytes = 3,
       .nonce = nonce,
   };
-  if (import_attempt) {
+  if (attempt == 2) {
+    creation.operation=Operation::scan_maintenance_space; creation.second_password_bytes=3; creation.mounted_drive=25;
+    write_request(client.get(),creation,target,password,password);
+  } else if (attempt == 1) {
     creation.operation=Operation::import_protected_file;creation.second_password_bytes=3;
     creation.mounted_drive=25;creation.source_characters=static_cast<std::uint32_t>(target.size());creation.destination_characters=8;
     write_request(client.get(),creation,target,password,password,target,L"file.bin");
@@ -529,7 +564,9 @@ int main() {
     test_a_measured_number_travels_only_with_success();
     test_response_round_trip();
     test_a_measurement_session_answers_until_the_caller_lets_go();
-    test_a_measurement_session_answers_until_the_caller_lets_go(true);
+    test_a_measurement_session_answers_until_the_caller_lets_go(1);
+    test_a_measurement_session_answers_until_the_caller_lets_go(2);
+    test_maintenance_binding();
     test_format_error_mapping();
     test_pipe_dacl_names_system_and_token_user_explicitly();
     std::cout << "creator_protocol_tests passed\n";

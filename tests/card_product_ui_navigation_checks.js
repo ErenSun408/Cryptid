@@ -232,7 +232,10 @@
       $("#decoy-drop-status").textContent.includes("重新进入维护"),
       "A failed upload stays disarmed across refresh until maintenance ends");
     $("#decoy-maintenance-end").click();
-    await wait(() => !$("#decoy-results").hidden);
+    await wait(() => !$("#decoy-results").hidden && !$("#decoy-container-list [data-decoy-container='1'] button").disabled);
+    check($("#decoy-container-list [data-decoy-container='1']").textContent.includes("未挂载") &&
+      !$("#decoy-container-list [data-decoy-container='1']").textContent.includes("X:"),
+      "Ending maintenance refreshes the result row mount status and drive");
     $("#decoy-container-list [data-decoy-container='1'] button").click();
     await wait(() => !$("#decoy-maintenance").hidden && !$("#decoy-maintenance-end").disabled);
     // A small drop can be over before the page is told it began, and two
@@ -333,6 +336,7 @@
     check(!$("#decoy-verify").hidden && $("#decoy-results").hidden,
       "Zero matches with unreachable containers also stay on verification");
 
+    Object.assign(window.navigationFixture.containers.find(item => item.id === 1), { mounted: true, size: 65536, drive: "X:" });
     window.dispatchEvent(new window.Event("usb-vault-session-changed"));
     await tick();
     check($("#decoy-verify").hidden === false &&

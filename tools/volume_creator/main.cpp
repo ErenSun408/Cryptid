@@ -179,6 +179,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       static_cast<void>(::FlushFileBuffers(pipe.get()));
       return 0;
     }
+    if (request.operation == usb_vault::volume_creation::detail::Operation::scan_maintenance_space) {
+      usb_vault::volume_creation::detail::serve_maintenance_session(pipe.get(), arguments.nonce, request);
+      static_cast<void>(::FlushFileBuffers(pipe.get()));
+      return 0;
+    }
     if (request.operation == usb_vault::volume_creation::detail::Operation::import_protected_file) {
       usb_vault::volume_creation::detail::serve_import_session(pipe.get(), arguments.nonce, request);
       static_cast<void>(::FlushFileBuffers(pipe.get()));

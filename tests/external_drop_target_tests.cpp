@@ -449,10 +449,52 @@ void test_a_card_that_goes_stops_the_run_and_the_window() {
           "the window offered to take a drop without a card");
 }
 
+void test_native_drop_region_is_bounded_and_disarmed() {
+  require(SUCCEEDED(::OleInitialize(nullptr)), "OLE initialization failed");
+  const HWND parent = ::CreateWindowExW(0, L"STATIC", L"drop test", WS_POPUP,
+      0, 0, 400, 300, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+  require(parent != nullptr, "parent creation failed");
+  CreationWorkState work;
+  ImportLog log;
+  {
+    TargetHolder target(step_into(log), work);
+    require(target->attach_window(parent), "native drop region creation failed");
+    HWND region = ::FindWindowExW(parent, nullptr, L"UsbVaultNativeDropRegion", nullptr);
+    require(region != nullptr, "drop region not a native child");
+    require(target->set_target(5, L""), "arming failed");
+    require(target->set_drop_bounds(10,20,200,100), "valid bounds refused");
+    require((::GetWindowLongPtrW(region,GWL_STYLE)&WS_VISIBLE)!=0, "armed region hidden");
+    require(::ChildWindowFromPoint(parent, POINT{30,40})==region, "drop region not hit-testable");
+    unsigned hover=0;
+    target->set_hover_callback([&](unsigned value) { hover=value; });
+    require(target->set_drop_button_bounds(50,50,100,30), "button bounds refused");
+    ::SendMessageW(region,WM_MOUSEMOVE,0,MAKELPARAM(60,40));
+    require(hover==2,"button hover did not remain separate");
+    ::SendMessageW(region,WM_MOUSEMOVE,0,MAKELPARAM(5,5));
+    require(hover==1,"region hover not delivered");
+    ::SendMessageW(region,WM_MOUSELEAVE,0,0);
+    require(hover==0,"region hover not cleared");
+    FakeDataObject hover_data({L"C:\\a\\hover.txt"});
+    require(drag_over(*target,hover_data)==DROPEFFECT_COPY && hover==3,"file drag did not highlight region");
+    target->DragLeave();
+    require(hover==0,"drag highlight not cleared");
+
+    require(!target->set_drop_bounds(350,20,200,100), "out-of-client bounds accepted");
+    require((::GetWindowLongPtrW(region,GWL_STYLE)&WS_VISIBLE)==0, "invalid region remained visible");
+    require(target->set_drop_bounds(10,20,200,100), "reposition failed");
+    target->clear_target();
+    require((::GetWindowLongPtrW(region,GWL_STYLE)&WS_VISIBLE)==0, "disarmed region remained visible");
+  }
+  require(::FindWindowExW(parent,nullptr,L"UsbVaultNativeDropRegion",nullptr)==nullptr, "drop region leaked");
+  ::DestroyWindow(parent);
+  ::OleUninitialize();
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_native_drop_region_is_bounded_and_disarmed();
     test_a_drop_carries_every_path_the_shell_named();
     test_the_window_takes_a_drop_only_when_the_page_armed_it();
     test_only_a_shell_file_list_is_taken();

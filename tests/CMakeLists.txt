@@ -396,6 +396,7 @@ add_test(NAME card_product_webview_host_object_tests
   COMMAND card_product_webview_host_object_tests)
 
 add_executable(external_drop_target_tests
+  ${PROJECT_SOURCE_DIR}/tools/app/usb_vault_app.manifest
   external_drop_target_tests.cpp
 )
 

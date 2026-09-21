@@ -124,19 +124,23 @@ HRESULT STDMETHODCALLTYPE ExternalDropTarget::DragEnter(
     IDataObject* const data, DWORD, POINTL, DWORD* const effect) noexcept {
   const bool accepted = accepts(data);
   accepting_.store(accepted);
+  hover(accepted ? 3U : 0U);
   if (effect != nullptr) *effect = accepted ? DROPEFFECT_COPY : DROPEFFECT_NONE;
   return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE ExternalDropTarget::DragOver(
     DWORD, POINTL, DWORD* const effect) noexcept {
+  hover(accepting_.load() && armed_.load() && !work_.running.load() && !work_.interrupted.load() ? 3U : 0U);
   if (effect != nullptr) {
-    *effect = accepting_.load() ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    *effect = accepting_.load() && armed_.load() && !work_.running.load() && !work_.interrupted.load()
+        ? DROPEFFECT_COPY : DROPEFFECT_NONE;
   }
   return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE ExternalDropTarget::DragLeave() noexcept {
+  hover(0);
   accepting_.store(false);
   return S_OK;
 }
@@ -144,6 +148,7 @@ HRESULT STDMETHODCALLTYPE ExternalDropTarget::DragLeave() noexcept {
 HRESULT STDMETHODCALLTYPE ExternalDropTarget::Drop(
     IDataObject* const data, DWORD, POINTL, DWORD* const effect) noexcept {
   if (effect != nullptr) *effect = DROPEFFECT_NONE;
+  hover(0);
   const bool accepted = accepting_.exchange(false);
   // 🔴 Checked again rather than trusted from `DragEnter`: the page may have
   // left maintenance, and the card may have gone, while the cursor was still
@@ -155,6 +160,88 @@ HRESULT STDMETHODCALLTYPE ExternalDropTarget::Drop(
 
   if (start_sources(std::move(sources)) && effect != nullptr) *effect = DROPEFFECT_COPY;
   return S_OK;
+}
+
+LRESULT CALLBACK ExternalDropTarget::drop_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* target = reinterpret_cast<ExternalDropTarget*>(::GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    target = static_cast<ExternalDropTarget*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
+    ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(target));
+  }
+  if (target && (message == WM_MOUSEMOVE || message == WM_LBUTTONUP || message == WM_LBUTTONDBLCLK)) {
+    POINT point{static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+    ::ClientToScreen(window, &point);
+    const bool button = target->over_button(point);
+    if (message == WM_MOUSEMOVE) {
+      TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
+      ::TrackMouseEvent(&tracking);
+      target->hover(button ? 2U : 1U);
+    } else if ((message == WM_LBUTTONUP && button) || (message == WM_LBUTTONDBLCLK && !button)) {
+      target->hover(0);
+      static_cast<void>(target->select_files());
+    }
+    return 0;
+  }
+  if (message == WM_MOUSELEAVE && target) { target->hover(0); return 0; }
+  if (message == WM_MOUSEWHEEL) return ::SendMessageW(::GetParent(window), message, wparam, lparam);
+  return ::DefWindowProcW(window, message, wparam, lparam);
+}
+
+bool ExternalDropTarget::attach_window(HWND parent) noexcept {
+  if (drop_window_ || !::IsWindow(parent)) return false;
+  WNDCLASSW type{};
+  type.style = CS_DBLCLKS;
+  type.lpfnWndProc = drop_window_proc;
+  type.hInstance = ::GetModuleHandleW(nullptr);
+  type.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(32649));
+  type.hbrBackground = static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH));
+  type.lpszClassName = L"UsbVaultNativeDropRegion";
+  if (!::RegisterClassW(&type) && ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+  drop_window_ = ::CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, type.lpszClassName, L"",
+      WS_CHILD, 0, 0, 0, 0, parent, nullptr, type.hInstance, this);
+  // A nonzero alpha retains native hit testing without obscuring the HTML.
+  if (!drop_window_ || !::SetLayeredWindowAttributes(drop_window_, 0, 1, LWA_ALPHA) ||
+      FAILED(::RegisterDragDrop(drop_window_, this))) {
+    if (drop_window_) ::DestroyWindow(drop_window_);
+    drop_window_ = nullptr; return false;
+  }
+  return true;
+}
+
+void ExternalDropTarget::hover(unsigned state) noexcept {
+  if (state == hover_state_) return;
+  hover_state_ = state;
+  try { if (hover_callback_) hover_callback_(state); } catch (...) {}
+}
+
+bool ExternalDropTarget::over_button(POINT screen) const noexcept {
+  if (!drop_window_) return false;
+  ::ScreenToClient(::GetParent(drop_window_), &screen);
+  return ::PtInRect(&button_bounds_, screen) != FALSE;
+}
+
+bool ExternalDropTarget::set_drop_button_bounds(int x, int y, int width, int height) noexcept {
+  button_bounds_ = {};
+  RECT client{};
+  if (!drop_window_ || !::GetClientRect(::GetParent(drop_window_), &client) ||
+      x < 0 || y < 0 || width < 0 || height < 0 || x > client.right || y > client.bottom ||
+      width > client.right-x || height > client.bottom-y) return false;
+  button_bounds_ = {x, y, x+width, y+height};
+  return true;
+}
+
+bool ExternalDropTarget::set_drop_bounds(int x, int y, int width, int height) noexcept {
+  if (!drop_window_) return false;
+  if (!armed_.load() || work_.running.load() || work_.interrupted.load() || width == 0 || height == 0) {
+    hover(0);
+    ::ShowWindow(drop_window_, SW_HIDE); return true;
+  }
+  RECT client{};
+  if (!::GetClientRect(::GetParent(drop_window_), &client) || x < 0 || y < 0 || width < 0 || height < 0 ||
+      x > client.right || y > client.bottom || width > client.right-x || height > client.bottom-y) {
+    ::ShowWindow(drop_window_, SW_HIDE); return false;
+  }
+  return ::SetWindowPos(drop_window_, HWND_TOP, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW) != FALSE;
 }
 
 bool ExternalDropTarget::select_files() noexcept {
@@ -209,6 +296,7 @@ bool ExternalDropTarget::start_sources(std::vector<std::wstring> sources) noexce
   work_.finish();  // A drop is not the creation gate's kind of cancellable.
   work_.volume_operation.store(true);
   work_.running.store(true);
+  if (drop_window_) ::ShowWindow(drop_window_, SW_HIDE);
   try {
     worker_ = std::thread(&ExternalDropTarget::run, this, id,
                           std::move(directory), std::move(sources));
@@ -286,6 +374,8 @@ bool ExternalDropTarget::set_target(
 
 void ExternalDropTarget::clear_target() noexcept {
   armed_.store(false);
+  hover(0);
+  if (drop_window_) ::ShowWindow(drop_window_, SW_HIDE);
   accepting_.store(false);
   try {
     const std::lock_guard lock(mutex_);
@@ -317,6 +407,11 @@ ExternalDropStatus ExternalDropTarget::status() const noexcept {
 }
 
 void ExternalDropTarget::close() noexcept {
+  if (drop_window_) {
+    ::RevokeDragDrop(drop_window_);
+    ::DestroyWindow(drop_window_);
+    drop_window_ = nullptr;
+  }
   clear_target();
   cancelled_.store(true);
   if (worker_.joinable()) worker_.join();

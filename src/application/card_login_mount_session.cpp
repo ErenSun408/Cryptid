@@ -39,7 +39,6 @@ class ProductionCardLoginMountSessionRuntime final
       std::filesystem::path volume_creator_helper_path)
       : provider_(provider),
         creator_(volume_creator_helper_path),
-        measurements_(volume_creator_helper_path),
         imports_(std::move(volume_creator_helper_path)) {}
 
   [[nodiscard]] MountSessionResult mount_authenticated(
@@ -122,11 +121,11 @@ class ProductionCardLoginMountSessionRuntime final
       std::wstring_view path, const volume::MountIdentity& identity,
       const security::SecureBuffer& outer,
       const security::SecureBuffer& hidden) override {
-    return measurements_.protected_space(path, identity.drive_letter, identity.unique_id,
+    return imports_.protected_space(path, identity.drive_letter, identity.unique_id,
                                          identity.disk_length, outer, hidden);
   }
 
-  void end_measurements() noexcept override { measurements_.close(); }
+  void end_measurements() noexcept override { imports_.close(); }
   void end_imports() noexcept override { imports_.close(); }
   void import_protected(std::wstring_view container, const volume::MountIdentity& identity,
       const security::SecureBuffer& outer, const security::SecureBuffer& hidden,
@@ -313,7 +312,6 @@ class ProductionCardLoginMountSessionRuntime final
   }
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
-  volume_creation::VolumeMeasurementSession measurements_;
   volume_creation::VolumeImportSession imports_;
 };
 

@@ -138,6 +138,8 @@ constexpr DISPID kCancelExternalDropId = 82;
 constexpr DISPID kExternalDropStatusId = 83;
 constexpr DISPID kDecoyWriteBlockedId = 84;
 constexpr DISPID kSelectExternalFilesId = 85;
+constexpr DISPID kExternalDropBoundsId = 87;
+constexpr DISPID kExternalDropButtonBoundsId = 88;
 constexpr DISPID kExternalFileProgressId = 86;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
@@ -552,6 +554,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getDecoyMaintenanceWriteBlocked")) { ids[0] = kDecoyWriteBlockedId; return S_OK; }
     if (matches(names[0], L"beginEndDecoyMaintenance")) { ids[0] = kBeginEndDecoyMaintenanceId; return S_OK; }
     if (matches(names[0], L"getExternalFileProgress")) { ids[0] = kExternalFileProgressId; return S_OK; }
+    if (matches(names[0], L"setExternalDropButtonBounds")) { ids[0] = kExternalDropButtonBoundsId; return S_OK; }
+    if (matches(names[0], L"setExternalDropBounds")) { ids[0] = kExternalDropBoundsId; return S_OK; }
     if (matches(names[0], L"selectExternalFiles")) { ids[0] = kSelectExternalFilesId; return S_OK; }
     if (matches(names[0], kSetExternalDropTargetName)) { ids[0] = kSetExternalDropTargetId; return S_OK; }
     if (matches(names[0], kClearExternalDropTargetName)) { ids[0] = kClearExternalDropTargetId; return S_OK; }
@@ -629,7 +633,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     // operation does, so its progress and its cancel are readable throughout;
     // they carry no session state of their own and are answered from atomics.
     const bool external_drop_query =
-        member == kExternalDropStatusId || member == kCancelExternalDropId || member == kExternalFileProgressId;
+        member == kExternalDropStatusId || member == kCancelExternalDropId || member == kExternalFileProgressId || member == kExternalDropBoundsId || member == kExternalDropButtonBoundsId;
     if (creation_work_->running.load() && !external_drop_query &&
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
@@ -654,7 +658,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       // Arming the window is not a session mutation: it says where a drop
       // would land and touches nothing a retry, a batch or a measurement is
       // holding, and the maintenance page re-arms on every directory change.
-      case kSetExternalDropTargetId: case kClearExternalDropTargetId:
+      case kSetExternalDropTargetId: case kClearExternalDropTargetId: case kExternalDropBoundsId: case kExternalDropButtonBoundsId:
       case kExternalDropStatusId: case kCancelExternalDropId: case kExternalFileProgressId:
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
@@ -848,6 +852,18 @@ class CardProductWebViewHostObject final : public IDispatch {
         return external_drop_sink_ &&
                        external_drop_sink_->set_target(id, relative_directory)
                    ? S_OK : E_ACCESSDENIED;
+      }
+      case kExternalDropBoundsId: case kExternalDropButtonBoundsId: {
+        if (!parameters || parameters->cArgs != 4 || parameters->cNamedArgs || !parameters->rgvarg)
+          return DISP_E_BADPARAMCOUNT;
+        std::uint32_t values[4]{};
+        for (unsigned i=0;i<4;++i)
+          if (!exact_uint32(parameters->rgvarg[3-i], values[i]) || values[i]>32768) return DISP_E_TYPEMISMATCH;
+        if (!external_drop_sink_) return E_FAIL;
+        const int x=static_cast<int>(values[0]), y=static_cast<int>(values[1]);
+        const int w=static_cast<int>(values[2]), h=static_cast<int>(values[3]);
+        return (member == kExternalDropBoundsId ? external_drop_sink_->set_drop_bounds(x,y,w,h)
+            : external_drop_sink_->set_drop_button_bounds(x,y,w,h)) ? S_OK : E_FAIL;
       }
       case kSelectExternalFilesId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;

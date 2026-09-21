@@ -82,6 +82,10 @@ class ExternalDropTarget final : public IDropTarget,
   void clear_target() noexcept override;
   bool request_cancel() noexcept override;
   bool select_files() noexcept override;
+  bool attach_window(HWND parent) noexcept;
+  void set_hover_callback(std::function<void(unsigned)> callback) { hover_callback_ = std::move(callback); }
+  bool set_drop_button_bounds(int x, int y, int width, int height) noexcept override;
+  bool set_drop_bounds(int x, int y, int width, int height) noexcept override;
   unsigned int file_progress() const noexcept override { return file_percent_.load(); }
   [[nodiscard]] ExternalDropStatus status() const noexcept override;
 
@@ -99,6 +103,13 @@ class ExternalDropTarget final : public IDropTarget,
   void run(std::uint32_t id, std::wstring relative_directory,
            std::vector<std::wstring> sources) noexcept;
 
+  HWND drop_window_{};
+  RECT button_bounds_{};
+  unsigned hover_state_{};
+  std::function<void(unsigned)> hover_callback_;
+  void hover(unsigned state) noexcept;
+  bool over_button(POINT screen) const noexcept;
+  static LRESULT CALLBACK drop_window_proc(HWND, UINT, WPARAM, LPARAM);
   ExternalImportStep step_;
   CreationWorkState& work_;
   std::atomic<ULONG> references_{1};
