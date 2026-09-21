@@ -220,6 +220,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return maintenance_space;
   }
 
+  bool maintenance_blocked = false;
+  bool decoy_maintenance_write_blocked(std::uint32_t id) override {
+    if (id != 7) throw std::runtime_error("unknown maintenance volume");
+    return maintenance_blocked;
+  }
+
   void end_decoy_maintenance(const std::uint32_t id) override {
     await_volume_operation();
     ++end_maintenance_calls;
@@ -3185,6 +3191,27 @@ void test_a_running_drop_answers_only_about_itself() {
   work.running.store(false);
 }
 
+void test_protection_query_is_boolean_scoped_and_serialized() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work)), "host failed");
+  VARIANT result{};
+  const auto query = [&](unsigned int id) { return invoke_with_number(*host.Get(), L"getDecoyMaintenanceWriteBlocked", id, &result, nullptr); };
+  require(FAILED(query(7)), "unauthenticated status leaked");
+  fixture.authentication.establish(root_secret());
+  require(SUCCEEDED(query(7)) && result.vt == VT_BOOL && result.boolVal == VARIANT_FALSE, "normal state not boolean");
+  fixture.volume.maintenance_blocked = true;
+  require(SUCCEEDED(query(7)) && result.boolVal == VARIANT_TRUE, "blocked state not projected");
+  require(FAILED(query(0)) && FAILED(query(8)), "invalid container accepted");
+  work.running.store(true);
+  work.volume_operation.store(true);
+  require(query(7) == E_PENDING, "query raced worker session ownership");
+  work.running.store(false);
+  work.interrupted.store(true);
+  require(FAILED(query(7)), "interrupted card state leaked");
+}
+
 void test_configuration_transition() {
   Fixture fixture;
   usb_vault::ui::CreationWorkState work;
@@ -3224,6 +3251,7 @@ void test_configuration_transition() {
 
 int main() {
   try {
+    test_protection_query_is_boolean_scoped_and_serialized();
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();

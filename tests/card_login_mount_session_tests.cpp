@@ -3251,6 +3251,24 @@ void test_a_surveyed_container_opens_without_asking_again() {
       "a released session still held the surveyed password");
 }
 
+void test_maintenance_protection_query_is_scoped_and_never_invents_safety() {
+  FakeRuntime runtime;
+  CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  require_throws<std::logic_error>([&] { (void)session.decoy_maintenance_write_blocked(1); }, "unauthenticated query accepted");
+  const auto id = maintenance_fixture(runtime, session);
+  require_throws<std::logic_error>([&] { (void)session.decoy_maintenance_write_blocked(id); }, "ordinary volume query accepted");
+  const auto drive = session.open_decoy_maintenance(id, bytes("decoy-password"));
+  require(!session.decoy_maintenance_write_blocked(id), "protected outer volume reported blocked");
+  runtime.attached_volume_types[drive] = usb_vault::volume::VolumeType::outer_write_prevented;
+  require(session.decoy_maintenance_write_blocked(id), "protection trigger not reported");
+  runtime.attached_volume_types[drive] = usb_vault::volume::VolumeType::normal;
+  require_throws<std::runtime_error>([&] { (void)session.decoy_maintenance_write_blocked(id); }, "unexpected volume reported safe");
+  runtime.attached_volume_types.erase(drive);
+  require_throws<std::runtime_error>([&] { (void)session.decoy_maintenance_write_blocked(id); }, "missing volume reported safe");
+  require(runtime.measure_calls == 0, "status query triggered elevation");
+}
+
 void test_only_a_volume_opened_for_maintenance_is_measured() {
   FakeRuntime runtime;
   CardAuthenticationSession authentication;
@@ -3657,6 +3675,7 @@ int main() {
     test_a_survey_counts_containers_it_could_not_release();
     test_a_survey_stops_when_asked_and_keeps_nothing_it_did_not_find();
     test_a_surveyed_container_opens_without_asking_again();
+    test_maintenance_protection_query_is_scoped_and_never_invents_safety();
     test_only_a_volume_opened_for_maintenance_is_measured();
     test_ending_maintenance_releases_the_volume_and_the_elevation();
     test_every_unmount_path_ends_a_measuring_run();

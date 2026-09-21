@@ -136,6 +136,7 @@ constexpr DISPID kSetExternalDropTargetId = 80;
 constexpr DISPID kClearExternalDropTargetId = 81;
 constexpr DISPID kCancelExternalDropId = 82;
 constexpr DISPID kExternalDropStatusId = 83;
+constexpr DISPID kDecoyWriteBlockedId = 84;
 // The page asks one question before anything else: which surface the host
 // opened it for. This object only ever serves the product session; setup has
 // its own bridge with no card, volume or container member on it.
@@ -546,6 +547,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginOpenDecoyMaintenance")) { ids[0] = kBeginOpenDecoyMaintenanceId; return S_OK; }
     if (matches(names[0], L"beginMeasureDecoySpace")) { ids[0] = kBeginMeasureDecoySpaceId; return S_OK; }
     if (matches(names[0], L"getDecoyMaintenanceSpace")) { ids[0] = kDecoySpaceId; return S_OK; }
+    if (matches(names[0], L"getDecoyMaintenanceWriteBlocked")) { ids[0] = kDecoyWriteBlockedId; return S_OK; }
     if (matches(names[0], L"beginEndDecoyMaintenance")) { ids[0] = kBeginEndDecoyMaintenanceId; return S_OK; }
     if (matches(names[0], kSetExternalDropTargetName)) { ids[0] = kSetExternalDropTargetId; return S_OK; }
     if (matches(names[0], kClearExternalDropTargetName)) { ids[0] = kClearExternalDropTargetId; return S_OK; }
@@ -644,6 +646,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
       case kBeginOpenDecoyMaintenanceId: // Opening one is what a survey is for.
       case kDecoySpaceId:
+      case kDecoyWriteBlockedId:
       // Arming the window is not a session mutation: it says where a drop
       // would land and touches nothing a retry, a batch or a measurement is
       // holding, and the maintenance page re-arms on every directory change.
@@ -703,6 +706,16 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kBeginMeasureDecoySpaceId:
       case kBeginEndDecoyMaintenanceId:
         return begin_volume_operation(member, parameters, result, argument_error);
+      case kDecoyWriteBlockedId: {
+        if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs != 0)
+          return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        std::uint32_t id = 0;
+        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        if (creation_work_->interrupted.load()) return E_ACCESSDENIED;
+        try { return complete_selection(controller_.decoy_maintenance_write_blocked(id), result); }
+        catch (...) { return E_FAIL; }
+      }
       case kDecoySpaceId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (!result) return E_POINTER;

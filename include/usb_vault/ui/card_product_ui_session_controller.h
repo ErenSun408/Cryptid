@@ -186,6 +186,7 @@ class CardProductUiSessionController final {
 
   // Closes maintenance: the outer volume is released and the measuring run
   // ends with it.
+  [[nodiscard]] bool decoy_maintenance_write_blocked(std::uint32_t id);
   void end_decoy_maintenance(std::uint32_t id);
 
   void unmount_container(std::uint32_t id);

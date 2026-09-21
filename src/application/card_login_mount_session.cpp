@@ -428,6 +428,10 @@ DecoyMaintenanceSpace CardLoginMountSession::decoy_maintenance_space(
   return impl_->core.decoy_maintenance_space(id);
 }
 
+bool CardLoginMountSession::decoy_maintenance_write_blocked(const std::uint32_t id) {
+  return impl_->core.decoy_maintenance_write_blocked(id);
+}
+
 void CardLoginMountSession::end_decoy_maintenance(const std::uint32_t id) {
   impl_->core.end_decoy_maintenance(id);
 }
@@ -1463,6 +1467,18 @@ DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
   return {.total_bytes = space.total_bytes,
           .free_bytes = space.free_bytes,
           .writable_bytes = runtime_.measure_tail_space(entry->drive_letter)};
+}
+
+bool CardLoginMountSessionCore::decoy_maintenance_write_blocked(const std::uint32_t id) {
+  if (!authentication_.authenticated()) throw std::logic_error("maintenance unavailable");
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (!entry || !entry->mounted || !entry->maintenance)
+    throw std::logic_error("maintenance unavailable");
+  const auto type = runtime_.mounted_volume_type(entry->drive_letter);
+  if (type == volume::VolumeType::outer_write_prevented) return true;
+  if (type == volume::VolumeType::outer) return false;
+  // Missing or unexpected volumes are unknown, never evidence of protection.
+  throw std::runtime_error("maintenance status unavailable");
 }
 
 void CardLoginMountSessionCore::end_decoy_maintenance(const std::uint32_t id) {

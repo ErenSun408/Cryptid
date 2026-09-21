@@ -256,6 +256,10 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
 
   // Releases the container maintenance was done on and ends the measuring run
   // it opened. A container still in use is refused, as any unmount is.
+  [[nodiscard]] virtual bool decoy_maintenance_write_blocked(std::uint32_t) {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
+
   virtual void end_decoy_maintenance(std::uint32_t) {
     throw std::logic_error("decoy maintenance is unavailable");
   }
@@ -530,6 +534,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] wchar_t open_surveyed_maintenance(std::uint32_t id) override;
   [[nodiscard]] DecoyMaintenanceSpace decoy_maintenance_space(
       std::uint32_t id) override;
+  [[nodiscard]] bool decoy_maintenance_write_blocked(std::uint32_t id) override;
   void end_decoy_maintenance(std::uint32_t id) override;
   void import_external_entry(
       std::uint32_t id, std::wstring_view relative_directory,

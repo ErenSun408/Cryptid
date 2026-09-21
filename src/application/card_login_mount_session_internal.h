@@ -214,6 +214,7 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] wchar_t open_surveyed_maintenance(std::uint32_t id);
   [[nodiscard]] ::usb_vault::application::DecoyMaintenanceSpace
   decoy_maintenance_space(std::uint32_t id);
+  [[nodiscard]] bool decoy_maintenance_write_blocked(std::uint32_t id);
   void end_decoy_maintenance(std::uint32_t id);
   void import_external_entry(
       std::uint32_t id, std::wstring_view relative_directory,

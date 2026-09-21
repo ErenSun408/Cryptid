@@ -228,6 +228,12 @@ DecoyMaintenanceUiSpace CardProductUiSessionController::decoy_maintenance_space(
               space.writable_bytes / kMib, UINT32_MAX))};
 }
 
+bool CardProductUiSessionController::decoy_maintenance_write_blocked(const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated)
+    throw_wrong_route("decoy maintenance is not available in the current UI state");
+  return volume_session_.decoy_maintenance_write_blocked(id);
+}
+
 void CardProductUiSessionController::end_decoy_maintenance(
     const std::uint32_t id) {
   if (state() != CardProductUiState::authenticated) {
