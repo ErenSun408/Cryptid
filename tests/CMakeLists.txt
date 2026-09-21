@@ -1010,6 +1010,11 @@ add_test(
 set_tests_properties(secure_buffer_copy_is_rejected PROPERTIES WILL_FAIL TRUE)
 
 if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
+  add_executable(decoy_allocation_behavior_tests EXCLUDE_FROM_ALL
+    decoy_allocation_behavior_tests.cpp)
+  target_include_directories(decoy_allocation_behavior_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(decoy_allocation_behavior_tests PRIVATE usb_vault_core bcrypt)
+  usb_vault_configure_target(decoy_allocation_behavior_tests)
   # Explicit candidate DLL + disposable fixture; never runs against user data.
   add_executable(hidden_geometry_integration_tests EXCLUDE_FROM_ALL
     hidden_geometry_integration_tests.cpp)
