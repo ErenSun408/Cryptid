@@ -2456,6 +2456,7 @@
   let decoyProtectionPending = false;
   let decoyProtectionGeneration = 0;
   let decoyWriteBlocked = false;
+  let decoyUploadRecovery = false;
   let decoyProtectionDisposed = false;
 
   const scheduleDecoyProtection = () => {
@@ -2485,7 +2486,7 @@
       decoyWriteBlocked = decoyWriteBlocked || blocked;
       decoyProtectionWarning.hidden = !decoyWriteBlocked;
       decoyProtectionStatus.hidden = true;
-      if (decoyWriteBlocked) decoyMaintenanceWritable.textContent = "写入已阻止";
+      if (decoyWriteBlocked) { decoyMaintenanceWritable.textContent = "写入已阻止"; disarmDecoyDrop(); }
     } catch (_) {
       if (!current()) return;
       decoyProtectionStatus.textContent = "暂时无法确认写入保护状态，请暂停修改并稍后重试；无法确认不代表可以继续写入。";
@@ -2522,7 +2523,7 @@
   // product is refused by the window before the page is involved at all.
   const armDecoyDrop = async () => {
     if (bridge === null) return;
-    if (decoyStage !== "maintenance" || fileContainerId === 0 ||
+    if (decoyStage !== "maintenance" || fileContainerId === 0 || decoyUploadRecovery || decoyWriteBlocked ||
         currentState !== nativeState.authenticated) {
       disarmDecoyDrop();
       return;
@@ -2661,6 +2662,7 @@
   };
 
   const resetDecoySection = () => {
+    decoyUploadRecovery = false;
     ++decoyMaintenanceRevision;
     disarmDecoyDrop();
     decoyDropWatching = false;
@@ -2825,12 +2827,16 @@
   // back as four numbers until the run ends. Nothing about the source files
   // crosses the boundary, so what arrived is learnt by listing the directory.
   const reportDecoyDrop = async ([state, , done, failed]) => {
+    if (state === 3 || state === 4) {
+      decoyUploadRecovery = true;
+      disarmDecoyDrop();
+    }
     setDecoyStatus(decoyDropStatus,
       state === 2
         ? `已放入 ${done} 个项目。`
         : state === 4
-          ? `已停止，放入了 ${done} 个项目，其余没有开始。`
-          : `放入了 ${done} 个项目，${failed} 个没有放进去，可能是外层卷放不下或已有同名项目。`,
+          ? `已停止，放入了 ${done} 个文件。请结束维护并检查未完成文件，再重新进入维护。`
+          : `已放入 ${done} 个文件，${failed} 个未完成，后续文件已停止。请结束维护并检查未完成文件，再重新进入维护。`,
       state === 2 ? "success" : state === 4 ? "warn" : "error");
     renderDecoySection();
     // Re-arming is what retires the finished run on the native side, so the
@@ -2978,6 +2984,7 @@
       await waitForVolumeOperation(() => bridge.beginOpenDecoyMaintenance(id));
       if (revision !== batchSessionRevision) return;
       opened = true;
+      decoyUploadRecovery = false;
       decoyStage = "maintenance";
       fileContainerId = id;
       filePath = [];

@@ -57,6 +57,11 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& outer_password,
       const security::SecureBuffer& hidden_password) = 0;
   virtual void end_measurements() noexcept = 0;
+  virtual void end_imports() noexcept = 0;
+  virtual void import_protected(std::wstring_view container_path, const volume::MountIdentity& identity,
+      const security::SecureBuffer& outer, const security::SecureBuffer& hidden,
+      std::wstring_view source, std::wstring_view destination_relative,
+      const volume::TransferCancellation& cancelled) = 0;
   [[nodiscard]] virtual security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
@@ -149,6 +154,7 @@ struct SessionContainer final {
   // Runtime only, like everything else here.
   bool maintenance{};
   std::optional<volume::MountIdentity> maintenance_identity;
+  bool maintenance_recovery_required{};
 };
 
 struct CardLoginMountSessionState final {

@@ -39,7 +39,8 @@ class ProductionCardLoginMountSessionRuntime final
       std::filesystem::path volume_creator_helper_path)
       : provider_(provider),
         creator_(volume_creator_helper_path),
-        measurements_(std::move(volume_creator_helper_path)) {}
+        measurements_(volume_creator_helper_path),
+        imports_(std::move(volume_creator_helper_path)) {}
 
   [[nodiscard]] MountSessionResult mount_authenticated(
       const ContainerLayout& layout,
@@ -126,6 +127,14 @@ class ProductionCardLoginMountSessionRuntime final
   }
 
   void end_measurements() noexcept override { measurements_.close(); }
+  void end_imports() noexcept override { imports_.close(); }
+  void import_protected(std::wstring_view container, const volume::MountIdentity& identity,
+      const security::SecureBuffer& outer, const security::SecureBuffer& hidden,
+      std::wstring_view source, std::wstring_view destination,
+      const volume::TransferCancellation& cancelled) override {
+    imports_.copy(container, identity.drive_letter, identity.unique_id, identity.disk_length,
+                  outer, hidden, source, destination, {}, cancelled);
+  }
 
   [[nodiscard]] security::SecureBuffer derive_container_password(
       const security::SecureBuffer& password_input,
@@ -305,6 +314,7 @@ class ProductionCardLoginMountSessionRuntime final
   const volume::VolumeProvider& provider_;
   volume_creation::VolumeCreator creator_;
   volume_creation::VolumeMeasurementSession measurements_;
+  volume_creation::VolumeImportSession imports_;
 };
 
 }  // namespace
@@ -1359,6 +1369,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
     throw refuse();
   }
   entry.maintenance_identity = std::move(identity);
+  entry.maintenance_recovery_required = false;
 
   // Proven, not stored: this container has an outer volume the supplied
   // password opens and a hidden one the session's own derivation opens.
@@ -1545,7 +1556,7 @@ void CardLoginMountSessionCore::import_external_entry(
     throw std::logic_error(
         "external import requires an authenticated card session");
   }
-  const SessionContainer* const entry = find_by_id(state_, id);
+  SessionContainer* const entry = find_by_id(state_, id);
   if (entry == nullptr) {
     throw std::invalid_argument(
         "no container is adopted under that identifier");
@@ -1567,11 +1578,23 @@ void CardLoginMountSessionCore::import_external_entry(
   if (name.empty()) {
     throw std::invalid_argument("the dropped entry has no file name");
   }
-  runtime_.copy_entry(
-      absolute_source,
-      volume::resolve_volume_child_path(entry->drive_letter,
-                                        relative_directory, name),
-      cancelled);
+  const auto destination = volume::resolve_volume_child_path(entry->drive_letter, relative_directory, name).substr(3);
+  if (!entry->maintenance_identity || state_.decoy_outer_password.empty() || entry->maintenance_recovery_required)
+    throw std::logic_error("maintenance upload requires a fresh authenticated mount");
+  try {
+    const auto verify = [&] {
+      if (!authentication_.authenticated() || runtime_.mount_identity(entry->drive_letter) != *entry->maintenance_identity)
+        throw std::runtime_error("maintenance identity changed during upload");
+    };
+    verify();
+    runtime_.import_protected(entry->path, *entry->maintenance_identity, state_.decoy_outer_password,
+        hidden_container_password(), absolute_source, destination, cancelled);
+    verify();
+  } catch (...) {
+    entry->maintenance_recovery_required = true;
+    runtime_.end_imports();
+    throw;
+  }
 }
 
 wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
@@ -1588,7 +1611,10 @@ wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
     throw std::invalid_argument(
         "no container is adopted under that identifier");
   }
-  if (entry->mounted && entry->maintenance) return entry->drive_letter;
+  if (entry->mounted && entry->maintenance) {
+    if (entry->maintenance_recovery_required) throw std::logic_error("end failed maintenance before reopening");
+    return entry->drive_letter;
+  }
   const bool switched = release_other_maintenance(id);
   try {
     return mount_outer_for_maintenance(*entry, state_.decoy_outer_password,
@@ -1650,7 +1676,8 @@ void CardLoginMountSessionCore::release_session_secrets() noexcept {
   state_.hidden_container_password = security::SecureBuffer();
   state_.decoy_outer_password = security::SecureBuffer();
   state_.login_password = security::SecureBuffer();
-  // The elevated run belonged to the session that opened it.
+  // The elevated runs belonged to the session that opened them.
+  runtime_.end_imports();
   runtime_.end_measurements();
 }
 
@@ -1856,6 +1883,7 @@ void CardLoginMountSessionCore::unmount_container_impl(
       container.maintenance = false;
       container.maintenance_identity.reset();
       container.drive_letter = wchar_t{};
+      if (ended_maintenance) runtime_.end_imports();
       if (ended_maintenance && end_measurements) runtime_.end_measurements();
       record_operation(OperationKind::container_unmounted,
                        OperationOutcome::succeeded,
@@ -2123,7 +2151,7 @@ void CardLoginMountSessionCore::unmount_active() {
         container.maintenance = false;
         container.maintenance_identity.reset();
         container.drive_letter = wchar_t{};
-        if (ended_maintenance) runtime_.end_measurements();
+        if (ended_maintenance) { runtime_.end_imports(); runtime_.end_measurements(); }
         record_operation(OperationKind::container_unmounted,
                          OperationOutcome::succeeded,
                          container.name,

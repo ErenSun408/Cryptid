@@ -200,10 +200,11 @@ void ExternalDropTarget::run(const std::uint32_t id,
       if (step_) step_(id, relative_directory, source, stop);
       ++completed;
     } catch (...) {
-      // One entry the volume would not take stops nothing else: the rest of
-      // the drop is still what the user asked for. The page is told how many
-      // did not arrive, and the directory listing says which.
+      // A failed protected write may leave metadata awaiting recovery.
+      // Never advance to another source on the same maintenance mount.
       ++failed;
+      failed_.store(failed);
+      break;
     }
     completed_.store(completed);
     failed_.store(failed);

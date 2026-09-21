@@ -353,6 +353,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   }
 
   void end_measurements() noexcept override { ++end_measure_calls; }
+  unsigned end_import_calls{};
+  unsigned protected_import_calls{};
+  bool change_identity_during_import{};
+  void end_imports() noexcept override { ++end_import_calls; }
+  void import_protected(std::wstring_view container, const usb_vault::volume::MountIdentity& identity,
+      const SecureBuffer& outer, const SecureBuffer& hidden, std::wstring_view source,
+      std::wstring_view destination, const usb_vault::volume::TransferCancellation& cancelled) override {
+    require(container==identity.volume_path && identity==mount_identity(identity.drive_letter),"import received wrong identity");
+    require(is_b_derivation(outer.bytes(),protected_outer_input)&&is_b_derivation(hidden.bytes(),"login-password"),"import missing authenticated credentials");
+    ++protected_import_calls;
+    copy_entry(source,std::wstring(1,identity.drive_letter)+L":\\"+std::wstring(destination),cancelled);
+    if(change_identity_during_import) ++identities.at(identity.drive_letter).unique_id;
+  }
 
   [[nodiscard]] std::optional<usb_vault::volume::VolumeType>
   mounted_volume_type(const wchar_t drive_letter) override {
@@ -3575,6 +3588,35 @@ void test_a_shell_drop_carries_its_cancellation_to_the_storage_layer() {
   require(runtime.copied.size() == 1, "a cancelled import still copied");
 }
 
+void test_import_rechecks_identity_before_and_after_copy() {
+  for(bool during:{false,true}) {
+    FakeRuntime runtime;CardAuthenticationSession authentication;
+    CardLoginMountSessionCore session(authentication,runtime,layout(),LoginMountPolicy::manual);
+    const auto id=maintenance_fixture(runtime,session);
+    const auto drive=session.open_decoy_maintenance(id,bytes("decoy-password"));
+    if(during)runtime.change_identity_during_import=true;else ++runtime.identities.at(drive).unique_id;
+    require_throws<std::runtime_error>([&]{session.import_external_entry(id,L"",L"C:\\file.bin",{});},"changed upload identity accepted");
+    require(runtime.protected_import_calls==(during?1U:0U),"stale upload reached wrong boundary");
+    require_throws_plain_logic_error([&]{session.import_external_entry(id,L"",L"C:\\next.bin",{});},"changed mount did not latch uploads");
+  }
+}
+
+void test_failed_import_latches_until_maintenance_remount() {
+  FakeRuntime runtime;CardAuthenticationSession authentication;
+  CardLoginMountSessionCore session(authentication,runtime,layout(),LoginMountPolicy::manual);
+  const auto id=maintenance_fixture(runtime,session);
+  static_cast<void>(session.open_decoy_maintenance(id,bytes("decoy-password")));
+  runtime.fail_copy=true;
+  require_throws<std::runtime_error>([&]{session.import_external_entry(id,L"",L"C:\\file.bin",{});},"copy failure lost");
+  const auto attempts=runtime.protected_import_calls;
+  runtime.fail_copy=false;
+  require_throws_plain_logic_error([&]{session.import_external_entry(id,L"",L"C:\\next.bin",{});},"failed maintenance upload restarted");
+  require(runtime.protected_import_calls==attempts&&runtime.end_import_calls>0,"failed upload reached helper again");
+  session.end_decoy_maintenance(id);static_cast<void>(session.open_decoy_maintenance(id,bytes("decoy-password")));
+  session.import_external_entry(id,L"",L"C:\\next.bin",{});
+  require(runtime.protected_import_calls==attempts+1,"fresh maintenance did not recover upload");
+}
+
 void test_a_shell_drop_needs_an_authenticated_session() {
   FakeRuntime runtime;
   CardAuthenticationSession authentication;
@@ -3753,6 +3795,8 @@ int main() {
     test_a_shell_drop_cannot_name_anything_outside_the_directory();
     test_a_shell_drop_carries_its_cancellation_to_the_storage_layer();
     test_a_shell_drop_needs_an_authenticated_session();
+    test_failed_import_latches_until_maintenance_remount();
+    test_import_rechecks_identity_before_and_after_copy();
     test_no_export_leaves_a_single_local_trace();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;

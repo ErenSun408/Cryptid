@@ -129,10 +129,21 @@
     window.navigationFixture.dropStatus = "3,3,2,1";
     await wait(() => $("#decoy-drop-run").hidden);
     await wait(() => $("#decoy-drop-status").textContent !== "");
-    check($("#decoy-drop-status").textContent.includes("2 个项目") &&
-      $("#decoy-drop-status").textContent.includes("1 个没有放进去") &&
+    check($("#decoy-drop-status").textContent.includes("2 个文件") &&
+      $("#decoy-drop-status").textContent.includes("后续文件已停止") &&
       $("#decoy-drop-status").dataset.tone === "error",
       "A finished drop says what arrived and what did not, on its own line");
+    const stoppedArms = window.navigationFixture.dropTargets.length;
+    await wait(() => !$("#decoy-maintenance-end").disabled);
+    $("#file-refresh").click();
+    await wait(() => !$("#decoy-maintenance-end").disabled);
+    check(window.navigationFixture.dropTargets.length === stoppedArms &&
+      $("#decoy-drop-status").textContent.includes("重新进入维护"),
+      "A failed upload stays disarmed across refresh until maintenance ends");
+    $("#decoy-maintenance-end").click();
+    await wait(() => !$("#decoy-results").hidden);
+    $("#decoy-container-list [data-decoy-container='1'] button").click();
+    await wait(() => !$("#decoy-maintenance").hidden && !$("#decoy-maintenance-end").disabled);
     // A small drop can be over before the page is told it began, and two
     // drops can come out identical. Each is reported on its own: the evidence
     // is the destination being named again, which is what retires the last.
@@ -175,17 +186,18 @@
       "Capacity and directory refresh do not erase protection warnings");
 
     const clearsBefore = window.navigationFixture.dropClears;
+    const endedBefore = window.navigationFixture.endedMaintenance.length;
     $("#decoy-maintenance-end").click();
-    await wait(() => window.navigationFixture.endedMaintenance.length === 1);
+    await wait(() => window.navigationFixture.endedMaintenance.length === endedBefore + 1);
     check(window.navigationFixture.endedMaintenance[0] === 1 &&
       !$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
       $("#management-files").closest("#dashboard-section-files") !== null,
       "Ending maintenance unmounts the current container and restores the shared file manager");
-    check(window.navigationFixture.dropClears > clearsBefore,
+    check(window.navigationFixture.dropClears >= clearsBefore && !window.navigationFixture.dropArmed,
       "Leaving maintenance disarms the window, so a drag lands nowhere");
 
     $("#decoy-container-list [data-decoy-container='3'] button").click();
-    await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
+    await wait(() => window.navigationFixture.openedMaintenance.length === 4 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 3);
     check($("#decoy-protection-warning").hidden, "Reopening maintenance clears the old mount warning");
     window.navigationFixture.delayProtection = true;

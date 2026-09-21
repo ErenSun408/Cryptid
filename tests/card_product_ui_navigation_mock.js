@@ -119,9 +119,10 @@ window.navigationFixture = {
     setExternalDropTarget: (id, directory) => {
       if (fixture.failDropTarget) throw new Error("the window refused to arm");
       fixture.dropTargets.push(`${id}/${directory}`);
+      fixture.dropArmed = true;
       if (!fixture.dropStatus.startsWith("1,")) fixture.dropStatus = "0,0,0,0";
     },
-    clearExternalDropTarget: () => { fixture.dropClears += 1; },
+    clearExternalDropTarget: () => { fixture.dropClears += 1; fixture.dropArmed = false; },
     getExternalDropStatus: () => fixture.dropStatus,
     cancelExternalDrop: () => {
       fixture.dropCancels += 1;

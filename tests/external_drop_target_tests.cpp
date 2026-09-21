@@ -386,10 +386,10 @@ void test_a_drop_reports_what_the_volume_would_not_take() {
   require(drop(*target, data) == DROPEFFECT_COPY, "the drop was refused");
   wait_until_idle(work);
 
-  // One refusal does not abandon the rest of what the user dropped.
-  require(log.snapshot().size() == 3, "a refusal stopped the whole drop");
+  // A protected-write failure stops all later entries until recovery.
+  require(log.snapshot().size() == 2, "the queue continued after a refusal");
   const ExternalDropStatus status = target->status();
-  require(status.state == 3 && status.total == 3 && status.completed == 2 &&
+  require(status.state == 3 && status.total == 3 && status.completed == 1 &&
               status.failed == 1,
           "the drop did not report exactly what did not arrive");
 }
