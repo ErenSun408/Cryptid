@@ -2,6 +2,7 @@
 #include "volume/fat32_safe_space_detail.h"
 #include "volume/fat32_allocation_plan_detail.h"
 
+#include "volume/fat32_volume_scan.h"
 #include <winioctl.h>
 #include <array>
 #include <system_error>
@@ -55,6 +56,22 @@ Fat32SafeSpace scan_bitmap(HANDLE volume, detail::Fat32Geometry geometry,
   return {counter.bytes(), geometry.cluster_size};
 }
 }  // namespace
+
+detail::Fat32Geometry detail::read_fat32_geometry(HANDLE volume, std::uint64_t length, std::uint64_t boundary) {
+  return read_geometry(volume, length, boundary);
+}
+std::uint64_t detail::free_fat32_prefix(HANDLE volume, Fat32Geometry geometry,
+                                      std::uint64_t first, std::uint64_t count) {
+  require_geometry(first < geometry.safe_clusters && count > 0 && count <= geometry.safe_clusters - first);
+  std::uint64_t found = 0;
+  bool gap = false;
+  static_cast<void>(scan_bitmap(volume, geometry, [&](std::uint64_t cluster) {
+    if (cluster < first || found == count || gap) return;
+    if (cluster == first + found) ++found;
+    else gap = true;
+  }));
+  return found;
+}
 
 Fat32SafeSpace scan_fat32_safe_space(HANDLE volume,
                                    std::uint64_t expected_volume_bytes,

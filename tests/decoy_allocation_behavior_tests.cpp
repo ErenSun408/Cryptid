@@ -1,3 +1,4 @@
+#include "usb_vault/volume/fat32_file_placement.h"
 #include "usb_vault/volume/fat32_file_allocation.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -167,7 +168,7 @@ int wmain(int argc,wchar_t** argv) {
   if(argc==5 && std::wstring_view(argv[1])==L"--measurement-helper-run") return measurement_helper_run(argv);
   if(argc==3 && std::wstring_view(argv[1])==L"--abrupt-disposable-writer") return abrupt_test_writer(argv[2]);
   if(argc==5 && std::wstring_view(argv[1])==L"--fault-disposable-run") return fault_run(argv);
-  if(argc==5 && std::wstring_view(argv[1])==L"--sequential-disposable-run") return sequential_run(argc,argv);
+  if(argc==5 && (std::wstring_view(argv[1])==L"--sequential-disposable-run" || std::wstring_view(argv[1])==L"--production-placement-run")) return sequential_run(argc,argv);
   if(argc==5 && (std::wstring_view(argv[1])==L"--placement-disposable-run" || std::wstring_view(argv[1])==L"--multirun-disposable-run")) return placement_run(argc,argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--recover-disposable-run") return recovery_run(argc,argv);
   bool output_created=false;
@@ -624,16 +625,35 @@ int sequential_run(int argc,wchar_t** argv) {
         Extents planned;std::uint64_t needed=size/l.cluster;
         for(const auto& run:ordered()) {if(!needed)break;const auto count=std::min(needed,run.second-run.first);planned.emplace_back(run.first,run.first+count);needed-=count;}
         need(!needed,"insufficient preallocation plan");
-        {auto handle=raw(m.drive);const auto formal=volume::plan_fat32_allocation(handle.h,g[1],g[2]-g[0],size);
+        volume::Fat32AllocationPlan formal;
+        {auto handle=raw(m.drive);formal=volume::plan_fat32_allocation(handle.h,g[1],g[2]-g[0],size);
           Extents actual;for(const auto& run:formal.runs)actual.emplace_back(run.first_cluster,run.first_cluster+run.cluster_count);
           need(actual==planned&&formal.file_bytes==size&&formal.allocation_bytes==size&&formal.cluster_size==l.cluster,"production first-fit plan mismatch");}
         Handle f;f.h=::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"create sequential file");
+        auto vol=raw(m.drive); Extents checked;
+        if(std::wstring_view(argv[1])==L"--production-placement-run") {
+          auto rejectBeforeAllocation=[&](auto action) {
+            bool rejected=false;try { action(); } catch(const std::exception&) { rejected=true; }
+            need(rejected,"invalid placement accepted");
+            FILE_STANDARD_INFO info{};need(::GetFileInformationByHandleEx(f.h,FileStandardInfo,&info,sizeof(info))&&info.EndOfFile.QuadPart==0&&info.AllocationSize.QuadPart==0,"rejected placement allocated file");
+          };
+          rejectBeforeAllocation([&]{volume::prepare_fat32_file(f.h,mountIdentity,g[2]-g[0],formal,[]{return true;});});
+          auto stale=mountIdentity;++stale.unique_id;
+          rejectBeforeAllocation([&]{volume::prepare_fat32_file(f.h,stale,g[2]-g[0],formal);});
+          auto invalid=formal;++invalid.allocation_bytes;
+          rejectBeforeAllocation([&]{volume::prepare_fat32_file(f.h,mountIdentity,g[2]-g[0],invalid);});
+          invalid=formal;invalid.runs.front().first_cluster=l.clusters;
+          rejectBeforeAllocation([&]{volume::prepare_fat32_file(f.h,mountIdentity,g[2]-g[0],invalid);});
+          record(id,"production_rejections",true);
+          volume::prepare_fat32_file(f.h,mountIdentity,g[2]-g[0],formal);
+          record(id,"production_prepare",true);
+        } else {
         LARGE_INTEGER eof{};eof.QuadPart=static_cast<LONGLONG>(size);need(::SetFilePointerEx(f.h,eof,nullptr,FILE_BEGIN),"seek eof");
         const BOOL allocated=::SetEndOfFile(f.h);record(id,"preallocate",allocated!=FALSE,allocated?0 : ::GetLastError());need(allocated&&m.type()==volume::VolumeType::outer,"preallocate failed");
         const auto allocation=volume::read_fat32_file_allocation(f.h,size,static_cast<std::uint32_t>(l.cluster),l.clusters);
-        Extents checked;for(const auto& run:allocation)checked.emplace_back(run.first_cluster,run.first_cluster+run.cluster_count);
+        checked.clear();for(const auto& run:allocation)checked.emplace_back(run.first_cluster,run.first_cluster+run.cluster_count);
         need(checked==extent_ranges(f.h),"production preallocation inspection mismatch");
-        auto vol=raw(m.drive);std::uint64_t vcn=0;
+        std::uint64_t vcn=0;
         for(const auto& destination:planned) {
           std::uint64_t first=destination.first;
           while(first<destination.second) {
@@ -655,6 +675,7 @@ int sequential_run(int argc,wchar_t** argv) {
             }
             vcn+=count;first+=count;
           }
+        }
         }
         need(extent_ranges(f.h)==planned,"actual extents mismatch");
         checked.clear();for(const auto& run:volume::read_fat32_file_allocation(f.h,size,static_cast<std::uint32_t>(l.cluster),l.clusters))
