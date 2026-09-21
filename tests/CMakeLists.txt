@@ -1010,6 +1010,12 @@ add_test(
 set_tests_properties(secure_buffer_copy_is_rejected PROPERTIES WILL_FAIL TRUE)
 
 if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
+  # Explicit candidate DLL + disposable fixture; never runs against user data.
+  add_executable(hidden_geometry_integration_tests EXCLUDE_FROM_ALL
+    hidden_geometry_integration_tests.cpp)
+  target_include_directories(hidden_geometry_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(hidden_geometry_integration_tests PRIVATE usb_vault_core)
+  usb_vault_configure_target(hidden_geometry_integration_tests)
   # Explicit opt-in executable only: creates and deliberately fills a NEW
   # disposable hidden-volume fixture. Never run implicitly through CTest.
   add_executable(decoy_maintenance_integration_tests EXCLUDE_FROM_ALL

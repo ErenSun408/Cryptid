@@ -37,6 +37,19 @@ using Initialize = int(__cdecl*)();
 using Shutdown = void(__cdecl*)();
 using FormatBinary = int(__cdecl*)(const Options*, std::uint32_t);
 
+// Candidate read-only export, not yet called by the production helper. Inputs
+// are the 512-byte primary outer/hidden headers from one file handle and two
+// explicit-length passwords. SHA-512 / PIM 0 matches the product format.
+// The four output uint64 values are outer start, outer length, protected start,
+// protected length, all in container-file bytes. No decrypted header/key leaves
+// the DLL. Valid-size output is zeroed on failure. See the third-party README.
+using ReadHiddenGeometry = int(__cdecl*)(
+    const unsigned char*, std::uint32_t, const unsigned char*, std::uint32_t,
+    const unsigned char*, std::uint32_t, const unsigned char*, std::uint32_t,
+    std::uint64_t, std::uint64_t*, std::uint32_t);
+constexpr std::uint32_t kGeometryHeaderBytes = 512;
+constexpr std::uint32_t kGeometryOutputBytes = 4 * sizeof(std::uint64_t);
+
 constexpr int kSuccess = 0;
 constexpr int kInvalidParameter = 2;
 constexpr int kPasswordPolicy = 7;

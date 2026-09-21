@@ -1,0 +1,20 @@
+--- a/src/FormatDLL/VeraCryptFormatSDK.cpp
++++ b/src/FormatDLL/VeraCryptFormatSDK.cpp
+@@ -494,1 +494,2 @@
+ }
++#include "UsbVaultGeometry.inl"
+--- a/src/FormatDLL/VeraCryptFormatSDK.h
++++ b/src/FormatDLL/VeraCryptFormatSDK.h
+@@ -177,3 +177,12 @@
++/** Read-only usb-vault geometry query. See UsbVaultGeometry.inl and the
++ * separately distributed boundary README for the fixed 32-byte output ABI. */
++VCF_API int __cdecl VeraCryptReadHiddenGeometry(
++    const unsigned char* outerHeader, uint32_t outerHeaderBytes,
++    const unsigned char* hiddenHeader, uint32_t hiddenHeaderBytes,
++    const unsigned char* outerPassword, uint32_t outerPasswordBytes,
++    const unsigned char* hiddenPassword, uint32_t hiddenPasswordBytes,
++    uint64_t hostBytes, uint64_t* geometry, uint32_t geometryBytes);
++
+ /* ---- Added by usb-vault Spike 3b (not part of the official SDK) ----
+  *
+  * Changes the password of an existing volume, headlessly.
