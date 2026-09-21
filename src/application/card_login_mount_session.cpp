@@ -1466,7 +1466,7 @@ DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
   const volume::VolumeSpace space = runtime_.volume_space(entry->drive_letter);
   return {.total_bytes = space.total_bytes,
           .free_bytes = space.free_bytes,
-          .writable_bytes = runtime_.measure_tail_space(entry->drive_letter)};
+          .tail_free_bytes = runtime_.measure_tail_space(entry->drive_letter)};
 }
 
 bool CardLoginMountSessionCore::decoy_maintenance_write_blocked(const std::uint32_t id) {

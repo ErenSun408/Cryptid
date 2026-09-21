@@ -80,9 +80,10 @@
       $("#decoy-maintenance-container").value === "3",
       "The secondary page reuses the existing file manager for the opened outer volume");
     check(all("#decoy-maintenance-container option").map((item) => item.value).join(",") === "1,3" &&
-      $("#decoy-maintenance-writable").textContent === "512 MiB" &&
-      $("#decoy-maintenance-space-detail").textContent.includes("总量 4.0 GiB"),
-      "Maintenance shows measured capacity and offers only the surveyed containers");
+      $("#decoy-maintenance-writable").textContent === "暂无法可靠计算" &&
+      $("#decoy-maintenance-space-detail").textContent.includes("总量 4.0 GiB") &&
+      $("#decoy-maintenance-space-detail").textContent.includes("不能作为可写额度"),
+      "Maintenance shows filesystem usage without treating tail free space as a safe write budget");
     check($("#decoy-maintenance-freshness").textContent.includes("天前有修改") &&
       $("#decoy-maintenance-freshness-detail").textContent.includes("顶层项目") &&
       all("#file-list-body tr").length === 2,

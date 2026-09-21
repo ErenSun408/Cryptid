@@ -2637,7 +2637,7 @@ void test_maintenance_facts_are_async_current_and_session_scoped() {
   fixture.volume.maintenance_space = {
       .total_bytes = 4096ULL * 1024ULL * 1024ULL,
       .free_bytes = 1024ULL * 1024ULL * 1024ULL,
-      .writable_bytes = 512ULL * 1024ULL * 1024ULL,
+      .tail_free_bytes = 512ULL * 1024ULL * 1024ULL,
   };
   usb_vault::ui::CreationWorkState work;
   ComPtr<IDispatch> host;

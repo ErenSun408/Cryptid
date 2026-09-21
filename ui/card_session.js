@@ -2910,18 +2910,20 @@
         await waitForVolumeOperation(() => bridge.beginMeasureDecoySpace(id));
         const packed = String(await bridge.getDecoyMaintenanceSpace());
         if (!/^\d+,\d+,\d+$/.test(packed)) throw new Error("invalid capacity facts");
-        const [total, free, writable] = packed.split(",").map(Number);
-        if (![total, free, writable].every((value) =>
+        const [total, free, tailFree] = packed.split(",").map(Number);
+        if (![total, free, tailFree].every((value) =>
               Number.isSafeInteger(value) && value >= 0) ||
-            free > total || writable > total) {
+            free > total || tailFree > total) {
           throw new Error("invalid capacity facts");
         }
         if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
             decoyStage !== "maintenance") return;
         const used = total - free;
-        decoyMaintenanceWritable.textContent = decoyWriteBlocked ? "写入已阻止" : formatCapacityMib(writable);
+        // The bitmap counts protected hidden sectors as free. Never present
+        // that number as permission to write into the outer filesystem.
+        decoyMaintenanceWritable.textContent = decoyWriteBlocked ? "写入已阻止" : "暂无法可靠计算";
         decoyMaintenanceSpaceDetail.textContent =
-          `已用 ${formatCapacityMib(used)} / 总量 ${formatCapacityMib(total)}`;
+          `已用 ${formatCapacityMib(used)} / 总量 ${formatCapacityMib(total)}。文件系统空闲包含受保护区域，不能作为可写额度。`;
         decoyMaintenanceSpaceBar.style.width = total === 0
           ? "0%" : `${Math.min(100, Math.round((used / total) * 100))}%`;
       } catch (_) {

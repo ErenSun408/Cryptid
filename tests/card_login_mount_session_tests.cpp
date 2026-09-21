@@ -3298,7 +3298,7 @@ void test_only_a_volume_opened_for_maintenance_is_measured() {
   const DecoyMaintenanceSpace space = session.decoy_maintenance_space(id);
   require(space.total_bytes == runtime.reported_total &&
               space.free_bytes == runtime.reported_free &&
-              space.writable_bytes == runtime.reported_tail,
+              space.tail_free_bytes == runtime.reported_tail,
           "the space report did not carry what the runtime measured");
   require(runtime.space_drive == drive_letter &&
               runtime.measured_drive == drive_letter,

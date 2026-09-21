@@ -111,13 +111,12 @@ class ContainerCreationCleanupError final : public std::runtime_error {
   std::exception_ptr cleanup_failure_;
 };
 
-// How much room an outer volume under maintenance still has. `writable_bytes`
-// is what can be added before reaching what is behind it, which free space
-// alone cannot say.
+// Filesystem facts only. Tail free space can INCLUDE the protected hidden
+// region; it is not a safe write budget for outer-volume maintenance.
 struct DecoyMaintenanceSpace final {
   std::uint64_t total_bytes{};
   std::uint64_t free_bytes{};
-  std::uint64_t writable_bytes{};
+  std::uint64_t tail_free_bytes{};
 };
 
 // What one decoy password found across every container the session holds.
@@ -247,8 +246,8 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("decoy maintenance is unavailable");
   }
 
-  // Reports the room left in a container opened for maintenance. Measuring
-  // what is still writable asks for consent once per run of maintenance.
+  // Reports filesystem space, not a safe outer-volume write budget.
+  // Bitmap measurement asks for consent once per run of maintenance.
   [[nodiscard]] virtual DecoyMaintenanceSpace decoy_maintenance_space(
       std::uint32_t) {
     throw std::logic_error("decoy maintenance is unavailable");

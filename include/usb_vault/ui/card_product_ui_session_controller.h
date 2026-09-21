@@ -73,13 +73,12 @@ struct DecoyMaintenanceUiSurvey final {
   bool cancelled{};
 };
 
-// Room left in a container opened for maintenance, in the same MiB the rest
-// of the page speaks. `writable_mib` is what can be added before reaching
-// what is behind the outer volume.
+// Filesystem facts in MiB. Neither free nor tail-free space is a safe write
+// budget: the filesystem bitmap does not identify the protected hidden area.
 struct DecoyMaintenanceUiSpace final {
   std::uint32_t total_mib{};
   std::uint32_t free_mib{};
-  std::uint32_t writable_mib{};
+  std::uint32_t tail_free_mib{};
 };
 
 enum class OperationUiKind : std::uint8_t {
@@ -179,7 +178,7 @@ class CardProductUiSessionController final {
   // outer volume came up on. Nothing is asked of the user a second time.
   [[nodiscard]] wchar_t open_decoy_maintenance(std::uint32_t id);
 
-  // Reports the room left in that container. Measuring what is still writable
+  // Reports filesystem space, not a safe write budget. Bitmap measurement
   // needs consent, which is asked once for a run of maintenance.
   [[nodiscard]] DecoyMaintenanceUiSpace decoy_maintenance_space(
       std::uint32_t id);

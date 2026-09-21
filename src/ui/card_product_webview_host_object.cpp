@@ -732,7 +732,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         }
         if (!space_ready_ || space_id_ == 0) return E_UNEXPECTED;
         const std::wstring packed = std::to_wstring(space_total_) + L"," +
-            std::to_wstring(space_free_) + L"," + std::to_wstring(space_writable_);
+            std::to_wstring(space_free_) + L"," + std::to_wstring(space_tail_free_);
         return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
       }
       case kVolumeOperationStatusId:
@@ -1305,7 +1305,7 @@ class CardProductWebViewHostObject final : public IDispatch {
               std::lock_guard lock(space_mutex_);
               space_total_ = space.total_mib;
               space_free_ = space.free_mib;
-              space_writable_ = space.writable_mib;
+              space_tail_free_ = space.tail_free_mib;
               space_id_ = id;
               space_epoch_ = operation_epoch;
               space_ready_ = true;
@@ -2279,7 +2279,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::mutex space_mutex_;
   std::uint32_t space_total_{};
   std::uint32_t space_free_{};
-  std::uint32_t space_writable_{};
+  std::uint32_t space_tail_free_{};
   std::uint32_t space_id_{};
   std::uint64_t space_epoch_{};
   bool space_ready_{false};
