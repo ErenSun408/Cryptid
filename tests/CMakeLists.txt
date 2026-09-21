@@ -203,6 +203,11 @@ target_include_directories(webview_startup_state_tests PRIVATE ${PROJECT_SOURCE_
 usb_vault_configure_target(webview_startup_state_tests)
 add_test(NAME webview_startup_state_tests COMMAND webview_startup_state_tests)
 
+add_executable(startup_log_tests startup_log_tests.cpp)
+target_include_directories(startup_log_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/include)
+usb_vault_configure_target(startup_log_tests)
+add_test(NAME startup_log_tests COMMAND startup_log_tests)
+
 add_executable(card_entry_initialization_controller_tests
   card_entry_initialization_controller_tests.cpp
 )

@@ -5495,6 +5495,10 @@
       setSetupStatus("");
     }
     setupFields[0].input.focus();
+    if (window.usbVaultPageStartupStatus === 0) {
+      window.usbVaultPageStartupStatus = queryFailed ? 1407
+        : status === setupCredentialStatus.unreadable ? 1108 : 1;
+    }
   };
 
   (async () => {

@@ -87,7 +87,7 @@ async function run(configure, verify) {
     b.getStartupView = () => "configuration";
     b.getCredentialStatus = () => { throw new Error("secret-credential"); };
   }, async w => {
-    assert.equal(w.usbVaultPageStartupStatus, 1);
+    assert.equal(w.usbVaultPageStartupStatus, 1407);
     assert.match(w.document.body.textContent, /1407/);
     assert.doesNotMatch(w.document.body.textContent, /secret-credential/);
   });
@@ -95,7 +95,7 @@ async function run(configure, verify) {
     b.getStartupView = () => "configuration";
     b.getCredentialStatus = () => 99;
   }, async w => {
-    assert.equal(w.usbVaultPageStartupStatus, 1);
+    assert.equal(w.usbVaultPageStartupStatus, 1407);
     assert.match(w.document.body.textContent, /1407/);
   });
   await run(w => { w.chrome = undefined; }, async w => {

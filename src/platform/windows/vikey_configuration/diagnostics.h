@@ -20,5 +20,5 @@ struct StartupInspection final {
   usb_vault::card::FailureDiagnostic failure{};
   usb_vault::card::FailureDiagnostic credential_failure{};
 };
-StartupInspection inspect_startup();
+StartupInspection inspect_startup(const Report& observer = {});
 }

@@ -124,11 +124,12 @@ bool diagnose(const Report& report, const bool include_card) {
   return run_checks(probes, report, include_card);
 }
 
-StartupInspection inspect_startup() {
+StartupInspection inspect_startup(const Report& observer) {
   try {
     std::array<Result, count> results{};
     static_cast<void>(diagnose([&](const unsigned int index, const Result& result) {
       if (index < count) results[index] = result;
+      if (observer) observer(index, result);
     }, false));
     StartupInspection inspection{true, false, {}};
     for (unsigned int index = 0;

@@ -12,6 +12,7 @@
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "platform/windows/hid_card_device_notifications.h"
 #include "platform/windows/installation_state.h"
+#include "platform/windows/startup_log.h"
 #include "platform/windows/shell_container_file_chooser.h"
 #include "card/diagnostic_error.h"
 #include "ui/webview_startup_state.h"
@@ -59,6 +60,10 @@ UINT64 g_navigation_id{};
 bool g_navigation_complete{};
 bool g_ready_poll_pending{};
 usb_vault::ui::WebviewStartupState g_webview_startup;
+usb_vault::platform::windows::StartupLog g_startup_log;
+using StartupStep = usb_vault::platform::windows::StartupStep;
+using StartupOutcome = usb_vault::platform::windows::StartupOutcome;
+bool g_log_warning_shown{};
 // Which surface the one product window shows. Setup and the product session
 // swap inside it rather than each owning a window, but the swap is still a
 // full teardown: the card context, the bridge and the document are all gone
@@ -279,6 +284,7 @@ void show_failure(const wchar_t* const message) noexcept {
 
 void show_numeric_failure(const wchar_t* message,
     const usb_vault::card::FailureDiagnostic failure) noexcept {
+  g_startup_log.record(StartupStep::failure, StartupOutcome::failed, failure);
   wchar_t text[1536]{};
   const auto& p = failure.primary;
   swprintf_s(text, L"%s\n错误码：%u\n原因码：%u\n底层类别：%u\n底层错误码：%u\n附加清理错误码：%u",
@@ -294,6 +300,14 @@ void show_numeric_failure(const wchar_t* message, std::uint32_t code,
 void show_warning(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
                                   MB_OK | MB_ICONWARNING));
+}
+
+void finish_startup_log() noexcept {
+  g_startup_log.finish();
+  if (g_startup_log.error() && !g_log_warning_shown) {
+    g_log_warning_shown = true;
+    show_warning(L"启动日志未能完整写入应用目录。错误码：9010。请检查目录权限和磁盘空间；应用仍可继续运行。");
+  }
 }
 
 [[nodiscard]] std::wstring executable_directory() {
@@ -661,6 +675,11 @@ void report_webview_failure(const std::uint32_t code,
                             const HRESULT result, const std::uint32_t event_kind,
                             const std::uint32_t event_code, const std::uint32_t step) noexcept {
   if (!g_webview_startup.fail(g_page_generation)) return;
+  g_startup_log.record(StartupStep::webview, StartupOutcome::failed,
+      {.primary = {.code = code, .native_kind = FAILED(result) ? 2u : 0u,
+                   .native_code = FAILED(result) ? static_cast<std::uint32_t>(result) : 0u}},
+      event_kind, event_code, step);
+  g_startup_log.finish();
   ::KillTimer(g_main_window, 2);
   disarm_external_drops();
   detach_host_object();
@@ -685,12 +704,14 @@ void report_webview_failure(const std::uint32_t code,
       reason, code, FAILED(result) ? 2u : 0u, FAILED(result) ? static_cast<unsigned int>(result) : 0u,
       event_kind, event_code, step);
   show_failure(message);
+  finish_startup_log();
   // Use the normal close guard. Never destroy an authenticated session with
   // active volumes merely because its renderer failed.
   if (::IsWindow(g_main_window)) ::PostMessageW(g_main_window, WM_CLOSE, 0, 0);
 }
 
 void begin_webview_watch(const HWND window) {
+  g_startup_log.record(StartupStep::webview, StartupOutcome::begin);
   ++g_page_generation;
   g_navigation_id = 0;
   g_navigation_complete = false;
@@ -718,8 +739,12 @@ void poll_webview_ready() {
             g_ready_poll_pending = false;
             if (FAILED(status)) { report_webview_failure(1401, status); return S_OK; }
             const std::wstring_view text = value ? value : L"";
-            if (text == L"1") {
+            if (text == L"1" || text == L"1407" || text == L"1108") {
               static_cast<void>(g_webview_startup.ready(generation));
+              if (text != L"1") g_startup_log.record(StartupStep::failure, StartupOutcome::failed,
+                  {.primary = {.code = text == L"1407" ? 1407u : 1108u}});
+              g_startup_log.record(StartupStep::ready, StartupOutcome::completed);
+              finish_startup_log();
               ::KillTimer(g_main_window, 2);
               notify_webview_session_changed();
             } else if (const auto error = usb_vault::ui::page_startup_error(text)) {
@@ -770,6 +795,7 @@ void initialize_webview(const HWND window) {
                                                          : E_FAIL;
                       }
                       g_controller = controller;
+                      g_startup_log.record(StartupStep::webview, StartupOutcome::completed, {}, 0, 0, 1305);
                       HRESULT current = g_controller->get_CoreWebView2(&g_webview);
                       if (FAILED(current) || !g_webview) {
                         report_webview_failure(1306, FAILED(current) ? current : E_POINTER);
@@ -921,6 +947,7 @@ void initialize_webview(const HWND window) {
                                   return S_OK;
                                 }
                                 g_navigation_complete = true;
+                                g_startup_log.record(StartupStep::webview, StartupOutcome::completed, {}, 0, 0, 1313);
                                 return S_OK;
                               }).Get(), &completed_token);
                       if (FAILED(current)) { report_webview_failure(1310, current); return current; }
@@ -1172,6 +1199,16 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
                     _In_ LPWSTR, _In_ int show_command) try {
+  // Leave the file open during exception unwinding so the outer catch can
+  // record the original error. Normal early returns still finalize it.
+  struct StartupScope final {
+    ~StartupScope() noexcept {
+      if (std::uncaught_exceptions() == 0) finish_startup_log();
+    }
+  } startup_scope;
+  static_cast<void>(g_startup_log.open(executable_directory()));
+  if (g_startup_log.error()) finish_startup_log();
+  g_startup_log.record(StartupStep::maintenance, StartupOutcome::begin);
   try {
     if (!usb_vault::platform::windows::installation_ready_for_start(executable_directory())) {
       show_numeric_failure(L"USB Vault 正在安装／卸载，或上次更新尚未完成。请等待操作结束；如已中断，请重新运行同一个安装包恢复。请勿删除更新备份文件夹。", 1003);
@@ -1182,6 +1219,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
         usb_vault::card::capture_startup_failure(1004));
     return 1;
   }
+  g_startup_log.record(StartupStep::maintenance, StartupOutcome::completed);
   // OLE rather than COM alone: the window registers a drop target, and
   // `RegisterDragDrop` is refused on an apartment that only initialized COM.
   const HRESULT com_result = ::OleInitialize(nullptr);
@@ -1189,6 +1227,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     show_numeric_failure(L"COM 初始化失败。", 1005, 2, static_cast<std::uint32_t>(com_result));
     return 1;
   }
+  g_startup_log.record(StartupStep::ole, StartupOutcome::completed);
   struct OleScope final { ~OleScope() noexcept { ::OleUninitialize(); } } ole_scope;
 
   // This preflight check never touches the card. The later session probe can
@@ -1196,7 +1235,16 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   // belong to the installer and end the start here; missing credentials open
   // the product setup page instead of the session.
   if (packaged_deployment()) {
-    const auto startup = configuration::inspect_startup();
+    g_startup_log.record(StartupStep::preflight, StartupOutcome::begin);
+    const auto startup = configuration::inspect_startup([](unsigned int index, const configuration::Result& result) {
+      if (result.state == configuration::State::skipped || result.state == configuration::State::waiting) return;
+      g_startup_log.record(StartupStep::preflight,
+          result.state == configuration::State::running ? StartupOutcome::begin :
+          result.state == configuration::State::passed ? StartupOutcome::completed : StartupOutcome::failed,
+          result.failure, 0, 0, index + 1);
+    });
+    g_startup_log.record(StartupStep::preflight,
+        startup.dependencies_ready ? StartupOutcome::completed : StartupOutcome::failed, startup.failure);
     if (!startup.dependencies_ready) {
       show_numeric_failure(startup.detail.c_str(), startup.failure);
       return 1;
@@ -1233,6 +1281,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     show_numeric_failure(L"窗口创建失败。", 1202, 1, ::GetLastError());
     return 1;
   }
+  g_startup_log.record(StartupStep::window, StartupOutcome::completed);
 
   g_window_size_sink.restore();
 
@@ -1251,12 +1300,18 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   }
 
   try {
+    g_startup_log.record(StartupStep::artifacts, StartupOutcome::begin);
     if (packaged_deployment()) pin_user_interface(executable_directory());
+    g_startup_log.record(StartupStep::artifacts, StartupOutcome::completed);
     // Setup builds no card context and registers no device notification, so
     // an inserted card is never probed with credentials the user is still
     // entering and no PIN attempt can be spent here.
     if (g_view == StartupView::session) {
+      g_startup_log.record(StartupStep::session, StartupOutcome::begin);
       initialize_application_session(window);
+      const auto failure = g_card_entry ? g_card_entry->startup_failure() : usb_vault::card::FailureDiagnostic{};
+      g_startup_log.record(StartupStep::session,
+          failure.primary.code ? StartupOutcome::failed : StartupOutcome::completed, failure);
     }
     initialize_webview(window);
     if (g_view == StartupView::session &&
@@ -1291,5 +1346,6 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
 } catch (...) {
   show_numeric_failure(L"应用启动发生未处理的异常。",
       usb_vault::card::capture_startup_failure(9001));
+  finish_startup_log();
   return 1;
 }
