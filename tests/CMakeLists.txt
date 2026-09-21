@@ -1101,3 +1101,9 @@ target_include_directories(configuration_card_failure_tests PRIVATE ${PROJECT_SO
 target_link_libraries(configuration_card_failure_tests PRIVATE usb_vault_vikey_sdk)
 usb_vault_configure_target(configuration_card_failure_tests)
 add_test(NAME configuration_card_failure_tests COMMAND configuration_card_failure_tests)
+
+add_executable(fat32_safe_space_tests fat32_safe_space_tests.cpp)
+target_include_directories(fat32_safe_space_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(fat32_safe_space_tests PRIVATE usb_vault_core)
+usb_vault_configure_target(fat32_safe_space_tests)
+add_test(NAME fat32_safe_space_tests COMMAND fat32_safe_space_tests)

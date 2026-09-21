@@ -20,10 +20,8 @@ struct TailSpace final {
   std::uint32_t cluster_size{};
 };
 
-// What can still be written to an outer volume without reaching the hidden one
-// behind it, which free space alone cannot say: the outer filesystem counts the
-// hidden volume's region as free. Reading the bitmap needs a volume handle, so
-// only an elevated caller gets an answer.
+// Filesystem tail only: it may include hidden protected space and is not a
+// safe-write budget. Reading the bitmap requires an elevated volume handle.
 [[nodiscard]] TailSpace scan_volume_tail_space(wchar_t drive_letter);
 
 }  // namespace usb_vault::volume

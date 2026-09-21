@@ -1,4 +1,5 @@
 #include "usb_vault/volume/volume_provider.h"
+#include "usb_vault/volume/fat32_safe_space.h"
 #include "volume_creation/veracrypt_format_abi.h"
 #include <Windows.h>
 #include <winioctl.h>
@@ -167,8 +168,9 @@ int wmain(int argc,wchar_t** argv) {
   if(argc==5 && std::wstring_view(argv[1])==L"--recover-disposable-run") return recovery_run(argc,argv);
   bool output_created=false;
   try {
+    const bool prepare=argc==4&&std::wstring_view(argv[1])==L"--prepare-disposable-base";
     const bool basic=argc==4&&std::wstring_view(argv[1])==L"--new-disposable-run-basic";
-    need(argc==4&&(basic||std::wstring_view(argv[1])==L"--new-disposable-run"),"requires explicit new-run flag, candidate DLL, NEW output directory");
+    need(argc==4&&(prepare||basic||std::wstring_view(argv[1])==L"--new-disposable-run"),"requires explicit new-run flag, candidate DLL, NEW output directory");
     const fs::path dll=argv[2],output=argv[3];
     need(dll.is_absolute()&&output.is_absolute()&&!fs::exists(output)&&fs::is_directory(output.parent_path()),"absolute paths and new directory required");
     need(fs::create_directory(output),"create output directory");
@@ -193,6 +195,7 @@ int wmain(int argc,wchar_t** argv) {
       headers.read(reinterpret_cast<char*>(a.data()),512); headers.seekg(65536);headers.read(reinterpret_cast<char*>(b.data()),512);need(headers.good(),"read headers");headers.close();
       std::array<std::uint64_t,4> g{};
       need(query(a.data(),512,b.data(),512,reinterpret_cast<const unsigned char*>(op.data()),static_cast<std::uint32_t>(op.size()),reinterpret_cast<const unsigned char*>(hp.data()),static_cast<std::uint32_t>(hp.size()),size*MiB,g.data(),32)==0,"fixture geometry");
+      if(prepare) continue;
       const auto hidden_hash=digest(base,g[2],g[3]);
       for(unsigned rep=1;rep<=2;++rep) for(unsigned scenario=0;scenario<6;++scenario) {
         Mounted m;m.path=output/(L"case-"+std::to_wstring(size)+L"-"+std::to_wstring(rep)+L"-"+std::to_wstring(scenario)+L".hc");
@@ -269,7 +272,7 @@ const auto free_bytes=std::uint64_t(free)*l.cluster;
         need(triggered&&unchanged,"protection absent or hidden region changed");
       }
     }
-    std::ofstream(output/L"complete.txt")<<"PASS 24 scenarios; only disposable fixtures written\n";
+    std::ofstream(output/L"complete.txt")<<(prepare?"Prepared two disposable bases; no allocation scenarios executed\n":"PASS 24 scenarios; only disposable fixtures written\n");
     return 0;
   } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';if(output_created)std::ofstream(fs::path(argv[3])/L"failure.txt")<<e.what()<<'\n';return 1;}
 }
@@ -604,7 +607,7 @@ int sequential_run(int argc,wchar_t** argv) {
       const auto initial=ordered();need(initial.size()>=5,"missing five holes");
       for(unsigned i=0;i<5;++i) {record(0,"initial_hole",true,0,(initial[i].second-initial[i].first)*l.cluster,initial[i].first);need((initial[i].second-initial[i].first)*l.cluster==(i+1)*MiB,"five hole sizes differ from requested layout");}
       const auto originals=existing_files(m.root());need(originals.size()==33,"expected 33 retained seeds");
-      auto available=[&]() {std::uint64_t total=0;for(const auto& r:ordered())total+=(r.second-r.first)*l.cluster;return total;};
+      auto available=[&]() {std::uint64_t total=0;for(const auto& r:ordered())total+=(r.second-r.first)*l.cluster;auto handle=raw(m.drive);const auto formal=volume::scan_fat32_safe_space(handle.h,g[1],g[2]-g[0]);need(formal.free_bytes==total&&formal.cluster_size==l.cluster,"production safe-space mismatch");return total;};
       record(0,"safe_free_before",true,0,available());
       std::vector<std::pair<std::wstring,std::uint64_t>> writtenFiles;
       auto put=[&](unsigned id,std::uint64_t size,const Extents* exact) {
