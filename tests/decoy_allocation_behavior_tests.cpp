@@ -168,7 +168,7 @@ int wmain(int argc,wchar_t** argv) {
   if(argc==5 && std::wstring_view(argv[1])==L"--measurement-helper-run") return measurement_helper_run(argv);
   if(argc==3 && std::wstring_view(argv[1])==L"--abrupt-disposable-writer") return abrupt_test_writer(argv[2]);
   if(argc==5 && std::wstring_view(argv[1])==L"--fault-disposable-run") return fault_run(argv);
-  if(argc==5 && (std::wstring_view(argv[1])==L"--sequential-disposable-run" || std::wstring_view(argv[1])==L"--production-placement-run")) return sequential_run(argc,argv);
+  if(argc==5 && (std::wstring_view(argv[1])==L"--sequential-disposable-run" || std::wstring_view(argv[1])==L"--production-placement-run" || std::wstring_view(argv[1])==L"--production-write-run")) return sequential_run(argc,argv);
   if(argc==5 && (std::wstring_view(argv[1])==L"--placement-disposable-run" || std::wstring_view(argv[1])==L"--multirun-disposable-run")) return placement_run(argc,argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--recover-disposable-run") return recovery_run(argc,argv);
   bool output_created=false;
@@ -605,6 +605,21 @@ int sequential_run(int argc,wchar_t** argv) {
       };
       const auto l=layout(m.drive,g[2]-g[0]);need(l.fat==32&&l.cluster==1024,"expected FAT32 fixture");
       for(unsigned i=0;i<48;++i)seed_file(m.root()+L"s"+std::to_wstring(i)+L".bin");
+      if(std::wstring_view(argv[1])==L"--production-write-run") {
+        for(const std::uint64_t smallSize: {0ULL, 513ULL, 65537ULL}) {
+          const auto identity=m.provider.mount_identity(m.drive);auto volumeHandle=raw(m.drive);
+          const auto plan=volume::plan_fat32_allocation(volumeHandle.h,g[1],g[2]-g[0],smallSize);
+          const auto targetPath=m.root()+L"small.bin";const auto sourcePath=output/(L"small-"+std::to_wstring(rep)+L"-"+std::to_wstring(smallSize)+L".bin");
+          {std::ofstream sourceOutput(sourcePath,std::ios::binary);for(std::uint64_t i=0;i<smallSize;++i)sourceOutput.put(static_cast<char>(placement_byte(i)));need(sourceOutput.good(),"small source fixture");}
+          Handle inputFile,target;inputFile.h=::CreateFileW(sourcePath.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+          target.h=::CreateFileW(targetPath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);
+          need(inputFile.h!=INVALID_HANDLE_VALUE&&target.h!=INVALID_HANDLE_VALUE,"small handles");
+          volume::prepare_fat32_file(target.h,identity,g[2]-g[0],plan);
+          volume::write_prepared_fat32_file(inputFile.h,target.h,identity,g[2]-g[0],plan);
+          target.close();need(fs::file_size(targetPath)==smallSize&&verify_pattern(targetPath,smallSize),"small copy mismatch");
+          need(::DeleteFileW(targetPath.c_str()),"delete own small fixture");record(0,"production_small_write",true,0,smallSize);
+        }
+      }
       const std::array<unsigned,5> starts{0,2,5,9,14};
       for(unsigned group=0;group<5;++group)for(unsigned j=0;j<=group;++j)need(::DeleteFileW((m.root()+L"s"+std::to_wstring(starts[group]+j)+L".bin").c_str()),"delete own fixture seed");
       m.close();m.open(); // Persist the fixture before recording the starting bitmap.
@@ -631,7 +646,7 @@ int sequential_run(int argc,wchar_t** argv) {
           need(actual==planned&&formal.file_bytes==size&&formal.allocation_bytes==size&&formal.cluster_size==l.cluster,"production first-fit plan mismatch");}
         Handle f;f.h=::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"create sequential file");
         auto vol=raw(m.drive); Extents checked;
-        if(std::wstring_view(argv[1])==L"--production-placement-run") {
+        if(std::wstring_view(argv[1])==L"--production-placement-run" || std::wstring_view(argv[1])==L"--production-write-run") {
           auto rejectBeforeAllocation=[&](auto action) {
             bool rejected=false;try { action(); } catch(const std::exception&) { rejected=true; }
             need(rejected,"invalid placement accepted");
@@ -686,7 +701,21 @@ int sequential_run(int argc,wchar_t** argv) {
         record(id,"extents_verified",true,0,planned.size());
         LARGE_INTEGER zero{};need(::SetFilePointerEx(f.h,zero,nullptr,FILE_BEGIN),"rewind");
         std::vector<unsigned char> content(static_cast<size_t>(size));for(size_t i=0;i<content.size();++i)content[i]=placement_byte(i);
+        if(std::wstring_view(argv[1])==L"--production-write-run") {
+          const auto sourcePath=output/(L"source-"+std::to_wstring(rep)+L"-"+std::to_wstring(id)+L".bin");
+          {std::ofstream sourceOutput(sourcePath,std::ios::binary);sourceOutput.write(reinterpret_cast<const char*>(content.data()),static_cast<std::streamsize>(content.size()));need(sourceOutput.good(),"create source fixture");}
+          Handle inputFile;inputFile.h=::CreateFileW(sourcePath.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr);need(inputFile.h!=INVALID_HANDLE_VALUE,"open copy source");
+          bool stopped=false,cancel=false;std::uint64_t progress=0;
+          try {volume::write_prepared_fat32_file(inputFile.h,f.h,mountIdentity,g[2]-g[0],formal,[&]{return cancel;},[&](auto done){progress=done;cancel=true;});}
+          catch(const std::system_error& error){stopped=error.code()==std::make_error_code(std::errc::operation_canceled);}
+          need(stopped&&progress==65536,"mid-copy cancellation failed");record(id,"production_cancel",true,0,progress);
+          bool sameRejected=false;try {volume::write_prepared_fat32_file(f.h,f.h,mountIdentity,g[2]-g[0],formal);}catch(const std::invalid_argument&){sameRejected=true;}
+          need(sameRejected,"self-copy accepted");
+          progress=0;volume::write_prepared_fat32_file(inputFile.h,f.h,mountIdentity,g[2]-g[0],formal,{},[&](auto done){need(done>progress&&done<=size,"invalid progress");progress=done;});
+          need(progress==size,"incomplete copy progress");record(id,"production_write",true,0,progress);
+        } else {
         DWORD bytes=0;const BOOL wrote=::WriteFile(f.h,content.data(),static_cast<DWORD>(size),&bytes,nullptr);record(id,"write",wrote!=FALSE,wrote?0 : ::GetLastError(),bytes);need(wrote&&bytes==size&&::FlushFileBuffers(f.h),"write flush failed");
+        }
         f.close();vol.close();need(verify_pattern(path,size),"immediate content mismatch");writtenFiles.emplace_back(name,size);
         need(m.type()==volume::VolumeType::outer,"unexpected protection trigger");
         record(id,"safe_free_after",true,0,available());
