@@ -183,6 +183,7 @@ window.navigationFixture = {
     },
     hasActiveSession: () => fixture.state === 3,
     canResetCardRecord: () => false,
+    canLoginReset: () => fixture.state === 2,
     getRememberContainerPaths: () => true,
     getMountImportedContainers: () => false,
     getContainerCount: () => fixture.containers.length,

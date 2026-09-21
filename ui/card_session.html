@@ -1121,6 +1121,7 @@
       <span id="card-session-spinner" class="spinner" aria-hidden="true" hidden></span>
       <span id="card-session-action-label">正在初始化</span>
     </button>
+    <button id="forgot-password-open" class="shell-button" type="button" hidden>忘记密码</button>
     <output id="card-session-status" aria-live="polite">正在连接安全组件</output>
     <output id="card-session-error" aria-live="polite" hidden></output>
     <button id="open-configuration" class="shell-button" type="button" disabled>配置凭据</button>
@@ -1562,6 +1563,39 @@
         <label class="batch-result-all"><span>全选</span><input id="batch-result-all" type="checkbox"></label>
         <button id="batch-result-retry" class="shell-button" type="button" disabled>重试选中项</button>
         <button id="batch-result-confirm" class="shell-button" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="forgot-password-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="forgot-password-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="forgot-password-title">重新初始化安全卡</h3>
+        <button id="forgot-password-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="forgot-password-intro">
+          <p>忘记应用登录密码后，可重新初始化这张安全卡。此操作会销毁本应用保存在卡上的认证密钥，且不可撤销。</p>
+          <p>现有容器文件和安全卡的其他数据不会被删除。重置后，旧容器将无法凭重新初始化后的安全卡打开。</p>
+          <p>重置不能撤销其他程序已保留的访问权限。完成后应用会关闭，请重新插卡并设置新的登录密码。</p>
+          <label class="creation-check"><input id="forgot-password-acknowledge" type="checkbox"><span>我已理解旧容器无法凭重新初始化后的安全卡打开，并确认重置。</span></label>
+        </div>
+        <div id="forgot-password-mounts" hidden>
+          <p id="forgot-password-mount-lead"></p>
+          <p id="forgot-password-drives" class="export-confirm-path"></p>
+          <div id="forgot-password-mount-guidance">
+            <p>若这些容器属于本次重置的安全卡，请先保存文件、关闭相关程序，再点击“强制卸载”。</p>
+            <p>若这些容器与本次重置无关，或你希望保留当前挂载状态，请点击“跳过”，继续重置。</p>
+          </div>
+          <p>强制卸载可能导致未保存的数据丢失。重置后，旧容器将无法凭重新初始化后的安全卡打开。</p>
+        </div>
+        <output id="forgot-password-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="forgot-password-cancel" class="modal-button" type="button">取消</button>
+        <button id="forgot-password-confirm" class="modal-button danger" type="button" disabled>确认重置</button>
+        <button id="forgot-password-force" class="modal-button danger" type="button" hidden>强制卸载</button>
+        <button id="forgot-password-skip" class="modal-button" type="button" hidden>跳过</button>
       </div>
     </div>
   </div>

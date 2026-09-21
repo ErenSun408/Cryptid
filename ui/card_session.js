@@ -195,6 +195,22 @@
   // pending, so a stale confirmation can never act on the wrong row.
   let pendingForgetId = 0;
 
+  const forgotOpen = document.getElementById("forgot-password-open");
+  const forgotDialog = document.getElementById("forgot-password-dialog");
+  const forgotTitle = document.getElementById("forgot-password-title");
+  const forgotIntro = document.getElementById("forgot-password-intro");
+  const forgotMounts = document.getElementById("forgot-password-mounts");
+  const forgotLead = document.getElementById("forgot-password-mount-lead");
+  const forgotDrives = document.getElementById("forgot-password-drives");
+  const forgotGuidance = document.getElementById("forgot-password-mount-guidance");
+  const forgotAcknowledge = document.getElementById("forgot-password-acknowledge");
+  const forgotStatus = document.getElementById("forgot-password-status");
+  const forgotClose = document.getElementById("forgot-password-close");
+  const forgotCancel = document.getElementById("forgot-password-cancel");
+  const forgotConfirm = document.getElementById("forgot-password-confirm");
+  const forgotForce = document.getElementById("forgot-password-force");
+  const forgotSkip = document.getElementById("forgot-password-skip");
+  let forgotAvailable = false, forgotRunning = false, forgotTicket = 0, forgotRevision = 0;
   const resetDialog = document.getElementById("reset-card-dialog");
   const resetCloseButton = document.getElementById("reset-card-close");
   const resetCancelButton = document.getElementById("reset-card-cancel");
@@ -3642,6 +3658,8 @@
   };
 
   const render = (message, error = "") => {
+    forgotOpen.hidden = !forgotAvailable;
+    forgotOpen.disabled = busy || !forgotAvailable;
     configurationButton.hidden = currentState === nativeState.authenticated;
     configurationButton.disabled = busy || activeVolumes || currentState === null || bridge === null;
     surface.dataset.sessionState = currentState === null
@@ -3838,6 +3856,11 @@
     const nextContainers = [];
     const nextOperationEvents = [];
     let nextResetAvailable = false;
+    let nextForgotAvailable = false;
+    if (nextState !== nativeState.authenticated) {
+      nextForgotAvailable = await bridge.canLoginReset();
+      if (typeof nextForgotAvailable !== "boolean") throw new Error("invalid reset availability");
+    }
     if (nextState === nativeState.authenticated) {
       const resetAvailable = await bridge.canResetCardRecord();
       if (resetAvailable !== true && resetAvailable !== false) {
@@ -3920,6 +3943,7 @@
       : nextState;
     activeVolumes = nextActiveVolumes;
     cardResetAvailable = nextResetAvailable;
+    forgotAvailable = nextForgotAvailable;
     containers = nextContainers;
     containerOrder = nextContainers.map((container) => container.id);
     operationEvents = nextOperationEvents;
@@ -3950,6 +3974,8 @@
   };
 
   const refreshAfterExternalChange = async () => {
+    ++forgotRevision;
+    if (!forgotDialog.hidden && !forgotRunning) await closeForgotPassword();
     externalRefreshPending = true;
     clearDomInputs();
     if (busy || bridge === null) {
@@ -4731,6 +4757,107 @@
       if (externalRefreshPending) void refreshAfterExternalChange();
     }
   };
+
+  const updateForgotControls = () => {
+    for (const control of [forgotClose, forgotCancel, forgotAcknowledge, forgotForce, forgotSkip]) control.disabled = forgotRunning;
+    forgotConfirm.disabled = forgotRunning || !forgotAcknowledge.checked;
+  };
+  const closeForgotPassword = async () => {
+    if (forgotRunning) return;
+    const ticket = forgotTicket;
+    forgotTicket = 0; ++forgotRevision;
+    forgotDialog.hidden = true; forgotAcknowledge.checked = false;
+    if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (_) {} }
+    busy = false; render(messageForCurrentState());
+    if (!forgotOpen.hidden) forgotOpen.focus();
+  };
+  const pollForgotPassword = async revision => {
+    for (;;) {
+      const status = await bridge.getLoginResetStatus();
+      if (!Number.isInteger(status) || status < 0 || status > 6) throw new Error("invalid reset status");
+      if (status !== 1) {
+        if (revision !== forgotRevision) throw new Error("card changed");
+        return status;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+  const runForgotPassword = async (prepare, force = false) => {
+    if (forgotRunning || forgotDialog.hidden || (prepare && !forgotAcknowledge.checked) || (!prepare && !forgotTicket)) return;
+    const revision = forgotRevision;
+    forgotRunning = true; updateForgotControls();
+    forgotStatus.dataset.tone = "";
+    forgotStatus.textContent = prepare ? "正在核验安全卡，请勿拔卡。" : force ? "正在卸载容器并重置安全卡，请勿拔卡。" : "正在重置安全卡，请勿拔卡。";
+    let writing = !prepare;
+    try {
+      if (prepare) {
+        await bridge.beginLoginResetPreparation();
+        if (await pollForgotPassword(revision) !== 2) throw new Error("preparation failed");
+        forgotTicket = await bridge.getLoginResetTicket();
+        const known = await bridge.getLoginResetMountsKnown();
+        const drives = await bridge.getLoginResetDrives();
+        if (!Number.isInteger(forgotTicket) || forgotTicket <= 0 || typeof known !== "boolean" ||
+            typeof drives !== "string" || (drives !== "" && !/^[A-Z]:(, [A-Z]:)*$/.test(drives))) throw new Error("invalid reset preparation");
+        if (revision !== forgotRevision) throw new Error("card changed");
+        if (!known || drives !== "") {
+          forgotIntro.hidden = true; forgotMounts.hidden = false; forgotConfirm.hidden = true;
+          forgotForce.hidden = !known || drives === ""; forgotSkip.hidden = false;
+          forgotTitle.textContent = known ? "仍有容器处于挂载状态" : "无法确认挂载状态";
+          forgotLead.textContent = known ? "检测到当前仍有处于挂载状态的容器，请确认是否需要在重置安全卡前卸载。" : "暂时无法确认容器的挂载状态。你可以自行检查并卸载容器，或点击“跳过”继续重置。";
+          forgotDrives.textContent = drives; forgotDrives.hidden = !known;
+          forgotGuidance.hidden = !known;
+          forgotStatus.textContent = ""; forgotRunning = false; updateForgotControls(); forgotSkip.focus();
+          return;
+        }
+      }
+      writing = true;
+      await bridge.beginConfirmLoginReset(forgotTicket, force);
+      const outcome = await pollForgotPassword(revision);
+      if (outcome === 4) {
+        forgotStatus.textContent = "强制卸载未完成。请检查容器状态，或点击“跳过”继续重置。";
+        forgotStatus.dataset.tone = "error";
+        forgotRunning = false; updateForgotControls(); forgotSkip.focus(); return;
+      }
+      if (outcome !== 5) throw new Error("reset incomplete");
+      forgotTicket = 0;
+      forgotStatus.textContent = "已重新初始化，正在关闭应用。";
+      forgotStatus.dataset.tone = "success";
+    } catch (_) {
+      const ticket = forgotTicket; forgotTicket = 0;
+      if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (_) {} }
+      forgotRunning = false; forgotAcknowledge.checked = false;
+      forgotConfirm.hidden = true; forgotForce.hidden = true; forgotSkip.hidden = true;
+      forgotStatus.textContent = writing ? "无法确认重置结果。请拔出安全卡重新插入，按实际状态继续；请勿重复执行旧确认。" : "无法准备重置。请重新插入安全卡，确认凭据配置后再试。";
+      forgotStatus.dataset.tone = "error"; updateForgotControls(); forgotClose.focus();
+      if (externalRefreshPending) { await closeForgotPassword(); void refreshAfterExternalChange(); }
+    }
+  };
+  forgotOpen.addEventListener("click", () => {
+    if (busy || !forgotAvailable) return;
+    clearDomInputs(); busy = true; ++forgotRevision; forgotTicket = 0;
+    forgotAcknowledge.checked = false; forgotRunning = false;
+    forgotTitle.textContent = "重新初始化安全卡";
+    forgotIntro.hidden = false; forgotMounts.hidden = true;
+    forgotConfirm.hidden = false; forgotForce.hidden = true; forgotSkip.hidden = true;
+    forgotStatus.textContent = ""; forgotStatus.dataset.tone = "";
+    forgotDialog.hidden = false; updateForgotControls(); render(messageForCurrentState()); forgotAcknowledge.focus();
+  });
+  forgotAcknowledge.addEventListener("change", updateForgotControls);
+  forgotClose.addEventListener("click", () => { void closeForgotPassword(); });
+  forgotCancel.addEventListener("click", () => { void closeForgotPassword(); });
+  forgotConfirm.addEventListener("click", () => { void runForgotPassword(true); });
+  forgotForce.addEventListener("click", () => { void runForgotPassword(false, true); });
+  forgotSkip.addEventListener("click", () => { void runForgotPassword(false); });
+  forgotDialog.addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); void closeForgotPassword(); }
+    if (event.key === "Tab") {
+      const items = [...forgotDialog.querySelectorAll("button,input")].filter(item => !item.disabled && !item.closest("[hidden]"));
+      const index = items.indexOf(document.activeElement);
+      if (items.length && ((event.shiftKey && index <= 0) || (!event.shiftKey && index === items.length - 1))) {
+        event.preventDefault(); items[event.shiftKey ? items.length - 1 : 0].focus();
+      }
+    }
+  });
 
   const resetCardRecord = async () => {
     if (busy || currentState !== nativeState.authenticated ||
