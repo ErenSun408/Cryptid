@@ -363,3 +363,12 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | 87 | combined missing sanitized_environment | 无（逻辑校验） |
 | 88 | combined security properties contain unexpected bits | 无（逻辑校验） |
 | 89 | zero attribute size | 无（逻辑校验） |
+
+
+### 2026-09-21：2005 的桌面启动环境对照
+
+本次 `2005 / 原因码 1` 出现在首次卡探测，前置组件摘要、驱动及凭据格式检查已通过。无实卡 helper 测试临时诊断确认：请求的 `AppData\Local\usb-vault-vikey-development-helper-*` 被当前 Codex 启动环境解析为其包私有 `Packages\OpenAI.Codex_*\LocalCache\Local` 下目录；最终路径比较因此拒绝。诊断插桩已撤回，不向产品启动日志新增路径。
+
+同一 Release EXE 经现有 Windows 桌面 Explorer 启动，首次卡探测、页面导航和页面就绪均完成；同一 helper 与制品安全测试通过 2/2。仅增加 `KF_FLAG_RETURN_FILTER_REDIRECTION_TARGET` 的试验在此环境无效，已撤回。生产路径、重解析和摘要校验均未放宽；从带包目录虚拟化的宿主直接启动仍可能被拒绝，应使用普通桌面启动做对照。本结果不证明所有 2005 或历史安装完成页首次启动问题具有相同原因，也不代表完成登录和全部实卡操作验收。
+
+参考：微软 [KNOWN_FOLDER_FLAG](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ne-shlobj_core-known_folder_flag) 对文件系统重定向目标的说明，以及 [通过 Explorer 发起启动](https://devblogs.microsoft.com/oldnewthing/20131118-00/?p=2643)。
