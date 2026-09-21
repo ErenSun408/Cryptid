@@ -1,6 +1,7 @@
 #pragma once
 
 #include "card/diagnostic_error.h"
+#include "card/process_security_failure.h"
 #include "usb_vault/card/failure_diagnostic.h"
 
 #include <exception>
@@ -53,6 +54,8 @@ class CapturedFailureError final : public std::system_error {
       const auto stage = static_cast<std::uint32_t>(diagnostic->stage());
       if (stage > 0 && stage <= 38) detail.code = 2000 + stage;
       else if (stage > 38) detail.code = 9001;
+      if (stage == 11 && diagnostic->step() <= kProcessSecurityStepCount)
+        detail.step = diagnostic->step();
       const auto kind = static_cast<std::uint32_t>(diagnostic->kind());
       if (kind >= 1 && kind <= 3) {
         detail.native_kind = kind;

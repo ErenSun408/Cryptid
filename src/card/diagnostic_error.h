@@ -49,8 +49,9 @@ class DiagnosticError final : public std::system_error {
  public:
   DiagnosticError(std::error_code code, DiagnosticStage stage,
                   const char* context, std::uint32_t native = 0,
-                  NativeCodeKind kind = NativeCodeKind::none)
-      : std::system_error(code, context), stage_(stage), native_(native), kind_(kind) {}
+                  NativeCodeKind kind = NativeCodeKind::none, std::uint32_t step = 0)
+      : std::system_error(code, context), stage_(stage), native_(native), kind_(kind), step_(step) {}
+  std::uint32_t step() const noexcept { return step_; }
   DiagnosticStage stage() const noexcept { return stage_; }
   std::uint32_t native() const noexcept { return native_; }
   NativeCodeKind kind() const noexcept { return kind_; }
@@ -58,6 +59,7 @@ class DiagnosticError final : public std::system_error {
   DiagnosticStage stage_;
   std::uint32_t native_;
   NativeCodeKind kind_;
+  std::uint32_t step_;
 };
 inline std::uint32_t diagnostic_stage(const std::system_error& e) noexcept {
   const auto* d = dynamic_cast<const DiagnosticError*>(&e);

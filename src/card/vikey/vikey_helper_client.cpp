@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "card/process_security_failure.h"
 #include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_client.h"
 
@@ -20,6 +21,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -131,6 +133,23 @@ struct Pipe final {
   Handle child_end;
 };
 
+[[noreturn]] void throw_process_security_win32(const std::uint32_t step,
+    const char* const context) {
+  const DWORD error = ::GetLastError();
+  throw_process_security(step, context, error, NativeCodeKind::win32);
+}
+
+// Report only a fixed missing-property step, never actual token/property values.
+void require_security_properties(const std::uint32_t actual,
+    const std::uint32_t required,
+    std::initializer_list<std::pair<helper::SecurityProperty, std::uint32_t>> steps) {
+  for (const auto& [property, step] : steps) {
+    const auto bit = helper::property_bit(property);
+    if ((required & bit) != 0 && (actual & bit) == 0)
+      throw_process_security(step, "helper required security property missing");
+  }
+}
+
 class AttributeList final {
  public:
   explicit AttributeList(const DWORD attribute_count) {
@@ -138,14 +157,15 @@ class AttributeList final {
     static_cast<void>(
         ::InitializeProcThreadAttributeList(nullptr, attribute_count, 0,
                                             &bytes));
-    if (bytes == 0 || ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-      throw_backend("size ViKey helper process attributes");
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+      throw_process_security_win32(1, "size process attributes");
     }
+    if (bytes == 0) throw_process_security(89, "zero attribute size");
     storage_.resize(bytes);
     list_ = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.data());
     if (::InitializeProcThreadAttributeList(list_, attribute_count, 0,
                                             &bytes) == FALSE) {
-      throw_backend("initialize ViKey helper process attributes");
+      throw_process_security_win32(2, "initialize process attributes");
     }
   }
 
@@ -159,10 +179,10 @@ class AttributeList final {
   AttributeList& operator=(const AttributeList&) = delete;
 
   void add(const DWORD_PTR attribute, void* const value,
-           const SIZE_T bytes) {
+           const SIZE_T bytes, const std::uint32_t step) {
     if (::UpdateProcThreadAttribute(list_, 0, attribute, value, bytes,
                                     nullptr, nullptr) == FALSE) {
-      throw_backend("set ViKey helper process attribute");
+      throw_process_security_win32(step, "set process attribute");
     }
   }
 
@@ -171,10 +191,6 @@ class AttributeList final {
   }
 
  private:
-  [[noreturn]] static void throw_backend(const char* const context) {
-    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::process_security, context, ::GetLastError(), NativeCodeKind::win32);
-  }
-
   std::vector<std::byte> storage_;
   LPPROC_THREAD_ATTRIBUTE_LIST list_{};
 };
@@ -224,7 +240,7 @@ class AttributeList final {
                          TOKEN_DUPLICATE | TOKEN_QUERY |
                              TOKEN_ASSIGN_PRIMARY | TOKEN_IMPERSONATE,
                          &raw_token) == FALSE) {
-    throw_card(CardError::backend_unavailable, "open current token for ViKey helper", DiagnosticStage::process_security);
+    throw_process_security_win32(7, "open current token for ViKey helper");
   }
   Handle source_token(raw_token);
 
@@ -232,28 +248,30 @@ class AttributeList final {
   static_cast<void>(::GetTokenInformation(source_token.get(),
                                           TokenRestrictedSids, nullptr, 0,
                                           &restricted_bytes));
-  if (restricted_bytes == 0 ||
-      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-    throw_card(CardError::backend_unavailable, "size current token restrictions for ViKey helper", DiagnosticStage::process_security);
+  if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw_process_security_win32(8, "size current token restrictions for ViKey helper");
+  }
+  if (restricted_bytes == 0) {
+    throw_process_security(9, "invalid size: size current token restrictions for ViKey helper");
   }
   std::vector<std::byte> restricted_storage(restricted_bytes);
   if (::GetTokenInformation(source_token.get(), TokenRestrictedSids,
                             restricted_storage.data(), restricted_bytes,
                             &restricted_bytes) == FALSE) {
-    throw_card(CardError::backend_unavailable, "read current token restrictions for ViKey helper", DiagnosticStage::process_security);
+    throw_process_security_win32(10, "read current token restrictions for ViKey helper");
   }
   const auto* const existing_restrictions =
       reinterpret_cast<const TOKEN_GROUPS*>(restricted_storage.data());
   if (existing_restrictions->GroupCount != 0) {
-    throw_card(CardError::backend_unavailable, "ViKey helper cannot safely refilter an already restricted "
-               "parent token", DiagnosticStage::process_security);
+    throw_process_security(11, "ViKey helper cannot safely refilter an already restricted "
+               "parent token");
   }
 
   HANDLE raw_restricted = INVALID_HANDLE_VALUE;
   if (::CreateRestrictedToken(source_token.get(), DISABLE_MAX_PRIVILEGE, 0,
                               nullptr, 0, nullptr, 0, nullptr,
                               &raw_restricted) == FALSE) {
-    throw_card(CardError::backend_unavailable, "create restricted ViKey helper token", DiagnosticStage::process_security);
+    throw_process_security_win32(12, "create restricted ViKey helper token");
   }
   return Handle(raw_restricted);
 }
@@ -262,21 +280,23 @@ void filter_development_process_privileges(const HANDLE token) {
   LUID change_notify{};
   if (::LookupPrivilegeValueW(nullptr, L"SeChangeNotifyPrivilege",
                               &change_notify) == FALSE) {
-    throw_card(CardError::backend_unavailable, "resolve development ViKey helper traversal privilege", DiagnosticStage::process_security);
+    throw_process_security_win32(13, "resolve development ViKey helper traversal privilege");
   }
 
   DWORD privilege_bytes = 0;
   static_cast<void>(
       ::GetTokenInformation(token, TokenPrivileges, nullptr, 0,
                             &privilege_bytes));
-  if (privilege_bytes < sizeof(TOKEN_PRIVILEGES) ||
-      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-    throw_card(CardError::backend_unavailable, "size development ViKey helper token privileges", DiagnosticStage::process_security);
+  if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw_process_security_win32(14, "size development ViKey helper token privileges");
+  }
+  if (privilege_bytes < sizeof(TOKEN_PRIVILEGES)) {
+    throw_process_security(15, "invalid size: size development ViKey helper token privileges");
   }
   std::vector<std::byte> privilege_storage(privilege_bytes);
   if (::GetTokenInformation(token, TokenPrivileges, privilege_storage.data(),
                             privilege_bytes, &privilege_bytes) == FALSE) {
-    throw_card(CardError::backend_unavailable, "read development ViKey helper token privileges", DiagnosticStage::process_security);
+    throw_process_security_win32(16, "read development ViKey helper token privileges");
   }
   auto* const privileges =
       reinterpret_cast<TOKEN_PRIVILEGES*>(privilege_storage.data());
@@ -293,14 +313,14 @@ void filter_development_process_privileges(const HANDLE token) {
   if (::AdjustTokenPrivileges(token, FALSE, privileges, 0, nullptr,
                               nullptr) == FALSE ||
       ::GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
-    throw_card(CardError::backend_unavailable, "filter development ViKey helper token privileges", DiagnosticStage::process_security);
+    throw_process_security_win32(17, "filter development ViKey helper token privileges");
   }
 }
 
 [[nodiscard]] Handle create_single_process_job() {
   Handle job(::CreateJobObjectW(nullptr, nullptr));
   if (!job) {
-    throw_card(CardError::backend_unavailable, "create ViKey helper job object", DiagnosticStage::process_security);
+    throw_process_security_win32(18, "create ViKey helper job object");
   }
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   limits.BasicLimitInformation.LimitFlags =
@@ -308,7 +328,7 @@ void filter_development_process_privileges(const HANDLE token) {
   limits.BasicLimitInformation.ActiveProcessLimit = 1;
   if (::SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation,
                                 &limits, sizeof(limits)) == FALSE) {
-    throw_card(CardError::backend_unavailable, "limit ViKey helper job object", DiagnosticStage::process_security);
+    throw_process_security_win32(19, "limit ViKey helper job object");
   }
   return job;
 }
@@ -320,20 +340,22 @@ void filter_development_process_privileges(const HANDLE token) {
   LUID change_notify{};
   if (::LookupPrivilegeValueW(nullptr, L"SeChangeNotifyPrivilege",
                               &change_notify) == FALSE) {
-    throw_card(CardError::backend_unavailable, "resolve ViKey helper traversal privilege", DiagnosticStage::process_security);
+    throw_process_security_win32(20, "resolve ViKey helper traversal privilege");
   }
 
   DWORD returned = 0;
   static_cast<void>(
       ::GetTokenInformation(token, TokenPrivileges, nullptr, 0, &returned));
-  if (returned < sizeof(TOKEN_PRIVILEGES) ||
-      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-    throw_card(CardError::backend_unavailable, "size ViKey helper token privileges", DiagnosticStage::process_security);
+  if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    throw_process_security_win32(21, "size ViKey helper token privileges");
+  }
+  if (returned < sizeof(TOKEN_PRIVILEGES)) {
+    throw_process_security(22, "invalid size: size ViKey helper token privileges");
   }
   std::vector<std::byte> privilege_storage(returned);
   if (::GetTokenInformation(token, TokenPrivileges, privilege_storage.data(),
                             returned, &returned) == FALSE) {
-    throw_card(CardError::backend_unavailable, "inspect ViKey helper token privileges", DiagnosticStage::process_security);
+    throw_process_security_win32(23, "inspect ViKey helper token privileges");
   }
   const auto* const privileges =
       reinterpret_cast<const TOKEN_PRIVILEGES*>(privilege_storage.data());
@@ -344,10 +366,10 @@ void filter_development_process_privileges(const HANDLE token) {
         privilege.Luid.LowPart == change_notify.LowPart &&
         privilege.Luid.HighPart == change_notify.HighPart;
     if (expected_app_container_sid == nullptr && !is_change_notify) {
-      throw_card(CardError::backend_unavailable, "development ViKey helper retained a removable privilege", DiagnosticStage::process_security);
+      throw_process_security(24, "development ViKey helper retained a removable privilege");
     }
     if (enabled && !is_change_notify) {
-      throw_card(CardError::backend_unavailable, "ViKey helper token retained an enabled privilege", DiagnosticStage::process_security);
+      throw_process_security(25, "ViKey helper token retained an enabled privilege");
     }
   }
   properties |=
@@ -356,9 +378,11 @@ void filter_development_process_privileges(const HANDLE token) {
   TOKEN_ELEVATION elevation{};
   returned = 0;
   if (::GetTokenInformation(token, TokenElevation, &elevation,
-                            sizeof(elevation), &returned) == FALSE ||
-      returned != sizeof(elevation)) {
-    throw_card(CardError::backend_unavailable, "inspect ViKey helper token elevation", DiagnosticStage::process_security);
+                            sizeof(elevation), &returned) == FALSE) {
+    throw_process_security_win32(26, "inspect ViKey helper token elevation");
+  }
+  if (returned != sizeof(elevation)) {
+    throw_process_security(27, "invalid helper elevation result size");
   }
   if (elevation.TokenIsElevated == 0) {
     properties |=
@@ -368,18 +392,20 @@ void filter_development_process_privileges(const HANDLE token) {
   BOOL is_app_container = FALSE;
   returned = 0;
   if (::GetTokenInformation(token, TokenIsAppContainer, &is_app_container,
-                            sizeof(is_app_container), &returned) == FALSE ||
-      returned != sizeof(is_app_container)) {
-    throw_card(CardError::backend_unavailable, "inspect ViKey helper AppContainer state", DiagnosticStage::process_security);
+                            sizeof(is_app_container), &returned) == FALSE) {
+    throw_process_security_win32(28, "inspect ViKey helper AppContainer state");
+  }
+  if (returned != sizeof(is_app_container)) {
+    throw_process_security(29, "invalid helper is_app_container result size");
   }
   if (expected_app_container_sid == nullptr) {
     if (is_app_container != FALSE) {
-      throw_card(CardError::backend_unavailable, "development ViKey helper unexpectedly entered an "
-                 "AppContainer", DiagnosticStage::process_security);
+      throw_process_security(30, "development ViKey helper unexpectedly entered an "
+                 "AppContainer");
     }
   } else {
     if (is_app_container == FALSE) {
-      throw_card(CardError::backend_unavailable, "ViKey helper is not in an AppContainer", DiagnosticStage::process_security);
+      throw_process_security(31, "ViKey helper is not in an AppContainer");
     }
     properties |=
         helper::property_bit(helper::SecurityProperty::app_container);
@@ -387,16 +413,18 @@ void filter_development_process_privileges(const HANDLE token) {
     DWORD app_container_bytes = 0;
     static_cast<void>(::GetTokenInformation(
         token, TokenAppContainerSid, nullptr, 0, &app_container_bytes));
-    if (app_container_bytes < sizeof(TOKEN_APPCONTAINER_INFORMATION) ||
-        ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-      throw_card(CardError::backend_unavailable, "size ViKey helper AppContainer identity", DiagnosticStage::process_security);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+      throw_process_security_win32(32, "size ViKey helper AppContainer identity");
+    }
+    if (app_container_bytes < sizeof(TOKEN_APPCONTAINER_INFORMATION)) {
+      throw_process_security(33, "invalid size: size ViKey helper AppContainer identity");
     }
     std::vector<std::byte> app_container_storage(app_container_bytes);
     if (::GetTokenInformation(token, TokenAppContainerSid,
                               app_container_storage.data(),
                               app_container_bytes,
                               &app_container_bytes) == FALSE) {
-      throw_card(CardError::backend_unavailable, "inspect ViKey helper AppContainer identity", DiagnosticStage::process_security);
+      throw_process_security_win32(34, "inspect ViKey helper AppContainer identity");
     }
     const auto* const app_container =
         reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(
@@ -404,26 +432,28 @@ void filter_development_process_privileges(const HANDLE token) {
     if (app_container->TokenAppContainer == nullptr ||
         ::EqualSid(app_container->TokenAppContainer,
                    expected_app_container_sid) == FALSE) {
-      throw_card(CardError::backend_unavailable, "ViKey helper AppContainer identity is invalid", DiagnosticStage::process_security);
+      throw_process_security(35, "ViKey helper AppContainer identity is invalid");
     }
 
     DWORD capability_bytes = 0;
     static_cast<void>(::GetTokenInformation(
         token, TokenCapabilities, nullptr, 0, &capability_bytes));
-    if (capability_bytes < sizeof(DWORD) ||
-        ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-      throw_card(CardError::backend_unavailable, "size ViKey helper capabilities", DiagnosticStage::process_security);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+      throw_process_security_win32(36, "size ViKey helper capabilities");
+    }
+    if (capability_bytes < sizeof(DWORD)) {
+      throw_process_security(37, "invalid size: size ViKey helper capabilities");
     }
     std::vector<std::byte> capability_storage(capability_bytes);
     if (::GetTokenInformation(token, TokenCapabilities,
                               capability_storage.data(), capability_bytes,
                               &capability_bytes) == FALSE) {
-      throw_card(CardError::backend_unavailable, "inspect ViKey helper capabilities", DiagnosticStage::process_security);
+      throw_process_security_win32(38, "inspect ViKey helper capabilities");
     }
     const auto* const capabilities =
         reinterpret_cast<const TOKEN_GROUPS*>(capability_storage.data());
     if (capabilities->GroupCount != 0) {
-      throw_card(CardError::backend_unavailable, "ViKey helper retained an AppContainer capability", DiagnosticStage::process_security);
+      throw_process_security(39, "ViKey helper retained an AppContainer capability");
     }
     properties |=
         helper::property_bit(helper::SecurityProperty::no_capabilities);
@@ -431,22 +461,24 @@ void filter_development_process_privileges(const HANDLE token) {
     DWORD integrity_bytes = 0;
     static_cast<void>(::GetTokenInformation(
         token, TokenIntegrityLevel, nullptr, 0, &integrity_bytes));
-    if (integrity_bytes < sizeof(TOKEN_MANDATORY_LABEL) ||
-        ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-      throw_card(CardError::backend_unavailable, "size ViKey helper integrity level", DiagnosticStage::process_security);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+      throw_process_security_win32(40, "size ViKey helper integrity level");
+    }
+    if (integrity_bytes < sizeof(TOKEN_MANDATORY_LABEL)) {
+      throw_process_security(41, "invalid size: size ViKey helper integrity level");
     }
     std::vector<std::byte> integrity_storage(integrity_bytes);
     if (::GetTokenInformation(token, TokenIntegrityLevel,
                               integrity_storage.data(), integrity_bytes,
                               &integrity_bytes) == FALSE) {
-      throw_card(CardError::backend_unavailable, "inspect ViKey helper integrity level", DiagnosticStage::process_security);
+      throw_process_security_win32(42, "inspect ViKey helper integrity level");
     }
     const auto* const integrity =
         reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(
             integrity_storage.data());
     if (integrity->Label.Sid == nullptr ||
         ::IsValidSid(integrity->Label.Sid) == FALSE) {
-      throw_card(CardError::backend_unavailable, "ViKey helper integrity SID is invalid", DiagnosticStage::process_security);
+      throw_process_security(43, "ViKey helper integrity SID is invalid");
     }
     const UCHAR subauthority_count =
         *::GetSidSubAuthorityCount(integrity->Label.Sid);
@@ -454,7 +486,7 @@ void filter_development_process_privileges(const HANDLE token) {
         *::GetSidSubAuthority(integrity->Label.Sid,
                               subauthority_count - 1) >
             SECURITY_MANDATORY_LOW_RID) {
-      throw_card(CardError::backend_unavailable, "ViKey helper integrity level is too high", DiagnosticStage::process_security);
+      throw_process_security(44, "ViKey helper integrity level is too high");
     }
     properties |=
         helper::property_bit(helper::SecurityProperty::low_integrity);
@@ -462,7 +494,7 @@ void filter_development_process_privileges(const HANDLE token) {
 
   BOOL in_job = FALSE;
   if (::IsProcessInJob(process, job, &in_job) == FALSE) {
-    throw_card(CardError::backend_unavailable, "inspect ViKey helper job membership", DiagnosticStage::process_security);
+    throw_process_security_win32(45, "inspect ViKey helper job membership");
   }
   if (in_job != FALSE) {
     properties |=
@@ -475,20 +507,23 @@ void filter_development_process_privileges(const HANDLE token) {
   PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY handles{};
   PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY extensions{};
   PROCESS_MITIGATION_IMAGE_LOAD_POLICY images{};
-  if (::GetProcessMitigationPolicy(process, ProcessChildProcessPolicy, &child,
-                                   sizeof(child)) == FALSE ||
-      ::GetProcessMitigationPolicy(process, ProcessDEPPolicy, &dep,
-                                   sizeof(dep)) == FALSE ||
-      ::GetProcessMitigationPolicy(process, ProcessASLRPolicy, &aslr,
-                                   sizeof(aslr)) == FALSE ||
-      ::GetProcessMitigationPolicy(process, ProcessStrictHandleCheckPolicy,
-                                   &handles, sizeof(handles)) == FALSE ||
-      ::GetProcessMitigationPolicy(process,
-                                   ProcessExtensionPointDisablePolicy,
-                                   &extensions, sizeof(extensions)) == FALSE ||
-      ::GetProcessMitigationPolicy(process, ProcessImageLoadPolicy, &images,
-                                   sizeof(images)) == FALSE) {
-    throw_card(CardError::backend_unavailable, "inspect ViKey helper process mitigations", DiagnosticStage::process_security);
+  if (::GetProcessMitigationPolicy(process, ProcessChildProcessPolicy, &child, sizeof(child)) == FALSE) {
+    throw_process_security_win32(46, "inspect helper child mitigation");
+  }
+  if (::GetProcessMitigationPolicy(process, ProcessDEPPolicy, &dep, sizeof(dep)) == FALSE) {
+    throw_process_security_win32(47, "inspect helper dep mitigation");
+  }
+  if (::GetProcessMitigationPolicy(process, ProcessASLRPolicy, &aslr, sizeof(aslr)) == FALSE) {
+    throw_process_security_win32(48, "inspect helper aslr mitigation");
+  }
+  if (::GetProcessMitigationPolicy(process, ProcessStrictHandleCheckPolicy, &handles, sizeof(handles)) == FALSE) {
+    throw_process_security_win32(49, "inspect helper handles mitigation");
+  }
+  if (::GetProcessMitigationPolicy(process, ProcessExtensionPointDisablePolicy, &extensions, sizeof(extensions)) == FALSE) {
+    throw_process_security_win32(50, "inspect helper extensions mitigation");
+  }
+  if (::GetProcessMitigationPolicy(process, ProcessImageLoadPolicy, &images, sizeof(images)) == FALSE) {
+    throw_process_security_win32(51, "inspect helper images mitigation");
   }
   if (child.NoChildProcessCreation != 0) {
     properties |= helper::property_bit(
@@ -586,7 +621,7 @@ create_ephemeral_app_container() {
     if (SUCCEEDED(result)) {
       static_cast<void>(::DeleteAppContainerProfile(moniker.c_str()));
     }
-    throw_card(CardError::backend_unavailable, "create ephemeral ViKey helper AppContainer profile", DiagnosticStage::process_security);
+    throw_process_security(52, "create ephemeral ViKey helper AppContainer profile", FAILED(result) ? static_cast<std::uint32_t>(result) : 0, FAILED(result) ? NativeCodeKind::hresult : NativeCodeKind::none);
   }
   return std::make_unique<EphemeralAppContainer>(std::move(moniker), sid);
 }
@@ -619,9 +654,11 @@ struct HelperLaunchContext final {
 [[nodiscard]] HelperLaunchContext app_container_launch_context(
     const PSID app_container_sid) {
   wchar_t* sid_string = nullptr;
-  if (::ConvertSidToStringSidW(app_container_sid, &sid_string) == FALSE ||
-      sid_string == nullptr) {
-    throw_card(CardError::backend_unavailable, "format ViKey helper AppContainer identity", DiagnosticStage::process_security);
+  if (::ConvertSidToStringSidW(app_container_sid, &sid_string) == FALSE) {
+    throw_process_security_win32(53, "format ViKey helper AppContainer identity");
+  }
+  if (sid_string == nullptr) {
+    throw_process_security(54, "null formatted helper SID");
   }
   wchar_t* folder = nullptr;
   const HRESULT folder_result =
@@ -1077,11 +1114,11 @@ namespace {
   DWORD64 mitigations = kHelperMitigations;
   AttributeList attributes(4);
   attributes.add(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited_handles.data(),
-                 sizeof(inherited_handles));
+                 sizeof(inherited_handles), 3);
   attributes.add(PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations,
-                 sizeof(mitigations));
+                 sizeof(mitigations), 4);
   attributes.add(PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, &child_policy,
-                 sizeof(child_policy));
+                 sizeof(child_policy), 5);
 
   std::unique_ptr<EphemeralAppContainer> app_container;
   std::unique_ptr<EphemeralDevelopmentDirectory> development_directory;
@@ -1105,7 +1142,7 @@ namespace {
       launch_context =
           app_container_launch_context(app_container->sid.get());
       attributes.add(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-                     &security_capabilities, sizeof(security_capabilities));
+                     &security_capabilities, sizeof(security_capabilities), 6);
     } else {
       development_directory = create_ephemeral_development_directory();
       launch_context =
@@ -1186,7 +1223,7 @@ namespace {
             : TOKEN_QUERY;
     if (::OpenProcessToken(process.get(), token_access,
                            &raw_process_token) == FALSE) {
-      throw_card(CardError::backend_unavailable, "open ViKey helper process token", DiagnosticStage::process_security);
+      throw_process_security_win32(55, "open ViKey helper process token");
     }
     Handle process_token(raw_process_token);
 
@@ -1197,15 +1234,32 @@ namespace {
     }
 
     if (::AssignProcessToJobObject(job.get(), process.get()) == FALSE) {
-      throw_card(CardError::backend_unavailable, "assign ViKey helper to job object", DiagnosticStage::process_security);
+      throw_process_security_win32(56, "assign ViKey helper to job object");
     }
     parent_security_properties =
         inspect_process_security(process_token.get(), process.get(), job.get(),
                                  app_container ? app_container->sid.get()
                                                : nullptr);
+    require_security_properties(parent_security_properties, parent_required_security_properties, {
+        {helper::SecurityProperty::filtered_token, 57},
+        {helper::SecurityProperty::not_elevated, 58},
+        {helper::SecurityProperty::app_container, 59},
+        {helper::SecurityProperty::no_capabilities, 60},
+        {helper::SecurityProperty::low_integrity, 61},
+        {helper::SecurityProperty::assigned_to_job, 62},
+        {helper::SecurityProperty::child_processes_disabled, 63},
+        {helper::SecurityProperty::dep_enabled, 64},
+        {helper::SecurityProperty::bottom_up_aslr_enabled, 65},
+        {helper::SecurityProperty::high_entropy_aslr_enabled, 66},
+        {helper::SecurityProperty::strict_handle_checks, 67},
+        {helper::SecurityProperty::extension_points_disabled, 68},
+        {helper::SecurityProperty::remote_image_load_blocked, 69},
+        {helper::SecurityProperty::low_label_image_load_blocked, 70},
+        {helper::SecurityProperty::sanitized_environment, 71},
+    });
     if (parent_security_properties !=
         parent_required_security_properties) {
-      throw_card(CardError::backend_unavailable, "ViKey helper security boundary is incomplete", DiagnosticStage::process_security);
+      throw_process_security(72, "ViKey helper security boundary is incomplete");
     }
     if (::ResumeThread(thread.get()) == std::numeric_limits<DWORD>::max()) {
       throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::process_start, "resume helper", ::GetLastError(), NativeCodeKind::win32);
@@ -1302,8 +1356,25 @@ namespace {
     }
     const std::uint32_t security_properties =
         parent_security_properties | response.security_properties;
+    require_security_properties(security_properties, required_security_properties, {
+        {helper::SecurityProperty::filtered_token, 73},
+        {helper::SecurityProperty::not_elevated, 74},
+        {helper::SecurityProperty::app_container, 75},
+        {helper::SecurityProperty::no_capabilities, 76},
+        {helper::SecurityProperty::low_integrity, 77},
+        {helper::SecurityProperty::assigned_to_job, 78},
+        {helper::SecurityProperty::child_processes_disabled, 79},
+        {helper::SecurityProperty::dep_enabled, 80},
+        {helper::SecurityProperty::bottom_up_aslr_enabled, 81},
+        {helper::SecurityProperty::high_entropy_aslr_enabled, 82},
+        {helper::SecurityProperty::strict_handle_checks, 83},
+        {helper::SecurityProperty::extension_points_disabled, 84},
+        {helper::SecurityProperty::remote_image_load_blocked, 85},
+        {helper::SecurityProperty::low_label_image_load_blocked, 86},
+        {helper::SecurityProperty::sanitized_environment, 87},
+    });
     if (security_properties != required_security_properties) {
-      throw_card(CardError::backend_unavailable, "ViKey helper security boundary is incomplete", DiagnosticStage::process_security);
+      throw_process_security(88, "ViKey helper security boundary is incomplete");
     }
     if (blob_response != nullptr) {
       const DWORD expected_bytes =

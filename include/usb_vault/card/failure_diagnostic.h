@@ -11,6 +11,7 @@ struct FailureDetail final {
   std::uint32_t reason{};
   std::uint32_t native_kind{};
   std::uint32_t native_code{};
+  std::uint32_t step{};
 };
 
 struct FailureDiagnostic final {

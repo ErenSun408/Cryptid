@@ -126,9 +126,44 @@ void test_cleanup_paths() {
   }
 }
 
+void test_security_diagnostics() {
+  const auto make_failure = [](std::uint32_t step, std::uint32_t native, NativeCodeKind kind) {
+    try { throw_process_security(step, "private path must not be retained", native, kind); }
+    catch (...) { return std::current_exception(); }
+  };
+  const auto primary = make_failure(56, 5, NativeCodeKind::win32);
+  const auto captured = capture_failure(primary).primary;
+  require(captured.code == 2011 && captured.reason == 1 && captured.step == 56 &&
+          captured.native_kind == 1 && captured.native_code == 5,
+          "security API step or Win32 error lost");
+  try {
+    cleanup_preserving_failure(primary, [] {
+      throw DiagnosticError(make_error_code(CardError::backend_unavailable),
+          DiagnosticStage::cleanup, "private cleanup", 32, NativeCodeKind::win32);
+    });
+  } catch (...) {
+    const auto result = capture_failure(std::current_exception());
+    require(result.primary.step == 56 && result.primary.native_code == 5 &&
+            result.cleanup.code == 2015 && result.cleanup.native_code == 32,
+            "cleanup overwrote security diagnostic");
+  }
+  const auto logical = capture_failure(make_failure(58, 0xdeadbeef, NativeCodeKind::none)).primary;
+  require(logical.step == 58 && logical.native_kind == 0 && logical.native_code == 0,
+          "logical security rejection acquired stale system error");
+  const auto hr = capture_failure(make_failure(52, 0x80070005, NativeCodeKind::hresult)).primary;
+  require(hr.step == 52 && hr.native_kind == 2 && hr.native_code == 0x80070005,
+          "profile HRESULT lost or reclassified");
+  require(capture_failure(make_failure(kProcessSecurityStepCount + 1, 0, NativeCodeKind::none)).primary.step == 0,
+          "unrecognized security step accepted");
+  try { throw DiagnosticError(make_error_code(CardError::backend_unavailable),
+      DiagnosticStage::sdk_pin, "private", 0, NativeCodeKind::none, 56); }
+  catch (...) { require(capture_failure(std::current_exception()).primary.step == 0,
+                       "security step attached to unrelated diagnostic"); }
+}
+
 void test_numeric_sanitization() {
   static_assert(std::is_trivially_copyable_v<FailureDiagnostic>);
-  static_assert(sizeof(FailureDiagnostic) == 8 * sizeof(std::uint32_t));
+  static_assert(sizeof(FailureDiagnostic) == 10 * sizeof(std::uint32_t));
   try { throw std::system_error(5, std::system_category(), "private"); }
   catch (...) {
     const auto result = capture_failure(std::current_exception()).primary;
@@ -170,7 +205,7 @@ void test_startup_fallback() {
 int main() {
   try {
     test_entry_lifetime(); test_router_capture(); test_cleanup_paths();
-    test_numeric_sanitization();
+    test_numeric_sanitization(); test_security_diagnostics();
     test_startup_fallback();
     std::cout << "startup_failure_tests passed\n";
     return 0;

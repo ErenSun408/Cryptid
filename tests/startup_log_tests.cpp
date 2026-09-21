@@ -43,6 +43,25 @@ int main() {
     log.record(StartupStep::session, StartupOutcome::completed,
         {.primary = {.code = 0, .native_kind = 1, .native_code = 0xdeadbeef}});
     require(read(first).find("3735928559") == std::string::npos, "success payload leaked into diagnostics");
+    log.record(StartupStep::session, StartupOutcome::failed,
+        {.primary = {.code = 2011, .reason = 1, .native_kind = 1, .native_code = 5, .step = 56},
+         .cleanup = {.code = 2015, .reason = 1, .native_kind = 1, .native_code = 32}});
+    require(read(first).find("错误码：2011；安全步骤码：56；原因码：1；Win32 错误：5；附加清理错误码：2015") != std::string::npos,
+            "security step/system error/cleanup did not survive log output");
+    log.record(StartupStep::session, StartupOutcome::failed,
+        {.primary = {.code = 2011, .reason = 1, .native_kind = 0, .native_code = 0xdeadbeef, .step = 58}});
+    require(read(first).find("错误码：2011；安全步骤码：58；原因码：1\r\n") != std::string::npos,
+            "logical rejection included stale system error");
+    log.record(StartupStep::session, StartupOutcome::failed,
+        {.primary = {.code = 2011, .reason = 1, .native_kind = 2, .native_code = 0x80070005, .step = 52}});
+    require(read(first).find("安全步骤码：52；原因码：1；HRESULT：2147942405") != std::string::npos,
+            "HRESULT logging lost unsigned value");
+    log.record(StartupStep::session, StartupOutcome::completed,
+        {.primary = {.step = 123456}});
+    log.record(StartupStep::session, StartupOutcome::failed,
+        {.primary = {.code = 2011, .step = 123456}, .cleanup = {.code = 2015, .step = 123456}});
+    require(read(first).find("123456") == std::string::npos,
+            "success, unknown or non-security step leaked");
     log.finish();
     const auto finished = read(first);
     require(finished.find("code=") == std::string::npos && finished.find("错误码：0") == std::string::npos &&

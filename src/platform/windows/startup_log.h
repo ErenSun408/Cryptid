@@ -1,4 +1,5 @@
 #pragma once
+#include "card/process_security_failure.h"
 #include <Windows.h>
 #include "usb_vault/card/failure_diagnostic.h"
 #include <cstdio>
@@ -52,7 +53,7 @@ class StartupLog final {
         if (error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) { error_ = error; return false; }
       }
       if (file_ == INVALID_HANDLE_VALUE) { error_ = ERROR_FILE_EXISTS; return false; }
-      constexpr char header[] = "\xEF\xBB\xBFUSB Vault 启动日志（格式 2，设备本地时间，精确到毫秒）\r\n";
+      constexpr char header[] = "\xEF\xBB\xBFUSB Vault 启动日志\r\n";
       write(header, static_cast<DWORD>(sizeof(header) - 1));
       record(StartupStep::entry, StartupOutcome::begin);
       return error_ == 0;
@@ -67,6 +68,7 @@ class StartupLog final {
     if (file_ == INVALID_HANDLE_VALUE || error_ || sequence_ >= 128) return;
     const auto clean = [](card::FailureDetail value) noexcept {
       if (value.code < 1000 || value.code > 9999) return card::FailureDetail{};
+      if (value.code != 2011 || value.step > card::kProcessSecurityStepCount) value.step = 0;
       if (value.reason > 18) value.reason = 0;
       if (value.native_kind < 1 || value.native_kind > 3) {
         value.native_kind = 0; value.native_code = 0;
@@ -95,6 +97,7 @@ class StartupLog final {
     const auto detail = [&](const card::FailureDetail& value, const char* label) noexcept {
       if (!value.code) return;
       append("；%s：%u", label, value.code);
+      if (value.step) append("；安全步骤码：%u", value.step);
       if (value.reason) append("；原因码：%u", value.reason);
       if (value.native_kind) append("；%s：%u", value.native_kind == 1 ? "Win32 错误" :
           value.native_kind == 2 ? "HRESULT" : "进程退出码", value.native_code);
@@ -139,7 +142,7 @@ class StartupLog final {
         return "WebView 页面初始化";
       case StartupStep::ready: return "页面就绪";
       case StartupStep::failure: return "启动错误";
-      case StartupStep::end: return "启动日志结束（不代表此前没有错误）";
+      case StartupStep::end: return "启动日志结束";
     }
     return "未知启动阶段";
   }

@@ -31,6 +31,7 @@
 - 页面保留状态标题，下方只显示红色“错误码：xxxx”，不显示原因／底层／清理附码，不提供复制入口；这些数值保存在启动日志中。`0000` 表示无错误，不把正常无卡或待配置计为故障。
 - 主码分区：10xx 启动前/入口，11xx 前置检查，12xx 原生会话，13xx WebView，14xx 页面/桥，15xx 设备事件，20xx 已有诊断阶段，30xx 缺少阶段时的卡错误，40xx 入口/记录判定，90xx 未分类故障。
 - 主码优先选择实际失败的、可证实的最具体阶段。已有 `DiagnosticStage = n` 映射到 `2000+n`，**不更改原有枚举或 helper 协议数值**。无阶段但存在 `CardError = n` 时用 `3000+n`。明确的本地步骤另用本表代码。
+- 2011 另保留本地固定安全步骤码 `step`（0 表示未取得，详见文末），不改变 helper 协议。
 - 同时保留独立的数字字段：`reason`（现有 CardError 1～18，0 表示无可用卡错误）、`native_kind`（0 无、1 Win32、2 HRESULT、3 进程退出码）、`native_code`（无符号 32 位十进制）。类别不是卡错误时不得把同值的系统错误冒充 CardError。
 - 示例：主码 **2019**、原因 **18**、底层类别 **0**、底层码 **0**，只表示等待辅助进程响应超时；不能解释为 PIN 错误或已经确认网络故障。底层码 0 在类别 0 时表示**未取得**，不是操作成功。
 - HRESULT 如需内部十六进制转换，应在诊断工具中进行；用户页面及导出的编号仍用数字。未知阶段/原因不得误解成成功；本地归为 9001，非法 IPC 枚举仍按 2018 拒绝。
@@ -129,7 +130,7 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | 2008 | 8 file_state；属性读取失败、非普通文件、大小越界/为空、待删除状态 | 已接入 | 不继续加载，不删除用户文件 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2009 | 9 sdk_stage；复制 DLL、设置安全标签、准备暂存文件失败 | 已接入 | 保留复制/标签/复核子步骤与系统码 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2010 | 10 process_start；CreateProcess 或 ResumeThread 失败 | 已接入 | 检查可执行制品/权限/系统码；不是卡接触问题 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
-| 2011 | 11 process_security；token、权限裁剪、Job、缓解策略、AppContainer、父子安全属性不符合要求 | 已接入 | 拒绝降级；区分当前联网开发分支与隔离分支，不能直接假定提权 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
+| 2011 | 11 process_security；token、权限裁剪、Job、缓解策略、AppContainer、父子安全属性不符合要求 | 已接入 | 拒绝降级；区分当前联网开发分支与隔离分支，不能直接假定提权 | 已补本地固定安全步骤及 Win32/HRESULT；捕获与日志回归通过，未逐出口实机注入，helper 集成仍有既有路径校验阻塞 |
 | 2012 | 12 sdk_load；LoadLibraryExW 失败 | 已接入 | 记录加载结果，可能缺依赖、格式/架构不匹配或拒绝访问 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2013 | 13 sdk_export；DLL 缺少要求的导出入口 | 已接入 | 使用匹配 SDK；原生 GetProcAddress 路径保存 Win32 码，模拟加载器路径可没有底层码 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2014 | 14 process_exit；提前退出、响应后未及时退出、退出码查询失败或非零退出 | 已接入 | 需区分子步骤；这类等待期限失败目前不一定是原因 18 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
@@ -266,3 +267,99 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | [usb-vault.nsi](../../packaging/windows/usb-vault.nsi)、[installer-engine.nsh](../../packaging/windows/installer-engine.nsh) | 完成页 Exec、快捷方式起始目录、维护收尾 |
 
 本表同时保存触发条件、接入状态和实际验证边界；没有为每一种失败做实机注入，也没有宣称已复现用户的首次启动故障。底层系统和 SDK 的具体外因仍须结合编号与实机证据判断。
+
+## 2011 安全步骤码（本地主进程）
+
+主码和原因码保持 2011 / 1；新增安全步骤码只进入启动日志，不改页面或 helper IPC。Win32 调用失败立即取系统码；HRESULT 直接保留调用结果；逻辑条件不满足不读取残留 GetLastError。旧日志无法回补。下列编号固定，不因后续插入检查而重排。
+
+| 步骤码 | 固定检查点 | 底层类别 |
+|---|---|---|
+| 1 | size process attributes | Win32 |
+| 2 | initialize process attributes | Win32 |
+| 3 | set handle list | Win32 |
+| 4 | set mitigation policy | Win32 |
+| 5 | set child policy | Win32 |
+| 6 | set security capabilities | Win32 |
+| 7 | open current token for ViKey helper | Win32 |
+| 8 | size current token restrictions for ViKey helper | Win32 |
+| 9 | invalid size: size current token restrictions for ViKey helper | 无（逻辑校验） |
+| 10 | read current token restrictions for ViKey helper | Win32 |
+| 11 | ViKey helper cannot safely refilter an already restricted parent token | 无（逻辑校验） |
+| 12 | create restricted ViKey helper token | Win32 |
+| 13 | resolve development ViKey helper traversal privilege | Win32 |
+| 14 | size development ViKey helper token privileges | Win32 |
+| 15 | invalid size: size development ViKey helper token privileges | 无（逻辑校验） |
+| 16 | read development ViKey helper token privileges | Win32 |
+| 17 | filter development ViKey helper token privileges | Win32 |
+| 18 | create ViKey helper job object | Win32 |
+| 19 | limit ViKey helper job object | Win32 |
+| 20 | resolve ViKey helper traversal privilege | Win32 |
+| 21 | size ViKey helper token privileges | Win32 |
+| 22 | invalid size: size ViKey helper token privileges | 无（逻辑校验） |
+| 23 | inspect ViKey helper token privileges | Win32 |
+| 24 | development ViKey helper retained a removable privilege | 无（逻辑校验） |
+| 25 | ViKey helper token retained an enabled privilege | 无（逻辑校验） |
+| 26 | inspect ViKey helper token elevation | Win32 |
+| 27 | invalid helper elevation result size | 无（逻辑校验） |
+| 28 | inspect ViKey helper AppContainer state | Win32 |
+| 29 | invalid helper is_app_container result size | 无（逻辑校验） |
+| 30 | development ViKey helper unexpectedly entered an AppContainer | 无（逻辑校验） |
+| 31 | ViKey helper is not in an AppContainer | 无（逻辑校验） |
+| 32 | size ViKey helper AppContainer identity | Win32 |
+| 33 | invalid size: size ViKey helper AppContainer identity | 无（逻辑校验） |
+| 34 | inspect ViKey helper AppContainer identity | Win32 |
+| 35 | ViKey helper AppContainer identity is invalid | 无（逻辑校验） |
+| 36 | size ViKey helper capabilities | Win32 |
+| 37 | invalid size: size ViKey helper capabilities | 无（逻辑校验） |
+| 38 | inspect ViKey helper capabilities | Win32 |
+| 39 | ViKey helper retained an AppContainer capability | 无（逻辑校验） |
+| 40 | size ViKey helper integrity level | Win32 |
+| 41 | invalid size: size ViKey helper integrity level | 无（逻辑校验） |
+| 42 | inspect ViKey helper integrity level | Win32 |
+| 43 | ViKey helper integrity SID is invalid | 无（逻辑校验） |
+| 44 | ViKey helper integrity level is too high | 无（逻辑校验） |
+| 45 | inspect ViKey helper job membership | Win32 |
+| 46 | inspect helper child mitigation | Win32 |
+| 47 | inspect helper dep mitigation | Win32 |
+| 48 | inspect helper aslr mitigation | Win32 |
+| 49 | inspect helper handles mitigation | Win32 |
+| 50 | inspect helper extensions mitigation | Win32 |
+| 51 | inspect helper images mitigation | Win32 |
+| 52 | create ephemeral ViKey helper AppContainer profile | HRESULT（API 失败）；无（SID 校验失败） |
+| 53 | format ViKey helper AppContainer identity | Win32 |
+| 54 | null formatted helper SID | 无（逻辑校验） |
+| 55 | open ViKey helper process token | Win32 |
+| 56 | assign ViKey helper to job object | Win32 |
+| 57 | parent missing filtered_token | 无（逻辑校验） |
+| 58 | parent missing not_elevated | 无（逻辑校验） |
+| 59 | parent missing app_container | 无（逻辑校验） |
+| 60 | parent missing no_capabilities | 无（逻辑校验） |
+| 61 | parent missing low_integrity | 无（逻辑校验） |
+| 62 | parent missing assigned_to_job | 无（逻辑校验） |
+| 63 | parent missing child_processes_disabled | 无（逻辑校验） |
+| 64 | parent missing dep_enabled | 无（逻辑校验） |
+| 65 | parent missing bottom_up_aslr_enabled | 无（逻辑校验） |
+| 66 | parent missing high_entropy_aslr_enabled | 无（逻辑校验） |
+| 67 | parent missing strict_handle_checks | 无（逻辑校验） |
+| 68 | parent missing extension_points_disabled | 无（逻辑校验） |
+| 69 | parent missing remote_image_load_blocked | 无（逻辑校验） |
+| 70 | parent missing low_label_image_load_blocked | 无（逻辑校验） |
+| 71 | parent missing sanitized_environment | 无（逻辑校验） |
+| 72 | parent security properties contain unexpected bits | 无（逻辑校验） |
+| 73 | combined missing filtered_token | 无（逻辑校验） |
+| 74 | combined missing not_elevated | 无（逻辑校验） |
+| 75 | combined missing app_container | 无（逻辑校验） |
+| 76 | combined missing no_capabilities | 无（逻辑校验） |
+| 77 | combined missing low_integrity | 无（逻辑校验） |
+| 78 | combined missing assigned_to_job | 无（逻辑校验） |
+| 79 | combined missing child_processes_disabled | 无（逻辑校验） |
+| 80 | combined missing dep_enabled | 无（逻辑校验） |
+| 81 | combined missing bottom_up_aslr_enabled | 无（逻辑校验） |
+| 82 | combined missing high_entropy_aslr_enabled | 无（逻辑校验） |
+| 83 | combined missing strict_handle_checks | 无（逻辑校验） |
+| 84 | combined missing extension_points_disabled | 无（逻辑校验） |
+| 85 | combined missing remote_image_load_blocked | 无（逻辑校验） |
+| 86 | combined missing low_label_image_load_blocked | 无（逻辑校验） |
+| 87 | combined missing sanitized_environment | 无（逻辑校验） |
+| 88 | combined security properties contain unexpected bits | 无（逻辑校验） |
+| 89 | zero attribute size | 无（逻辑校验） |
