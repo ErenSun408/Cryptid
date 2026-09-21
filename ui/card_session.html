@@ -151,8 +151,10 @@
     /* Out of the entry card and into the corner of the window: it is a way
        out of the routine flow, not a step in it. Taken out of the card's
        flow entirely so it cannot push the centred content off balance. */
-    body[data-view="session"] #open-configuration {
+    body[data-view="session"] #open-configuration,
+    body[data-view="configuration"] #setup-back {
       position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 5;
+      width: 7rem; justify-content: center;
     }
 
     /* ================= 首次配置 ================= */
@@ -199,12 +201,6 @@
       background: rgba(255, 255, 255, .05); border: 1px solid var(--line);
     }
     .setup-surface[data-busy="true"] #setup-save:disabled { cursor: wait; }
-    /* Always in the corner of the window, the way the entry into setup sits in
-       the opposite one. Taken out of the card's flow so it is a way back out
-       of this page rather than a step at the end of the form. */
-    body[data-view="configuration"] #setup-back {
-      position: fixed; left: 1.25rem; top: 1.25rem; z-index: 5;
-    }
     #setup-status { color: var(--text-2); }
     #setup-status[data-tone="ok"] { color: var(--ok); }
     #setup-status[data-tone="error"] { color: var(--danger); }
