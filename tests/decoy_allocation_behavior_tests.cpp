@@ -603,11 +603,13 @@ int sequential_run(int argc,wchar_t** argv) {
       const std::array<unsigned,5> starts{0,2,5,9,14};
       for(unsigned group=0;group<5;++group)for(unsigned j=0;j<=group;++j)need(::DeleteFileW((m.root()+L"s"+std::to_wstring(starts[group]+j)+L".bin").c_str()),"delete own fixture seed");
       m.close();m.open(); // Persist the fixture before recording the starting bitmap.
+      auto mountIdentity=m.provider.mount_identity(m.drive);
+      need(mountIdentity.protected_outer_writable&&mountIdentity.disk_length==g[1],"protected mount identity mismatch");
       auto ordered=[&]() {auto runs=safe_free_runs(m,l);std::sort(runs.begin(),runs.end());return runs;};
       const auto initial=ordered();need(initial.size()>=5,"missing five holes");
       for(unsigned i=0;i<5;++i) {record(0,"initial_hole",true,0,(initial[i].second-initial[i].first)*l.cluster,initial[i].first);need((initial[i].second-initial[i].first)*l.cluster==(i+1)*MiB,"five hole sizes differ from requested layout");}
       const auto originals=existing_files(m.root());need(originals.size()==33,"expected 33 retained seeds");
-      auto available=[&]() {std::uint64_t total=0;for(const auto& r:ordered())total+=(r.second-r.first)*l.cluster;auto handle=raw(m.drive);const auto formal=volume::scan_fat32_safe_space(handle.h,g[1],g[2]-g[0]);need(formal.free_bytes==total&&formal.cluster_size==l.cluster,"production safe-space mismatch");return total;};
+      auto available=[&]() {need(m.provider.mount_identity(m.drive)==mountIdentity,"mount identity changed during scan");std::uint64_t total=0;for(const auto& r:ordered())total+=(r.second-r.first)*l.cluster;auto handle=raw(m.drive);const auto formal=volume::scan_fat32_safe_space(handle.h,g[1],g[2]-g[0]);need(formal.free_bytes==total&&formal.cluster_size==l.cluster,"production safe-space mismatch");return total;};
       record(0,"safe_free_before",true,0,available());
       std::vector<std::pair<std::wstring,std::uint64_t>> writtenFiles;
       auto put=[&](unsigned id,std::uint64_t size,const Extents* exact) {
@@ -654,7 +656,7 @@ int sequential_run(int argc,wchar_t** argv) {
         f.close();vol.close();need(verify_pattern(path,size),"immediate content mismatch");writtenFiles.emplace_back(name,size);
         need(m.type()==volume::VolumeType::outer,"unexpected protection trigger");
         record(id,"safe_free_after",true,0,available());
-        if(rep==2){m.close();m.open();for(const auto& item:writtenFiles)need(verify_pattern(m.root()+item.first,item.second),"between-files persistence");record(id,"between_files_remount",true);}
+        if(rep==2){m.close();m.open();const auto nextIdentity=m.provider.mount_identity(m.drive);need(nextIdentity.unique_id!=mountIdentity.unique_id&&nextIdentity.protected_outer_writable,"remount identity not refreshed");mountIdentity=nextIdentity;for(const auto& item:writtenFiles)need(verify_pattern(m.root()+item.first,item.second),"between-files persistence");record(id,"between_files_remount",true);}
         return true;
       };
       const auto units=MiB/l.cluster;

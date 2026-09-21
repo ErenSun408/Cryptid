@@ -3,6 +3,7 @@
 
 #include "volume/locked_driver_buffer.h"
 #include "volume/mount_request.h"
+#include "volume/mount_identity.h"
 #include "volume/veracrypt_driver_abi.h"
 
 #include <cstddef>
@@ -288,6 +289,51 @@ void test_protected_mount_request() {
           "protection PIM displaced the mounted volume PIM");
 }
 
+void test_mount_identity_validation() {
+  using usb_vault::volume::detail::decode_mount_identity;
+  usb_vault::volume::detail::abi::VolumeProperties p{};
+  p.drive_number = 24;
+  p.unique_id = 0; // The driver's first mount is numbered zero.
+  p.volume_path[0] = L'D';
+  p.volume_path[1] = L':';
+  p.disk_length = 1024;
+  p.pkcs5_prf = 1;
+  p.hidden_protection = 1;
+  const auto valid = decode_mount_identity(p, 24);
+  require(valid.protected_outer_writable && valid.unique_id == 0 &&
+          valid.drive_letter == L'Y', "valid protected mount identity rejected");
+  auto bad = p;
+  bad.unique_id = -1;
+  require_invalid_argument([&]{decode_mount_identity(bad, 24);}, "negative identity accepted");
+  require_invalid_argument([&]{decode_mount_identity(p, 23);}, "another drive accepted");
+  bad = p; bad.disk_length = 0;
+  require_invalid_argument([&]{decode_mount_identity(bad, 24);}, "empty volume accepted");
+  bad = p; std::fill(std::begin(bad.volume_path), std::end(bad.volume_path), L'x');
+  require_invalid_argument([&]{decode_mount_identity(bad, 24);}, "unterminated path accepted");
+  bad = p; bad.hidden_protection = 3;
+  require_invalid_argument([&]{decode_mount_identity(bad, 24);}, "unknown protection accepted");
+  bad = p; bad.read_only = 2;
+  require_invalid_argument([&]{decode_mount_identity(bad, 24);}, "malformed boolean accepted");
+  for (const auto field : {&decltype(p)::hidden_volume, &decltype(p)::read_only,
+       &decltype(p)::partition_in_inactive_system_scope, &decltype(p)::mount_disabled,
+       &decltype(p)::volume_pim}) {
+    bad = p; bad.*field = 1;
+    require(!decode_mount_identity(bad, 24).protected_outer_writable,
+            "unsupported mount marked writable protected outer");
+  }
+  for (const int protection : {0, 2}) {
+    bad = p; bad.hidden_protection = protection;
+    require(!decode_mount_identity(bad, 24).protected_outer_writable,
+            "unprotected or triggered volume accepted");
+  }
+  bad = p; bad.unique_id = 1;
+  require(decode_mount_identity(bad, 24) != valid, "remount identity was ignored");
+  bad = p; bad.header_flags = 1;
+  require(!decode_mount_identity(bad, 24).protected_outer_writable, "header flags ignored");
+  bad = p; bad.pkcs5_prf = 2;
+  require(!decode_mount_identity(bad, 24).protected_outer_writable, "unsupported PRF ignored");
+}
+
 void test_driver_error_codes() {
   const std::error_code busy =
       usb_vault::volume::make_error_code(
@@ -307,6 +353,7 @@ int main() {
     test_protected_mount_request();
     test_invalid_mount_requests();
     test_driver_error_codes();
+    test_mount_identity_validation();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

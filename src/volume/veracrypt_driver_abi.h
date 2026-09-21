@@ -82,6 +82,32 @@ struct MountedVolumes final {
   std::int32_t reserved[kDriveCount];
 };
 
+// Query-only ABI, pinned to VeraCrypt 1.26.29. Do not persist its contents.
+struct VolumeProperties final {
+  std::int32_t drive_number;
+  std::int32_t unique_id;
+  wchar_t volume_path[kMaxPath];
+  std::uint64_t disk_length;
+  std::int32_t encryption_algorithm;
+  std::int32_t encryption_mode;
+  std::int32_t pkcs5_prf;
+  std::int32_t pkcs5_iterations;
+  std::int32_t hidden_volume;
+  std::int32_t read_only;
+  std::int32_t removable;
+  std::int32_t partition_in_inactive_system_scope;
+  std::uint32_t header_flags;
+  std::uint64_t total_bytes_read;
+  std::uint64_t total_bytes_written;
+  std::int32_t hidden_protection;
+  std::int32_t format_version;
+  std::int32_t volume_pim;
+  wchar_t label[kLabelCharacters];
+  std::int32_t driver_set_label;
+  std::uint8_t volume_id[kVolumeIdSize];
+  std::int32_t mount_disabled;
+};
+
 #pragma pack(pop)
 
 static_assert(sizeof(wchar_t) == 2, "VeraCrypt ABI requires 2-byte wchar_t");
@@ -152,5 +178,21 @@ USB_VAULT_ASSERT_OFFSET(MountedVolumes, disk_length, 16904);
 USB_VAULT_ASSERT_OFFSET(MountedVolumes, encryption_algorithm, 17112);
 USB_VAULT_ASSERT_OFFSET(MountedVolumes, volume_type, 17216);
 USB_VAULT_ASSERT_OFFSET(MountedVolumes, reserved, 17320);
+
+USB_VAULT_ASSERT_STANDARD_LAYOUT(VolumeProperties);
+USB_VAULT_ASSERT_SIZE(VolumeProperties, 706);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, drive_number, 0);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, unique_id, 4);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, volume_path, 8);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, disk_length, 528);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, pkcs5_prf, 544);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, hidden_volume, 552);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, header_flags, 568);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, total_bytes_read, 572);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, hidden_protection, 588);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, volume_pim, 596);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, label, 600);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, volume_id, 670);
+USB_VAULT_ASSERT_OFFSET(VolumeProperties, mount_disabled, 702);
 
 }  // namespace usb_vault::volume::detail::abi

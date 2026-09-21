@@ -93,6 +93,17 @@ struct MountedVolume final {
   VolumeType type{VolumeType::unknown};
 };
 
+// Ephemeral identity of one driver mount. unique_id changes on remount, but is
+// not a persistent identifier and cannot be compared across driver restarts.
+struct MountIdentity final {
+  wchar_t drive_letter{};
+  std::int32_t unique_id{};
+  std::wstring volume_path;
+  std::uint64_t disk_length{};
+  bool protected_outer_writable{};
+  friend bool operator==(const MountIdentity&, const MountIdentity&) = default;
+};
+
 // Provides the validated VeraCrypt driver boundary used by higher-level
 // orchestration. It does not persist paths, mount state, volume type, or other
 // metadata locally.
@@ -123,6 +134,9 @@ class VolumeProvider final {
   void notify_mounted(wchar_t drive_letter) const;
 
   [[nodiscard]] std::vector<MountedVolume> mounted_volumes() const;
+
+  // Read-only driver query; missing drives and malformed responses fail closed.
+  [[nodiscard]] MountIdentity mount_identity(wchar_t drive_letter) const;
 
  private:
   struct Impl;

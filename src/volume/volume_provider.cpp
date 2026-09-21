@@ -2,6 +2,7 @@
 
 #include "volume/locked_driver_buffer.h"
 #include "volume/mount_request.h"
+#include "volume/mount_identity.h"
 #include "volume/veracrypt_driver_abi.h"
 
 #include <Windows.h>
@@ -31,6 +32,7 @@ constexpr DWORD kGetDriverVersion = driver_ioctl(1);
 constexpr DWORD kMountVolume = driver_ioctl(3);
 constexpr DWORD kUnmountVolume = driver_ioctl(4);
 constexpr DWORD kGetMountedVolumes = driver_ioctl(6);
+constexpr DWORD kGetVolumeProperties = driver_ioctl(7);
 
 class DriverErrorCategory final : public std::error_category {
  public:
@@ -328,6 +330,19 @@ std::vector<MountedVolume> VolumeProvider::mounted_volumes() const {
     });
   }
   return result;
+}
+
+MountIdentity VolumeProvider::mount_identity(const wchar_t drive_letter) const {
+  require_active(impl_);
+  const auto drive = detail::drive_number(drive_letter);
+  detail::LockedDriverBuffer<detail::abi::VolumeProperties> locked;
+  auto& properties = locked.get();
+  properties.drive_number = drive;
+  const auto driver = open_driver();
+  require_supported_version(driver.get());
+  transact(driver.get(), kGetVolumeProperties, properties,
+           "query VeraCrypt mount identity");
+  return detail::decode_mount_identity(properties, drive);
 }
 
 }  // namespace usb_vault::volume
