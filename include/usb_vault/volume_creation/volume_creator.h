@@ -93,6 +93,26 @@ class VolumeCreator final {
   std::filesystem::path helper_path_;
 };
 
+// Dedicated upload consent, bound to one maintenance mount. A failure closes
+// the pipe; another mount cannot reuse it. It accepts no measurement or creation.
+class VolumeImportSession final {
+ public:
+  explicit VolumeImportSession(std::filesystem::path helper_path);
+  ~VolumeImportSession() noexcept;
+  VolumeImportSession(const VolumeImportSession&) = delete;
+  VolumeImportSession& operator=(const VolumeImportSession&) = delete;
+  void copy(std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
+      std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
+      const security::SecureBuffer& hidden_password, std::wstring_view source_path,
+      std::wstring_view destination_relative, const ProgressCallback& progress = {},
+      const CancellationQuery& cancelled = {});
+  void close() noexcept;
+  [[nodiscard]] bool open() const noexcept;
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 // Separate one-operation consent; the measurement session never accepts writes.
 // Source and target handles are opened under caller impersonation, while only
 // fixed authenticated FAT32 device operations use elevation. Failure requires

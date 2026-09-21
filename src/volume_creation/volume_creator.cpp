@@ -368,13 +368,37 @@ std::error_code make_error_code(const CreationError error) noexcept {
   return letter;
 }
 
-void import_protected_file(const std::filesystem::path& helper_path,
-    std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
+struct VolumeImportSession::Impl final {
+  std::filesystem::path helper_path;
+  std::array<std::byte, detail::kNonceSize> nonce{};
+  Handle process, pipe;
+  std::wstring container;
+  wchar_t drive{};
+  std::int32_t mount_id{};
+  std::uint64_t mounted_bytes{};
+  bool connected{};
+  bool failed{};
+};
+VolumeImportSession::VolumeImportSession(std::filesystem::path helper_path) : impl_(std::make_unique<Impl>()) {
+  impl_->helper_path=validated_helper_path(helper_path);
+}
+VolumeImportSession::~VolumeImportSession() noexcept { close(); }
+bool VolumeImportSession::open() const noexcept { return impl_->connected; }
+void VolumeImportSession::close() noexcept {
+  impl_->failed=false;
+  impl_->connected=false;
+  impl_->pipe=Handle{};
+  if (impl_->process) static_cast<void>(::WaitForSingleObject(impl_->process.get(), 5000));
+  impl_->process=Handle{};
+  impl_->container.clear();
+}
+void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
     std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
     const security::SecureBuffer& hidden_password, std::wstring_view source_path,
     std::wstring_view destination_relative, const ProgressCallback& progress,
     const CancellationQuery& cancelled) {
-  const auto helper = validated_helper_path(helper_path);
+  if (impl_->failed) throw std::logic_error("protected import session requires recovery");
+  try {
   const auto container = validated_target_path(container_path);
   const auto source = validated_target_path(source_path);
   const auto letter = validated_drive_letter(drive);
@@ -387,13 +411,21 @@ void import_protected_file(const std::filesystem::path& helper_path,
       .second_password_bytes = static_cast<std::uint32_t>(hidden_password.size()),
       .mounted_drive = static_cast<std::uint32_t>(letter - L'A' + 1), .mount_id = mount_id,
       .source_characters = static_cast<std::uint32_t>(source.size()),
-      .destination_characters = static_cast<std::uint32_t>(destination.size()), .nonce = random_nonce()};
+      .destination_characters = static_cast<std::uint32_t>(destination.size()), .nonce = impl_->nonce};
   if (!detail::valid_request_header(header)) throw std::invalid_argument("invalid protected import");
   if (cancelled && cancelled()) throw_creation(CreationError::operation_cancelled, "protected import cancelled");
-  const auto suffix = hex_nonce(header.nonce);
-  const Handle process = launch_elevated_helper(helper, suffix, suffix);
-  const HelperExitWait wait(process.get());
-  const Handle pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, process.get());
+  if (impl_->connected && (impl_->container != container || impl_->drive != letter ||
+      impl_->mount_id != mount_id || impl_->mounted_bytes != mounted_bytes))
+    throw std::logic_error("protected import session cannot change mounts");
+  if (!impl_->connected) {
+    impl_->nonce = random_nonce(); header.nonce = impl_->nonce;
+    const auto suffix = hex_nonce(impl_->nonce);
+    impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
+    impl_->pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, impl_->process.get());
+    impl_->container=container;impl_->drive=letter;impl_->mount_id=mount_id;impl_->mounted_bytes=mounted_bytes;
+    impl_->connected=true;
+  }
+  const auto& pipe = impl_->pipe;
   detail::write_request(pipe.get(), header, container, outer_password, hidden_password, source, destination);
   bool sent = false;
   for (;;) {
@@ -407,6 +439,18 @@ void import_protected_file(const std::filesystem::path& helper_path,
     if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid protected import result");
     throw_creation(static_cast<CreationError>(response.error), "protected import failed; maintenance recovery required");
   }
+  } catch (...) { close(); impl_->failed=true; throw; }
+}
+
+void import_protected_file(const std::filesystem::path& helper_path,
+    std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
+    std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
+    const security::SecureBuffer& hidden_password, std::wstring_view source_path,
+    std::wstring_view destination_relative, const ProgressCallback& progress,
+    const CancellationQuery& cancelled) {
+  VolumeImportSession session(helper_path);
+  session.copy(container_path,drive,mount_id,mounted_bytes,outer_password,hidden_password,
+               source_path,destination_relative,progress,cancelled);
 }
 
 struct VolumeMeasurementSession::Impl final {

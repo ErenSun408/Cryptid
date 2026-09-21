@@ -915,6 +915,15 @@ int import_helper_run(wchar_t** argv) {
     need(::CreateDirectoryW((m.root()+L"folder").c_str(),nullptr),"create own test directory");
     invoke(L"folder/copied.bin",identity.unique_id,inner);need(verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"helper copied payload differs");
     rejects([&]{invoke(L"folder/copied.bin",identity.unique_id,inner);});need(verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"collision changed payload");
+    volume_creation::VolumeImportSession uploads(helper);
+    const auto persistent=[&](std::wstring_view name,std::int32_t mountId) {
+      uploads.copy(m.path.native(),m.drive,mountId,identity.disk_length,outer,inner,payload.native(),name);
+    };
+    persistent(L"session-one.bin",identity.unique_id);need(uploads.open(),"upload session closed after success");
+    persistent(L"session-two.bin",identity.unique_id);need(uploads.open()&&verify_pattern(m.root()+L"session-two.bin",8*MiB+513),"second session copy failed");
+    rejects([&]{persistent(L"stale.bin",identity.unique_id+1);});need(!uploads.open()&&!fs::exists(m.root()+L"stale.bin"),"session switched mounts");
+    rejects([&]{persistent(L"latched.bin",identity.unique_id);});need(!uploads.open()&&!fs::exists(m.root()+L"latched.bin"),"failed upload session restarted");
+    uploads.close();
     bool cancel=false,cancelled=false;try {invoke(L"cancel.bin",identity.unique_id,inner,[&](const auto& progress){if(progress.percent>=1)cancel=true;},[&]{return cancel;});}
     catch(const std::system_error& error){cancelled=error.code()==volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled);}
     need(cancelled&&!fs::exists(m.root()+L"cancel.bin"),"helper cancellation cleanup failed");

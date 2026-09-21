@@ -19,4 +19,7 @@ void serve_measurement_session(HANDLE pipe,
                                const std::array<std::byte, kNonceSize>& nonce,
                                Request& first);
 
+// Dedicated mount-bound import session; exits on the first failure.
+void serve_import_session(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce, Request& first);
+
 }  // namespace usb_vault::volume_creation::detail

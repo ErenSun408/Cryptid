@@ -663,13 +663,14 @@ void create_with_hidden(const HANDLE pipe, Request& request,
 
 }  // namespace
 
-void serve_measurement_session(const HANDLE pipe,
+static void serve_session(const HANDLE pipe,
                                const std::array<std::byte, kNonceSize>& nonce,
-                               Request& first) {
+                               Request& first, bool importing) {
   // Idle time is the only thing that ends this session other than the caller
   // closing the pipe, and something has to end it if the caller never does.
   std::atomic<std::int64_t> last_activity{
       std::chrono::steady_clock::now().time_since_epoch().count()};
+  std::atomic<bool> idle_wait{false};
   bool finished = false;
   std::mutex finished_mutex;
   std::condition_variable finished_signal;
@@ -684,16 +685,21 @@ void serve_measurement_session(const HANDLE pipe,
           last_activity.load()};
       // Nothing here is worth flushing, and the caller reads a closed pipe as
       // the end of the session either way.
-      if (idle > kIdleLimit) ::ExitProcess(0);
+      if (idle_wait.load() && idle > kIdleLimit) ::ExitProcess(0);
     }
   });
 
+  const auto bound_path = first.target_path;
+  const auto bound_drive = first.mounted_drive;
+  const auto bound_id = first.mount_id;
+  const auto bound_bytes = first.outer_size_bytes;
   Request request = std::move(first);
   for (;;) {
     last_activity.store(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    if (request.operation != Operation::scan_tail_space &&
-        request.operation != Operation::scan_protected_space) {
+    if (importing ? (request.operation != Operation::import_protected_file || request.target_path != bound_path ||
+                      request.mounted_drive != bound_drive || request.mount_id != bound_id || request.outer_size_bytes != bound_bytes)
+                  : (request.operation != Operation::scan_tail_space && request.operation != Operation::scan_protected_space)) {
       // A session that measures never creates, however the request is
       // labelled: one consent covered measuring and nothing else.
       write_response(pipe,
@@ -705,7 +711,7 @@ void serve_measurement_session(const HANDLE pipe,
     Response response{.type = MessageType::result};
     try {
       validate_request(request);
-      response.value = request.operation == Operation::scan_protected_space
+      response.value = importing ? import_protected(pipe, request) : request.operation == Operation::scan_protected_space
           ? scan_protected_space(pipe, request) : scan_tail_space(request.target_path[0]).bytes;
     } catch (const std::system_error& error) {
       response.error = error.code().category() == creation_error_category()
@@ -717,8 +723,12 @@ void serve_measurement_session(const HANDLE pipe,
     request.first_password.clear();
     request.second_password.clear();
     write_response(pipe, response);
+    if (importing && response.error != 0) break;
     try {
+      last_activity.store(std::chrono::steady_clock::now().time_since_epoch().count());
+      idle_wait.store(true);
       request = read_request(pipe, nonce);
+      idle_wait.store(false);
     } catch (...) {
       // The caller closed the pipe, which is how a session ends.
       break;
@@ -730,6 +740,13 @@ void serve_measurement_session(const HANDLE pipe,
   }
   finished_signal.notify_all();
   watchdog.join();
+}
+
+void serve_measurement_session(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce, Request& first) {
+  serve_session(pipe, nonce, first, false);
+}
+void serve_import_session(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce, Request& first) {
+  serve_session(pipe, nonce, first, true);
 }
 
 std::uint64_t execute_request(const HANDLE pipe, Request& request) {
