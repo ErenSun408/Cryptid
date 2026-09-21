@@ -1,5 +1,6 @@
 #include "usb_vault/volume/fat32_safe_space.h"
 #include "volume/fat32_safe_space_detail.h"
+#include "volume/fat32_allocation_plan_detail.h"
 
 #include <winioctl.h>
 #include <array>
@@ -12,10 +13,9 @@ namespace {
   throw std::system_error(static_cast<int>(error), std::system_category(),
                           "read FAT32 safe-space snapshot");
 }
-}
-Fat32SafeSpace scan_fat32_safe_space(HANDLE volume,
-                                   std::uint64_t expected_volume_bytes,
-                                   std::uint64_t protected_start_in_volume) {
+detail::Fat32Geometry read_geometry(HANDLE volume,
+                                    std::uint64_t expected_volume_bytes,
+                                    std::uint64_t protected_start_in_volume) {
   detail::require_geometry(volume != nullptr && volume != INVALID_HANDLE_VALUE &&
                            expected_volume_bytes != 0 && protected_start_in_volume != 0);
   GET_LENGTH_INFORMATION length{};
@@ -29,8 +29,13 @@ Fat32SafeSpace scan_fat32_safe_space(HANDLE volume,
   if (!::SetFilePointerEx(volume, zero, nullptr, FILE_BEGIN)) fail(::GetLastError());
   if (!::ReadFile(volume, boot.data(), static_cast<DWORD>(boot.size()), &returned, nullptr)) fail(::GetLastError());
   detail::require_geometry(returned == boot.size());
-  const auto geometry = detail::parse_fat32_geometry(boot, expected_volume_bytes,
-                                                    protected_start_in_volume);
+  return detail::parse_fat32_geometry(boot, expected_volume_bytes, protected_start_in_volume);
+}
+
+template<class FreeCluster>
+Fat32SafeSpace scan_bitmap(HANDLE volume, detail::Fat32Geometry geometry,
+                          FreeCluster&& free_cluster) {
+  DWORD returned = 0;
   detail::Fat32BitmapCounter counter(geometry);
   std::vector<std::byte> buffer(1U << 20);
   while (!counter.complete()) {
@@ -44,9 +49,30 @@ Fat32SafeSpace scan_fat32_safe_space(HANDLE volume,
     detail::require_geometry(returned > header && returned <= buffer.size());
     const auto* bitmap = reinterpret_cast<const VOLUME_BITMAP_BUFFER*>(buffer.data());
     counter.consume(bitmap->StartingLcn.QuadPart, bitmap->BitmapSize.QuadPart,
-                    std::span<const std::byte>(buffer).subspan(header, returned - header));
+                    std::span<const std::byte>(buffer).subspan(header, returned - header), free_cluster);
     detail::require_geometry(ok ? counter.complete() : !counter.complete());
   }
   return {counter.bytes(), geometry.cluster_size};
+}
+}  // namespace
+
+Fat32SafeSpace scan_fat32_safe_space(HANDLE volume,
+                                   std::uint64_t expected_volume_bytes,
+                                   std::uint64_t protected_start_in_volume) {
+  return scan_bitmap(volume, read_geometry(volume, expected_volume_bytes,
+      protected_start_in_volume), [](std::uint64_t) {});
+}
+
+Fat32AllocationPlan plan_fat32_allocation(HANDLE volume,
+                                        std::uint64_t expected_volume_bytes,
+                                        std::uint64_t protected_start_in_volume,
+                                        std::uint64_t file_bytes) {
+  const auto geometry = read_geometry(volume, expected_volume_bytes, protected_start_in_volume);
+  detail::Fat32FirstFitPlanner planner(geometry, file_bytes);
+  // Even after enough clusters are found, validate all bitmap pages before
+  // publishing a plan. A truncated final page cannot yield a usable plan.
+  static_cast<void>(scan_bitmap(volume, geometry,
+      [&](std::uint64_t cluster) { planner.free_cluster(cluster); }));
+  return planner.finish();
 }
 }  // namespace usb_vault::volume

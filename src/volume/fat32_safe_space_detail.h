@@ -63,6 +63,11 @@ class Fat32BitmapCounter final {
   }
   void consume(std::int64_t start, std::int64_t reported_bits,
                std::span<const std::byte> payload) {
+    consume(start, reported_bits, payload, [](std::uint64_t) {});
+  }
+  template<class FreeCluster>
+  void consume(std::int64_t start, std::int64_t reported_bits,
+               std::span<const std::byte> payload, FreeCluster&& free_cluster) {
     require_geometry(start >= 0 && reported_bits > 0 && !payload.empty());
     const auto first = static_cast<std::uint64_t>(start);
     require_geometry(first <= next_ && first < geometry_.cluster_count &&
@@ -74,7 +79,10 @@ class Fat32BitmapCounter final {
     for (auto cluster = next_; cluster < std::min(end, geometry_.safe_clusters); ++cluster) {
       const auto index = cluster - first;
       if ((std::to_integer<unsigned int>(payload[static_cast<std::size_t>(index / 8)]) &
-           (1U << (index % 8))) == 0) ++free_;
+           (1U << (index % 8))) == 0) {
+        free_cluster(cluster);
+        ++free_;
+      }
     }
     next_ = end;
   }

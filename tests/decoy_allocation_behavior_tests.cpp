@@ -623,6 +623,9 @@ int sequential_run(int argc,wchar_t** argv) {
         Extents planned;std::uint64_t needed=size/l.cluster;
         for(const auto& run:ordered()) {if(!needed)break;const auto count=std::min(needed,run.second-run.first);planned.emplace_back(run.first,run.first+count);needed-=count;}
         need(!needed,"insufficient preallocation plan");
+        {auto handle=raw(m.drive);const auto formal=volume::plan_fat32_allocation(handle.h,g[1],g[2]-g[0],size);
+          Extents actual;for(const auto& run:formal.runs)actual.emplace_back(run.first_cluster,run.first_cluster+run.cluster_count);
+          need(actual==planned&&formal.file_bytes==size&&formal.allocation_bytes==size&&formal.cluster_size==l.cluster,"production first-fit plan mismatch");}
         Handle f;f.h=::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"create sequential file");
         LARGE_INTEGER eof{};eof.QuadPart=static_cast<LONGLONG>(size);need(::SetFilePointerEx(f.h,eof,nullptr,FILE_BEGIN),"seek eof");
         const BOOL allocated=::SetEndOfFile(f.h);record(id,"preallocate",allocated!=FALSE,allocated?0 : ::GetLastError());need(allocated&&m.type()==volume::VolumeType::outer,"preallocate failed");
