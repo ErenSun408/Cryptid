@@ -1,4 +1,5 @@
 #include "volume_creation/creator_helper_engine.h"
+#include "volume_creation/import_unique_name.h"
 
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -513,7 +514,7 @@ std::uint64_t import_tree(HANDLE pipe, Request& request, HANDLE raw,
     const std::function<bool()>& cancelled,
     const std::function<void(std::uint64_t,std::uint64_t)>& progress) {
   const auto space=volume::scan_fat32_safe_space(raw,identity.disk_length,boundary);
-  const auto destination=volume::resolve_volume_entry_path(identity.drive_letter,request.destination_relative).substr(3);
+  auto destination=volume::resolve_volume_entry_path(identity.drive_letter,request.destination_relative).substr(3);
   const auto root=std::wstring(LR"(\\?\GLOBALROOT\Device\VeraCryptVolume)")+identity.drive_letter+L"\\";
   std::vector<ImportTreeEntry> entries;
   std::uint64_t total=0,allocation=0;
@@ -581,7 +582,17 @@ std::uint64_t import_tree(HANDLE pipe, Request& request, HANDLE raw,
         const auto name=std::filesystem::path(relative).filename().native();
         const Impersonation caller(pipe);
         directories[i]=std::make_unique<Handle>();
-        directories[i]->reset(create_directory_handle(i==0?pinned.back()->get():directories[entry.parent]->get(),name));
+        if (i == 0) {
+          const auto prefix = destination.substr(0, destination.size() - name.size());
+          directories[i]->reset(detail::create_unique_import(name, true, [&](const std::wstring& candidate) {
+            guard();
+            // Allocate the path before acquiring ownership of a new directory.
+            auto selected = prefix + candidate;
+            const auto handle = create_directory_handle(pinned.back()->get(), candidate);
+            destination.swap(selected);
+            return handle;
+          }));
+        } else directories[i]->reset(create_directory_handle(directories[entry.parent]->get(),name));
         guard();
       } else {
         const auto plan=volume::plan_fat32_allocation(raw,identity.disk_length,boundary,entry.bytes);
@@ -675,7 +686,14 @@ std::uint64_t import_protected(HANDLE pipe, Request& request) {
       volume::VolumeProvider provider;
       if (provider.mount_identity(identity.drive_letter) != identity)
         fail(CreationError::invalid_request, "mount changed before target creation");
-      target = std::make_unique<volume::Fat32TransferTarget>(root + relative);
+      const auto name = std::filesystem::path(relative).filename().native();
+      const auto prefix = root + relative.substr(0, relative.size() - name.size());
+      target = detail::create_unique_import(name, false, [&](const std::wstring& candidate) {
+        if (cancelled()) fail(CreationError::operation_cancelled, "import cancelled before creation");
+        if (provider.mount_identity(identity.drive_letter) != identity)
+          fail(CreationError::invalid_request, "mount changed during target naming");
+        return std::make_unique<volume::Fat32TransferTarget>(prefix + candidate);
+      });
     }
     const auto result = volume::transfer_fat32_file(source.get(), *target, identity, boundary, plan,
         cancelled, [&](std::uint64_t done) {

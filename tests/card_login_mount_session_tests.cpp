@@ -3464,14 +3464,21 @@ void test_switching_maintenance_reuses_one_measuring_run() {
   static_cast<void>(
       session.open_decoy_maintenance(first, bytes("decoy-password")));
   static_cast<void>(session.decoy_maintenance_space(first));
+  session.import_external_entry(first, L"", L"C:\\source\\first.txt", {});
+  const auto closed_imports = runtime.end_import_calls;
   static_cast<void>(
-      session.open_decoy_maintenance(second, bytes("decoy-password")));
+      session.open_surveyed_maintenance(second));
 
   require(!mounted_now(session, first) && mounted_now(session, second),
           "switching maintenance left two outer volumes current");
   require(runtime.end_measure_calls == 0,
           "switching containers discarded the measuring run");
+  require(runtime.end_import_calls == closed_imports + 1,
+          "switching maintenance retained the previous import session");
   static_cast<void>(session.decoy_maintenance_space(second));
+  session.import_external_entry(second, L"", L"C:\\source\\second.txt", {});
+  require(runtime.protected_import_calls == 2,
+          "the switched maintenance mount could not import");
   session.end_decoy_maintenance(second);
   require(runtime.end_measure_calls == 1,
           "ending after a switch did not close exactly one measuring run");

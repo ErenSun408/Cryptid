@@ -117,10 +117,33 @@
       $("#decoy-maintenance-freshness-detail").textContent.includes("顶层项目") &&
       all("#file-list-body tr").length === 2,
       "Freshness is derived from a bounded root listing while the reused list renders its entries");
+    const endsBeforeNavigation = window.navigationFixture.endedMaintenance.length;
     $("[data-section=files]").click();
-    check($("#dashboard-section-decoy").classList.contains("active") &&
-      $("#decoy-maintenance-container").value === "3",
-      "The shared manager cannot be detached through its ordinary navigation while maintenance is active");
+    await wait(() => $("#dashboard-section-files").classList.contains("active"));
+    const maintenanceRow = $("#management-containers [data-row-container='3']");
+    check(!$("#management-containers").hidden &&
+      maintenanceRow.textContent.includes("正在更新诱饵内容，暂不可操作") &&
+      maintenanceRow.querySelector("[data-container-action]").disabled &&
+      !$("#management-containers [data-row-container='1'] [data-container-action]").disabled &&
+      window.navigationFixture.endedMaintenance.length === endsBeforeNavigation,
+      "Container navigation preserves maintenance and disables only its container");
+    check($("#unmount-items input[data-id='3']").disabled &&
+      !$("#unmount-items input[data-id='1']").disabled,
+      "Batch unmount excludes only the maintenance container");
+    maintenanceRow.click();
+    check(!$("#management-containers").hidden,
+      "The maintained container cannot enter the ordinary file manager");
+    $("#management-containers [data-row-container='1']").click();
+    await wait(() => !$("#management-files").hidden);
+    check($("#files-title").textContent.includes("容器管理") &&
+      !$("#file-mount-toggle").hidden,
+      "Another container uses the normal file controls during maintenance");
+    decoyNav.click();
+    await wait(() => $("#decoy-maintenance-container").value === "3" &&
+      $("#management-files").parentNode.id === "decoy-maintenance-files-slot");
+    check(window.navigationFixture.endedMaintenance.length === endsBeforeNavigation &&
+      $("#files-title").textContent === "更新诱饵内容",
+      "Returning to decoy maintenance restores its container without remounting");
 
     $("#decoy-maintenance-container").value = "1";
     $("#decoy-maintenance-container").dispatchEvent(new Event("change", { bubbles: true }));
@@ -147,8 +170,12 @@
 
     // A run the window started: the page only reads its four numbers back.
     window.navigationFixture.dropStatus = "1,3,0,0";
-    window.dispatchEvent(new Event("usb-vault-external-drop-changed"));
+    // No window notification yet: the protection timer must recognize the
+    // worker's atomic upload state instead of warning about a rejected query.
+    await new Promise(resolve => setTimeout(resolve, 1150));
     await wait(() => !$("#decoy-drop-run").hidden);
+    check($("#decoy-protection-status").hidden,
+      "Upload ownership before its notification is not a protection failure");
     window.navigationFixture.filePercent = 50;
     window.navigationFixture.dropStatus = "1,3,2,0";
     await wait(() => $("#decoy-drop-copy").textContent.includes("2/3"));
@@ -225,7 +252,7 @@
     const endedBefore = window.navigationFixture.endedMaintenance.length;
     $("#decoy-maintenance-end").click();
     await wait(() => window.navigationFixture.endedMaintenance.length === endedBefore + 1);
-    check(window.navigationFixture.endedMaintenance[0] === 1 &&
+    check(window.navigationFixture.endedMaintenance.at(-1) === 1 &&
       !$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
       $("#management-files").closest("#dashboard-section-files") !== null,
       "Ending maintenance unmounts the current container and restores the shared file manager");

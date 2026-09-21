@@ -488,7 +488,7 @@
     }
   };
   const updateBatchSelection = (control) => {
-    const eligible = containers.filter((item) => item.mounted !== control.mounting);
+    const eligible = containers.filter((item) => item.mounted !== control.mounting && !isMaintenanceContainer(item.id));
     for (const id of control.selected) {
       if (!eligible.some((item) => item.id === id)) control.selected.delete(id);
     }
@@ -518,15 +518,15 @@
         input.dataset.id = String(item.id);
         const reached = item.mounted === control.mounting;
         input.checked = reached || control.selected.has(item.id);
-        input.disabled = reached || busy;
+        input.disabled = reached || busy || isMaintenanceContainer(item.id);
         const name = document.createElement("span");
         name.className = "batch-name";
         name.textContent = item.name;
         row.append(name);
-        if (reached) {
+        if (reached || isMaintenanceContainer(item.id)) {
           const state = document.createElement("span");
           state.className = "batch-state";
-          state.textContent = item.mounted ? "已挂载" : "未挂载";
+          state.textContent = isMaintenanceContainer(item.id) ? "正在更新诱饵内容" : item.mounted ? "已挂载" : "未挂载";
           row.append(state);
         }
         row.append(input);
@@ -596,7 +596,7 @@
       if (busy || externalRefreshPending || currentState !== nativeState.authenticated) return;
       control.selected.clear();
       if (control.all.checked) for (const item of containers) {
-        if (item.mounted !== control.mounting) control.selected.add(item.id);
+        if (item.mounted !== control.mounting && !isMaintenanceContainer(item.id)) control.selected.add(item.id);
       }
       updateBatchSelection(control);
     });
@@ -1172,7 +1172,7 @@
     const mounted = container !== null && container.mounted;
     fileMountToggle.textContent = mounted ? "卸载" : "挂载";
     fileMountToggle.classList.toggle("danger", mounted);
-    fileMountToggle.hidden = decoyStage === "maintenance";
+    fileMountToggle.hidden = inDecoyFileView();
     fileMountToggle.disabled = busy || container === null || currentState !== nativeState.authenticated;
     fileCreateDirectoryButton.disabled = busy || !mounted;
     renderFileBreadcrumb();
@@ -1194,7 +1194,7 @@
     const container = selectedFileContainer();
     const heading = document.createElement("h2");
     heading.id = "files-title";
-    if (decoyStage === "maintenance") {
+    if (inDecoyFileView()) {
       heading.textContent = "更新诱饵内容";
     } else {
       const back = document.createElement("button");
@@ -1402,7 +1402,7 @@
     busy = false;
     render(messageForCurrentState());
     await refreshFileManager();
-    if (decoyStage === "maintenance") await refreshDecoyMaintenanceFacts();
+    if (inDecoyFileView()) await refreshDecoyMaintenanceFacts();
     if (failed) setFileStatus(failure, "error");
   };
 
@@ -1978,6 +1978,9 @@
   // this pane is for; browsing is the file manager's job, and building a
   // second one here would mean two places that can walk a volume.
   const renderExportContainers = () => {
+    for (const [key, entry] of exportSelection) {
+      if (isMaintenanceContainer(entry.id)) exportSelection.delete(key);
+    }
     while (exportContainerList.firstChild !== null) {
       exportContainerList.removeChild(exportContainerList.firstChild);
     }
@@ -2007,11 +2010,12 @@
       const head = exportRow(container, tail, () => {
         void toggleExportContainer(container.id);
       });
+      head.disabled = head.disabled || isMaintenanceContainer(container.id);
       head.dataset.exportToggle = String(container.id);
       head.setAttribute("aria-expanded", open ? "true" : "false");
       group.appendChild(head);
 
-      if (open) {
+      if (open && !isMaintenanceContainer(container.id)) {
         const files = document.createElement("div");
         files.className = "xfiles";
         if (!container.mounted) {
@@ -2436,7 +2440,7 @@
   };
 
   const browseContainer = (id) => {
-    if (busy || currentState !== nativeState.authenticated) return;
+    if (busy || currentState !== nativeState.authenticated || isMaintenanceContainer(id)) return;
     fileContainerId = id;
     filePath = [];
     fileEntries = [];
@@ -2446,6 +2450,10 @@
   // Which of the three panels the maintenance column is showing. It starts
   // over whenever the session does: the walk's findings are session facts.
   let decoyStage = "verify";
+  let decoyMaintenanceId = 0;
+  let decoyMaintenancePath = [];
+  const isMaintenanceContainer = (id) => decoyStage === "maintenance" && id === decoyMaintenanceId;
+  const inDecoyFileView = () => decoyStage === "maintenance" && activeSection === "decoy";
   let decoyFound = [];
   let decoyUnreachable = 0;
   let decoyCancelRequested = false;
@@ -2473,14 +2481,29 @@
       scheduleDecoyProtection();
       return;
     }
-    const id = fileContainerId;
+    const id = decoyMaintenanceId;
     const revision = batchSessionRevision;
     const generation = decoyProtectionGeneration;
     const current = () => !decoyProtectionDisposed && revision === batchSessionRevision &&
-      generation === decoyProtectionGeneration && id === fileContainerId &&
+      generation === decoyProtectionGeneration && id === decoyMaintenanceId &&
       decoyStage === "maintenance" && currentState === nativeState.authenticated;
     decoyProtectionPending = true;
+    const uploading = async () => {
+      const status = String(await bridge.getExternalDropStatus());
+      return /^1,\d+,\d+,\d+$/.test(status);
+    };
     try {
+      // The worker owns the session before its window notification reaches JS.
+      // Atomic upload progress is readable during that interval; protection
+      // queries are intentionally rejected until the worker releases it.
+      if (await uploading()) {
+        if (current()) {
+          decoyProtectionStatus.hidden = true;
+          void watchDecoyDrop();
+        }
+        return;
+      }
+      if (!current() || busy) return;
       const blocked = await bridge.getDecoyMaintenanceWriteBlocked(id);
       if (!current()) return;
       if (typeof blocked !== "boolean") throw new Error("invalid protection status");
@@ -2495,6 +2518,17 @@
       }
     } catch (_) {
       if (!current()) return;
+      // A drop can start between the progress read and the protection query.
+      try {
+        if (await uploading()) {
+          if (current()) {
+            decoyProtectionStatus.hidden = true;
+            void watchDecoyDrop();
+          }
+          return;
+        }
+      } catch (_) {}
+      if (!current() || busy) return;
       decoyProtectionStatus.textContent = "暂时无法确认写入保护状态，请暂停修改并稍后重试；无法确认不代表可以继续写入。";
       decoyProtectionStatus.hidden = false;
     } finally {
@@ -2529,7 +2563,7 @@
   // product is refused by the window before the page is involved at all.
   const armDecoyDrop = async () => {
     if (bridge === null) return;
-    if (decoyStage !== "maintenance" || fileContainerId === 0 || decoyUploadRecovery || decoyWriteBlocked ||
+    if (!inDecoyFileView() || fileContainerId !== decoyMaintenanceId || decoyMaintenanceId === 0 || decoyUploadRecovery || decoyWriteBlocked ||
         currentState !== nativeState.authenticated) {
       disarmDecoyDrop();
       return;
@@ -2538,6 +2572,11 @@
     if (wanted === decoyDropTarget) return;
     try {
       await bridge.setExternalDropTarget(fileContainerId, filePath.join("/"));
+      if (!inDecoyFileView() || `${fileContainerId}/${filePath.join("/")}` !== wanted) {
+        decoyDropTarget = "";
+        await bridge.clearExternalDropTarget();
+        return;
+      }
       decoyDropTarget = wanted;
       // Naming a destination retires the run before it on the window's side,
       // so the page stops treating that run's numbers as already reported.
@@ -2641,7 +2680,7 @@
       const option = document.createElement("option");
       option.value = String(id);
       option.textContent = known.name;
-      option.selected = id === fileContainerId;
+      option.selected = id === decoyMaintenanceId;
       decoyMaintenanceContainer.appendChild(option);
     }
     decoyMaintenanceContainer.disabled = busy || decoyMaintenanceContainer.options.length < 2;
@@ -2665,7 +2704,8 @@
     decoyVerifySubmit.disabled = busy || currentState !== nativeState.authenticated;
     if (decoyStage === "maintenance") {
       scheduleDecoyProtection();
-      placeFileManagerInDecoyMaintenance();
+      if (inDecoyFileView()) placeFileManagerInDecoyMaintenance();
+      else restoreFileManagerPlacement();
       decoyMaintenanceEnd.disabled = busy || currentState !== nativeState.authenticated;
       renderDecoyMaintenanceChoices();
       renderDecoyDropZone();
@@ -2678,6 +2718,8 @@
   };
 
   const resetDecoySection = () => {
+    decoyMaintenanceId = 0;
+    decoyMaintenancePath = [];
     decoyUploadRecovery = false;
     ++decoyMaintenanceRevision;
     disarmDecoyDrop();
@@ -2885,6 +2927,8 @@
 
     const revision = batchSessionRevision;
     decoyDropWatching = true;
+    ++decoyProtectionGeneration;
+    decoyProtectionStatus.hidden = true;
     decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "上传中…";
     decoyMaintenanceSpaceDetail.textContent = "上传结束后重新测量容量。";
     decoyMaintenanceSpaceBar.style.width = "0%";
@@ -2928,7 +2972,7 @@
   const refreshDecoyMaintenanceFacts = async () => {
     if (busy || bridge === null || decoyStage !== "maintenance" ||
         currentState !== nativeState.authenticated) return;
-    const id = fileContainerId;
+    const id = decoyMaintenanceId;
     const revision = ++decoyMaintenanceRevision;
     let capacityFailed = false;
     let freshnessFailed = false;
@@ -2949,7 +2993,7 @@
             free > total || safeFree > free) {
           throw new Error("invalid capacity facts");
         }
-        if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
+        if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
             decoyStage !== "maintenance") return;
         const used = total - free;
         decoyMaintenanceWritable.textContent = maintenanceCapacityState() || formatSafeBytes(safeFree);
@@ -2960,7 +3004,7 @@
         decoyMaintenanceSpaceBar.style.width = total === 0
           ? "0%" : `${Math.min(100, Math.round((used / total) * 100))}%`;
       } catch (_) {
-        if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
+        if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
             decoyStage !== "maintenance") return;
         capacityFailed = true;
         decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "无法读取";
@@ -2968,10 +3012,10 @@
         decoyMaintenanceSpaceBar.style.width = "0%";
       }
 
-      if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
+      if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
           decoyStage !== "maintenance") return;
       const listing = await readContainerRoot(id);
-      if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
+      if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
           decoyStage !== "maintenance") return;
       if (listing === null) {
         freshnessFailed = true;
@@ -3013,6 +3057,8 @@
       opened = true;
       decoyUploadRecovery = false;
       decoyStage = "maintenance";
+      decoyMaintenanceId = id;
+      decoyMaintenancePath = [];
       fileContainerId = id;
       filePath = [];
       fileEntries = [];
@@ -3038,7 +3084,7 @@
     if (busy || currentState !== nativeState.authenticated ||
         decoyStage !== "maintenance") return;
     const revision = batchSessionRevision;
-    const id = fileContainerId;
+    const id = decoyMaintenanceId;
     busy = true;
     setDecoyStatus(decoyMaintenanceStatus, "");
     renderDecoySection();
@@ -3047,6 +3093,8 @@
       if (revision !== batchSessionRevision) return;
       ++decoyMaintenanceRevision;
       decoyStage = "results";
+      decoyMaintenanceId = 0;
+      decoyMaintenancePath = [];
       fileContainerId = 0;
       filePath = [];
       fileEntries = [];
@@ -3084,7 +3132,7 @@
   });
   decoyMaintenanceContainer.addEventListener("change", () => {
     const id = Number(decoyMaintenanceContainer.value);
-    if (!Number.isInteger(id) || id <= 0 || id === fileContainerId) return;
+    if (!Number.isInteger(id) || id <= 0 || id === decoyMaintenanceId) return;
     void openDecoyMaintenance(id);
   });
   decoyMaintenanceEnd.addEventListener("click", () => {
@@ -3103,8 +3151,22 @@
 
   const showDashboardSection = (sectionName) => {
     if (sectionName === "history" && !operationLoggingEnabled) return;
-    if (sectionName === "files" && decoyStage === "maintenance") {
-      sectionName = "decoy";
+    if (inDecoyFileView() && sectionName !== "decoy") {
+      decoyMaintenancePath = [...filePath];
+      fileListingRevision += 1;
+      fileContainerId = 0;
+      filePath = [];
+      fileEntries = [];
+      restoreFileManagerPlacement();
+      disarmDecoyDrop();
+    }
+    const returningToMaintenance = sectionName === "decoy" &&
+      activeSection !== "decoy" && decoyStage === "maintenance";
+    if (returningToMaintenance) {
+      fileListingRevision += 1;
+      fileContainerId = decoyMaintenanceId;
+      filePath = [...decoyMaintenancePath];
+      fileEntries = [];
     }
     closeFileContextMenu();
     activeSection = sectionName;
@@ -3125,7 +3187,11 @@
     // reads a directory when the user arrives at it or moves inside it.
     if (sectionName === "files") void refreshFileManager();
     if (sectionName === "backup") renderBackupCentre();
-    if (sectionName === "decoy") renderDecoySection();
+    if (sectionName === "decoy") {
+      renderDecoySection();
+      if (returningToMaintenance) void refreshFileManager();
+    }
+    renderContainers();
   };
 
   const openCreationFlow = () => {
@@ -3215,7 +3281,7 @@
     button.type = "button";
     button.className = action === "unmount" ? "shell-button danger" : "shell-button";
     button.textContent = label;
-    button.disabled = busy || disabled;
+    button.disabled = busy || disabled || isMaintenanceContainer(container.id);
     button.dataset.containerId = String(container.id);
     button.dataset.containerName = container.name;
     button.dataset.containerAction = action;
@@ -3230,10 +3296,12 @@
     row.className = container.mounted
       ? "container-row mounted"
       : "container-row";
-    row.dataset.busy = String(busy);
+    const maintaining = isMaintenanceContainer(container.id);
+    row.dataset.busy = String(busy || maintaining);
+    row.setAttribute("aria-disabled", String(maintaining));
     if (management) {
       row.classList.add("management-row");
-      row.tabIndex = 0;
+      row.tabIndex = maintaining ? -1 : 0;
       row.setAttribute("aria-label", `打开容器 ${container.name}`);
       row.addEventListener("keydown", (event) => {
         if (event.target !== row || !["Enter", " "].includes(event.key)) return;
@@ -3253,7 +3321,7 @@
     const grab = document.createElement("button");
     grab.type = "button";
     grab.className = "grab container-grab";
-    grab.disabled = busy;
+    grab.disabled = busy || maintaining;
     grab.setAttribute("aria-label", `调整 ${container.name} 的顺序`);
     grab.title = "拖动排序；也可按 Alt + 上下方向键";
     grab.appendChild(gripGlyph());
@@ -3287,7 +3355,7 @@
     name.title = container.name;
     const state = document.createElement("div");
     state.className = "container-state";
-    state.textContent = container.mounted ? "已挂载" : "未挂载";
+    state.textContent = maintaining ? "正在更新诱饵内容，暂不可操作" : container.mounted ? "已挂载" : "未挂载";
     identity.append(name, state);
 
     const facts = document.createElement("div");
@@ -4165,7 +4233,7 @@
   const batchItemFailed = (item) => item.outcome !== 2 && item.outcome !== 11;
   const retryableBatchItems = (context) => context.items.filter((item) =>
     batchItemFailed(item) && containers.some((container) =>
-      container.id === item.id && container.mounted !== context.mounting));
+      container.id === item.id && container.mounted !== context.mounting && !isMaintenanceContainer(container.id)));
   const clearBatchResults = () => {
     if (batchResultContext) {
       batchResultContext.items.length = 0;
@@ -4509,7 +4577,8 @@
     if (retryContext ? retryContext !== batchResultContext : !batchResultDialog.hidden) return;
     if (retryContext) updateBatchResultSelection();
     else updateBatchSelection(control);
-    const ids = automaticIds || [...(retryContext ? retryContext.selected : control.selected)];
+    const ids = (automaticIds || [...(retryContext ? retryContext.selected : control.selected)])
+      .filter((id) => !isMaintenanceContainer(id));
     if (!ids.length) return;
     const revision = batchSessionRevision;
     const checkSession = () => {
@@ -4799,7 +4868,7 @@
   for (const item of dashboardNavigation) {
     item.addEventListener("click", () => {
       if (!busy && currentState === nativeState.authenticated) {
-        if (item.dataset.section === "files" && decoyStage !== "maintenance") {
+        if (item.dataset.section === "files" && !inDecoyFileView()) {
           fileContainerId = 0;
           filePath = [];
           fileEntries = [];
@@ -5039,7 +5108,7 @@
   fileRefreshButton.addEventListener("click", async () => {
     if (fileRefreshButton.disabled || currentState !== nativeState.authenticated) return;
     await refreshFileManager();
-    if (decoyStage === "maintenance") await refreshDecoyMaintenanceFacts();
+    if (inDecoyFileView()) await refreshDecoyMaintenanceFacts();
   });
   fileMountToggle.addEventListener("click", async () => {
     const container = selectedFileContainer();
@@ -5261,7 +5330,7 @@
         return;
       }
       const id = Number(target.dataset.containerId);
-      if (!Number.isInteger(id) || id <= 0) return;
+      if (!Number.isInteger(id) || id <= 0 || isMaintenanceContainer(id)) return;
       if (target.dataset.containerAction === "forget") {
         openForgetFlow(id, target.dataset.containerName ?? "");
       } else if (target.dataset.containerAction === "unmount") {

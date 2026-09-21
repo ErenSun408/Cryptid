@@ -115,6 +115,7 @@ window.navigationFixture = {
     getDecoyMaintenanceSpace: () => fixture.maintenanceSpace,
     getDecoyMaintenanceWriteBlocked: (id) => {
       fixture.protectionQueries.push(id);
+      if (fixture.dropStatus.startsWith("1,")) throw new Error("E_PENDING: upload owns session");
       if (fixture.delayProtection) return new Promise(resolve => { fixture.completeProtection = resolve; });
       return fixture.protectionBlocked;
     },
