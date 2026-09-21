@@ -65,7 +65,7 @@
         .map((row) => row.dataset.decoyContainer).join(",") === "1,3",
       "The column lists exactly the containers the walk found");
     check(!$("#decoy-container-list [data-decoy-container='1'] .container-grab") &&
-      $("#decoy-container-list .container-row").textContent.includes("打开外层卷") &&
+      $("#decoy-container-list .container-row").textContent.includes("更新") &&
       !$("#decoy-container-list .container-row").textContent.includes("从列表移除"),
       "Found rows carry neither reordering nor removal");
 
@@ -81,7 +81,8 @@
       "The secondary page reuses the existing file manager for the opened outer volume");
     check(all("#decoy-maintenance-container option").map((item) => item.value).join(",") === "1,3" &&
       $("#decoy-maintenance-writable").textContent === "512 MiB" &&
-      $("#decoy-maintenance-space-detail").textContent.includes("总量 4.0 GiB") &&
+      $("#decoy-maintenance-used").textContent === "3.0" &&
+      $("#decoy-maintenance-total").textContent === "/ 4.0 GiB" &&
       $("#decoy-maintenance-space-detail").textContent.includes("536,870,912 字节") &&
       $("#decoy-maintenance-space-detail").textContent.includes("不保证同等大小文件"),
       "Maintenance shows authenticated safe bytes separately from filesystem usage");
@@ -122,7 +123,7 @@
     await wait(() => $("#dashboard-section-files").classList.contains("active"));
     const maintenanceRow = $("#management-containers [data-row-container='3']");
     check(!$("#management-containers").hidden &&
-      maintenanceRow.textContent.includes("正在更新诱饵内容，暂不可操作") &&
+      maintenanceRow.textContent.includes("正在进行高级更新，请卸载后重新挂载") &&
       maintenanceRow.querySelector("[data-container-action]").disabled &&
       !$("#management-containers [data-row-container='1'] [data-container-action]").disabled &&
       window.navigationFixture.endedMaintenance.length === endsBeforeNavigation,
@@ -142,12 +143,20 @@
     await wait(() => $("#decoy-maintenance-container").value === "3" &&
       $("#management-files").parentNode.id === "decoy-maintenance-files-slot");
     check(window.navigationFixture.endedMaintenance.length === endsBeforeNavigation &&
-      $("#files-title").textContent === "更新诱饵内容",
+      $("#files-title").textContent === "高级更新",
       "Returning to decoy maintenance restores its container without remounting");
+    $("[data-decoy-back]").click();
+    check(!$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
+      window.navigationFixture.endedMaintenance.length === endsBeforeNavigation,
+      "Advanced update heading returns to the list without ending maintenance");
+    all("#decoy-container-list .container-row button")[1].click();
+    await wait(() => window.navigationFixture.openedMaintenance.length === 2 &&
+      !$("#decoy-maintenance-end").disabled);
+
 
     $("#decoy-maintenance-container").value = "1";
     $("#decoy-maintenance-container").dispatchEvent(new Event("change", { bubbles: true }));
-    await wait(() => window.navigationFixture.openedMaintenance.length === 2 &&
+    await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 1);
     check(window.navigationFixture.openedMaintenance.at(-1) === 1 &&
       $("#decoy-maintenance-container").value === "1",
@@ -260,7 +269,7 @@
       "Leaving maintenance disarms the window, so a drag lands nowhere");
 
     $("#decoy-container-list [data-decoy-container='3'] button").click();
-    await wait(() => window.navigationFixture.openedMaintenance.length === 4 &&
+    await wait(() => window.navigationFixture.openedMaintenance.length === 5 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 3);
     check($("#decoy-protection-warning").hidden, "Reopening maintenance clears the old mount warning");
     window.navigationFixture.delayProtection = true;
@@ -290,19 +299,19 @@
     $("#decoy-password").value = "handover";
     $("#decoy-verify-submit").click();
     $("#decoy-confirm-accept").click();
-    await wait(() => $("#decoy-results-status").textContent !== "");
-    check(all("#decoy-container-list .container-row").length === 0 &&
-      $("#decoy-results-status").textContent.includes("没有可更新诱饵内容的容器"),
-      "A walk that finds nothing says so without saying why");
+    await wait(() => !$("#decoy-empty-dialog").hidden);
+    check(!$("#decoy-verify").hidden && $("#decoy-results").hidden &&
+      $("#decoy-empty-title").textContent === "无可更新容器",
+      "An empty survey stays on verification and shows a neutral dialog");
+    $("#decoy-empty-close").click();
 
     window.navigationFixture.surveyProgress = "2,4,4,0,2,0";
-    decoyNav.click();
     $("#decoy-password").value = "handover";
     $("#decoy-verify-submit").click();
     $("#decoy-confirm-accept").click();
-    await wait(() => $("#decoy-results-status").textContent.includes("未能验证"));
-    check($("#decoy-results-status").textContent.includes("2 个容器未能验证"),
-      "Containers nothing was learned about are counted for the user");
+    await wait(() => !$("#decoy-empty-dialog").hidden);
+    check(!$("#decoy-verify").hidden && $("#decoy-results").hidden,
+      "Zero matches with unreachable containers also stay on verification");
 
     window.dispatchEvent(new window.Event("usb-vault-session-changed"));
     await tick();

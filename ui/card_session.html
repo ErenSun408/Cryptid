@@ -571,8 +571,8 @@
     .container-grab { border: 0; background: none; touch-action: none; }
     .container-grab svg { fill: currentColor; stroke: none; }
     .container-grab:disabled { cursor: default; opacity: .4; }
-    .decoy-gate { display: flex; justify-content: center; padding: 3.5rem 1rem; }
-    .decoy-gate-card { width: min(26rem, 100%); display: flex; flex-direction: column; gap: .75rem;
+    .decoy-gate { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - 15rem); padding: 2rem 1rem; }
+    .decoy-gate-card { width: min(23rem, 100%); display: flex; flex-direction: column; gap: .75rem;
       align-items: stretch; text-align: center; }
     .decoy-gate-card h3 { margin: 0; font-size: 1.05rem; }
     .decoy-gate-copy { margin: 0; color: var(--text-2); font-size: .84rem; line-height: 1.6; }
@@ -585,21 +585,31 @@
     .decoy-gate-card .password-visibility { border: 0; background: transparent; }
     .decoy-maintenance-tools { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; justify-content: flex-end; }
     .decoy-maintenance-tools label { color: var(--text-3); font-size: .72rem; }
-    .decoy-maintenance-facts { margin-bottom: 1.25rem; }
-    .decoy-maintenance-facts .stat-card { align-items: flex-start; }
-    .decoy-maintenance-facts .stat-card > div:last-child { flex: 1 1 auto; min-width: 0; }
-    .decoy-maintenance-detail { margin-top: .35rem; color: var(--text-3); font-size: .72rem; line-height: 1.55; }
-    .decoy-space-track { height: .35rem; margin-top: .65rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
+    .decoy-update-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem; }
+    .decoy-update-facts { display: grid; grid-template-rows: auto auto; gap: 1.1rem; }
+    .decoy-capacity-card, .decoy-freshness-card { border: 1px solid rgba(255,255,255,.08); border-radius: 1rem; padding: 1.5rem; background: rgba(255,255,255,.012); }
+    .decoy-used-value { display: flex; align-items: baseline; gap: .5rem; margin: 1rem 0 1.1rem; font-size: 1.7rem; font-weight: 600; }
+    .decoy-used-total { font-size: .95rem; color: var(--text-3); font-weight: 500; }
+    .decoy-maintenance-detail { margin-top: .4rem; color: var(--text-3); font-size: .72rem; line-height: 1.55; }
+    .decoy-space-track { height: .35rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
     .decoy-space-track i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
+    .decoy-remaining { margin-top: .7rem; font-size: .85rem; color: var(--text-3); }
+    .decoy-remaining strong { color: var(--text-2); }
+    .decoy-freshness-card { display: flex; gap: .85rem; align-items: flex-start; }
+    .decoy-info-icon { flex: 0 0 1rem; width: 1rem; height: 1rem; margin-top: .2rem; fill: none; stroke: var(--text-3); stroke-width: 1.7; }
+    .decoy-freshness-value { margin-top: .5rem; color: var(--text-2); font-size: 1.05rem; font-weight: 600; }
     #decoy-maintenance-files-slot:empty { display: none; }
-    .decoy-drop-zone {
-      margin-bottom: 1rem; padding: .85rem 1rem; border: 1px dashed rgba(255,255,255,.18);
-      border-radius: .6rem; color: var(--text-3); font-size: .78rem; line-height: 1.6;
-    }
-    .decoy-drop-zone strong { color: var(--text-2); font-weight: 600; }
-    .decoy-drop-run { display: flex; align-items: center; gap: .75rem; margin-top: .65rem; }
+    .decoy-drop-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 19rem; padding: 2rem; border: 1px dashed rgba(255,255,255,.16); border-radius: 1rem; color: var(--text-3); text-align: center; line-height: 1.65; }
+    .decoy-document-icon { display: grid; place-items: center; width: 3.3rem; height: 3.3rem; margin-bottom: 1.2rem; border: 1px solid rgba(201,169,96,.28); border-radius: 1rem; background: rgba(201,169,96,.07); color: var(--gold); }
+    .decoy-document-icon svg { width: 1.85rem; height: 2.3rem; fill: none; stroke: currentColor; stroke-width: 3; stroke-linejoin: round; }
+    .decoy-drop-zone strong { color: var(--text); font-size: 1.05rem; font-weight: 600; }
+    #decoy-drop-hint { margin: .7rem 0 1.35rem; font-size: .85rem; }
+    #decoy-select-files { display: inline-flex; align-items: center; gap: .65rem; padding: .65rem 1rem; font-weight: 600; }
+    #decoy-select-files svg { width: 1.05rem; height: 1.05rem; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
+    .decoy-drop-run { display: flex; align-items: center; gap: .75rem; margin-top: .85rem; width: 100%; font-size: .75rem; }
     .decoy-drop-run .bar { flex: 1 1 auto; height: .35rem; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
     .decoy-drop-run .bar i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
+    @media (max-width: 850px) { .decoy-update-grid { grid-template-columns: 1fr; } .decoy-drop-zone { min-height: 15rem; } }
     .container-details-toggle {
       position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
       display: grid; place-items: center; width: 1.75rem; height: 2rem; padding: 0;
@@ -1190,20 +1200,13 @@
           <span class="nav-label">容器管理</span>
           <span id="nav-container-count" class="nav-count">0</span>
         </button>
-        <!-- 🔴 Withheld while P3.25.8 is unfinished, and withheld the same way
-             for everyone: the attribute is in the markup, no script reads or
-             writes it, and every install of this build lacks the column. What
-             8.7.2 forbids is a column that comes and goes with what is on the
-             machine or with which password opened the session; a build-wide
-             absence tells an adversary comparing installs nothing. Slice 9
-             takes the attribute away again. -->
-        <button class="nav-item dashboard-nav" type="button" data-section="decoy">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v6.5c0 3.9-3.3 7-8 8.5-4.7-1.5-8-4.6-8-8.5V7l8-4z"></path><path d="M8.5 12.5l2.5 2.5 4.5-4.5"></path></svg>
-          <span class="nav-label">更新诱饵内容</span>
-        </button>
         <button class="nav-item dashboard-nav" type="button" data-section="backup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12"></path><path d="M13 7l5 5-5 5"></path><path d="M20 4v16"></path></svg>
           <span class="nav-label">导出与迁移</span>
+        </button>
+        <button class="nav-item dashboard-nav" type="button" data-section="decoy">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v6.5c0 3.9-3.3 7-8 8.5-4.7-1.5-8-4.6-8-8.5V7l8-4z"></path><path d="M8.5 12.5l2.5 2.5 4.5-4.5"></path></svg>
+          <span class="nav-label">高级更新</span>
         </button>
         <button class="nav-item dashboard-nav" type="button" data-section="history">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 1.8"></path></svg>
@@ -1277,13 +1280,12 @@
 
         <section id="dashboard-section-decoy" class="dashboard-section" aria-labelledby="decoy-title">
           <div id="decoy-overview-header" class="section-header">
-            <div><h2 id="decoy-title">更新诱饵内容</h2><p>补充或替换外层卷中的内容</p></div>
+            <div><h2 id="decoy-title">高级更新</h2></div>
           </div>
 
           <div id="decoy-verify" class="decoy-gate">
             <div class="decoy-gate-card">
               <h3>请验证</h3>
-              <p class="decoy-gate-copy">为安全地打开外层卷，需要再次验证身份。</p>
               <div class="password-field">
                 <input id="decoy-password" type="password" autocomplete="off" spellcheck="false"
                        aria-label="密码" placeholder="密码">
@@ -1299,8 +1301,7 @@
 
           <div id="decoy-progress" class="decoy-gate" hidden>
             <div class="decoy-gate-card">
-              <h3>正在验证</h3>
-              <p id="decoy-progress-copy" class="decoy-gate-copy">正在逐个尝试本机记录的容器。</p>
+              <h3 id="decoy-progress-copy">正在验证...</h3>
               <div class="bar"><i id="decoy-progress-bar" style="width:0%"></i></div>
               <button id="decoy-progress-cancel" class="shell-button" type="button">取消</button>
             </div>
@@ -1309,7 +1310,7 @@
           <div id="decoy-results" hidden>
             <div class="overview-group">
               <div class="overview-heading">
-                <div><h3>可更新诱饵内容的容器</h3><p class="overview-sub">选择一个容器以打开它的外层卷</p></div>
+                <div><h3>可进行高级更新的容器</h3></div>
               </div>
               <div id="decoy-container-list" class="container-list"></div>
             </div>
@@ -1320,50 +1321,50 @@
             <div class="section-header">
               <div>
                 <div id="decoy-maintenance-breadcrumb-slot"></div>
-                <p>当前只挂载这一容器的外层卷。</p>
               </div>
               <div class="decoy-maintenance-tools">
                 <label for="decoy-maintenance-container">切换容器</label>
                 <select id="decoy-maintenance-container" class="file-select" aria-label="切换维护容器"></select>
-                <button id="decoy-select-files" class="shell-button" type="button">选择文件</button>
-                <button id="decoy-maintenance-end" class="shell-button danger" type="button">结束并卸载</button>
+                <button id="decoy-maintenance-end" class="shell-button danger" type="button">卸载</button>
               </div>
             </div>
             <output id="decoy-maintenance-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
             <div id="decoy-protection-warning" class="section-note" role="alert" hidden>
               <strong>保护已触发，当前外层卷已停止接受写入。</strong>
-              <p>本次复制或修改可能未完整保存，页面显示完成也不代表数据已落盘。请停止复制、删除和修改，保留源文件，关闭占用该卷的程序，然后点击“结束并卸载”。</p>
+              <p>本次复制或修改可能未完整保存，页面显示完成也不代表数据已落盘。请停止复制、删除和修改，保留源文件，关闭占用该卷的程序，然后点击“卸载”。</p>
               <p>卸载后重新进入维护并核对文件；不要关闭保护或反复重试原来的写入。此提示不代表完成了文件完整性校验。</p>
             </div>
             <output id="decoy-protection-status" class="section-note" aria-live="polite" hidden></output>
-            <div class="stats-row decoy-maintenance-facts">
-              <article class="stat-card">
-                <div class="stat-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5v8.5h8.5"></path></svg></div>
-                <div>
-                  <div class="stat-label">外层剩余可写</div>
-                  <div id="decoy-maintenance-writable" class="stat-value">—</div>
-                  <div id="decoy-maintenance-space-detail" class="decoy-maintenance-detail">正在读取容量…</div>
-                  <div class="decoy-space-track" aria-hidden="true"><i id="decoy-maintenance-space-bar"></i></div>
+            <div class="decoy-update-grid">
+              <div id="decoy-drop-zone" class="decoy-drop-zone">
+                <div class="decoy-document-icon" aria-hidden="true"><svg viewBox="0 0 40 48"><path d="M5 2h19l11 12v29a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V5a3 3 0 0 1 3-3Z"></path><path d="M24 2v12h11"></path></svg></div>
+                <strong>将文件拖至此处</strong>
+                <p id="decoy-drop-hint">将文件或文件夹添加到当前目录。</p>
+                <button id="decoy-select-files" class="shell-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg>选择文件</button>
+                <div id="decoy-drop-run" class="decoy-drop-run" hidden>
+                  <span id="decoy-drop-copy">正在放入…</span>
+                  <span class="bar"><i id="decoy-drop-bar"></i></span>
+                  <button id="decoy-drop-cancel" class="shell-button" type="button">停止</button>
                 </div>
-              </article>
-              <article class="stat-card">
-                <div class="stat-icon neutral"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h6l2 2h8v9H4z"></path><path d="M8 13h8M12 10v6"></path></svg></div>
-                <div>
-                  <div class="stat-label">诱饵内容新鲜度</div>
-                  <div id="decoy-maintenance-freshness" class="stat-value">—</div>
-                  <div id="decoy-maintenance-freshness-detail" class="decoy-maintenance-detail">只检查外层根目录，不保存扫描结果。</div>
-                </div>
-              </article>
-            </div>
-            <div id="decoy-drop-zone" class="decoy-drop-zone">
-              <strong>从资源管理器拖进来</strong>：把文件或文件夹拖到本窗口，就直接复制进当前这个文件夹。
-              <span id="decoy-drop-hint">只接受已经存在于磁盘上的文件，拖出去不行——那是明文导出。</span>
-              <div id="decoy-drop-run" class="decoy-drop-run" hidden>
-                <span id="decoy-drop-copy">正在放入…</span>
-                <span class="bar"><i id="decoy-drop-bar"></i></span>
-                <button id="decoy-drop-cancel" class="shell-button" type="button">停止</button>
+                <output id="decoy-drop-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
               </div>
-              <output id="decoy-drop-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
+              <div class="decoy-update-facts">
+                <article class="decoy-capacity-card">
+                  <div class="stat-label">外层已用</div>
+                  <div class="decoy-used-value"><span id="decoy-maintenance-used">—</span><span id="decoy-maintenance-total" class="decoy-used-total"></span></div>
+                  <div class="decoy-space-track" aria-hidden="true"><i id="decoy-maintenance-space-bar"></i></div>
+                  <div class="decoy-remaining">剩余可写 <strong id="decoy-maintenance-writable">—</strong></div>
+                  <div id="decoy-maintenance-space-detail" class="decoy-maintenance-detail">正在读取容量…</div>
+                </article>
+                <article class="decoy-freshness-card">
+                  <svg class="decoy-info-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7v1"></path></svg>
+                  <div>
+                    <div class="stat-label">诱饵内容新鲜度</div>
+                    <div id="decoy-maintenance-freshness" class="decoy-freshness-value">—</div>
+                    <div id="decoy-maintenance-freshness-detail" class="decoy-maintenance-detail">只检查外层根目录，不保存扫描结果。</div>
+                  </div>
+                </article>
+              </div>
             </div>
             <div id="decoy-maintenance-files-slot"></div>
           </div>
@@ -1605,10 +1606,19 @@
     </div>
   </div>
 
+  <div id="decoy-empty-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="decoy-empty-title" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="decoy-empty-title">无可更新容器</h3></div>
+      <div class="modal-footer">
+        <button id="decoy-empty-close" class="modal-button" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
   <div id="decoy-confirm-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="decoy-confirm-title" hidden>
     <div class="modal">
       <div class="modal-header">
-        <h3 id="decoy-confirm-title">更新诱饵内容</h3>
+        <h3 id="decoy-confirm-title">高级更新</h3>
         <button id="decoy-confirm-close" class="modal-close" type="button" aria-label="关闭">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
         </button>

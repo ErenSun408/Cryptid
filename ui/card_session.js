@@ -133,6 +133,8 @@
     document.getElementById("decoy-maintenance-writable");
   const decoyMaintenanceSpaceDetail =
     document.getElementById("decoy-maintenance-space-detail");
+  const decoyMaintenanceUsed = document.getElementById("decoy-maintenance-used");
+  const decoyMaintenanceTotal = document.getElementById("decoy-maintenance-total");
   const decoyMaintenanceSpaceBar =
     document.getElementById("decoy-maintenance-space-bar");
   const decoyMaintenanceFreshness =
@@ -145,6 +147,8 @@
   const decoyDropBar = document.getElementById("decoy-drop-bar");
   const decoyDropCancel = document.getElementById("decoy-drop-cancel");
   const decoyDropStatus = document.getElementById("decoy-drop-status");
+  const decoyEmptyDialog = document.getElementById("decoy-empty-dialog");
+  const decoyEmptyClose = document.getElementById("decoy-empty-close");
   const decoyConfirmDialog = document.getElementById("decoy-confirm-dialog");
   const decoyConfirmClose = document.getElementById("decoy-confirm-close");
   const decoyConfirmCancel = document.getElementById("decoy-confirm-cancel");
@@ -526,7 +530,7 @@
         if (reached || isMaintenanceContainer(item.id)) {
           const state = document.createElement("span");
           state.className = "batch-state";
-          state.textContent = isMaintenanceContainer(item.id) ? "正在更新诱饵内容" : item.mounted ? "已挂载" : "未挂载";
+          state.textContent = isMaintenanceContainer(item.id) ? "正在进行高级更新" : item.mounted ? "已挂载" : "未挂载";
           row.append(state);
         }
         row.append(input);
@@ -1195,7 +1199,13 @@
     const heading = document.createElement("h2");
     heading.id = "files-title";
     if (inDecoyFileView()) {
-      heading.textContent = "更新诱饵内容";
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "file-crumb";
+      back.textContent = "高级更新";
+      back.dataset.decoyBack = "";
+      back.disabled = busy;
+      heading.appendChild(back);
     } else {
       const back = document.createElement("button");
       back.type = "button";
@@ -2450,10 +2460,11 @@
   // Which of the three panels the maintenance column is showing. It starts
   // over whenever the session does: the walk's findings are session facts.
   let decoyStage = "verify";
+  let decoyListVisible = false;
   let decoyMaintenanceId = 0;
   let decoyMaintenancePath = [];
   const isMaintenanceContainer = (id) => decoyStage === "maintenance" && id === decoyMaintenanceId;
-  const inDecoyFileView = () => decoyStage === "maintenance" && activeSection === "decoy";
+  const inDecoyFileView = () => decoyStage === "maintenance" && !decoyListVisible && activeSection === "decoy";
   let decoyFound = [];
   let decoyUnreachable = 0;
   let decoyCancelRequested = false;
@@ -2514,6 +2525,8 @@
         decoyMaintenanceWritable.textContent = "写入已阻止";
         decoyMaintenanceSpaceDetail.textContent = "请结束维护并检查未完成文件，再重新进入维护。";
         decoyMaintenanceSpaceBar.style.width = "0%";
+        decoyMaintenanceUsed.textContent = "—";
+        decoyMaintenanceTotal.textContent = "";
         disarmDecoyDrop();
       }
     } catch (_) {
@@ -2626,6 +2639,8 @@
     decoyMaintenanceWritable.textContent = "—";
     decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
     decoyMaintenanceSpaceBar.style.width = "0%";
+    decoyMaintenanceUsed.textContent = "—";
+    decoyMaintenanceTotal.textContent = "";
     decoyMaintenanceFreshness.textContent = "—";
     decoyMaintenanceFreshnessDetail.textContent =
       "只检查外层根目录，不保存扫描结果。";
@@ -2698,9 +2713,9 @@
   const renderDecoySection = () => {
     decoyVerify.hidden = decoyStage !== "verify";
     decoyProgress.hidden = decoyStage !== "running";
-    decoyResults.hidden = decoyStage !== "results";
-    decoyMaintenance.hidden = decoyStage !== "maintenance";
-    decoyOverviewHeader.hidden = decoyStage === "maintenance";
+    decoyResults.hidden = decoyStage !== "results" && !decoyListVisible;
+    decoyMaintenance.hidden = decoyStage !== "maintenance" || decoyListVisible;
+    decoyOverviewHeader.hidden = decoyStage === "maintenance" && !decoyListVisible;
     decoyVerifySubmit.disabled = busy || currentState !== nativeState.authenticated;
     if (decoyStage === "maintenance") {
       scheduleDecoyProtection();
@@ -2710,6 +2725,7 @@
       renderDecoyMaintenanceChoices();
       renderDecoyDropZone();
       renderManagementView();
+      if (decoyListVisible) renderDecoyList();
     } else {
       restoreFileManagerPlacement();
       if (decoyStage === "results") renderDecoyList();
@@ -2718,7 +2734,9 @@
   };
 
   const resetDecoySection = () => {
+    decoyEmptyDialog.hidden = true;
     decoyMaintenanceId = 0;
+    decoyListVisible = false;
     decoyMaintenancePath = [];
     decoyUploadRecovery = false;
     ++decoyMaintenanceRevision;
@@ -2780,7 +2798,7 @@
       const open = document.createElement("button");
       open.className = "shell-button";
       open.type = "button";
-      open.textContent = "打开外层卷";
+      open.textContent = "更新";
       open.disabled = busy;
       open.addEventListener("click", () => { void openDecoyMaintenance(id); });
       actions.appendChild(open);
@@ -2809,13 +2827,14 @@
   };
 
   const runDecoySurvey = async () => {
+    let emptyResult = false;
     const revision = batchSessionRevision;
     let encoded = null;
     let passwordBytes = null;
     decoyConfirmDialog.hidden = true;
     decoyCancelRequested = false;
     decoyStage = "running";
-    decoyProgressCopy.textContent = "正在逐个尝试本机记录的容器。";
+    decoyProgressCopy.textContent = "正在验证...";
     decoyProgressBar.style.width = "0%";
     busy = true;
     renderDecoySection();
@@ -2850,23 +2869,23 @@
             if (!Number.isInteger(id) || id <= 0) throw new Error("invalid result");
             decoyFound.push(id);
           }
-          decoyStage = "results";
-          if (cancelled === 1) {
+          emptyResult = decoyFound.length === 0;
+          decoyStage = emptyResult ? "verify" : "results";
+          if (emptyResult) {
+            setDecoyStatus(decoyVerifyStatus, "");
+            setDecoyStatus(decoyResultsStatus, "");
+          } else if (cancelled === 1) {
             setDecoyStatus(decoyResultsStatus,
               "验证已中止，下面只列出中止前确认可更新的容器。", "warn");
           } else if (unreachable > 0) {
             setDecoyStatus(decoyResultsStatus,
               `有 ${unreachable} 个容器未能验证，通常是其中还有文件正在使用。`, "warn");
-          } else if (decoyFound.length === 0) {
-            setDecoyStatus(decoyResultsStatus, "没有可更新诱饵内容的容器。");
           } else setDecoyStatus(decoyResultsStatus, "");
           break;
         }
         if (state !== 1) throw new Error("survey failed");
         decoyProgressBar.style.width = total === 0 ? "0%" : `${Math.round((done / total) * 100)}%`;
-        decoyProgressCopy.textContent = total === 0
-          ? "正在逐个尝试本机记录的容器。"
-          : `正在逐个尝试本机记录的容器（${done}/${total}）。`;
+        decoyProgressCopy.textContent = "正在验证...";
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     } catch (_) {
@@ -2878,6 +2897,11 @@
       busy = false;
       renderDecoySection();
       await refreshAfterExternalChange();
+      if (emptyResult && revision === batchSessionRevision &&
+          currentState === nativeState.authenticated && decoyStage === "verify") {
+        decoyEmptyDialog.hidden = false;
+        decoyEmptyClose.focus();
+      }
     }
   };
 
@@ -2932,6 +2956,8 @@
     decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "上传中…";
     decoyMaintenanceSpaceDetail.textContent = "上传结束后重新测量容量。";
     decoyMaintenanceSpaceBar.style.width = "0%";
+    decoyMaintenanceUsed.textContent = "—";
+    decoyMaintenanceTotal.textContent = "";
     setDecoyStatus(decoyDropStatus, "");
     busy = true;
     renderDecoySection();
@@ -2979,6 +3005,8 @@
     decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "正在读取…";
     decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
     decoyMaintenanceSpaceBar.style.width = "0%";
+    decoyMaintenanceUsed.textContent = "—";
+    decoyMaintenanceTotal.textContent = "";
     busy = true;
     setDecoyStatus(decoyMaintenanceStatus, "");
     renderDecoySection();
@@ -2996,9 +3024,12 @@
         if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
             decoyStage !== "maintenance") return;
         const used = total - free;
+        const capacityUnit = total >= 1073741824 ? 1073741824 : 1048576;
+        const capacityLabel = capacityUnit === 1073741824 ? "GiB" : "MiB";
+        decoyMaintenanceUsed.textContent = (used / capacityUnit).toFixed(1);
+        decoyMaintenanceTotal.textContent = `/ ${(total / capacityUnit).toFixed(1)} ${capacityLabel}`;
         decoyMaintenanceWritable.textContent = maintenanceCapacityState() || formatSafeBytes(safeFree);
         decoyMaintenanceSpaceDetail.textContent =
-          `已用 ${formatCapacityMib(used / 1048576)} / 总量 ${formatCapacityMib(total / 1048576)}。` +
           (maintenanceCapacityState() ? "请结束维护并检查未完成文件，再重新进入维护。" :
             `当前安全空闲 ${safeFree.toLocaleString("zh-CN")} 字节，已排除保护区域。目录及文件系统元数据也会占用空间，不保证同等大小文件均可放入。`);
         decoyMaintenanceSpaceBar.style.width = total === 0
@@ -3010,6 +3041,8 @@
         decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "无法读取";
         decoyMaintenanceSpaceDetail.textContent = "容量事实暂不可用，请稍后刷新。";
         decoyMaintenanceSpaceBar.style.width = "0%";
+        decoyMaintenanceUsed.textContent = "—";
+        decoyMaintenanceTotal.textContent = "";
       }
 
       if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
@@ -3057,6 +3090,7 @@
       opened = true;
       decoyUploadRecovery = false;
       decoyStage = "maintenance";
+      decoyListVisible = false;
       decoyMaintenanceId = id;
       decoyMaintenancePath = [];
       fileContainerId = id;
@@ -3093,6 +3127,7 @@
       if (revision !== batchSessionRevision) return;
       ++decoyMaintenanceRevision;
       decoyStage = "results";
+      decoyListVisible = false;
       decoyMaintenanceId = 0;
       decoyMaintenancePath = [];
       fileContainerId = 0;
@@ -3121,6 +3156,22 @@
     decoyPassword.focus();
   });
   decoyConfirmAccept.addEventListener("click", () => { void runDecoySurvey(); });
+  const closeDecoyEmpty = () => {
+    decoyEmptyDialog.hidden = true;
+    decoyPassword.focus();
+  };
+  decoyEmptyClose.addEventListener("click", closeDecoyEmpty);
+  decoyEmptyDialog.addEventListener("click", (event) => {
+    if (event.target === decoyEmptyDialog) closeDecoyEmpty();
+  });
+  decoyEmptyDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") closeDecoyEmpty();
+      else decoyEmptyClose.focus();
+    }
+  });
   decoyConfirmCancel.addEventListener("click", closeDecoyConfirm);
   decoyConfirmClose.addEventListener("click", closeDecoyConfirm);
   decoyProgressCancel.addEventListener("click", async () => {
@@ -3161,7 +3212,7 @@
       disarmDecoyDrop();
     }
     const returningToMaintenance = sectionName === "decoy" &&
-      activeSection !== "decoy" && decoyStage === "maintenance";
+      activeSection !== "decoy" && decoyStage === "maintenance" && !decoyListVisible;
     if (returningToMaintenance) {
       fileListingRevision += 1;
       fileContainerId = decoyMaintenanceId;
@@ -3355,7 +3406,7 @@
     name.title = container.name;
     const state = document.createElement("div");
     state.className = "container-state";
-    state.textContent = maintaining ? "正在更新诱饵内容，暂不可操作" : container.mounted ? "已挂载" : "未挂载";
+    state.textContent = maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.mounted ? "已挂载" : "未挂载";
     identity.append(name, state);
 
     const facts = document.createElement("div");
@@ -4878,6 +4929,19 @@
     });
   }
   fileBreadcrumb.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("[data-decoy-back]")) {
+      if (busy || !inDecoyFileView()) return;
+      decoyMaintenancePath = [...filePath];
+      decoyListVisible = true;
+      fileListingRevision += 1;
+      fileContainerId = 0;
+      filePath = [];
+      fileEntries = [];
+      disarmDecoyDrop();
+      renderDecoySection();
+      decoyContainerList.querySelector("button")?.focus();
+      return;
+    }
     if (event.target instanceof Element && event.target.closest("[data-file-back]")) {
       if (busy) return;
       fileContainerId = 0;
