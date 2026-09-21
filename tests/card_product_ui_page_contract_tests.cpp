@@ -102,20 +102,16 @@ void require(const bool condition, const char* const message) {
 // another. A column that appeared only when there was something behind it, or
 // only under one of the two passwords, would be the tier itself.
 //
-// ⚠️ 2026-09-20: the column is withheld from the navigation while P3.25.8 is
-// unfinished, so a tester cannot reach a screen that has no protection alert
-// yet. It stays safe because it is withheld unconditionally -- the attribute
-// is in the markup, no script decides it, and every install of this build is
-// the same. The page and its flows are untouched and still tested below.
-void test_the_maintenance_column_is_withheld_the_same_way_for_everyone() {
+// P3.25.9 restores the same static entry for every authenticated identity.
+void test_the_maintenance_column_is_visible_the_same_way_for_everyone() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
 
   require(count_occurrences(page, "data-section=\"decoy\"") == 1 &&
               page.find("id=\"dashboard-section-decoy\"") != std::string::npos,
           "the maintenance column must be one fixed navigation entry");
-  require(page.find("data-section=\"decoy\" hidden") != std::string::npos,
-          "the withheld column must be hidden in the markup, not by a script");
+  require(page.find("data-section=\"decoy\" hidden") == std::string::npos,
+          "the maintenance column must not be hidden in the markup");
   require(script.find("data-section=\"decoy\"") == std::string::npos,
           "no script may decide whether the column is shown");
 
@@ -1433,7 +1429,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
 
 int main() {
   try {
-    test_the_maintenance_column_is_withheld_the_same_way_for_everyone();
+    test_the_maintenance_column_is_visible_the_same_way_for_everyone();
     test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral();
     test_a_shell_drop_is_never_read_by_the_page();
     test_page_has_route_specific_password_surfaces();

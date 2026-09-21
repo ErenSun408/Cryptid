@@ -1,5 +1,10 @@
 "use strict";
 
+// This fixture deliberately keeps its native window hidden. Chromium can
+// suspend animation frames there; use a timer for paint-yield scheduling.
+// This exercises the real COM bridge, not visual rendering or frame timing.
+window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 16);
+
 chrome.webview.postMessage("driver-loaded");
 
 (async () => {
@@ -240,13 +245,13 @@ chrome.webview.postMessage("driver-loaded");
   }
   autoMount.click();
   lockedUnmount.click();
-  if (!await waitFor(() => autoMount.getAttribute("aria-checked") === "true") ||
+  if (!await waitFor(() => autoMount.getAttribute("aria-checked") === "true" && autoMount.getAttribute("aria-disabled") !== "true") ||
       lockedUnmount.getAttribute("aria-checked") !== "true") {
     request("fail-settings-switch");
     return;
   }
   autoMount.click();
-  if (!await waitFor(() => autoMount.getAttribute("aria-checked") === "false")) {
+  if (!await waitFor(() => autoMount.getAttribute("aria-checked") === "false" && autoMount.getAttribute("aria-disabled") !== "true")) {
     request("fail-settings-switch");
     return;
   }
@@ -255,20 +260,20 @@ chrome.webview.postMessage("driver-loaded");
   // it settles a turn later rather than in place.
   rememberContainers.click();
   if (!await waitFor(
-      () => rememberContainers.getAttribute("aria-checked") === "false")) {
+      () => rememberContainers.getAttribute("aria-checked") === "false" && rememberContainers.getAttribute("aria-disabled") !== "true")) {
     request("fail-settings-remember");
     return;
   }
   rememberContainers.click();
   if (!await waitFor(
-      () => rememberContainers.getAttribute("aria-checked") === "true")) {
+      () => rememberContainers.getAttribute("aria-checked") === "true" && rememberContainers.getAttribute("aria-disabled") !== "true")) {
     request("fail-settings-remember");
     return;
   }
   // The import switch is the same shape, and starts from the other position.
   mountImported.click();
   if (!await waitFor(
-      () => mountImported.getAttribute("aria-checked") === "true")) {
+      () => mountImported.getAttribute("aria-checked") === "true" && mountImported.getAttribute("aria-disabled") !== "true")) {
     request("fail-settings-remember");
     return;
   }
@@ -580,13 +585,14 @@ chrome.webview.postMessage("driver-loaded");
 
   request("request-residual-mount");
   if (!await waitForState("unavailable") || action.hidden ||
-      actionLabel.textContent !== "尝试安全卸载" || surface.hidden ||
+      actionLabel.textContent !== "尝试一键卸载" || surface.hidden ||
       !dashboard.hidden) {
     request("fail-unavailable");
     return;
   }
   action.click();
-  if (!await waitForState("unavailable") || !action.hidden) {
+  if (!await waitFor(() => surface.dataset.sessionState === "unavailable" &&
+      surface.dataset.busy === "false" && action.hidden)) {
     request("fail-unmount");
     return;
   }
