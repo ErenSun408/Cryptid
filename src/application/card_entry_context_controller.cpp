@@ -77,6 +77,8 @@ void CardEntryContextController::initialize_and_authenticate(
         "card initialization requires a fresh eligible insertion");
   }
 
+  auto operation_lease = source_.acquire_operation();
+
   // Retired up front, and left retired on every failure below: a card whose
   // initialization tore halfway is in a state nobody knows, and no retry may
   // run against it.
@@ -105,6 +107,8 @@ void CardEntryContextController::set_second_card_password(
     throw std::invalid_argument(
         "both card record passwords are required");
   }
+  auto operation_lease = source_.acquire_operation();
+
   // Login success deliberately destroys its one-shot insertion context. A
   // later record update starts from a new read-only inspection and binds its
   // write target to the card that is physically present at that moment.
@@ -149,6 +153,8 @@ void CardEntryContextController::reset_card_record(
         card::make_error_code(card::CardError::invalid_operation),
         "card reset requires an authenticated session");
   }
+
+  auto operation_lease = source_.acquire_operation();
 
   // Never revive the insertion consumed by login. The destructive operation
   // receives a new adapter-authenticated observation and binds the write to
@@ -198,6 +204,8 @@ void CardEntryContextController::authenticate_login(
         card::make_error_code(card::CardError::invalid_operation),
         "card login requires a fresh initialized insertion");
   }
+
+  auto operation_lease = source_.acquire_operation();
 
   std::unique_ptr<card::ICardLoginTarget> target;
   security::SecureBuffer record;

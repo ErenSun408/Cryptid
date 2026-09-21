@@ -7,6 +7,7 @@
 #include "usb_vault/card/card_login_target.h"
 #include "usb_vault/card/card_update_target.h"
 
+#include "usb_vault/application/card_operation_lease.h"
 #include <memory>
 #include <optional>
 
@@ -28,6 +29,9 @@ class ICardEntryInspectionSource {
 
   [[nodiscard]] virtual std::unique_ptr<IReadOnlyCardEntryInspection>
   inspect_inserted_card() = 0;
+
+  // Production adapters coordinate all transactions and nested helper calls.
+  [[nodiscard]] virtual std::unique_ptr<ICardOperationLease> acquire_operation() { return nullptr; }
 
   // Creates a short-lived write target bound to the exact read-only context
   // previously returned by this source. Implementations must not perform card

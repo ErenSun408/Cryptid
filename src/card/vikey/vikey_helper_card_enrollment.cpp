@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "card/vikey/card_operation_lease.h"
 #include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 
@@ -131,6 +132,11 @@ VikeyHelperCardEnrollment::make_update_target(
   }
   return std::make_unique<VikeyHelperCardUpdateTarget>(
       config_, credential_provider_, insertion->probe());
+}
+
+std::unique_ptr<application::ICardOperationLease>
+VikeyHelperCardEnrollment::acquire_operation() {
+  return std::make_unique<CardOperationLease>();
 }
 
 void VikeyHelperCardEnrollment::bootstrap(

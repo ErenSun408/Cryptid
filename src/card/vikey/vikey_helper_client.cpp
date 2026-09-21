@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "card/vikey/card_operation_lease.h"
 #include "card/process_security_failure.h"
 #include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_client.h"
@@ -1012,6 +1013,7 @@ namespace {
     security::SecureBuffer* const blob_response = nullptr,
     std::uint32_t* const success_result = nullptr,
     std::uint32_t* const success_logical_state = nullptr) {
+  CardOperationLease operation_lease;
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
                "ViKey helper timeout must be positive");

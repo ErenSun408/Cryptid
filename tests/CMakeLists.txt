@@ -1130,3 +1130,8 @@ add_executable(card_reset_confirmation_tests card_reset_confirmation_tests.cpp)
 target_include_directories(card_reset_confirmation_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 usb_vault_configure_target(card_reset_confirmation_tests)
 add_test(NAME card_reset_confirmation_tests COMMAND card_reset_confirmation_tests)
+
+add_executable(card_operation_lease_tests card_operation_lease_tests.cpp)
+target_include_directories(card_operation_lease_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+usb_vault_configure_target(card_operation_lease_tests)
+add_test(NAME card_operation_lease_tests COMMAND card_operation_lease_tests)
