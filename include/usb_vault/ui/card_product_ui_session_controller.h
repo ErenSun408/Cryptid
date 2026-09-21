@@ -73,12 +73,12 @@ struct DecoyMaintenanceUiSurvey final {
   bool cancelled{};
 };
 
-// Filesystem facts in MiB. Neither free nor tail-free space is a safe write
-// budget: the filesystem bitmap does not identify the protected hidden area.
+// Byte facts for the current authenticated mount. Safe free excludes protected
+// clusters; filesystem metadata can still consume part of this snapshot.
 struct DecoyMaintenanceUiSpace final {
-  std::uint32_t total_mib{};
-  std::uint32_t free_mib{};
-  std::uint32_t tail_free_mib{};
+  std::uint64_t total_bytes{};
+  std::uint64_t free_bytes{};
+  std::uint64_t safe_free_bytes{};
 };
 
 enum class OperationUiKind : std::uint8_t {

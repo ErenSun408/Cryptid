@@ -1303,14 +1303,15 @@ void test_maintenance_capacity_is_projected_conservatively_and_can_end() {
   fixture.volume.maintenance_space = {
       .total_bytes = (static_cast<std::uint64_t>(UINT32_MAX) + 10ULL) * mib,
       .free_bytes = 9ULL * mib + mib / 2ULL,
-      .tail_free_bytes = 5ULL * mib + mib - 1ULL,
+      .tail_free_bytes = 0,
+      .safe_free_bytes = 513,
   };
 
   const usb_vault::ui::DecoyMaintenanceUiSpace space =
       fixture.controller.decoy_maintenance_space(7);
-  require(space.total_mib == UINT32_MAX && space.free_mib == 9 &&
-              space.tail_free_mib == 5,
-          "maintenance capacity rounded up or overflowed its page shape");
+  require(space.total_bytes == (static_cast<std::uint64_t>(UINT32_MAX) + 10ULL) * mib &&
+              space.free_bytes == 9ULL * mib + mib / 2ULL && space.safe_free_bytes == 513,
+          "maintenance byte facts lost precision or used legacy tail space");
   require(fixture.volume.maintenance_space_calls == 1 &&
               fixture.volume.maintenance_space_id == 7,
           "capacity was measured for a container the page did not name");

@@ -26,7 +26,7 @@ window.navigationFixture = {
   openedMaintenance: [],
   measuredMaintenance: [],
   endedMaintenance: [],
-  maintenanceSpace: "4096,1024,512",
+  maintenanceSpace: "4294967296,1073741824,536870912",
   protectionBlocked: false,
   protectionQueries: [],
   delayProtection: false,

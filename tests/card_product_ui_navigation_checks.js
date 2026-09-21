@@ -80,10 +80,39 @@
       $("#decoy-maintenance-container").value === "3",
       "The secondary page reuses the existing file manager for the opened outer volume");
     check(all("#decoy-maintenance-container option").map((item) => item.value).join(",") === "1,3" &&
-      $("#decoy-maintenance-writable").textContent === "暂无法可靠计算" &&
+      $("#decoy-maintenance-writable").textContent === "512 MiB" &&
       $("#decoy-maintenance-space-detail").textContent.includes("总量 4.0 GiB") &&
-      $("#decoy-maintenance-space-detail").textContent.includes("不能作为可写额度"),
-      "Maintenance shows filesystem usage without treating tail free space as a safe write budget");
+      $("#decoy-maintenance-space-detail").textContent.includes("536,870,912 字节") &&
+      $("#decoy-maintenance-space-detail").textContent.includes("不保证同等大小文件"),
+      "Maintenance shows authenticated safe bytes separately from filesystem usage");
+    for (const [bytes, label] of [[513, "513 字节"], [1536, "1.5 KiB"], [0, "0 字节"]]) {
+      window.navigationFixture.maintenanceSpace = `4294967296,1073741824,${bytes}`;
+      $("#file-refresh").click();
+      await wait(() => $("#decoy-maintenance-writable").textContent === label && !$("#decoy-maintenance-end").disabled);
+      check($("#decoy-maintenance-writable").textContent === label, `Safe capacity retains ${bytes} bytes without rounding upward`);
+    }
+    window.navigationFixture.maintenanceSpace = "4294967296,1073741824,536870912";
+    window.navigationFixture.delayVolume = true;
+    window.navigationFixture.completeVolume = null;
+    $("#file-refresh").click();
+    await wait(() => window.navigationFixture.completeVolume !== null);
+    check($("#decoy-maintenance-writable").textContent === "正在读取…" && $("#decoy-maintenance-space-bar").style.width === "0%",
+      "A new measurement clears the previous capacity before completion");
+    window.navigationFixture.delayVolume = false;
+    window.navigationFixture.completeVolume();
+    await wait(() => !$("#decoy-maintenance-end").disabled);
+    window.navigationFixture.failMeasureMaintenance = true;
+    $("#file-refresh").click();
+    await wait(() => $("#decoy-maintenance-writable").textContent === "无法读取" && !$("#decoy-maintenance-end").disabled);
+    check(!$("#decoy-maintenance-space-detail").textContent.includes("536,870,912"), "Failed measurements discard stale safe-space bytes");
+    window.navigationFixture.failMeasureMaintenance = false;
+    window.navigationFixture.maintenanceSpace = "4294967296,1073741824,9007199254740992";
+    $("#file-refresh").click();
+    await wait(() => !$("#decoy-maintenance-end").disabled);
+    check($("#decoy-maintenance-writable").textContent === "无法读取", "Unsafe integer capacity is rejected");
+    window.navigationFixture.maintenanceSpace = "4294967296,1073741824,536870912";
+    $("#file-refresh").click();
+    await wait(() => $("#decoy-maintenance-writable").textContent === "512 MiB" && !$("#decoy-maintenance-end").disabled);
     check($("#decoy-maintenance-freshness").textContent.includes("天前有修改") &&
       $("#decoy-maintenance-freshness-detail").textContent.includes("顶层项目") &&
       all("#file-list-body tr").length === 2,
@@ -143,6 +172,7 @@
     $("#file-refresh").click();
     await wait(() => !$("#decoy-maintenance-end").disabled);
     check(window.navigationFixture.dropTargets.length === stoppedArms && $("#decoy-select-files").disabled &&
+      $("#decoy-maintenance-writable").textContent === "需重新进入维护" &&
       $("#decoy-drop-status").textContent.includes("重新进入维护"),
       "A failed upload stays disarmed across refresh until maintenance ends");
     $("#decoy-maintenance-end").click();
@@ -179,6 +209,7 @@
     await protectionTick();
     check(!$("#decoy-protection-warning").hidden && $("#decoy-protection-status").hidden &&
       $("#decoy-maintenance-writable").textContent === "写入已阻止" &&
+      !$("#decoy-maintenance-space-detail").textContent.includes("536,870,912") &&
       window.navigationFixture.protectionQueries.at(-1) === 1,
       "Protection polling warns for the current container and replaces writable capacity");
     window.navigationFixture.protectionBlocked = false;

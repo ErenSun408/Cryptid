@@ -736,7 +736,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         }
         if (!space_ready_ || space_id_ == 0) return E_UNEXPECTED;
         const std::wstring packed = std::to_wstring(space_total_) + L"," +
-            std::to_wstring(space_free_) + L"," + std::to_wstring(space_tail_free_);
+            std::to_wstring(space_free_) + L"," + std::to_wstring(space_safe_free_);
         return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
       }
       case kVolumeOperationStatusId:
@@ -1319,9 +1319,9 @@ class CardProductWebViewHostObject final : public IDispatch {
             else if (member == kBeginMeasureDecoySpaceId) {
               const auto space = controller_.decoy_maintenance_space(id);
               std::lock_guard lock(space_mutex_);
-              space_total_ = space.total_mib;
-              space_free_ = space.free_mib;
-              space_tail_free_ = space.tail_free_mib;
+              space_total_ = space.total_bytes;
+              space_free_ = space.free_bytes;
+              space_safe_free_ = space.safe_free_bytes;
               space_id_ = id;
               space_epoch_ = operation_epoch;
               space_ready_ = true;
@@ -2293,9 +2293,9 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::size_t batch_completed_{};
   std::size_t batch_current_{};
   std::mutex space_mutex_;
-  std::uint32_t space_total_{};
-  std::uint32_t space_free_{};
-  std::uint32_t space_tail_free_{};
+  std::uint64_t space_total_{};
+  std::uint64_t space_free_{};
+  std::uint64_t space_safe_free_{};
   std::uint32_t space_id_{};
   std::uint64_t space_epoch_{};
   bool space_ready_{false};

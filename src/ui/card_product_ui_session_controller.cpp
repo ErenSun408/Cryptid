@@ -217,14 +217,9 @@ DecoyMaintenanceUiSpace CardProductUiSessionController::decoy_maintenance_space(
   }
   const application::DecoyMaintenanceSpace space =
       volume_session_.decoy_maintenance_space(id);
-  // Round filesystem facts down to MiB; tail free space is not a write budget.
-  constexpr std::uint64_t kMib = 1024ULL * 1024ULL;
-  return {.total_mib = static_cast<std::uint32_t>(
-              std::min<std::uint64_t>(space.total_bytes / kMib, UINT32_MAX)),
-          .free_mib = static_cast<std::uint32_t>(
-              std::min<std::uint64_t>(space.free_bytes / kMib, UINT32_MAX)),
-          .tail_free_mib = static_cast<std::uint32_t>(std::min<std::uint64_t>(
-              space.tail_free_bytes / kMib, UINT32_MAX))};
+  return {.total_bytes = space.total_bytes,
+          .free_bytes = space.free_bytes,
+          .safe_free_bytes = space.safe_free_bytes};
 }
 
 bool CardProductUiSessionController::decoy_maintenance_write_blocked(const std::uint32_t id) {

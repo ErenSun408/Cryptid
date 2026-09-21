@@ -2637,7 +2637,7 @@ void test_maintenance_facts_are_async_current_and_session_scoped() {
   fixture.volume.maintenance_space = {
       .total_bytes = 4096ULL * 1024ULL * 1024ULL,
       .free_bytes = 1024ULL * 1024ULL * 1024ULL,
-      .tail_free_bytes = 512ULL * 1024ULL * 1024ULL,
+      .safe_free_bytes = 512ULL * 1024ULL * 1024ULL + 513,
   };
   usb_vault::ui::CreationWorkState work;
   ComPtr<IDispatch> host;
@@ -2664,8 +2664,8 @@ void test_maintenance_facts_are_async_current_and_session_scoped() {
   require(invoke_named(*host.Get(), L"getDecoyMaintenanceSpace", nullptr, 0,
                        &result, nullptr) == S_OK && result.vt == VT_BSTR &&
               std::wstring(result.bstrVal, ::SysStringLen(result.bstrVal)) ==
-                  L"4096,1024,512",
-          "capacity did not return as the three bounded MiB facts");
+                  L"4294967296,1073741824,536871425",
+          "capacity did not return as the three exact byte facts");
   static_cast<void>(::VariantClear(&result));
   require(fixture.volume.maintenance_space_calls == 1 &&
               fixture.volume.maintenance_space_id == 7 &&

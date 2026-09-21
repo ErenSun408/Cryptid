@@ -2487,7 +2487,12 @@
       decoyWriteBlocked = decoyWriteBlocked || blocked;
       decoyProtectionWarning.hidden = !decoyWriteBlocked;
       decoyProtectionStatus.hidden = true;
-      if (decoyWriteBlocked) { decoyMaintenanceWritable.textContent = "写入已阻止"; disarmDecoyDrop(); }
+      if (decoyWriteBlocked) {
+        decoyMaintenanceWritable.textContent = "写入已阻止";
+        decoyMaintenanceSpaceDetail.textContent = "请结束维护并检查未完成文件，再重新进入维护。";
+        decoyMaintenanceSpaceBar.style.width = "0%";
+        disarmDecoyDrop();
+      }
     } catch (_) {
       if (!current()) return;
       decoyProtectionStatus.textContent = "暂时无法确认写入保护状态，请暂停修改并稍后重试；无法确认不代表可以继续写入。";
@@ -2589,8 +2594,17 @@
     setDecoyStatus(decoyDropStatus, "");
   };
 
+  const maintenanceCapacityState = () => decoyWriteBlocked ? "写入已阻止"
+    : decoyUploadRecovery ? "需重新进入维护" : "";
+  const formatSafeBytes = (bytes) => {
+    if (bytes < 1024) return `${bytes} 字节`;
+    const unit = bytes < 1048576 ? 1024 : bytes < 1073741824 ? 1048576 : 1073741824;
+    const label = unit === 1024 ? "KiB" : unit === 1048576 ? "MiB" : "GiB";
+    return `${Math.floor(bytes / unit * 100) / 100} ${label}`;
+  };
+
   const formatCapacityMib = (mib) => {
-    if (mib < 1024) return `${mib} MiB`;
+    if (mib < 1024) return `${Math.floor(mib)} MiB`;
     const gib = mib / 1024;
     return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GiB`;
   };
@@ -2831,6 +2845,8 @@
   const reportDecoyDrop = async ([state, , done, failed]) => {
     if (state === 3 || state === 4) {
       decoyUploadRecovery = true;
+      decoyMaintenanceWritable.textContent = maintenanceCapacityState();
+      decoyMaintenanceSpaceDetail.textContent = "请结束维护并检查未完成文件，再重新进入维护。";
       disarmDecoyDrop();
     }
     setDecoyStatus(decoyDropStatus,
@@ -2869,6 +2885,9 @@
 
     const revision = batchSessionRevision;
     decoyDropWatching = true;
+    decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "上传中…";
+    decoyMaintenanceSpaceDetail.textContent = "上传结束后重新测量容量。";
+    decoyMaintenanceSpaceBar.style.width = "0%";
     setDecoyStatus(decoyDropStatus, "");
     busy = true;
     renderDecoySection();
@@ -2913,6 +2932,9 @@
     const revision = ++decoyMaintenanceRevision;
     let capacityFailed = false;
     let freshnessFailed = false;
+    decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "正在读取…";
+    decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
+    decoyMaintenanceSpaceBar.style.width = "0%";
     busy = true;
     setDecoyStatus(decoyMaintenanceStatus, "");
     renderDecoySection();
@@ -2921,27 +2943,27 @@
         await waitForVolumeOperation(() => bridge.beginMeasureDecoySpace(id));
         const packed = String(await bridge.getDecoyMaintenanceSpace());
         if (!/^\d+,\d+,\d+$/.test(packed)) throw new Error("invalid capacity facts");
-        const [total, free, tailFree] = packed.split(",").map(Number);
-        if (![total, free, tailFree].every((value) =>
+        const [total, free, safeFree] = packed.split(",").map(Number);
+        if (![total, free, safeFree].every((value) =>
               Number.isSafeInteger(value) && value >= 0) ||
-            free > total || tailFree > total) {
+            free > total || safeFree > free) {
           throw new Error("invalid capacity facts");
         }
         if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
             decoyStage !== "maintenance") return;
         const used = total - free;
-        // The bitmap counts protected hidden sectors as free. Never present
-        // that number as permission to write into the outer filesystem.
-        decoyMaintenanceWritable.textContent = decoyWriteBlocked ? "写入已阻止" : "暂无法可靠计算";
+        decoyMaintenanceWritable.textContent = maintenanceCapacityState() || formatSafeBytes(safeFree);
         decoyMaintenanceSpaceDetail.textContent =
-          `已用 ${formatCapacityMib(used)} / 总量 ${formatCapacityMib(total)}。文件系统空闲包含受保护区域，不能作为可写额度。`;
+          `已用 ${formatCapacityMib(used / 1048576)} / 总量 ${formatCapacityMib(total / 1048576)}。` +
+          (maintenanceCapacityState() ? "请结束维护并检查未完成文件，再重新进入维护。" :
+            `当前安全空闲 ${safeFree.toLocaleString("zh-CN")} 字节，已排除保护区域。目录及文件系统元数据也会占用空间，不保证同等大小文件均可放入。`);
         decoyMaintenanceSpaceBar.style.width = total === 0
           ? "0%" : `${Math.min(100, Math.round((used / total) * 100))}%`;
       } catch (_) {
         if (revision !== decoyMaintenanceRevision || id !== fileContainerId ||
             decoyStage !== "maintenance") return;
         capacityFailed = true;
-        decoyMaintenanceWritable.textContent = decoyWriteBlocked ? "写入已阻止" : "无法读取";
+        decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "无法读取";
         decoyMaintenanceSpaceDetail.textContent = "容量事实暂不可用，请稍后刷新。";
         decoyMaintenanceSpaceBar.style.width = "0%";
       }
