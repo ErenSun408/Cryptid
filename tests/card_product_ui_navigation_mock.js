@@ -242,7 +242,7 @@ window.navigationFixture = {
         return new Promise((resolve) => { fixture.pending = resolve; });
       }
       return (directory === "" ?
-        `0\u001e文档\u001f1\u001f0\u001f0\u001f${Date.now() - 2 * 24 * 60 * 60 * 1000}\u001e报告.xlsx\u001f0\u001f0\u001f188416\u001f${Date.now() - 24 * 60 * 60 * 1000}` :
+        `0\u001e文档\u001f1\u001f0\u001f0\u001f${Date.now() - ((fixture.freshnessDays ?? 1) + 1) * 24 * 60 * 60 * 1000}\u001e报告.xlsx\u001f0\u001f0\u001f188416\u001f${Date.now() - (fixture.freshnessDays ?? 1) * 24 * 60 * 60 * 1000}` :
         "0") + fixture.listingSuffix;
     },
   };

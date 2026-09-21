@@ -139,8 +139,6 @@
     document.getElementById("decoy-maintenance-space-bar");
   const decoyMaintenanceFreshness =
     document.getElementById("decoy-maintenance-freshness");
-  const decoyMaintenanceFreshnessDetail =
-    document.getElementById("decoy-maintenance-freshness-detail");
   const decoyDropZone = document.getElementById("decoy-drop-zone");
   const decoyDropRun = document.getElementById("decoy-drop-run");
   const decoyDropCopy = document.getElementById("decoy-drop-copy");
@@ -1170,6 +1168,7 @@
         renderFileDropTargets();
       }
     }
+    document.getElementById("management-list-actions").hidden = fileContainerId !== 0;
     managementContainers.hidden = fileContainerId !== 0;
     managementFiles.hidden = fileContainerId === 0;
     const container = selectedFileContainer();
@@ -1321,7 +1320,7 @@
         button.title = danger ? "永久删除，不进回收站" : label;
         button.appendChild(exportGlyph(danger
           ? ["M4 7h16", "M9 7V4h6v3", "M6 7l1 13h10l1-13", "M10 10v7M14 10v7"]
-          : ["M4 12h12", "M12 8l4 4-4 4", "M20 5v14"]));
+          : ["M13 5H5v14h14v-8", "M12 12 21 3", "M15 3h6v6"]));
         button.disabled = busy;
         button.dataset.fileAction = action;
         button.dataset.fileName = entry.name;
@@ -2627,6 +2626,11 @@
     decoySelectFiles.disabled = busy || decoyUploadRecovery || decoyWriteBlocked || currentState !== nativeState.authenticated;
     decoyDropRun.hidden = !decoyDropWatching;
     decoyDropCancel.disabled = !decoyDropWatching;
+    decoyDropZone.setAttribute("aria-disabled", String(busy || decoyUploadRecovery || decoyWriteBlocked));
+    if (busy || decoyUploadRecovery || decoyWriteBlocked) {
+      decoyDropZone.classList.remove("drop-hover");
+      decoySelectFiles.classList.remove("drop-button-hover");
+    }
   };
 
   const clearDecoyMaintenanceFacts = () => {
@@ -2637,13 +2641,12 @@
     decoyProtectionWarning.hidden = true;
     decoyProtectionStatus.hidden = true;
     decoyMaintenanceWritable.textContent = "—";
-    decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
+    decoyMaintenanceSpaceDetail.textContent = "";
     decoyMaintenanceSpaceBar.style.width = "0%";
     decoyMaintenanceUsed.textContent = "—";
     decoyMaintenanceTotal.textContent = "";
     decoyMaintenanceFreshness.textContent = "—";
-    decoyMaintenanceFreshnessDetail.textContent =
-      "只检查外层根目录，不保存扫描结果。";
+    decoyMaintenanceFreshness.dataset.age = "";
     setDecoyStatus(decoyMaintenanceStatus, "");
     setDecoyStatus(decoyDropStatus, "");
   };
@@ -2664,27 +2667,20 @@
   };
 
   const renderDecoyFreshness = (listing) => {
-    const timestamps = listing.entries
-      .map((entry) => entry.modifiedUnixMs)
-      .filter((value) => value > 0);
-    if (listing.entries.length === 0) {
+    const timestamps = listing.entries.map((entry) => entry.modifiedUnixMs).filter((value) => value > 0);
+    decoyMaintenanceFreshness.dataset.age = "";
+    if (!listing.entries.length) {
       decoyMaintenanceFreshness.textContent = "暂无内容";
-    } else if (timestamps.length === 0) {
-      decoyMaintenanceFreshness.textContent = "修改时间未知";
+    } else if (!timestamps.length) {
+      decoyMaintenanceFreshness.textContent = "上次修改：未知";
     } else {
-      const elapsedDays = Math.max(0, Math.floor(
-        (Date.now() - Math.max(...timestamps)) / (24 * 60 * 60 * 1000)));
-      decoyMaintenanceFreshness.textContent = elapsedDays === 0
-        ? "今天有修改"
-        : elapsedDays < 30
-          ? `${elapsedDays} 天前有修改`
-          : elapsedDays < 365
-            ? `${Math.floor(elapsedDays / 30)} 个月前有修改`
-            : `${Math.floor(elapsedDays / 365)} 年前有修改`;
+      const modified = Math.max(...timestamps);
+      const days = Math.max(0, Math.floor((Date.now() - modified) / 86400000));
+      const when = days === 0 ? "今天"
+        : days < 30 ? `${days} 日前` : days < 365 ? `${Math.floor(days / 30)} 月前` : `${Math.floor(days / 365)} 年前`;
+      decoyMaintenanceFreshness.textContent = `上次修改：${when}`;
+      decoyMaintenanceFreshness.dataset.age = days < 30 ? "fresh" : days < 180 ? "aging" : "stale";
     }
-    decoyMaintenanceFreshnessDetail.textContent = listing.truncated
-      ? "顶层项目较多，本次结果来自受限扫描；扫描结果不会保存。"
-      : `本次检查了 ${listing.entries.length} 个顶层项目；扫描结果不会保存。`;
   };
 
   const renderDecoyMaintenanceChoices = () => {
@@ -2917,7 +2913,7 @@
     }
     setDecoyStatus(decoyDropStatus,
       state === 2
-        ? `已放入 ${done} 个项目。`
+        ? ""
         : state === 4
           ? `已停止，放入了 ${done} 个文件。请结束维护并检查未完成文件，再重新进入维护。`
           : `已放入 ${done} 个文件，${failed} 个未完成，后续文件已停止。请结束维护并检查未完成文件，再重新进入维护。`,
@@ -2953,11 +2949,6 @@
     decoyDropWatching = true;
     ++decoyProtectionGeneration;
     decoyProtectionStatus.hidden = true;
-    decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "上传中…";
-    decoyMaintenanceSpaceDetail.textContent = "上传结束后重新测量容量。";
-    decoyMaintenanceSpaceBar.style.width = "0%";
-    decoyMaintenanceUsed.textContent = "—";
-    decoyMaintenanceTotal.textContent = "";
     setDecoyStatus(decoyDropStatus, "");
     busy = true;
     renderDecoySection();
@@ -3002,11 +2993,6 @@
     const revision = ++decoyMaintenanceRevision;
     let capacityFailed = false;
     let freshnessFailed = false;
-    decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "正在读取…";
-    decoyMaintenanceSpaceDetail.textContent = "正在读取容量…";
-    decoyMaintenanceSpaceBar.style.width = "0%";
-    decoyMaintenanceUsed.textContent = "—";
-    decoyMaintenanceTotal.textContent = "";
     busy = true;
     setDecoyStatus(decoyMaintenanceStatus, "");
     renderDecoySection();
@@ -3053,8 +3039,7 @@
       if (listing === null) {
         freshnessFailed = true;
         decoyMaintenanceFreshness.textContent = "无法读取";
-        decoyMaintenanceFreshnessDetail.textContent =
-          "无法检查外层根目录；未保存任何扫描结果。";
+        decoyMaintenanceFreshness.dataset.age = "";
       } else {
         renderDecoyFreshness(listing);
       }
@@ -3194,6 +3179,20 @@
     await armDecoyDrop();
     try { if (await bridge.selectExternalFiles()) await watchDecoyDrop(); }
     catch (_) { setDecoyStatus(decoyDropStatus, "无法选择文件，请稍后重试。", "error"); }
+  });
+  decoyDropZone.addEventListener("dblclick", (event) => {
+    if (!(event.target instanceof Element) || event.target.closest("button")) return;
+    if (!decoySelectFiles.disabled) decoySelectFiles.click();
+  });
+  decoyDropZone.addEventListener("keydown", (event) => {
+    if (event.target !== decoyDropZone || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    if (!decoySelectFiles.disabled) decoySelectFiles.click();
+  });
+  window.addEventListener("usb-vault-drop-hover", (event) => {
+    const enabled = inDecoyFileView() && !busy && !decoyUploadRecovery && !decoyWriteBlocked;
+    decoyDropZone.classList.toggle("drop-hover", enabled && (event.detail === 1 || event.detail === 3));
+    decoySelectFiles.classList.toggle("drop-button-hover", enabled && event.detail === 2);
   });
   decoyDropCancel.addEventListener("click", async () => {
     decoyDropCancel.disabled = true;

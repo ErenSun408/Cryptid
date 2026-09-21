@@ -366,7 +366,7 @@
     .file-actions .file-icon-button { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; padding: 0; border: 0; background: none; color: var(--text-2); cursor: pointer; }
     .file-actions .file-icon-button:hover:not(:disabled) { color: var(--text); }
     .file-actions .file-icon-button:disabled { opacity: .45; cursor: default; }
-    .file-actions [data-file-action="export"] svg { transform: rotate(-90deg); }
+
     .file-actions .file-icon-button.danger { color: var(--danger); }
     .file-actions .file-icon-button.danger:hover:not(:disabled) { color: #f08a81; }
     .file-actions .danger { color: var(--danger); border-color: rgba(224, 123, 114, .45); }
@@ -586,30 +586,44 @@
     .decoy-maintenance-tools { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; justify-content: flex-end; }
     .decoy-maintenance-tools label { color: var(--text-3); font-size: .72rem; }
     .decoy-update-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem; }
-    .decoy-update-facts { display: grid; grid-template-rows: auto auto; gap: 1.1rem; }
-    .decoy-capacity-card, .decoy-freshness-card { border: 1px solid rgba(255,255,255,.08); border-radius: 1rem; padding: 1.5rem; background: rgba(255,255,255,.012); }
-    .decoy-used-value { display: flex; align-items: baseline; gap: .5rem; margin: 1rem 0 1.1rem; font-size: 1.7rem; font-weight: 600; }
+    .decoy-update-facts { display: grid; height: 21rem; min-width: 0; grid-template-rows: 13.5rem 6.4rem; gap: 1.1rem; }
+    .decoy-capacity-card, .decoy-freshness-card { border: 1px solid rgba(255,255,255,.08); border-radius: 1rem; padding: 1.1rem 1.35rem; background: rgba(255,255,255,.012); }
+    .decoy-used-value { display: flex; align-items: baseline; height: 2.25rem; white-space: nowrap; gap: .5rem; margin: .65rem 0 .75rem; font-size: 1.7rem; font-weight: 600; }
     .decoy-used-total { font-size: .95rem; color: var(--text-3); font-weight: 500; }
-    .decoy-maintenance-detail { margin-top: .4rem; color: var(--text-3); font-size: .72rem; line-height: 1.55; }
+    .decoy-maintenance-detail { height: 3.4rem; overflow: auto; overflow-wrap: anywhere; margin-top: .4rem; color: var(--text-3); font-size: .72rem; line-height: 1.55; }
     .decoy-space-track { height: .35rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
     .decoy-space-track i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
-    .decoy-remaining { margin-top: .7rem; font-size: .85rem; color: var(--text-3); }
+    .decoy-remaining { height: 1.5rem; overflow: auto; white-space: nowrap; margin-top: .7rem; font-size: .85rem; color: var(--text-3); }
     .decoy-remaining strong { color: var(--text-2); }
     .decoy-freshness-card { display: flex; gap: .85rem; align-items: flex-start; }
     .decoy-info-icon { flex: 0 0 1rem; width: 1rem; height: 1rem; margin-top: .2rem; fill: none; stroke: var(--text-3); stroke-width: 1.7; }
     .decoy-freshness-value { margin-top: .5rem; color: var(--text-2); font-size: 1.05rem; font-weight: 600; }
+    #decoy-maintenance-container { color-scheme: dark; background: #151719; color: var(--text); }
+    #decoy-maintenance-container option { background: #151719; color: #e8eaed; }
+    .decoy-freshness-value[data-age="fresh"] { color: #79bd92; }
+    .decoy-freshness-value[data-age="aging"] { color: #d1ae62; }
+    .decoy-freshness-value[data-age="stale"] { color: #dd8177; }
+    .decoy-drop-zone { cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+    .decoy-drop-zone.drop-hover, .decoy-drop-zone[aria-disabled="false"]:hover:not(:has(button:hover)):not(:has(.drop-button-hover)) { background: rgba(255,255,255,.035); border-color: rgba(201,169,96,.35); }
+    #decoy-select-files.drop-button-hover, #decoy-select-files:hover:not(:disabled) { background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.24); }
+    .decoy-drop-zone:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
     #decoy-maintenance-files-slot:empty { display: none; }
-    .decoy-drop-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 19rem; padding: 2rem; border: 1px dashed rgba(255,255,255,.16); border-radius: 1rem; color: var(--text-3); text-align: center; line-height: 1.65; }
+    .decoy-drop-zone { display: grid; grid-template-rows: minmax(0, 1fr) 3rem; height: 21rem; min-width: 0; padding: 1.25rem; border: 1px dashed rgba(255,255,255,.16); border-radius: 1rem; color: var(--text-3); text-align: center; line-height: 1.65; }
+    .decoy-drop-main { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; }
+    .decoy-drop-feedback { min-width: 0; overflow: auto; overflow-wrap: anywhere; }
+    #decoy-drop-status { margin: 0; text-align: left; }
     .decoy-document-icon { display: grid; place-items: center; width: 3.3rem; height: 3.3rem; margin-bottom: 1.2rem; border: 1px solid rgba(201,169,96,.28); border-radius: 1rem; background: rgba(201,169,96,.07); color: var(--gold); }
     .decoy-document-icon svg { width: 1.85rem; height: 2.3rem; fill: none; stroke: currentColor; stroke-width: 3; stroke-linejoin: round; }
     .decoy-drop-zone strong { color: var(--text); font-size: 1.05rem; font-weight: 600; }
-    #decoy-drop-hint { margin: .7rem 0 1.35rem; font-size: .85rem; }
+    #decoy-drop-hint { height: 2.8rem; flex-shrink: 0; overflow: auto; margin: .7rem 0 .65rem; font-size: .85rem; }
     #decoy-select-files { display: inline-flex; align-items: center; gap: .65rem; padding: .65rem 1rem; font-weight: 600; }
     #decoy-select-files svg { width: 1.05rem; height: 1.05rem; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
-    .decoy-drop-run { display: flex; align-items: center; gap: .75rem; margin-top: .85rem; width: 100%; font-size: .75rem; }
+    .decoy-drop-run { display: flex; align-items: center; gap: .75rem; margin: 0; width: 100%; min-height: 2.5rem; font-size: .75rem; }
+    #decoy-drop-copy { flex: 0 1 65%; }
+    #decoy-drop-cancel { flex: 0 0 auto; }
     .decoy-drop-run .bar { flex: 1 1 auto; height: .35rem; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
     .decoy-drop-run .bar i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .2s ease; }
-    @media (max-width: 850px) { .decoy-update-grid { grid-template-columns: 1fr; } .decoy-drop-zone { min-height: 15rem; } }
+    @media (max-width: 850px) { .decoy-update-grid { grid-template-columns: 1fr; } }
     .container-details-toggle {
       position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
       display: grid; place-items: center; width: 1.75rem; height: 2rem; padding: 0;
@@ -1201,7 +1215,7 @@
           <span id="nav-container-count" class="nav-count">0</span>
         </button>
         <button class="nav-item dashboard-nav" type="button" data-section="backup">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12"></path><path d="M13 7l5 5-5 5"></path><path d="M20 4v16"></path></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5H5v14h14v-8"></path><path d="M12 12 21 3M15 3h6v6"></path></svg>
           <span class="nav-label">导出与迁移</span>
         </button>
         <button class="nav-item dashboard-nav" type="button" data-section="decoy">
@@ -1251,7 +1265,7 @@
         <section id="dashboard-section-files" class="dashboard-section" aria-labelledby="files-title">
           <div class="section-header">
             <nav id="file-breadcrumb" class="file-breadcrumb" aria-label="当前位置"><h2 id="files-title">容器管理</h2></nav>
-            <div class="overview-actions">
+            <div id="management-list-actions" class="overview-actions">
               <button class="shell-button" type="button" data-mount-existing>导入容器</button>
               <button class="create-button" type="button" data-create-container>新建容器</button>
             </div>
@@ -1336,17 +1350,21 @@
             </div>
             <output id="decoy-protection-status" class="section-note" aria-live="polite" hidden></output>
             <div class="decoy-update-grid">
-              <div id="decoy-drop-zone" class="decoy-drop-zone">
-                <div class="decoy-document-icon" aria-hidden="true"><svg viewBox="0 0 40 48"><path d="M5 2h19l11 12v29a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V5a3 3 0 0 1 3-3Z"></path><path d="M24 2v12h11"></path></svg></div>
-                <strong>将文件拖至此处</strong>
-                <p id="decoy-drop-hint">将文件或文件夹添加到当前目录。</p>
-                <button id="decoy-select-files" class="shell-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg>选择文件</button>
-                <div id="decoy-drop-run" class="decoy-drop-run" hidden>
-                  <span id="decoy-drop-copy">正在放入…</span>
-                  <span class="bar"><i id="decoy-drop-bar"></i></span>
-                  <button id="decoy-drop-cancel" class="shell-button" type="button">停止</button>
+              <div id="decoy-drop-zone" class="decoy-drop-zone" role="button" tabindex="0" aria-label="选择要添加的文件">
+                <div class="decoy-drop-main">
+                  <div class="decoy-document-icon" aria-hidden="true"><svg viewBox="0 0 40 48"><path d="M5 2h19l11 12v29a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V5a3 3 0 0 1 3-3Z"></path><path d="M24 2v12h11"></path></svg></div>
+                  <strong>将文件拖至此处</strong>
+                  <p id="decoy-drop-hint">将文件或文件夹添加到当前目录。</p>
+                  <button id="decoy-select-files" class="shell-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg>选择文件</button>
                 </div>
-                <output id="decoy-drop-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
+                <div class="decoy-drop-feedback">
+                  <div id="decoy-drop-run" class="decoy-drop-run" hidden>
+                    <span id="decoy-drop-copy">正在放入…</span>
+                    <span class="bar"><i id="decoy-drop-bar"></i></span>
+                    <button id="decoy-drop-cancel" class="shell-button" type="button">停止</button>
+                  </div>
+                  <output id="decoy-drop-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
+                </div>
               </div>
               <div class="decoy-update-facts">
                 <article class="decoy-capacity-card">
@@ -1354,14 +1372,12 @@
                   <div class="decoy-used-value"><span id="decoy-maintenance-used">—</span><span id="decoy-maintenance-total" class="decoy-used-total"></span></div>
                   <div class="decoy-space-track" aria-hidden="true"><i id="decoy-maintenance-space-bar"></i></div>
                   <div class="decoy-remaining">剩余可写 <strong id="decoy-maintenance-writable">—</strong></div>
-                  <div id="decoy-maintenance-space-detail" class="decoy-maintenance-detail">正在读取容量…</div>
+                  <div id="decoy-maintenance-space-detail" class="decoy-maintenance-detail"></div>
                 </article>
                 <article class="decoy-freshness-card">
-                  <svg class="decoy-info-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7v1"></path></svg>
                   <div>
-                    <div class="stat-label">诱饵内容新鲜度</div>
+                    <div class="stat-label">内容新鲜度</div>
                     <div id="decoy-maintenance-freshness" class="decoy-freshness-value">—</div>
-                    <div id="decoy-maintenance-freshness-detail" class="decoy-maintenance-detail">只检查外层根目录，不保存扫描结果。</div>
                   </div>
                 </article>
               </div>

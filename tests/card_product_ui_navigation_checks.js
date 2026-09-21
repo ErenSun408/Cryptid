@@ -97,8 +97,8 @@
     window.navigationFixture.completeVolume = null;
     $("#file-refresh").click();
     await wait(() => window.navigationFixture.completeVolume !== null);
-    check($("#decoy-maintenance-writable").textContent === "正在读取…" && $("#decoy-maintenance-space-bar").style.width === "0%",
-      "A new measurement clears the previous capacity before completion");
+    check($("#decoy-maintenance-writable").textContent === "0 字节" && $("#decoy-maintenance-used").textContent === "3.0" && $("#decoy-maintenance-space-bar").style.width === "75%",
+      "A pending measurement retains the last completed capacity snapshot");
     window.navigationFixture.delayVolume = false;
     window.navigationFixture.completeVolume();
     await wait(() => !$("#decoy-maintenance-end").disabled);
@@ -114,10 +114,18 @@
     window.navigationFixture.maintenanceSpace = "4294967296,1073741824,536870912";
     $("#file-refresh").click();
     await wait(() => $("#decoy-maintenance-writable").textContent === "512 MiB" && !$("#decoy-maintenance-end").disabled);
-    check($("#decoy-maintenance-freshness").textContent.includes("天前有修改") &&
-      $("#decoy-maintenance-freshness-detail").textContent.includes("顶层项目") &&
+    check($("#decoy-maintenance-freshness").textContent.includes("日前") &&
+      $("#decoy-maintenance-freshness").dataset.age === "fresh" &&
       all("#file-list-body tr").length === 2,
       "Freshness is derived from a bounded root listing while the reused list renders its entries");
+    for (const [days, label, age] of [[0, "上次修改：今天", "fresh"], [45, "1 月前", "aging"], [400, "1 年前", "stale"]]) {
+      window.navigationFixture.freshnessDays = days;
+      $("#file-refresh").click();
+      await wait(() => !$("#decoy-maintenance-end").disabled && $("#decoy-maintenance-freshness").textContent.includes(label));
+      check($("#decoy-maintenance-freshness").dataset.age === age,
+        `Freshness at ${days} days uses the correct label and color`);
+    }
+    window.navigationFixture.freshnessDays = 1;
     const endsBeforeNavigation = window.navigationFixture.endedMaintenance.length;
     $("[data-section=files]").click();
     await wait(() => $("#dashboard-section-files").classList.contains("active"));
@@ -139,6 +147,7 @@
     check($("#files-title").textContent.includes("容器管理") &&
       !$("#file-mount-toggle").hidden,
       "Another container uses the normal file controls during maintenance");
+    check($("#management-list-actions").hidden, "Container detail hides list-only creation and import actions");
     decoyNav.click();
     await wait(() => $("#decoy-maintenance-container").value === "3" &&
       $("#management-files").parentNode.id === "decoy-maintenance-files-slot");
@@ -171,6 +180,16 @@
     $("#decoy-select-files").click();
     await wait(() => window.navigationFixture.selectFilesCalls === 1);
     check(!$("#decoy-select-files").disabled,"File selection uses the native picker and cancellation leaves maintenance ready");
+    for (const [state, region, button] of [[1,true,false],[2,false,true],[3,true,false],[0,false,false]]) {
+      window.dispatchEvent(new CustomEvent("usb-vault-drop-hover",{detail:state}));
+      check($("#decoy-drop-zone").classList.contains("drop-hover")===region &&
+        $("#decoy-select-files").classList.contains("drop-button-hover")===button,
+        `Native hover state ${state} highlights only the intended surface`);
+    }
+    $("#decoy-drop-zone").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await wait(() => window.navigationFixture.selectFilesCalls === 2);
+    check(window.navigationFixture.selectFilesCalls === 2,
+      "Double clicking the drop region opens the same file picker");
     const armedBefore = window.navigationFixture.dropTargets.length;
     $("#file-list-body [data-file-enter]").click();
     await wait(() => window.navigationFixture.dropTargets.length > armedBefore);
@@ -185,6 +204,7 @@
     await wait(() => !$("#decoy-drop-run").hidden);
     check($("#decoy-protection-status").hidden,
       "Upload ownership before its notification is not a protection failure");
+    check($("#decoy-maintenance-writable").textContent === "512 MiB" && $("#decoy-maintenance-used").textContent === "3.0", "Upload retains the completed capacity snapshot");
     window.navigationFixture.filePercent = 50;
     window.navigationFixture.dropStatus = "1,3,2,0";
     await wait(() => $("#decoy-drop-copy").textContent.includes("2/3"));
@@ -223,7 +243,7 @@
       window.navigationFixture.dropStatus = "2,1,1,0";
       window.dispatchEvent(new Event("usb-vault-external-drop-changed"));
       await wait(() => window.navigationFixture.dropTargets.length > armed);
-      check($("#decoy-drop-status").textContent.includes("已放入 1 个项目") &&
+      check($("#decoy-drop-status").hidden && $("#decoy-drop-status").textContent === "" &&
         $("#decoy-drop-status").dataset.tone === "success" &&
         $("#decoy-drop-run").hidden &&
         window.navigationFixture.dropStatus === "0,0,0,0",
