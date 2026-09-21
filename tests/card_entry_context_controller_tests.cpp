@@ -120,6 +120,19 @@ class FakeInitializationTarget final
   FakeRecordStore& store_;
 };
 
+class FakeResetTarget final : public usb_vault::card::ICardResetTarget {
+ public:
+  explicit FakeResetTarget(FakeRecordStore& store) : store_(store) {}
+  SecureBuffer snapshot() override { return store_.get_blob(); }
+  void reset(const SecureBuffer& expected) override {
+    if (!std::ranges::equal(expected.bytes(), store_.blob))
+      throw std::runtime_error("card changed");
+    store_.put_blob(usb_vault::card::provision_uninitialized_card_record_v1());
+  }
+ private:
+  FakeRecordStore& store_;
+};
+
 class FakeSource final : public ICardEntryInspectionSource {
  public:
   [[nodiscard]] std::unique_ptr<IReadOnlyCardEntryInspection>
@@ -147,6 +160,12 @@ class FakeSource final : public ICardEntryInspectionSource {
   make_initialization_target(const IReadOnlyCardEntryInspection&) override {
     if (!support_initialization) return nullptr;
     return std::make_unique<FakeInitializationTarget>(record);
+  }
+
+  std::unique_ptr<usb_vault::card::ICardResetTarget> make_reset_target(
+      const IReadOnlyCardEntryInspection&) override {
+    if (!support_updates) return nullptr;
+    return std::make_unique<FakeResetTarget>(record);
   }
 
   Lifetime lifetime;
@@ -447,10 +466,47 @@ void test_source_failures_fail_closed_without_context() {
           "null source result was retried or retained a context");
 }
 
+void test_login_reset_confirmation_lifecycle() {
+  const auto initialized = usb_vault::card::initialize_card_record_v1(secure_text("forgotten-password"));
+  for (int scenario = 0; scenario < 7; ++scenario) {
+    FakeSource source;
+    source.support_updates = true;
+    source.specs.push_back({CardEntryMediaEvidence::product_record, CardRecordState::initialized_v1});
+    source.specs.push_back({CardEntryMediaEvidence::product_record, CardRecordState::initialized_v1});
+    source.record.blob.assign(initialized.bytes().begin(), initialized.bytes().end());
+    CardEntryContextController controller(source);
+    static_cast<void>(controller.handle_arrival());
+    const auto ticket = controller.prepare_login_reset();
+    require(source.record.put_calls == 0 && controller.login_reset_pending(ticket), "prepare wrote or lost confirmation");
+    if (scenario == 1) controller.cancel_login_reset();
+    if (scenario == 2) controller.handle_removal();
+    if (scenario == 3) static_cast<void>(controller.handle_arrival());
+    if (scenario == 4) static_cast<void>(controller.prepare_login_reset());
+    if (scenario == 5) source.record.blob.back() ^= std::byte{1};
+    bool succeeded = false;
+    try { controller.confirm_login_reset(scenario == 6 ? ticket + 1 : ticket); succeeded = true; }
+    catch (const std::exception&) {}
+    require(succeeded == (scenario == 0), "invalid confirmation reached reset");
+    require(source.record.put_calls == (scenario == 0 ? 1 : 0), "unexpected reset writes");
+    require(!controller.login_reset_pending(ticket), "confirmation survived consumption");
+    bool replayed = false;
+    try { controller.confirm_login_reset(ticket); replayed = true; } catch (const std::exception&) {}
+    require(!replayed, "reset confirmation replay succeeded");
+    if (scenario == 0 || scenario == 5)
+      require(!controller.has_context(), "reset attempt retained insertion");
+  }
+  FakeSource source;
+  CardEntryContextController controller(source);
+  bool accepted = false;
+  try { static_cast<void>(controller.prepare_login_reset()); accepted = true; } catch (const std::exception&) {}
+  require(!accepted, "no-card reset preparation accepted");
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_login_reset_confirmation_lifecycle();
     test_second_card_password_requires_a_fresh_initialized_inspection();
     test_second_card_password_rejects_empty_input_without_retiring();
     test_second_card_password_retires_the_insertion_on_failure();

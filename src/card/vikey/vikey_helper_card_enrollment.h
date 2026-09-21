@@ -33,6 +33,8 @@ class VikeyHelperCardEnrollment final
   [[nodiscard]] std::unique_ptr<ICardUpdateTarget> make_update_target(
       const application::IReadOnlyCardEntryInspection& context) override;
   [[nodiscard]] std::unique_ptr<application::ICardOperationLease> acquire_operation() override;
+  std::unique_ptr<ICardResetTarget> make_reset_target(
+      const application::IReadOnlyCardEntryInspection& context) override;
   void bootstrap(const VikeyCardMediaProbe& context);
 
  private:

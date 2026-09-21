@@ -41,6 +41,7 @@ CardEntryContextController::CardEntryContextController(
     : source_(source) {}
 
 CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
+  cancel_login_reset();
   startup_failure_ = {};
   context_.reset();
   route_ = CardEntryRoute::unavailable;
@@ -62,6 +63,7 @@ CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
 }
 
 void CardEntryContextController::handle_removal() noexcept {
+  cancel_login_reset();
   startup_failure_ = {};
   context_.reset();
   route_.reset();
@@ -77,6 +79,7 @@ void CardEntryContextController::initialize_and_authenticate(
         "card initialization requires a fresh eligible insertion");
   }
 
+  cancel_login_reset();
   auto operation_lease = source_.acquire_operation();
 
   // Retired up front, and left retired on every failure below: a card whose
@@ -107,6 +110,7 @@ void CardEntryContextController::set_second_card_password(
     throw std::invalid_argument(
         "both card record passwords are required");
   }
+  cancel_login_reset();
   auto operation_lease = source_.acquire_operation();
 
   // Login success deliberately destroys its one-shot insertion context. A
@@ -154,6 +158,7 @@ void CardEntryContextController::reset_card_record(
         "card reset requires an authenticated session");
   }
 
+  cancel_login_reset();
   auto operation_lease = source_.acquire_operation();
 
   // Never revive the insertion consumed by login. The destructive operation
@@ -205,6 +210,7 @@ void CardEntryContextController::authenticate_login(
         "card login requires a fresh initialized insertion");
   }
 
+  cancel_login_reset();
   auto operation_lease = source_.acquire_operation();
 
   std::unique_ptr<card::ICardLoginTarget> target;
@@ -266,6 +272,56 @@ void CardEntryContextController::authenticate_login(
   context_.reset();
   success_consumer.consume_authenticated_login(
       std::move(root_secret), std::move(login_password_utf8));
+}
+
+
+std::uint32_t CardEntryContextController::prepare_login_reset() {
+  cancel_login_reset();
+  if (route_ != CardEntryRoute::login_required || !context_)
+    throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
+  try {
+    auto lease = source_.acquire_operation();
+    auto target = source_.make_reset_target(*context_);
+    if (!target)
+      throw std::system_error(card::make_error_code(card::CardError::backend_unavailable));
+    auto snapshot = target->snapshot();
+    if (card::inspect_card_record(snapshot.bytes()) != card::CardRecordState::initialized_v1)
+      throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
+    const auto ticket = reset_confirmation_.prepare();
+    reset_target_ = std::move(target);
+    reset_snapshot_ = std::move(snapshot);
+    return ticket;
+  } catch (...) {
+    cancel_login_reset();
+    route_ = CardEntryRoute::unavailable;
+    context_.reset();
+    throw;
+  }
+}
+
+void CardEntryContextController::cancel_login_reset() noexcept {
+  reset_confirmation_.cancel();
+  reset_target_.reset();
+  reset_snapshot_.clear();
+}
+
+bool CardEntryContextController::login_reset_pending(const std::uint32_t ticket) const noexcept {
+  return route_ == CardEntryRoute::login_required && context_ && reset_target_ &&
+         reset_confirmation_.matches(ticket);
+}
+
+void CardEntryContextController::confirm_login_reset(const std::uint32_t ticket) {
+  if (!login_reset_pending(ticket)) {
+    cancel_login_reset();
+    throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
+  }
+  static_cast<void>(reset_confirmation_.consume(ticket));
+  auto target = std::move(reset_target_);
+  auto snapshot = std::move(reset_snapshot_);
+  route_ = CardEntryRoute::unavailable;
+  context_.reset();
+  auto lease = source_.acquire_operation();
+  target->reset(snapshot);
 }
 
 std::optional<CardEntryRoute>

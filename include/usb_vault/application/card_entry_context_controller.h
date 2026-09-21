@@ -8,6 +8,8 @@
 #include "usb_vault/card/card_update_target.h"
 
 #include "usb_vault/application/card_operation_lease.h"
+#include "usb_vault/card/card_reset_target.h"
+#include "usb_vault/application/card_reset_confirmation.h"
 #include <memory>
 #include <optional>
 
@@ -61,6 +63,9 @@ class ICardEntryInspectionSource {
     return nullptr;
   }
 
+  [[nodiscard]] virtual std::unique_ptr<card::ICardResetTarget>
+  make_reset_target(const IReadOnlyCardEntryInspection&) { return nullptr; }
+
  protected:
   ICardEntryInspectionSource() noexcept = default;
 };
@@ -96,6 +101,10 @@ class ICardEntryActions {
   // revived. The fresh insertion is retired on every outcome.
   virtual void reset_card_record(
       const IVolatileCardAuthenticationSession& authentication) = 0;
+  virtual std::uint32_t prepare_login_reset() { throw std::logic_error("login reset unsupported"); }
+  virtual void cancel_login_reset() noexcept {}
+  [[nodiscard]] virtual bool login_reset_pending(std::uint32_t) const noexcept { return false; }
+  virtual void confirm_login_reset(std::uint32_t) { throw std::logic_error("login reset unsupported"); }
   [[nodiscard]] virtual std::optional<CardEntryRoute>
   current_route() const noexcept = 0;
 
@@ -138,6 +147,11 @@ class CardEntryContextController final : public ICardEntryActions {
   void reset_card_record(
       const IVolatileCardAuthenticationSession& authentication) override;
 
+  std::uint32_t prepare_login_reset() override;
+  void cancel_login_reset() noexcept override;
+  bool login_reset_pending(std::uint32_t ticket) const noexcept override;
+  void confirm_login_reset(std::uint32_t ticket) override;
+
   // No value means no accepted physical insertion is currently present.
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override;
@@ -152,6 +166,9 @@ class CardEntryContextController final : public ICardEntryActions {
   std::unique_ptr<IReadOnlyCardEntryInspection> context_;
   std::optional<CardEntryRoute> route_;
   card::FailureDiagnostic startup_failure_{};
+  CardResetConfirmation reset_confirmation_;
+  std::unique_ptr<card::ICardResetTarget> reset_target_;
+  security::SecureBuffer reset_snapshot_;
 };
 
 }  // namespace usb_vault::application

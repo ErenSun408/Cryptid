@@ -60,6 +60,36 @@ namespace {
   return context;
 }
 
+class VikeyHelperCardResetTarget final : public ICardResetTarget {
+ public:
+  VikeyHelperCardResetTarget(VikeyHelperBackendConfig config,
+      IVikeyCredentialProvider& provider, const VikeyCardMediaProbe context)
+      : config_(std::move(config)), provider_(provider),
+        hardware_id_(validate_login_context(context).hardware_id) {}
+  security::SecureBuffer snapshot() override {
+    try {
+      auto credentials = provider_.load_credentials();
+      return read_vikey_development_card_record_with_network_access(
+          config_.helper_path, config_.helper_digest, config_.vendor_directory,
+          config_.vendor_digest, hardware_id_, credentials.user_sn,
+          credentials.api_key, credentials.user_pin, config_.timeout, true);
+    } catch (...) { rethrow_enrollment_failure(); }
+  }
+  void reset(const security::SecureBuffer& expected) override {
+    try {
+      auto credentials = provider_.load_credentials();
+      write_vikey_development_card_record_with_network_access(
+          config_.helper_path, config_.helper_digest, config_.vendor_directory,
+          config_.vendor_digest, hardware_id_, credentials.user_sn,
+          credentials.api_key, credentials.user_pin, expected, config_.timeout, true);
+    } catch (...) { rethrow_enrollment_failure(); }
+  }
+ private:
+  VikeyHelperBackendConfig config_;
+  IVikeyCredentialProvider& provider_;
+  std::uint32_t hardware_id_;
+};
+
 }  // namespace
 
 VikeyHelperCardEnrollment::VikeyHelperCardEnrollment(
@@ -137,6 +167,14 @@ VikeyHelperCardEnrollment::make_update_target(
 std::unique_ptr<application::ICardOperationLease>
 VikeyHelperCardEnrollment::acquire_operation() {
   return std::make_unique<CardOperationLease>();
+}
+
+std::unique_ptr<ICardResetTarget> VikeyHelperCardEnrollment::make_reset_target(
+    const application::IReadOnlyCardEntryInspection& context) {
+  const auto* insertion = dynamic_cast<const VikeyCardInsertionContext*>(&context);
+  if (!insertion)
+    throw std::system_error(make_error_code(CardError::invalid_configuration));
+  return std::make_unique<VikeyHelperCardResetTarget>(config_, credential_provider_, insertion->probe());
 }
 
 void VikeyHelperCardEnrollment::bootstrap(
