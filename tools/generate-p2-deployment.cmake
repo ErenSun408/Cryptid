@@ -10,7 +10,7 @@ if(DEFINED app)
   string(APPEND text "inline constexpr wchar_t app[] = L\"${digest}\";\n")
 endif()
 string(APPEND text "inline constexpr wchar_t vendor[] = L\"735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E\";\n")
-string(APPEND text "inline constexpr wchar_t format[] = L\"E411BB9552ACA94B1285570E45C3D77D44652519309B7D33EC0A4EF99AF28AB3\";\n}\n")
+string(APPEND text "inline constexpr wchar_t format[] = L\"416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184\";\n}\n")
 file(WRITE "${output}.tmp" "${text}")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${output}.tmp" "${output}"
                 COMMAND_ERROR_IS_FATAL ANY)
