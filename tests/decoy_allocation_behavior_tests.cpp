@@ -1,3 +1,4 @@
+#include "usb_vault/volume/fat32_file_allocation.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/fat32_safe_space.h"
@@ -629,6 +630,9 @@ int sequential_run(int argc,wchar_t** argv) {
         Handle f;f.h=::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_WRITE_THROUGH,nullptr);need(f.h!=INVALID_HANDLE_VALUE,"create sequential file");
         LARGE_INTEGER eof{};eof.QuadPart=static_cast<LONGLONG>(size);need(::SetFilePointerEx(f.h,eof,nullptr,FILE_BEGIN),"seek eof");
         const BOOL allocated=::SetEndOfFile(f.h);record(id,"preallocate",allocated!=FALSE,allocated?0 : ::GetLastError());need(allocated&&m.type()==volume::VolumeType::outer,"preallocate failed");
+        const auto allocation=volume::read_fat32_file_allocation(f.h,size,static_cast<std::uint32_t>(l.cluster),l.clusters);
+        Extents checked;for(const auto& run:allocation)checked.emplace_back(run.first_cluster,run.first_cluster+run.cluster_count);
+        need(checked==extent_ranges(f.h),"production preallocation inspection mismatch");
         auto vol=raw(m.drive);std::uint64_t vcn=0;
         for(const auto& destination:planned) {
           std::uint64_t first=destination.first;
@@ -653,6 +657,9 @@ int sequential_run(int argc,wchar_t** argv) {
           }
         }
         need(extent_ranges(f.h)==planned,"actual extents mismatch");
+        checked.clear();for(const auto& run:volume::read_fat32_file_allocation(f.h,size,static_cast<std::uint32_t>(l.cluster),l.clusters))
+          checked.emplace_back(run.first_cluster,run.first_cluster+run.cluster_count);
+        need(checked==planned,"production final allocation mismatch");
         if(exact)need(planned==*exact,"first fit does not match expected remaining holes");
         for(const auto& range:planned)need(l.data+range.second*l.cluster<=l.boundary,"unsafe extent");
         record(id,"extents_verified",true,0,planned.size());

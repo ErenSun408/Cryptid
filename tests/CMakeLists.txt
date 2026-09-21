@@ -1113,3 +1113,9 @@ target_include_directories(fat32_allocation_plan_tests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(fat32_allocation_plan_tests PRIVATE usb_vault_core)
 usb_vault_configure_target(fat32_allocation_plan_tests)
 add_test(NAME fat32_allocation_plan_tests COMMAND fat32_allocation_plan_tests)
+
+add_executable(fat32_file_allocation_tests fat32_file_allocation_tests.cpp)
+target_include_directories(fat32_file_allocation_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(fat32_file_allocation_tests PRIVATE usb_vault_core)
+usb_vault_configure_target(fat32_file_allocation_tests)
+add_test(NAME fat32_file_allocation_tests COMMAND fat32_file_allocation_tests)
