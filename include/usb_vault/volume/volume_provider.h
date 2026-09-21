@@ -2,6 +2,7 @@
 
 #include "usb_vault/security/secure_buffer.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -101,6 +102,7 @@ struct MountIdentity final {
   std::wstring volume_path;
   std::uint64_t disk_length{};
   bool protected_outer_writable{};
+  std::array<std::uint8_t, 32> header_digest{};
   friend bool operator==(const MountIdentity&, const MountIdentity&) = default;
 };
 

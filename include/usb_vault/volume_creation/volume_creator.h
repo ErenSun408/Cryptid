@@ -110,12 +110,22 @@ class VolumeMeasurementSession final {
   VolumeMeasurementSession& operator=(VolumeMeasurementSession&&) noexcept;
 
   [[nodiscard]] std::uint64_t tail_space(wchar_t drive_letter);
+  // Caller supplies the identity captured when opening authenticated maintenance.
+  // The helper independently authenticates headers and rechecks the live mount.
+  [[nodiscard]] std::uint64_t protected_space(
+      std::wstring_view container_path, wchar_t drive_letter, std::int32_t mount_id,
+      std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
+      const security::SecureBuffer& hidden_password);
   // Ends the session now rather than at destruction. Calling it twice, or
   // before anything was measured, does nothing.
   void close() noexcept;
   [[nodiscard]] bool open() const noexcept;
 
  private:
+  [[nodiscard]] std::uint64_t measure(
+      std::wstring_view path, std::uint32_t mounted_drive, std::int32_t mount_id,
+      std::uint64_t mounted_bytes, const security::SecureBuffer& first,
+      const security::SecureBuffer& second);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

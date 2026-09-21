@@ -1,3 +1,4 @@
+#include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/fat32_safe_space.h"
 #include "volume_creation/veracrypt_format_abi.h"
@@ -159,8 +160,10 @@ int recovery_run(int argc,wchar_t** argv);
 int placement_run(int argc,wchar_t** argv);
 int sequential_run(int argc,wchar_t** argv);
 int fault_run(wchar_t** argv);
+int measurement_helper_run(wchar_t** argv);
 int abrupt_test_writer(wchar_t* path);
 int wmain(int argc,wchar_t** argv) {
+  if(argc==5 && std::wstring_view(argv[1])==L"--measurement-helper-run") return measurement_helper_run(argv);
   if(argc==3 && std::wstring_view(argv[1])==L"--abrupt-disposable-writer") return abrupt_test_writer(argv[2]);
   if(argc==5 && std::wstring_view(argv[1])==L"--fault-disposable-run") return fault_run(argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--sequential-disposable-run") return sequential_run(argc,argv);
@@ -758,5 +761,45 @@ int fault_run(wchar_t** argv) {
       const auto after=total();record("free_after",after==before,0,after);need(after==before,"safe space leaked after cleanup");need(m.type()==volume::VolumeType::outer,"protection latch persisted across remount");m.close();need(digest(m.path,g[2],g[3])==hidden,"hidden region changed");record("hidden_unchanged",true);
     }
     std::ofstream(output/L"complete.txt")<<"PASS six failure scenarios; original files, reclaimed space and hidden hashes verified."<<std::endl;return 0;
+  } catch(const std::exception& e){std::cerr<<e.what()<<std::endl;if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
+}
+
+
+int measurement_helper_run(wchar_t** argv) {
+  bool created=false;
+  try {
+    const fs::path helper=argv[2],source=argv[3],output=argv[4],base=source/L"base-128.hc";
+    need(helper.is_absolute()&&source.is_absolute()&&output.is_absolute()&&!fs::exists(output)&&fs::is_directory(output.parent_path()),"new absolute helper run required");
+    need(fs::is_regular_file(source/L"complete.txt")&&fs::file_size(base)==128*MiB,"disposable base required");
+    need(fs::create_directory(output),"create measurement output");created=true;
+    Mounted m;m.path=output/L"measurement.hc";
+    need(fs::copy_file(base,m.path,fs::copy_options::none),"copy measurement fixture");
+    const auto other=output/L"other.hc";need(fs::copy_file(base,other,fs::copy_options::none),"copy other identity");
+    const auto hidden=digest(base,66977792,66977792),otherHash=digest(other,0,128*MiB);
+    choose_drive(m);m.open();
+    auto identity=m.provider.mount_identity(m.drive);
+    need(identity.protected_outer_writable,"protected identity required");
+    auto password=[](std::string_view text) {security::SecureBuffer p(text.size());std::memcpy(p.data(),text.data(),text.size());return p;};
+    const auto outer=password("DisposableOuterP3259"),inner=password("DisposableHiddenP3259"),wrong=password("WrongDisposableP3259");
+    usb_vault::volume_creation::VolumeMeasurementSession session(helper);
+    auto measure=[&]() {return session.protected_space(m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner);};
+    auto rejects=[&](auto action) {bool failed=false;try{static_cast<void>(action());}catch(const std::system_error&){failed=true;}catch(const std::invalid_argument&){failed=true;}need(failed&&session.open(),"bad request accepted or healthy pipe closed");};
+    const auto before=measure();need(before>MiB&&before<64*MiB,"unexpected safe capacity");
+    rejects([&]{return session.protected_space(other.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner);});
+    rejects([&]{return session.protected_space(m.path.native(),m.drive,identity.unique_id+1,identity.disk_length,outer,inner);});
+    rejects([&]{return session.protected_space(m.path.native(),m.drive,identity.unique_id,identity.disk_length+512,outer,inner);});
+    rejects([&]{return session.protected_space(m.path.native(),m.drive,identity.unique_id,identity.disk_length,wrong,inner);});
+    rejects([&]{return session.protected_space(m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,wrong);});
+    rejects([&]{return session.protected_space(m.path.native()+L":stream",m.drive,identity.unique_id,identity.disk_length,outer,inner);});
+    need(measure()==before,"failure changed measurement");
+    seed_file(m.root()+L"seed.bin");need(measure()==before-MiB,"write did not refresh safe capacity");
+    m.close();m.open();rejects(measure);
+    identity=m.provider.mount_identity(m.drive);
+    need(measure()==before-MiB,"remount measurement differs");
+    session.close();need(!session.open(),"session stayed open");
+    need(!m.close(),"unexpected protection trigger");
+    need(digest(m.path,66977792,66977792)==hidden&&digest(other,0,128*MiB)==otherHash,"readonly helper damaged fixtures");
+    std::ofstream(output/L"complete.txt")<<"PASS bound helper measurement, six rejection cases, failure reuse, write refresh, stale remount rejection and hidden integrity.\n";
+    return 0;
   } catch(const std::exception& e){std::cerr<<e.what()<<std::endl;if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
 }

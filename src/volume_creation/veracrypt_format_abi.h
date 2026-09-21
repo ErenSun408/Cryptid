@@ -37,7 +37,7 @@ using Initialize = int(__cdecl*)();
 using Shutdown = void(__cdecl*)();
 using FormatBinary = int(__cdecl*)(const Options*, std::uint32_t);
 
-// Candidate read-only export, not yet called by the production helper. Inputs
+// Read-only export required for authenticated protected-space measurement. Inputs
 // are the 512-byte primary outer/hidden headers from one file handle and two
 // explicit-length passwords. SHA-512 / PIM 0 matches the product format.
 // The four output uint64 values are outer start, outer length, protected start,

@@ -16,10 +16,12 @@ inline MountIdentity decode_mount_identity(const abi::VolumeProperties& p,
       !boolean(p.mount_disabled) || p.hidden_protection < 0 || p.hidden_protection > 2) {
     throw std::invalid_argument("invalid driver mount identity response");
   }
-  return {static_cast<wchar_t>(L'A' + expected_drive), p.unique_id,
+  MountIdentity result{static_cast<wchar_t>(L'A' + expected_drive), p.unique_id,
           {std::begin(p.volume_path), end}, p.disk_length,
           p.hidden_protection == 1 && !p.hidden_volume && !p.read_only &&
           !p.partition_in_inactive_system_scope && !p.mount_disabled &&
           p.header_flags == 0 && p.pkcs5_prf == 1 && p.volume_pim == 0};
+  std::copy(std::begin(p.volume_id), std::end(p.volume_id), result.header_digest.begin());
+  return result;
 }
 }  // namespace usb_vault::volume::detail

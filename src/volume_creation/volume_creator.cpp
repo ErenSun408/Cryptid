@@ -409,6 +409,26 @@ std::uint64_t VolumeMeasurementSession::tail_space(
     const wchar_t drive_letter) {
   const wchar_t letter = validated_drive_letter(drive_letter);
   const std::wstring root = {letter, L':', L'\\'};
+  return measure(root, 0, 0, 0, security::SecureBuffer{}, security::SecureBuffer{});
+}
+
+std::uint64_t VolumeMeasurementSession::protected_space(
+    std::wstring_view path, wchar_t drive, std::int32_t mount_id,
+    std::uint64_t mounted_bytes, const security::SecureBuffer& first,
+    const security::SecureBuffer& second) {
+  const auto letter = validated_drive_letter(drive);
+  const auto normalized = validated_target_path(path);
+  if (mount_id < 0 || mounted_bytes == 0 || first.empty() || second.empty() ||
+      first.size() > detail::kMaxPasswordBytes || second.size() > detail::kMaxPasswordBytes)
+    throw std::invalid_argument("invalid protected-space request");
+  return measure(normalized, static_cast<std::uint32_t>(letter - L'A' + 1),
+                 mount_id, mounted_bytes, first, second);
+}
+
+std::uint64_t VolumeMeasurementSession::measure(
+    std::wstring_view root, std::uint32_t drive, std::int32_t mount_id,
+    std::uint64_t mounted_bytes, const security::SecureBuffer& first,
+    const security::SecureBuffer& second) {
   if (impl_ == nullptr) {
     throw std::logic_error("this measurement session has been moved from");
   }
@@ -429,14 +449,19 @@ std::uint64_t VolumeMeasurementSession::tail_space(
   }
 
   const detail::RequestHeader header{
-      .operation = detail::Operation::scan_tail_space,
+      .operation = drive ? detail::Operation::scan_protected_space : detail::Operation::scan_tail_space,
+      .outer_size_bytes = mounted_bytes,
       .path_characters = static_cast<std::uint32_t>(root.size()),
+      .first_password_bytes = static_cast<std::uint32_t>(first.size()),
+      .second_password_bytes = static_cast<std::uint32_t>(second.size()),
+      .mounted_drive = drive,
+      .mount_id = mount_id,
       .nonce = impl_->nonce,
   };
   detail::Response answer{};
   try {
     detail::write_request(impl_->pipe.get(), header, root,
-                          security::SecureBuffer{}, security::SecureBuffer{});
+                          first, second);
     for (;;) {
       answer = detail::read_response(impl_->pipe.get());
       if (answer.type != detail::MessageType::progress) break;

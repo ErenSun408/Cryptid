@@ -170,7 +170,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     Request request = usb_vault::volume_creation::detail::read_request(
         pipe.get(), arguments.nonce);
     if (request.operation ==
-        usb_vault::volume_creation::detail::Operation::scan_tail_space) {
+        usb_vault::volume_creation::detail::Operation::scan_tail_space ||
+        request.operation == usb_vault::volume_creation::detail::Operation::scan_protected_space) {
       // One consent, one run of measurements: the caller keeps the pipe while
       // its maintenance session lasts and this process ends when it lets go.
       usb_vault::volume_creation::detail::serve_measurement_session(

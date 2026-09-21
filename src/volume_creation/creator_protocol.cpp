@@ -22,7 +22,8 @@ namespace {
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
   return operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
-         operation == Operation::scan_tail_space;
+         operation == Operation::scan_tail_space ||
+         operation == Operation::scan_protected_space;
 }
 
 [[nodiscard]] bool valid_stage(const CreationStage stage) noexcept {
@@ -43,6 +44,16 @@ bool valid_request_header(const RequestHeader& header) noexcept {
       header.path_characters > kMaxPathCharacters) {
     return false;
   }
+
+  if (header.operation == Operation::scan_protected_space) {
+    return header.mounted_drive >= 1 && header.mounted_drive <= 26 &&
+           header.mount_id >= 0 && header.outer_size_bytes > 0 &&
+           header.hidden_size_bytes == 0 && header.first_password_bytes > 0 &&
+           header.first_password_bytes <= kMaxPasswordBytes &&
+           header.second_password_bytes > 0 &&
+           header.second_password_bytes <= kMaxPasswordBytes;
+  }
+  if (header.mounted_drive != 0 || header.mount_id != 0) return false;
 
   // A measurement carries neither a size nor a password, so a request that
   // brings one is not a measurement however it is labelled.
@@ -150,6 +161,8 @@ Request read_request(
       .operation = header.operation,
       .outer_size_bytes = header.outer_size_bytes,
       .hidden_size_bytes = header.hidden_size_bytes,
+      .mounted_drive = header.mounted_drive,
+      .mount_id = header.mount_id,
       .target_path = std::wstring(header.path_characters, L'\0'),
       .first_password = security::SecureBuffer(header.first_password_bytes),
       .second_password =

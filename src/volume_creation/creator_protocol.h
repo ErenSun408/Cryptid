@@ -13,7 +13,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 2;
+constexpr std::uint16_t kProtocolVersion = 3;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -23,6 +23,7 @@ enum class Operation : std::uint32_t {
   create_with_hidden = 2,
   // Carries a mounted volume's root path and no secret at all.
   scan_tail_space = 3,
+  scan_protected_space = 4,
 };
 
 enum class MessageType : std::uint32_t {
@@ -42,6 +43,8 @@ struct RequestHeader final {
   std::uint32_t path_characters{};
   std::uint32_t first_password_bytes{};
   std::uint32_t second_password_bytes{};
+  std::uint32_t mounted_drive{};  // 1-26 for protected scans, zero otherwise.
+  std::int32_t mount_id{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 
@@ -70,7 +73,7 @@ struct CancelRequest final {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(RequestHeader) == 60);
+static_assert(sizeof(RequestHeader) == 68);
 static_assert(sizeof(Response) == 36);
 static_assert(sizeof(CancelRequest) == 24);
 
@@ -78,6 +81,8 @@ struct Request final {
   Operation operation{Operation::create_standard};
   std::uint64_t outer_size_bytes{};
   std::uint64_t hidden_size_bytes{};
+  std::uint32_t mounted_drive{};
+  std::int32_t mount_id{};
   std::wstring target_path;
   security::SecureBuffer first_password;
   security::SecureBuffer second_password;

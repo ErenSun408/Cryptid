@@ -3,10 +3,13 @@
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/volume_space.h"
+#include "usb_vault/volume/fat32_safe_space.h"
 #include "volume_creation/veracrypt_format_abi.h"
 
 #include <Windows.h>
 #include <winioctl.h>
+#include <bcrypt.h>
+#include <cstring>
 
 #include <algorithm>
 #include <cstddef>
@@ -138,6 +141,22 @@ class FormatBackend final {
   FormatBackend(const FormatBackend&) = delete;
   FormatBackend& operator=(const FormatBackend&) = delete;
 
+  security::SecureBuffer geometry(
+      const std::array<unsigned char, 512>& outer,
+      const std::array<unsigned char, 512>& hidden,
+      std::uint64_t host_bytes, const security::SecureBuffer& first,
+      const security::SecureBuffer& second) {
+    const auto query = symbol<format_abi::ReadHiddenGeometry>("VeraCryptReadHiddenGeometry");
+    security::SecureBuffer result(format_abi::kGeometryOutputBytes);
+    if (query(outer.data(), 512, hidden.data(), 512,
+              reinterpret_cast<const unsigned char*>(first.data()), static_cast<std::uint32_t>(first.size()),
+              reinterpret_cast<const unsigned char*>(second.data()), static_cast<std::uint32_t>(second.size()),
+              host_bytes, reinterpret_cast<std::uint64_t*>(result.data()),
+              format_abi::kGeometryOutputBytes) != format_abi::kSuccess)
+      fail(CreationError::format_rejected, "protected geometry unavailable");
+    return result;
+  }
+
   void format(const std::wstring& path, const std::uint64_t size,
               const security::SecureBuffer& password,
               const bool hidden_volume,
@@ -238,6 +257,16 @@ void validate_request(const Request& request) {
       !std::filesystem::path(request.target_path).is_absolute()) {
     fail(CreationError::invalid_request, "invalid creation request values");
   }
+  if (request.operation == Operation::scan_protected_space) {
+    if (request.mounted_drive < 1 || request.mounted_drive > 26 || request.mount_id < 0 ||
+        request.outer_size_bytes == 0 || request.hidden_size_bytes != 0 ||
+        request.first_password.empty() || request.second_password.empty() ||
+        request.first_password.size() > kMaxPasswordBytes || request.second_password.size() > kMaxPasswordBytes)
+      fail(CreationError::invalid_request, "invalid protected-space request");
+    return;
+  }
+  if (request.mounted_drive != 0 || request.mount_id != 0)
+    fail(CreationError::invalid_request, "unexpected mounted identity");
   if (request.operation == Operation::scan_tail_space) {
     // A volume root and nothing else: a request carrying a size or a password
     // is not a measurement, whatever it calls itself.
@@ -338,6 +367,89 @@ void as_caller(const HANDLE pipe, Action&& action) {
   } catch (const std::exception&) {
     fail(CreationError::bitmap_scan_failed, "scan outer-volume free tail");
   }
+}
+
+// Neither caller paths nor DOS drive mappings select a privileged raw device.
+// Paths are opened while impersonating the caller; the raw device is a fixed
+// VeraCrypt namespace derived only from a validated drive number.
+std::uint64_t scan_protected_space(HANDLE pipe, Request& request) {
+  const auto drive = static_cast<wchar_t>(L'A' + request.mounted_drive - 1);
+  volume::VolumeProvider provider;
+  volume::MountIdentity before;
+  {
+    const Impersonation caller(pipe);
+    before = provider.mount_identity(drive);
+  }
+  if (!before.protected_outer_writable || before.unique_id != request.mount_id ||
+      before.disk_length != request.outer_size_bytes)
+    fail(CreationError::invalid_request, "protected mount identity changed");
+
+  auto open_file = [&](std::wstring path) {
+    if (std::filesystem::path(path).filename().wstring().find(L':' ) != std::wstring::npos)
+      fail(CreationError::invalid_request, "container streams are not supported");
+    if (path.starts_with(LR"(\??\)")) path.replace(0, 4, LR"(\\?\)");
+    const Impersonation caller(pipe);
+    const auto h = ::CreateFileW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+      fail(CreationError::target_access_denied, "caller cannot read container");
+    return Handle(h);
+  };
+  const auto target = open_file(request.target_path);
+  const auto mounted_file = open_file(before.volume_path);
+  auto identity = [](HANDLE h) {
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (::GetFileType(h) != FILE_TYPE_DISK || !::GetFileInformationByHandle(h, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+      fail(CreationError::invalid_request, "container is not a regular file");
+    return info;
+  };
+  const auto a = identity(target.get()), b = identity(mounted_file.get());
+  if (a.dwVolumeSerialNumber != b.dwVolumeSerialNumber ||
+      a.nFileIndexHigh != b.nFileIndexHigh || a.nFileIndexLow != b.nFileIndexLow)
+    fail(CreationError::invalid_request, "container file identity differs");
+  const auto host_bytes = (static_cast<std::uint64_t>(a.nFileSizeHigh) << 32) | a.nFileSizeLow;
+  auto header = [&](std::int64_t offset) {
+    std::array<unsigned char, 512> data{};
+    LARGE_INTEGER pos{}; pos.QuadPart = offset;
+    DWORD count = 0;
+    if (!::SetFilePointerEx(target.get(), pos, nullptr, FILE_BEGIN) ||
+        !::ReadFile(target.get(), data.data(), static_cast<DWORD>(data.size()), &count, nullptr) || count != data.size())
+      fail(CreationError::io_error, "cannot read container headers");
+    return data;
+  };
+  const auto outer = header(0), hidden = header(65536);
+  // Pinned driver overwrites volumeID after authenticating the protection header.
+  // For a protected outer mount it identifies the hidden header, not the outer.
+  std::array<unsigned char, 32> hash{};
+  if (::BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0,
+        const_cast<PUCHAR>(hidden.data()), static_cast<ULONG>(hidden.size()),
+        hash.data(), static_cast<ULONG>(hash.size())) < 0 || hash != before.header_digest)
+    fail(CreationError::invalid_request, "mounted header identity differs");
+  FormatBackend backend(pipe, request.nonce);
+  auto geometry = backend.geometry(outer, hidden, host_bytes,
+                                    request.first_password, request.second_password);
+  const auto* g = reinterpret_cast<const std::uint64_t*>(geometry.data());
+  if (g[0] >= host_bytes || g[1] != before.disk_length || g[1] > host_bytes - g[0] ||
+      g[2] <= g[0] || g[2] - g[0] >= g[1] || g[3] == 0 || g[3] > g[1] - (g[2] - g[0]))
+    fail(CreationError::invalid_request, "protected geometry does not match mount");
+  const auto device = std::wstring(LR"(\\?\GLOBALROOT\Device\VeraCryptVolume)") + drive;
+  const Handle raw(::CreateFileW(device.c_str(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+  if (raw.get() == INVALID_HANDLE_VALUE)
+    fail(CreationError::bitmap_scan_failed, "cannot read protected volume");
+  const auto value = volume::scan_fat32_safe_space(raw.get(), g[1], g[2] - g[0]).free_bytes;
+  // A measurement that overlaps a header update, file replacement or remount
+  // is discarded; no previous value is returned on failure.
+  if (header(0) != outer || header(65536) != hidden)
+    fail(CreationError::invalid_request, "container headers changed during scan");
+  {
+    const Impersonation caller(pipe);
+    if (provider.mount_identity(drive) != before)
+      fail(CreationError::invalid_request, "mount changed during scan");
+  }
+  return value;
 }
 
 [[nodiscard]] std::uint64_t safe_hidden_size(
@@ -468,10 +580,10 @@ void serve_measurement_session(const HANDLE pipe,
   bool finished = false;
   std::mutex finished_mutex;
   std::condition_variable finished_signal;
-  std::thread watchdog([&] {
+  std::jthread watchdog([&](std::stop_token stop) {
     constexpr auto kIdleLimit = std::chrono::minutes(15);
     std::unique_lock lock(finished_mutex);
-    while (!finished) {
+    while (!finished && !stop.stop_requested()) {
       finished_signal.wait_for(lock, std::chrono::seconds(5));
       if (finished) break;
       const std::chrono::steady_clock::duration idle{
@@ -487,7 +599,8 @@ void serve_measurement_session(const HANDLE pipe,
   for (;;) {
     last_activity.store(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    if (request.operation != Operation::scan_tail_space) {
+    if (request.operation != Operation::scan_tail_space &&
+        request.operation != Operation::scan_protected_space) {
       // A session that measures never creates, however the request is
       // labelled: one consent covered measuring and nothing else.
       write_response(pipe,
@@ -499,7 +612,8 @@ void serve_measurement_session(const HANDLE pipe,
     Response response{.type = MessageType::result};
     try {
       validate_request(request);
-      response.value = scan_tail_space(request.target_path[0]).bytes;
+      response.value = request.operation == Operation::scan_protected_space
+          ? scan_protected_space(pipe, request) : scan_tail_space(request.target_path[0]).bytes;
     } catch (const std::system_error& error) {
       response.error = error.code().category() == creation_error_category()
                            ? error.code().value()
@@ -507,6 +621,8 @@ void serve_measurement_session(const HANDLE pipe,
     } catch (...) {
       response.error = static_cast<std::int32_t>(CreationError::io_error);
     }
+    request.first_password.clear();
+    request.second_password.clear();
     write_response(pipe, response);
     try {
       request = read_request(pipe, nonce);
@@ -530,6 +646,8 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     // no progress to report: the number is the whole exchange.
     return scan_tail_space(request.target_path[0]).bytes;
   }
+  if (request.operation == Operation::scan_protected_space)
+    return scan_protected_space(pipe, request);
   FormatBackend backend(pipe, request.nonce);
   if (request.operation == Operation::create_standard) {
     create_standard(pipe, request, backend);

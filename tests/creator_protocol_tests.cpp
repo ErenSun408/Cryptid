@@ -159,6 +159,29 @@ void test_partial_cancel_request_is_not_a_cancel() {
          "the completed cancel was not seen");
 }
 
+void test_protected_measurement_contract() {
+  const auto first = password({0, 1, 255});
+  const auto second = password({2, 0, 3});
+  const std::wstring path = LR"(D:\vault\sample.hc)";
+  RequestHeader h{.operation = Operation::scan_protected_space,
+      .outer_size_bytes = 134000000, .path_characters = static_cast<std::uint32_t>(path.size()),
+      .first_password_bytes = 3, .second_password_bytes = 3,
+      .mounted_drive = 25, .mount_id = 0};
+  expect(valid_request_header(h), "valid protected measurement rejected");
+  for (const auto drive : {0U, 27U}) { auto bad=h;bad.mounted_drive=drive;expect(!valid_request_header(bad),"invalid drive accepted"); }
+  auto bad=h;bad.mount_id=-1;expect(!valid_request_header(bad),"negative mount accepted");
+  bad=h;bad.version=2;expect(!valid_request_header(bad),"old protocol accepted");
+  bad=h;bad.hidden_size_bytes=512;expect(!valid_request_header(bad),"caller geometry accepted");
+  bad=h;bad.first_password_bytes=0;expect(!valid_request_header(bad),"missing outer credential accepted");
+  bad=h;bad.second_password_bytes=129;expect(!valid_request_header(bad),"oversized credential accepted");
+  bad=h;bad.operation=Operation::create_with_hidden;expect(!valid_request_header(bad),"creation accepted mounted identity");
+  const auto pipe=make_pipe();write_request(pipe.write.get(),h,path,first,second);
+  auto decoded=read_request(pipe.read.get(),h.nonce);
+  expect(decoded.mount_id==0 && decoded.mounted_drive==25 && decoded.outer_size_bytes==h.outer_size_bytes &&
+      decoded.target_path==path && decoded.first_password.bytes()[0]==std::byte{0} &&
+      decoded.second_password.bytes()[1]==std::byte{0}, "protected request round trip changed");
+}
+
 void test_header_validation() {
   RequestHeader standard{
       .operation = Operation::create_standard,
@@ -335,6 +358,15 @@ void test_a_measurement_session_answers_until_the_caller_lets_go() {
   expect(answer.error != 0,
          "the session stopped answering after one measurement");
 
+  const auto outer=password({1,0,2}), hidden=password({3,0,4});
+  const std::wstring invalid_path=L"relative";
+  const RequestHeader protected_scan{.operation=Operation::scan_protected_space,
+      .outer_size_bytes=1024,.path_characters=static_cast<std::uint32_t>(invalid_path.size()),
+      .first_password_bytes=3,.second_password_bytes=3,.mounted_drive=25,.mount_id=0,.nonce=nonce};
+  write_request(client.get(),protected_scan,invalid_path,outer,hidden);
+  answer=read_response(client.get());
+  expect(answer.error!=0 && answer.value==0,"failed protected scan returned capacity");
+
   // One consent covered measuring. It does not cover creating, whatever the
   // next request calls itself.
   const std::wstring target = L"D:\\after.hc";
@@ -466,6 +498,7 @@ int main() {
     test_cancel_request_rejects_another_nonce();
     test_partial_cancel_request_is_not_a_cancel();
     test_header_validation();
+    test_protected_measurement_contract();
     test_nonce_mismatch_is_rejected();
     test_a_measurement_carries_no_secret_and_no_size();
     test_a_measurement_round_trips_with_neither_password();

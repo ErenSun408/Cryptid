@@ -92,3 +92,12 @@ CTest. It only reads that fixed-password fixture, checks exact geometry, failure
 output clearing, wrong passwords, corrupt/swapped headers, embedded-NUL suffixes,
 host/header/password/output lengths, and successful reuse after failure. It does
 not authenticate a security card or mount a volume.
+
+
+The protected-space helper now uses this export through protocol v3. It opens
+both headers under caller impersonation, matches file identity and the mounted
+protection-header digest, and rechecks mount identity and headers after scanning.
+The pinned driver records the last authenticated header digest; for a protected
+outer mount this is the hidden protection header. Geometry stays inside the
+helper. The packaged DLL allowlist has not been changed by this integration;
+application lifecycle wiring and reviewed distribution remain separate slices.
