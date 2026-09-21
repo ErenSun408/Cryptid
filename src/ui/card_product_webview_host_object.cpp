@@ -1292,6 +1292,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       if (creation_work_->interrupted.load()) return E_PENDING;
       if (!all && controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
       if (creation_thread_.joinable()) creation_thread_.join();
+      // A completed survey leaves its result mode active for the page to read.
+      // Retire it only after admitting the next volume operation and joining
+      // its worker, or the gate will reject getVolumeOperationStatus as a
+      // non-survey query while the mount is still running.
+      clear_survey();
       if (member == kBeginOpenDecoyMaintenanceId ||
           member == kBeginMeasureDecoySpaceId ||
           member == kBeginEndDecoyMaintenanceId) {
