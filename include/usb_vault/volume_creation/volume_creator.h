@@ -42,6 +42,7 @@ enum class CreationStage : std::uint32_t {
   formatting_hidden = 4,
   authorized = 5,
   allocated = 6,
+  copying = 7,
 };
 
 struct CreationProgress final {
@@ -91,6 +92,17 @@ class VolumeCreator final {
  private:
   std::filesystem::path helper_path_;
 };
+
+// Separate one-operation consent; the measurement session never accepts writes.
+// Source and target handles are opened under caller impersonation, while only
+// fixed authenticated FAT32 device operations use elevation. Failure requires
+// ending/rechecking the maintenance mount before further uploads.
+void import_protected_file(const std::filesystem::path& helper_path,
+    std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
+    std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
+    const security::SecureBuffer& hidden_password, std::wstring_view source_path,
+    std::wstring_view destination_relative, const ProgressCallback& progress = {},
+    const CancellationQuery& cancelled = {});
 
 // One consent for a run of measurements, so a number can be refreshed while
 // the user is still writing files without asking again.

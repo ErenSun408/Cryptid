@@ -23,7 +23,7 @@ namespace {
   return operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
-         operation == Operation::scan_protected_space;
+         operation == Operation::scan_protected_space || operation == Operation::import_protected_file;
 }
 
 [[nodiscard]] bool valid_stage(const CreationStage stage) noexcept {
@@ -31,7 +31,7 @@ namespace {
          stage == CreationStage::formatting_outer ||
          stage == CreationStage::scanning_tail_space ||
          stage == CreationStage::formatting_hidden ||
-         stage == CreationStage::authorized || stage == CreationStage::allocated;
+         stage == CreationStage::authorized || stage == CreationStage::allocated || stage == CreationStage::copying;
 }
 
 }  // namespace
@@ -45,7 +45,11 @@ bool valid_request_header(const RequestHeader& header) noexcept {
     return false;
   }
 
-  if (header.operation == Operation::scan_protected_space) {
+  if (header.operation == Operation::import_protected_file) {
+    if (header.source_characters == 0 || header.source_characters > kMaxPathCharacters ||
+        header.destination_characters == 0 || header.destination_characters > 256) return false;
+  } else if (header.source_characters != 0 || header.destination_characters != 0) return false;
+  if (header.operation == Operation::scan_protected_space || header.operation == Operation::import_protected_file) {
     return header.mounted_drive >= 1 && header.mounted_drive <= 26 &&
            header.mount_id >= 0 && header.outer_size_bytes > 0 &&
            header.hidden_size_bytes == 0 && header.first_password_bytes > 0 &&
@@ -134,9 +138,11 @@ void read_exact(const HANDLE pipe, void* const data, const std::size_t size) {
 void write_request(const HANDLE pipe, const RequestHeader& header,
                    const std::wstring_view target_path,
                    const security::SecureBuffer& first_password,
-                   const security::SecureBuffer& second_password) {
+                   const security::SecureBuffer& second_password,
+                   std::wstring_view source_path, std::wstring_view destination_relative) {
   if (!valid_request_header(header) ||
       target_path.size() != header.path_characters ||
+      source_path.size() != header.source_characters || destination_relative.size() != header.destination_characters ||
       first_password.size() != header.first_password_bytes ||
       second_password.size() != header.second_password_bytes) {
     throw std::invalid_argument("invalid volume-creation request");
@@ -146,6 +152,8 @@ void write_request(const HANDLE pipe, const RequestHeader& header,
               target_path.size() * sizeof(wchar_t));
   write_exact(pipe, first_password.data(), first_password.size());
   write_exact(pipe, second_password.data(), second_password.size());
+  write_exact(pipe, source_path.data(), source_path.size() * sizeof(wchar_t));
+  write_exact(pipe, destination_relative.data(), destination_relative.size() * sizeof(wchar_t));
 }
 
 Request read_request(
@@ -164,6 +172,8 @@ Request read_request(
       .mounted_drive = header.mounted_drive,
       .mount_id = header.mount_id,
       .target_path = std::wstring(header.path_characters, L'\0'),
+      .source_path = std::wstring(header.source_characters, L'\0'),
+      .destination_relative = std::wstring(header.destination_characters, L'\0'),
       .first_password = security::SecureBuffer(header.first_password_bytes),
       .second_password =
           security::SecureBuffer(header.second_password_bytes),
@@ -175,7 +185,10 @@ Request read_request(
   read_exact(pipe, request.second_password.data(),
              request.second_password.size());
 
-  if (request.target_path.find(L'\0') != std::wstring::npos) {
+  read_exact(pipe, request.source_path.data(), request.source_path.size() * sizeof(wchar_t));
+  read_exact(pipe, request.destination_relative.data(), request.destination_relative.size() * sizeof(wchar_t));
+
+  if (request.source_path.find(L'\0') != std::wstring::npos || request.destination_relative.find(L'\0') != std::wstring::npos || request.target_path.find(L'\0') != std::wstring::npos) {
     throw_protocol_error("target path contains an embedded NUL");
   }
   return request;

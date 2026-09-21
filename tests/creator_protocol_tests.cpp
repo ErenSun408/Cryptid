@@ -159,6 +159,25 @@ void test_partial_cancel_request_is_not_a_cancel() {
          "the completed cancel was not seen");
 }
 
+void test_protected_import_contract() {
+  const Pipe pipe = make_pipe();
+  auto outer=password({1,0,2}), hidden=password({3,0,4});
+  const std::wstring container=L"D:\\fixture.hc", source=L"D:\\source.bin", destination=L"folder\\file.bin";
+  RequestHeader header{.operation=Operation::import_protected_file,.outer_size_bytes=1024,
+      .path_characters=static_cast<std::uint32_t>(container.size()),.first_password_bytes=3,.second_password_bytes=3,
+      .mounted_drive=25,.mount_id=0,.source_characters=static_cast<std::uint32_t>(source.size()),
+      .destination_characters=static_cast<std::uint32_t>(destination.size())};
+  expect(valid_request_header(header),"valid import rejected");
+  write_request(pipe.write.get(),header,container,outer,hidden,source,destination);
+  auto decoded=read_request(pipe.read.get(),header.nonce);
+  expect(decoded.source_path==source&&decoded.destination_relative==destination&&decoded.operation==Operation::import_protected_file,"import paths changed");
+  auto bad=header;bad.source_characters=0;expect(!valid_request_header(bad),"missing source accepted");
+  bad=header;bad.destination_characters=257;expect(!valid_request_header(bad),"oversized target accepted");
+  bad=header;bad.version=3;expect(!valid_request_header(bad),"old protocol accepted");
+  bad=header;bad.operation=Operation::scan_protected_space;expect(!valid_request_header(bad),"measurement accepted import paths");
+  bad=header;bad.second_password_bytes=0;expect(!valid_request_header(bad),"unauthenticated import accepted");
+}
+
 void test_protected_measurement_contract() {
   const auto first = password({0, 1, 255});
   const auto second = password({2, 0, 3});
@@ -313,7 +332,7 @@ void test_response_round_trip() {
 
 // One consent has to cover a run of measurements, so the helper answers more
 // than one on a connection and stops when the caller lets go of it.
-void test_a_measurement_session_answers_until_the_caller_lets_go() {
+void test_a_measurement_session_answers_until_the_caller_lets_go(bool import_attempt = false) {
   const std::wstring name = L"\\\\.\\pipe\\usb-vault-measurement-test";
   Handle server(::CreateNamedPipeW(
       name.c_str(), PIPE_ACCESS_DUPLEX,
@@ -371,14 +390,18 @@ void test_a_measurement_session_answers_until_the_caller_lets_go() {
   // next request calls itself.
   const std::wstring target = L"D:\\after.hc";
   const SecureBuffer password = ::password({1, 2, 3});
-  const RequestHeader creation{
+  RequestHeader creation{
       .operation = Operation::create_standard,
       .outer_size_bytes = 20ULL * 1024ULL * 1024ULL,
       .path_characters = static_cast<std::uint32_t>(target.size()),
       .first_password_bytes = 3,
       .nonce = nonce,
   };
-  write_request(client.get(), creation, target, password, SecureBuffer{});
+  if (import_attempt) {
+    creation.operation=Operation::import_protected_file;creation.second_password_bytes=3;
+    creation.mounted_drive=25;creation.source_characters=static_cast<std::uint32_t>(target.size());creation.destination_characters=8;
+    write_request(client.get(),creation,target,password,password,target,L"file.bin");
+  } else write_request(client.get(), creation, target, password, SecureBuffer{});
   answer = read_response(client.get());
   expect(answer.error ==
              static_cast<std::int32_t>(CreationError::invalid_request),
@@ -499,12 +522,14 @@ int main() {
     test_partial_cancel_request_is_not_a_cancel();
     test_header_validation();
     test_protected_measurement_contract();
+    test_protected_import_contract();
     test_nonce_mismatch_is_rejected();
     test_a_measurement_carries_no_secret_and_no_size();
     test_a_measurement_round_trips_with_neither_password();
     test_a_measured_number_travels_only_with_success();
     test_response_round_trip();
     test_a_measurement_session_answers_until_the_caller_lets_go();
+    test_a_measurement_session_answers_until_the_caller_lets_go(true);
     test_format_error_mapping();
     test_pipe_dacl_names_system_and_token_user_explicitly();
     std::cout << "creator_protocol_tests passed\n";

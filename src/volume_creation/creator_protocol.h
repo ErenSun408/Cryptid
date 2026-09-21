@@ -13,7 +13,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 3;
+constexpr std::uint16_t kProtocolVersion = 4;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -24,6 +24,7 @@ enum class Operation : std::uint32_t {
   // Carries a mounted volume's root path and no secret at all.
   scan_tail_space = 3,
   scan_protected_space = 4,
+  import_protected_file = 5,
 };
 
 enum class MessageType : std::uint32_t {
@@ -45,6 +46,8 @@ struct RequestHeader final {
   std::uint32_t second_password_bytes{};
   std::uint32_t mounted_drive{};  // 1-26 for protected scans, zero otherwise.
   std::int32_t mount_id{};
+  std::uint32_t source_characters{};
+  std::uint32_t destination_characters{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 
@@ -73,7 +76,7 @@ struct CancelRequest final {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(RequestHeader) == 68);
+static_assert(sizeof(RequestHeader) == 76);
 static_assert(sizeof(Response) == 36);
 static_assert(sizeof(CancelRequest) == 24);
 
@@ -84,6 +87,8 @@ struct Request final {
   std::uint32_t mounted_drive{};
   std::int32_t mount_id{};
   std::wstring target_path;
+  std::wstring source_path;
+  std::wstring destination_relative;
   security::SecureBuffer first_password;
   security::SecureBuffer second_password;
   // Kept so the helper can recognise this caller's cancel while formatting.
@@ -99,7 +104,9 @@ void read_exact(HANDLE pipe, void* data, std::size_t size);
 void write_request(HANDLE pipe, const RequestHeader& header,
                    std::wstring_view target_path,
                    const security::SecureBuffer& first_password,
-                   const security::SecureBuffer& second_password);
+                   const security::SecureBuffer& second_password,
+                   std::wstring_view source_path = {},
+                   std::wstring_view destination_relative = {});
 
 [[nodiscard]] Request read_request(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce);

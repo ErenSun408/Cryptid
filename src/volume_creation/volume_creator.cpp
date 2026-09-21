@@ -1,6 +1,7 @@
 #include "usb_vault/volume_creation/volume_creator.h"
 
 #include "volume_creation/creator_protocol.h"
+#include "usb_vault/volume/volume_entry_path.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -365,6 +366,47 @@ std::error_code make_error_code(const CreationError error) noexcept {
     throw std::invalid_argument("drive letter must be in the range A-Z");
   }
   return letter;
+}
+
+void import_protected_file(const std::filesystem::path& helper_path,
+    std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
+    std::uint64_t mounted_bytes, const security::SecureBuffer& outer_password,
+    const security::SecureBuffer& hidden_password, std::wstring_view source_path,
+    std::wstring_view destination_relative, const ProgressCallback& progress,
+    const CancellationQuery& cancelled) {
+  const auto helper = validated_helper_path(helper_path);
+  const auto container = validated_target_path(container_path);
+  const auto source = validated_target_path(source_path);
+  const auto letter = validated_drive_letter(drive);
+  const auto destination = volume::resolve_volume_entry_path(letter, destination_relative).substr(3);
+  if (destination.empty()) throw std::invalid_argument("missing import filename");
+  detail::RequestHeader header{.operation = detail::Operation::import_protected_file,
+      .outer_size_bytes = mounted_bytes,
+      .path_characters = static_cast<std::uint32_t>(container.size()),
+      .first_password_bytes = static_cast<std::uint32_t>(outer_password.size()),
+      .second_password_bytes = static_cast<std::uint32_t>(hidden_password.size()),
+      .mounted_drive = static_cast<std::uint32_t>(letter - L'A' + 1), .mount_id = mount_id,
+      .source_characters = static_cast<std::uint32_t>(source.size()),
+      .destination_characters = static_cast<std::uint32_t>(destination.size()), .nonce = random_nonce()};
+  if (!detail::valid_request_header(header)) throw std::invalid_argument("invalid protected import");
+  if (cancelled && cancelled()) throw_creation(CreationError::operation_cancelled, "protected import cancelled");
+  const auto suffix = hex_nonce(header.nonce);
+  const Handle process = launch_elevated_helper(helper, suffix, suffix);
+  const HelperExitWait wait(process.get());
+  const Handle pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, process.get());
+  detail::write_request(pipe.get(), header, container, outer_password, hidden_password, source, destination);
+  bool sent = false;
+  for (;;) {
+    const auto response = detail::read_response(pipe.get());
+    if (response.type == detail::MessageType::progress) {
+      if (progress) progress({.stage=response.stage, .percent=response.percent});
+      if (!sent && cancelled && cancelled()) {detail::write_cancel_request(pipe.get(), header.nonce);sent=true;}
+      continue;
+    }
+    if (response.error == 0) return;
+    if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid protected import result");
+    throw_creation(static_cast<CreationError>(response.error), "protected import failed; maintenance recovery required");
+  }
 }
 
 struct VolumeMeasurementSession::Impl final {

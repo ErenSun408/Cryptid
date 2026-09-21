@@ -164,8 +164,10 @@ int placement_run(int argc,wchar_t** argv);
 int sequential_run(int argc,wchar_t** argv);
 int fault_run(wchar_t** argv);
 int measurement_helper_run(wchar_t** argv);
+int import_helper_run(wchar_t** argv);
 int abrupt_test_writer(wchar_t* path);
 int wmain(int argc,wchar_t** argv) {
+  if(argc==5 && std::wstring_view(argv[1])==L"--import-helper-run") return import_helper_run(argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--measurement-helper-run") return measurement_helper_run(argv);
   if(argc==3 && std::wstring_view(argv[1])==L"--abrupt-disposable-writer") return abrupt_test_writer(argv[2]);
   if(argc==5 && std::wstring_view(argv[1])==L"--fault-disposable-run") return fault_run(argv);
@@ -890,4 +892,34 @@ int measurement_helper_run(wchar_t** argv) {
     std::ofstream(output/L"complete.txt")<<"PASS bound helper measurement, six rejection cases, failure reuse, write refresh, stale remount rejection and hidden integrity.\n";
     return 0;
   } catch(const std::exception& e){std::cerr<<e.what()<<std::endl;if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
+}
+
+int import_helper_run(wchar_t** argv) {
+  bool created=false;
+  try {
+    const fs::path helper=argv[2],source=argv[3],output=argv[4],base=source/L"base-128.hc";
+    need(helper.is_absolute()&&source.is_absolute()&&output.is_absolute()&&!fs::exists(output)&&fs::is_directory(output.parent_path()),"new import fixture required");
+    need(fs::is_regular_file(source/L"complete.txt")&&fs::file_size(base)==128*MiB,"disposable base required");
+    need(fs::create_directory(output),"create import output");created=true;
+    Mounted m;m.path=output/L"import.hc";need(fs::copy_file(base,m.path),"copy import fixture");choose_drive(m);m.open();
+    const auto hidden=digest(base,66977792,66977792);auto identity=m.provider.mount_identity(m.drive);
+    const auto payload=output/L"payload.bin";{std::ofstream data(payload,std::ios::binary);for(std::uint64_t i=0;i<8*MiB+513;++i)data.put(static_cast<char>(placement_byte(i)));need(data.good(),"create import payload");}
+    auto outer=secret("DisposableOuterP3259"),inner=secret("DisposableHiddenP3259"),wrong=secret("WrongDisposableP3259");
+    auto invoke=[&](std::wstring_view destination,std::int32_t id,const security::SecureBuffer& key,const volume_creation::ProgressCallback& progress=volume_creation::ProgressCallback{},const volume_creation::CancellationQuery& cancelled=volume_creation::CancellationQuery{}) {
+      volume_creation::import_protected_file(helper,m.path.native(),m.drive,id,identity.disk_length,outer,key,payload.native(),destination,progress,cancelled);
+    };
+    auto rejects=[&](auto action){bool rejected=false;try{action();}catch(const std::exception&){rejected=true;}need(rejected,"invalid import accepted");};
+    rejects([&]{invoke(L"../outside.bin",identity.unique_id,inner);});
+    rejects([&]{invoke(L"bad.bin",identity.unique_id+1,inner);});need(!fs::exists(m.root()+L"bad.bin"),"stale import created target");
+    rejects([&]{invoke(L"bad.bin",identity.unique_id,wrong);});need(!fs::exists(m.root()+L"bad.bin"),"bad credentials created target");
+    need(::CreateDirectoryW((m.root()+L"folder").c_str(),nullptr),"create own test directory");
+    invoke(L"folder/copied.bin",identity.unique_id,inner);need(verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"helper copied payload differs");
+    rejects([&]{invoke(L"folder/copied.bin",identity.unique_id,inner);});need(verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"collision changed payload");
+    bool cancel=false,cancelled=false;try {invoke(L"cancel.bin",identity.unique_id,inner,[&](const auto& progress){if(progress.percent>=1)cancel=true;},[&]{return cancel;});}
+    catch(const std::system_error& error){cancelled=error.code()==volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled);}
+    need(cancelled&&!fs::exists(m.root()+L"cancel.bin"),"helper cancellation cleanup failed");
+    need(!m.close(),"helper triggered protection");m.open();need(!fs::exists(m.root()+L"cancel.bin")&&verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"helper remount persistence failed");
+    need(!m.close()&&digest(m.path,66977792,66977792)==hidden,"helper hidden integrity failed");
+    std::ofstream(output/L"complete.txt")<<"PASS medium-client protected import, traversal/stale identity/wrong password/collision rejection, cancellation cleanup, remount and hidden integrity.\n";return 0;
+  } catch(const std::exception& e){if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
 }

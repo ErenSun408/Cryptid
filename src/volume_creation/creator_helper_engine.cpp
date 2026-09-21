@@ -4,6 +4,8 @@
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/volume_space.h"
 #include "usb_vault/volume/fat32_safe_space.h"
+#include "usb_vault/volume/fat32_file_transfer.h"
+#include "usb_vault/volume/volume_entry_path.h"
 #include "volume_creation/veracrypt_format_abi.h"
 
 #include <Windows.h>
@@ -257,12 +259,18 @@ void validate_request(const Request& request) {
       !std::filesystem::path(request.target_path).is_absolute()) {
     fail(CreationError::invalid_request, "invalid creation request values");
   }
-  if (request.operation == Operation::scan_protected_space) {
+  if (request.operation == Operation::scan_protected_space || request.operation == Operation::import_protected_file) {
     if (request.mounted_drive < 1 || request.mounted_drive > 26 || request.mount_id < 0 ||
         request.outer_size_bytes == 0 || request.hidden_size_bytes != 0 ||
         request.first_password.empty() || request.second_password.empty() ||
         request.first_password.size() > kMaxPasswordBytes || request.second_password.size() > kMaxPasswordBytes)
       fail(CreationError::invalid_request, "invalid protected-space request");
+    if (request.operation == Operation::import_protected_file) {
+      const auto source = std::filesystem::path(request.source_path);
+      static_cast<void>(volume::resolve_exported_entry_path(source.parent_path().native(), source.filename().native()));
+      const auto destination = volume::resolve_volume_entry_path(static_cast<wchar_t>(L'A' + request.mounted_drive - 1), request.destination_relative);
+      if (destination.size() <= 3) fail(CreationError::invalid_request, "missing import destination");
+    }
     return;
   }
   if (request.mounted_drive != 0 || request.mount_id != 0)
@@ -372,7 +380,8 @@ void as_caller(const HANDLE pipe, Action&& action) {
 // Neither caller paths nor DOS drive mappings select a privileged raw device.
 // Paths are opened while impersonating the caller; the raw device is a fixed
 // VeraCrypt namespace derived only from a validated drive number.
-std::uint64_t scan_protected_space(HANDLE pipe, Request& request) {
+template<class Action>
+std::uint64_t with_protected_volume(HANDLE pipe, Request& request, Action&& action) {
   const auto drive = static_cast<wchar_t>(L'A' + request.mounted_drive - 1);
   volume::VolumeProvider provider;
   volume::MountIdentity before;
@@ -439,7 +448,12 @@ std::uint64_t scan_protected_space(HANDLE pipe, Request& request) {
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
   if (raw.get() == INVALID_HANDLE_VALUE)
     fail(CreationError::bitmap_scan_failed, "cannot read protected volume");
-  const auto value = volume::scan_fat32_safe_space(raw.get(), g[1], g[2] - g[0]).free_bytes;
+  if (header(0) != outer || header(65536) != hidden)
+    fail(CreationError::invalid_request, "container headers changed before operation");
+  { const Impersonation caller(pipe);
+    if (provider.mount_identity(drive) != before)
+      fail(CreationError::invalid_request, "mount changed before operation"); }
+  const auto value = action(raw.get(), before, g[2] - g[0]);
   // A measurement that overlaps a header update, file replacement or remount
   // is discarded; no previous value is returned on failure.
   if (header(0) != outer || header(65536) != hidden)
@@ -450,6 +464,85 @@ std::uint64_t scan_protected_space(HANDLE pipe, Request& request) {
       fail(CreationError::invalid_request, "mount changed during scan");
   }
   return value;
+}
+
+std::uint64_t scan_protected_space(HANDLE pipe, Request& request) {
+  return with_protected_volume(pipe, request, [](HANDLE raw, const volume::MountIdentity& identity, std::uint64_t boundary) {
+    return volume::scan_fat32_safe_space(raw, identity.disk_length, boundary).free_bytes;
+  });
+}
+
+std::uint64_t import_protected(HANDLE pipe, Request& request) {
+  return with_protected_volume(pipe, request, [&](HANDLE raw, const volume::MountIdentity& identity, std::uint64_t boundary) -> std::uint64_t {
+    std::uint32_t percent = 0;
+    auto reported = std::chrono::steady_clock::time_point{};
+    const auto cancelled = [&] {
+      const auto now = std::chrono::steady_clock::now();
+      if (now - reported >= std::chrono::milliseconds(100)) {
+        write_response(pipe, Response{.type=MessageType::progress, .stage=CreationStage::copying, .percent=percent});
+        reported = now;
+      }
+      return cancel_requested(pipe, request.nonce);
+    };
+    if (cancelled()) fail(CreationError::operation_cancelled, "protected import cancelled");
+    const auto source = [&] {
+      const Impersonation caller(pipe);
+      return Handle(::CreateFileW(request.source_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+          OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+    }();
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (source.get() == INVALID_HANDLE_VALUE || ::GetFileType(source.get()) != FILE_TYPE_DISK ||
+        !::GetFileInformationByHandle(source.get(), &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+      fail(CreationError::target_access_denied, "caller source is not a readable regular file");
+    const auto size = (static_cast<std::uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+    const auto plan = volume::plan_fat32_allocation(raw, identity.disk_length, boundary, size);
+    // FAT32 geometry has been validated before creating any filesystem entry.
+    // Pin every existing parent, reject links, and use the fixed driver device.
+    const auto relative = volume::resolve_volume_entry_path(identity.drive_letter, request.destination_relative).substr(3);
+    const auto root = std::wstring(LR"(\\?\GLOBALROOT\Device\VeraCryptVolume)") + identity.drive_letter + L"\\";
+    std::vector<std::unique_ptr<Handle>> parents;
+    std::unique_ptr<volume::Fat32TransferTarget> target;
+    {
+      const Impersonation caller(pipe);
+      const auto pin = [&](const std::wstring& path) {
+        auto parent = std::make_unique<Handle>(::CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        BY_HANDLE_FILE_INFORMATION attributes{};
+        if (parent->get() == INVALID_HANDLE_VALUE || !::GetFileInformationByHandle(parent->get(), &attributes) ||
+            !(attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (attributes.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+          fail(CreationError::target_access_denied, "caller import parent is unavailable");
+        parents.push_back(std::move(parent));
+      };
+      pin(root);
+      for (std::size_t at = relative.find(L'\\'); at != std::wstring::npos; at = relative.find(L'\\', at + 1))
+        pin(root + relative.substr(0, at));
+      volume::VolumeProvider provider;
+      if (provider.mount_identity(identity.drive_letter) != identity)
+        fail(CreationError::invalid_request, "mount changed before target creation");
+      target = std::make_unique<volume::Fat32TransferTarget>(root + relative);
+    }
+    const auto result = volume::transfer_fat32_file(source.get(), *target, identity, boundary, plan,
+        cancelled, [&](std::uint64_t done) {
+          const auto next = size ? static_cast<std::uint32_t>(std::min<std::uint64_t>(99, done * 100 / size)) : 99;
+          if (next != percent) {
+            percent = next;
+            write_response(pipe, Response{.type=MessageType::progress, .stage=CreationStage::copying, .percent=percent});
+            reported = std::chrono::steady_clock::now();
+          }
+        });
+    if (result.failure) {
+      // Preserve the initiating failure; never turn accepted deletion into an
+      // assurance of durable cleanup. The caller must stop this mount's queue.
+      try { std::rethrow_exception(result.failure); }
+      catch (const std::system_error& error) {
+        if (error.code() == std::make_error_code(std::errc::operation_canceled))
+          fail(CreationError::operation_cancelled, "protected import cancelled; recovery required");
+        throw;
+      }
+    }
+    return size;
+  });
 }
 
 [[nodiscard]] std::uint64_t safe_hidden_size(
@@ -648,6 +741,8 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   }
   if (request.operation == Operation::scan_protected_space)
     return scan_protected_space(pipe, request);
+  if (request.operation == Operation::import_protected_file)
+    return import_protected(pipe, request);
   FormatBackend backend(pipe, request.nonce);
   if (request.operation == Operation::create_standard) {
     create_standard(pipe, request, backend);
