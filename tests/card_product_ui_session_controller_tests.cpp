@@ -1,3 +1,4 @@
+#include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
 #include "usb_vault/card/card_error.h"
@@ -634,6 +635,17 @@ class FakeEntry final : public ICardEntryActions {
     route = CardEntryRoute::unavailable;
   }
 
+  std::uint32_t prepare_login_reset() override { reset_ticket = ++reset_serial; return reset_ticket; }
+  void cancel_login_reset() noexcept override { reset_ticket = 0; }
+  bool login_reset_pending(std::uint32_t ticket) const noexcept override {
+    return ticket != 0 && ticket == reset_ticket && route == CardEntryRoute::login_required;
+  }
+  void confirm_login_reset(std::uint32_t ticket) override {
+    if (!login_reset_pending(ticket)) throw std::runtime_error("expired");
+    reset_ticket = 0; ++login_reset_calls; route = CardEntryRoute::unavailable;
+  }
+  std::uint32_t reset_ticket{}, reset_serial{};
+  int login_reset_calls{};
   int reset_calls{};
   bool reject_reset{};
 
@@ -708,11 +720,26 @@ class ScopedDirectory final {
 
 std::uint32_t g_fixture_serial = 0;
 
+class FakeResetMounts final : public usb_vault::ui::ILoginResetMountAccess {
+ public:
+  std::vector<usb_vault::volume::MountIdentity> values;
+  bool query_fails{}, force_fails{};
+  int forced{};
+  std::vector<usb_vault::volume::MountIdentity> mounted() override {
+    if (query_fails) throw std::runtime_error("driver unavailable");
+    return values;
+  }
+  void force_unmount(const usb_vault::volume::MountIdentity& expected) override {
+    if (force_fails) throw std::runtime_error("busy");
+    ++forced;
+    std::erase_if(values, [&](const auto& value) { return value == expected; });
+  }
+};
 struct Fixture final {
   Fixture()
       : directory(std::to_wstring(++g_fixture_serial).c_str()),
         volume(authentication),
-        controller(entry, authentication, volume, policy, chooser) {}
+        controller(entry, authentication, volume, policy, chooser, &reset_mounts) {}
 
   FakeEntry entry;
   ScopedDirectory directory;
@@ -720,6 +747,7 @@ struct Fixture final {
   FakeVolumeSession volume;
   OfflineCardPasswordPolicy policy;
   FakeFileChooser chooser;
+  FakeResetMounts reset_mounts;
   CardProductUiSessionController controller;
 };
 
@@ -1904,10 +1932,42 @@ void test_exports_reach_the_session_unchanged() {
           "the controller turned one export into more than one call");
 }
 
+void test_login_reset_mount_choices() {
+  for (int scenario = 0; scenario < 6; ++scenario) {
+    Fixture fixture;
+    fixture.entry.route = CardEntryRoute::login_required;
+    fixture.volume.mounted_state = true;
+    fixture.reset_mounts.values.push_back({.drive_letter = L'X', .unique_id = 1});
+    if (scenario == 1) fixture.reset_mounts.values.clear();
+    if (scenario == 2) fixture.reset_mounts.query_fails = true;
+    require(fixture.controller.can_login_reset(), "mount state blocked reset");
+    const auto prepared = fixture.controller.prepare_login_reset();
+    require(prepared.mounts_known == (scenario != 2), "query failure invented mount facts");
+    if (scenario == 3) {
+      fixture.reset_mounts.values.push_back({.drive_letter = L'Y', .unique_id = 2});
+      fixture.controller.force_login_reset_mounts(prepared.ticket);
+      require(fixture.reset_mounts.forced == 1 && fixture.reset_mounts.values.size() == 1 &&
+              fixture.reset_mounts.values[0].drive_letter == L'Y', "force expanded targets");
+    }
+    if (scenario == 4 || scenario == 5) {
+      if (scenario == 4) fixture.reset_mounts.values[0].unique_id++;
+      else fixture.reset_mounts.force_fails = true;
+      require_throws<std::exception>([&] { fixture.controller.force_login_reset_mounts(prepared.ticket); }, "unsafe force accepted");
+      require(fixture.controller.login_reset_pending(prepared.ticket), "force failure prevented skipping");
+    }
+    fixture.controller.confirm_login_reset(prepared.ticket);
+    require(fixture.entry.login_reset_calls == 1 && fixture.volume.unmount_calls == 0,
+            "reset blocked or implicitly unmounted");
+    require(fixture.reset_mounts.forced == (scenario == 3 ? 1 : 0), "skip performed force");
+    require(usb_vault::ui::prepare_ui_session_for_close(fixture.controller) && fixture.volume.unmount_calls == 0, "close unmounted skipped volumes");
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_login_reset_mount_choices();
     test_state_projection_is_complete_and_authentication_wins();
     test_login_normalizes_wipes_and_preserves_retry_semantics();
     test_post_authentication_failure_projects_authenticated_state();

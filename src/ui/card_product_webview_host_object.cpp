@@ -22,6 +22,14 @@
 namespace usb_vault::ui {
 namespace {
 
+constexpr DISPID kCanLoginResetId = 90;
+constexpr DISPID kBeginLoginResetPreparationId = 91;
+constexpr DISPID kLoginResetStatusId = 92;
+constexpr DISPID kLoginResetTicketId = 93;
+constexpr DISPID kLoginResetDrivesId = 94;
+constexpr DISPID kLoginResetMountsKnownId = 95;
+constexpr DISPID kCancelLoginResetId = 96;
+constexpr DISPID kBeginConfirmLoginResetId = 97;
 constexpr DISPID kSubmitLoginPasswordBytesId = 1;
 constexpr DISPID kSubmitInitializationPasswordBytesId = 2;
 constexpr DISPID kUnmountId = 3;
@@ -360,6 +368,7 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   ~CardProductWebViewHostObject() {
     if (creation_thread_.joinable()) creation_thread_.join();
+    controller_.cancel_login_reset();
   }
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
@@ -612,6 +621,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kCanResetCardRecordId;
       return S_OK;
     }
+    if (matches(names[0], L"canLoginReset")) { ids[0] = kCanLoginResetId; return S_OK; }
+    if (matches(names[0], L"beginLoginResetPreparation")) { ids[0] = kBeginLoginResetPreparationId; return S_OK; }
+    if (matches(names[0], L"getLoginResetStatus")) { ids[0] = kLoginResetStatusId; return S_OK; }
+    if (matches(names[0], L"getLoginResetTicket")) { ids[0] = kLoginResetTicketId; return S_OK; }
+    if (matches(names[0], L"getLoginResetDrives")) { ids[0] = kLoginResetDrivesId; return S_OK; }
+    if (matches(names[0], L"getLoginResetMountsKnown")) { ids[0] = kLoginResetMountsKnownId; return S_OK; }
+    if (matches(names[0], L"cancelLoginReset")) { ids[0] = kCancelLoginResetId; return S_OK; }
+    if (matches(names[0], L"beginConfirmLoginReset")) { ids[0] = kBeginConfirmLoginResetId; return S_OK; }
     ids[0] = DISPID_UNKNOWN;
     return DISP_E_UNKNOWNNAME;
   }
@@ -635,6 +652,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     const bool external_drop_query =
         member == kExternalDropStatusId || member == kCancelExternalDropId || member == kExternalFileProgressId || member == kExternalDropBoundsId || member == kExternalDropButtonBoundsId;
     if (creation_work_->running.load() && !external_drop_query &&
+        !(reset_mode_ && member == kLoginResetStatusId) &&
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
                 : survey_mode_ ? !is_survey_query(member)
@@ -645,6 +663,9 @@ class CardProductWebViewHostObject final : public IDispatch {
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
     }
+
+    if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
+      return invoke_login_reset(member, parameters, result);
 
     // Observations may refresh the failure dialog. Any unrelated mutation
     // revokes the last cleanup target, so a stale page cannot force a new mount.
@@ -697,6 +718,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (controller_.state() == CardProductUiState::authenticated || controller_.mounted())
           return E_ACCESSDENIED;
         if (!close_sink_ || !close_sink_->request_configuration()) return E_FAIL;
+        controller_.cancel_login_reset();
         configuration_pending_ = true;
         return S_OK;
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
@@ -2161,6 +2183,97 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  HRESULT invoke_login_reset(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    const bool confirming = member == kBeginConfirmLoginResetId;
+    const bool cancelling = member == kCancelLoginResetId;
+    if (!parameters || parameters->cNamedArgs != 0 ||
+        parameters->cArgs != (confirming ? 2U : cancelling ? 1U : 0U) ||
+        ((confirming || cancelling) && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+    if (!result) return E_POINTER;
+    std::uint32_t ticket = 0;
+    bool force = false;
+    if ((confirming || cancelling) && !exact_uint32(parameters->rgvarg[confirming ? 1 : 0], ticket))
+      return DISP_E_TYPEMISMATCH;
+    if (confirming) {
+      const auto& choice = parameters->rgvarg[0];
+      if (choice.vt != VT_BOOL || (choice.boolVal != VARIANT_TRUE && choice.boolVal != VARIANT_FALSE))
+        return DISP_E_TYPEMISMATCH;
+      force = choice.boolVal == VARIANT_TRUE;
+    }
+    try {
+      if (member == kLoginResetStatusId && reset_mode_ && creation_work_->running.load()) {
+        ::VariantInit(result); result->vt = VT_UI4; result->ulVal = 1; return S_OK;
+      }
+      if (creation_work_->running.load()) return E_PENDING;
+      if (creation_thread_.joinable()) creation_thread_.join();
+      if (member == kCanLoginResetId) return complete_selection(controller_.can_login_reset(), result);
+      if (member == kBeginLoginResetPreparationId) {
+        if (creation_work_->interrupted.load() || !controller_.can_login_reset()) return E_ACCESSDENIED;
+        reset_result_ = {}; reset_epoch_ = creation_work_->card_epoch.load();
+      } else {
+        if (!reset_mode_ || creation_work_->interrupted.load() || reset_epoch_ != creation_work_->card_epoch.load()) {
+          controller_.cancel_login_reset(); reset_result_ = {}; reset_status_.store(6);
+          if (member != kLoginResetStatusId) return E_ACCESSDENIED;
+        }
+        if (member == kLoginResetStatusId) {
+          auto status = reset_status_.load();
+          if ((status == 2 || status == 4) && !controller_.login_reset_pending(reset_result_.ticket)) {
+            controller_.cancel_login_reset(); reset_result_ = {}; status = 6; reset_status_.store(status);
+          }
+          ::VariantInit(result); result->vt = VT_UI4; result->ulVal = status;
+          if (status == 5 && !reset_close_requested_) {
+            reset_close_requested_ = true;
+            if (close_sink_) close_sink_->request_close();
+          }
+          return S_OK;
+        }
+        if (!controller_.login_reset_pending(reset_result_.ticket)) return E_ACCESSDENIED;
+        if (confirming || cancelling) {
+          if (ticket != reset_result_.ticket) { controller_.cancel_login_reset(); return E_ACCESSDENIED; }
+          if (cancelling) { controller_.cancel_login_reset(); reset_result_ = {}; reset_status_.store(0); return complete_selection(true, result); }
+        } else if (member == kLoginResetDrivesId) {
+          return complete_string(reset_result_.drives.c_str(), static_cast<UINT>(reset_result_.drives.size()), result);
+        } else if (member == kLoginResetMountsKnownId) {
+          return complete_selection(reset_result_.mounts_known, result);
+        } else if (member == kLoginResetTicketId) {
+          ::VariantInit(result); result->vt = VT_UI4; result->ulVal = reset_result_.ticket; return S_OK;
+        }
+      }
+      clear_survey(); clear_batch();
+      reset_mode_ = true; reset_close_requested_ = false;
+      creation_work_->finish(); creation_work_->volume_operation.store(true);
+      reset_status_.store(1); creation_work_->running.store(true);
+      const auto epoch = reset_epoch_;
+      creation_thread_ = std::thread([this, confirming, ticket, force, epoch] {
+        unsigned int status = 3;
+        const auto interrupted = [this, epoch] {
+          return creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch;
+        };
+        try {
+          if (interrupted()) throw std::runtime_error("reset interrupted");
+          if (!confirming) {
+            reset_result_ = controller_.prepare_login_reset(); status = 2;
+          } else {
+            if (force) {
+              try { controller_.force_login_reset_mounts(ticket, interrupted); }
+              catch (...) { status = 4; }
+            }
+            if (status != 4) {
+              if (interrupted()) throw std::runtime_error("reset interrupted");
+              controller_.confirm_login_reset(ticket); status = 5;
+            }
+          }
+        } catch (...) { controller_.cancel_login_reset(); }
+        if (interrupted()) { controller_.cancel_login_reset(); status = 6; }
+        reset_status_.store(status);
+        creation_work_->running.store(false);
+      });
+      return complete_selection(true, result);
+    } catch (...) {
+      creation_work_->running.store(false); controller_.cancel_login_reset(); reset_status_.store(3); return E_FAIL;
+    }
+  }
+
   HRESULT invoke_can_reset_card_record(DISPPARAMS* const parameters,
                                       VARIANT* const result) noexcept {
     if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -2298,6 +2411,11 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::atomic<ULONG> references_{1};
   CardProductUiSessionController& controller_;
   IUiCloseRequestSink* close_sink_{};
+  bool reset_mode_{};
+  bool reset_close_requested_{};
+  std::atomic<unsigned int> reset_status_{};
+  std::uint64_t reset_epoch_{};
+  LoginResetPreparation reset_result_;
   bool configuration_pending_{};
   IUiWindowSizeSink* window_size_sink_{};
   IUiExternalDropTargetSink* external_drop_sink_{};

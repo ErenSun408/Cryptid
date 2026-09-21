@@ -9,6 +9,9 @@
 
 namespace usb_vault::ui {
 
+// Login reset uses the same exclusive worker. Bridge status: 0 idle, 1 running,
+// 2 prepared, 3 failure/unknown result, 4 force failed (skip allowed), 5 reset
+// verified, 6 expired. Only a one-shot ticket and drive letters reach the page.
 struct CreationWorkState final {
   std::atomic<bool> running{false};
   std::atomic<bool> interrupted{false};

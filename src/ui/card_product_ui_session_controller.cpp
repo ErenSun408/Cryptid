@@ -159,8 +159,9 @@ CardProductUiSessionController::CardProductUiSessionController(
     application::CardAuthenticationSession& authentication,
     application::IAuthenticatedCardVolumeSession& volume_session,
     const security::IPasswordStrengthPolicy& password_policy,
-    IContainerFileChooser& file_chooser) noexcept
-    : entry_(entry),
+    IContainerFileChooser& file_chooser,
+    ILoginResetMountAccess* reset_mount_access) noexcept
+    : reset_mount_access_(reset_mount_access), entry_(entry),
       authentication_(authentication),
       volume_session_(volume_session),
       password_policy_(password_policy),
@@ -774,4 +775,60 @@ void CardProductUiSessionController::set_operation_logging_enabled(bool enabled)
   volume_session_.set_operation_logging_enabled(enabled);
 }
 
+}  // namespace usb_vault::ui
+
+namespace usb_vault::ui {
+bool CardProductUiSessionController::can_login_reset() const noexcept {
+  return !authentication_.authenticated() && !login_reset_completed_ &&
+         entry_.current_route() == application::CardEntryRoute::login_required;
+}
+LoginResetPreparation CardProductUiSessionController::prepare_login_reset() {
+  cancel_login_reset();
+  if (!can_login_reset()) throw std::logic_error("login reset unavailable");
+  LoginResetPreparation result;
+  result.ticket = entry_.prepare_login_reset();
+  try {
+    if (!reset_mount_access_) throw std::runtime_error("mount query unavailable");
+    reset_mounts_ = reset_mount_access_->mounted();
+    if (reset_mounts_.size() > 26) throw std::runtime_error("invalid mount list");
+    for (const auto& mount : reset_mounts_) {
+      if (mount.drive_letter < L'A' || mount.drive_letter > L'Z')
+        throw std::runtime_error("invalid mount drive");
+      if (!result.drives.empty()) result.drives += L", ";
+      result.drives += mount.drive_letter; result.drives += L":";
+    }
+    result.mounts_known = reset_mounts_known_ = true;
+  } catch (...) {
+    reset_mounts_.clear(); result.drives.clear(); reset_mounts_known_ = false;
+  }
+  return result;
+}
+void CardProductUiSessionController::cancel_login_reset() noexcept {
+  entry_.cancel_login_reset(); reset_mounts_.clear(); reset_mounts_known_ = false;
+}
+bool CardProductUiSessionController::login_reset_pending(std::uint32_t ticket) const noexcept {
+  return can_login_reset() && entry_.login_reset_pending(ticket);
+}
+void CardProductUiSessionController::force_login_reset_mounts(std::uint32_t ticket, const std::function<bool()>& interrupted) {
+  if (!login_reset_pending(ticket) || !reset_mount_access_ || !reset_mounts_known_ || reset_mounts_.empty())
+    throw std::logic_error("no confirmed mount targets");
+  // Never extend the saved set to newly mounted volumes. Reused letters fail.
+  for (const auto& expected : reset_mounts_) {
+    if (interrupted && interrupted()) throw std::runtime_error("reset interrupted");
+    const auto current = reset_mount_access_->mounted();
+    const auto found = std::ranges::find(current, expected.drive_letter, &volume::MountIdentity::drive_letter);
+    if (found == current.end()) continue;
+    if (*found != expected) throw std::runtime_error("mount identity changed");
+    reset_mount_access_->force_unmount(expected);
+  }
+}
+void CardProductUiSessionController::confirm_login_reset(std::uint32_t ticket) {
+  if (!login_reset_pending(ticket)) { cancel_login_reset(); throw std::logic_error("confirmation expired"); }
+  reset_mounts_.clear(); reset_mounts_known_ = false;
+  entry_.confirm_login_reset(ticket);
+  login_reset_completed_ = true;
+  volume_session_.release_session_secrets();
+  volume_session_.clear_operation_history();
+  authentication_.clear_authentication();
+}
 }  // namespace usb_vault::ui

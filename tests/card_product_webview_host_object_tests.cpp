@@ -681,6 +681,17 @@ class FakeEntry final : public ICardEntryActions {
     ++reset_calls;
   }
 
+  std::uint32_t prepare_login_reset() override { reset_ticket = ++reset_serial; return reset_ticket; }
+  void cancel_login_reset() noexcept override { reset_ticket = 0; }
+  bool login_reset_pending(std::uint32_t ticket) const noexcept override {
+    return ticket != 0 && ticket == reset_ticket && route == CardEntryRoute::login_required;
+  }
+  void confirm_login_reset(std::uint32_t ticket) override {
+    if (!login_reset_pending(ticket)) throw std::runtime_error("expired");
+    reset_ticket = 0; ++login_reset_calls; route = CardEntryRoute::unavailable;
+  }
+  std::uint32_t reset_ticket{}, reset_serial{};
+  int login_reset_calls{};
   int reset_calls{};
   std::vector<std::byte> existing_password_bytes;
   std::vector<std::byte> second_password_bytes;
@@ -3305,10 +3316,54 @@ void test_configuration_transition() {
       LOCALE_INVARIANT, DISPATCH_METHOD, &args, nullptr, nullptr, nullptr) == E_PENDING,
       "retiring bridge still accessed old context");
 }
+void test_login_reset_bridge_lifecycle() {
+  for (int scenario = 0; scenario < 4; ++scenario) {
+    Fixture fixture;
+    fixture.entry.route = CardEntryRoute::login_required;
+    RecordingCloseSink sink;
+    usb_vault::ui::CreationWorkState work;
+    ComPtr<IDispatch> host;
+    require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, &sink, &host, nullptr, &work)), "host creation");
+    VARIANT result{};
+    VARIANTARG args[2]{}; args[0].vt = VT_BOOL; args[0].boolVal = VARIANT_FALSE;
+    args[1].vt = VT_UI4; args[1].ulVal = 1;
+    DISPPARAMS parameters{args, nullptr, 2, 0};
+    const auto confirm = [&] { return host->Invoke(member_id(*host.Get(), L"beginConfirmLoginReset"), IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr); };
+    require(FAILED(confirm()) && fixture.entry.login_reset_calls == 0, "direct confirm accepted");
+    work.running.store(true);
+    require(invoke_no_arguments(*host.Get(), L"beginLoginResetPreparation", &result) == E_PENDING, "busy preparation accepted");
+    work.running.store(false);
+    require(SUCCEEDED(invoke_no_arguments(*host.Get(), L"beginLoginResetPreparation", &result)), "prepare failed");
+    const auto wait = [&] {
+      for (int i = 0; i < 1000; ++i) {
+        require(SUCCEEDED(invoke_no_arguments(*host.Get(), L"getLoginResetStatus", &result)), "status failed");
+        if (result.ulVal != 1) return result.ulVal;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      throw std::runtime_error("reset worker timeout");
+    };
+    require(wait() == 2, "preparation did not finish");
+    require(SUCCEEDED(invoke_no_arguments(*host.Get(), L"getLoginResetTicket", &result)), "ticket missing");
+    args[1].ulVal = result.ulVal;
+    if (scenario == 1) work.card_epoch.fetch_add(1);
+    if (scenario == 2) args[1].ulVal++;
+    if (scenario == 3) args[0].vt = VT_I4;
+    const auto status = confirm();
+    if (scenario != 0) {
+      require(FAILED(status) && fixture.entry.login_reset_calls == 0 && sink.close_calls == 0, "invalid reset reached card");
+    } else {
+      require(SUCCEEDED(status) && wait() == 5, "reset failed");
+      require(fixture.entry.login_reset_calls == 1 && sink.close_calls == 1, "success did not close once");
+      require(FAILED(confirm()) && sink.close_calls == 1, "replay accepted");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_login_reset_bridge_lifecycle();
     test_protection_query_is_boolean_scoped_and_serialized();
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();

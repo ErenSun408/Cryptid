@@ -265,6 +265,7 @@ std::unique_ptr<usb_vault::security::OfflineCardPasswordPolicy>
 std::unique_ptr<
     usb_vault::platform::windows::ShellContainerFileChooser>
     g_container_file_chooser;
+std::unique_ptr<usb_vault::ui::ProviderLoginResetMountAccess> g_reset_mount_access;
 std::unique_ptr<usb_vault::ui::CardProductUiSessionController> g_ui_session;
 std::unique_ptr<
     usb_vault::card::vikey::development::WindowsCredentialProvider>
@@ -486,10 +487,11 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
       usb_vault::security::OfflineCardPasswordPolicy>();
   auto file_chooser = std::make_unique<
       usb_vault::platform::windows::ShellContainerFileChooser>(window);
+  g_reset_mount_access = std::make_unique<usb_vault::ui::ProviderLoginResetMountAccess>(*g_volume_provider);
   auto ui_session = std::make_unique<
       usb_vault::ui::CardProductUiSessionController>(
           *entry, *authentication, *volume_session, *password_policy,
-          *file_chooser);
+          *file_chooser, g_reset_mount_access.get());
   auto presence =
       std::make_unique<usb_vault::application::CardPresenceController>(
           *volume_session);
@@ -545,6 +547,7 @@ void clear_application_session() noexcept {
   g_authentication.reset();
   g_card_entry.reset();
   g_card_enrollment.reset();
+  g_reset_mount_access.reset();
   g_volume_provider.reset();
   g_vikey_credential_provider.reset();
   g_deployment_artifacts.clear();

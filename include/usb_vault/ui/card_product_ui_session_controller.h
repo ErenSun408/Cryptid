@@ -6,6 +6,7 @@
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/container_file_chooser.h"
 
+#include "usb_vault/ui/login_reset_mount_access.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -115,7 +116,8 @@ class CardProductUiSessionController final {
       application::CardAuthenticationSession& authentication,
       application::IAuthenticatedCardVolumeSession& volume_session,
       const security::IPasswordStrengthPolicy& password_policy,
-      IContainerFileChooser& file_chooser) noexcept;
+      IContainerFileChooser& file_chooser,
+      ILoginResetMountAccess* reset_mount_access = nullptr) noexcept;
 
   void submit_login(std::span<std::byte> mutable_utf8);
   void submit_initialization(
@@ -309,8 +311,19 @@ class CardProductUiSessionController final {
   // mount would outlive the key that opens it. Container files are untouched
   // and stay on disk, permanently unopenable.
   void reset_card_record();
+  bool can_login_reset() const noexcept;
+  bool login_reset_completed() const noexcept { return login_reset_completed_; }
+  LoginResetPreparation prepare_login_reset();
+  void cancel_login_reset() noexcept;
+  bool login_reset_pending(std::uint32_t ticket) const noexcept;
+  void force_login_reset_mounts(std::uint32_t ticket, const std::function<bool()>& interrupted = {});
+  void confirm_login_reset(std::uint32_t ticket);
 
  private:
+  ILoginResetMountAccess* reset_mount_access_;
+  std::vector<volume::MountIdentity> reset_mounts_;
+  bool reset_mounts_known_{};
+  bool login_reset_completed_{};
   application::ICardEntryActions& entry_;
   application::CardAuthenticationSession& authentication_;
   application::IAuthenticatedCardVolumeSession& volume_session_;

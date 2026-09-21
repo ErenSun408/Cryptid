@@ -20,6 +20,7 @@ template <typename Controller>
 
 bool prepare_ui_session_for_close(
     CardProductUiSessionController& controller) noexcept {
+  if (controller.login_reset_completed()) return true;
   return prepare_for_close(controller);
 }
 
