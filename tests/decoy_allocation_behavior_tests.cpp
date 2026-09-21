@@ -1,3 +1,4 @@
+#include "usb_vault/volume/fat32_file_transfer.h"
 #include "usb_vault/volume/fat32_file_placement.h"
 #include "usb_vault/volume/fat32_file_allocation.h"
 #include "usb_vault/volume_creation/volume_creator.h"
@@ -168,7 +169,7 @@ int wmain(int argc,wchar_t** argv) {
   if(argc==5 && std::wstring_view(argv[1])==L"--measurement-helper-run") return measurement_helper_run(argv);
   if(argc==3 && std::wstring_view(argv[1])==L"--abrupt-disposable-writer") return abrupt_test_writer(argv[2]);
   if(argc==5 && std::wstring_view(argv[1])==L"--fault-disposable-run") return fault_run(argv);
-  if(argc==5 && (std::wstring_view(argv[1])==L"--sequential-disposable-run" || std::wstring_view(argv[1])==L"--production-placement-run" || std::wstring_view(argv[1])==L"--production-write-run")) return sequential_run(argc,argv);
+  if(argc==5 && (std::wstring_view(argv[1])==L"--sequential-disposable-run" || std::wstring_view(argv[1])==L"--production-placement-run" || std::wstring_view(argv[1])==L"--production-write-run" || std::wstring_view(argv[1])==L"--production-transfer-run")) return sequential_run(argc,argv);
   if(argc==5 && (std::wstring_view(argv[1])==L"--placement-disposable-run" || std::wstring_view(argv[1])==L"--multirun-disposable-run")) return placement_run(argc,argv);
   if(argc==5 && std::wstring_view(argv[1])==L"--recover-disposable-run") return recovery_run(argc,argv);
   bool output_created=false;
@@ -619,6 +620,33 @@ int sequential_run(int argc,wchar_t** argv) {
           target.close();need(fs::file_size(targetPath)==smallSize&&verify_pattern(targetPath,smallSize),"small copy mismatch");
           need(::DeleteFileW(targetPath.c_str()),"delete own small fixture");record(0,"production_small_write",true,0,smallSize);
         }
+      }
+      if(std::wstring_view(argv[1])==L"--production-transfer-run") {
+        const auto identity=m.provider.mount_identity(m.drive);const auto beforeFiles=existing_files(m.root());
+        auto volumeHandle=raw(m.drive);const auto beforeSpace=volume::scan_fat32_safe_space(volumeHandle.h,g[1],g[2]-g[0]).free_bytes;
+        const auto plan=volume::plan_fat32_allocation(volumeHandle.h,g[1],g[2]-g[0],MiB);
+        const auto sourcePath=output/(L"transaction-source-"+std::to_wstring(rep)+L".bin");
+        {std::ofstream outFile(sourcePath,std::ios::binary);for(std::uint64_t n=0;n<MiB;++n)outFile.put(static_cast<char>(placement_byte(n)));need(outFile.good(),"transaction source");}
+        Handle inputFile;inputFile.h=::CreateFileW(sourcePath.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);need(inputFile.h!=INVALID_HANDLE_VALUE,"transaction source handle");
+        const auto path=m.root()+L"owned-transfer.bin";
+        for(unsigned test=0;test<3;++test) {
+          volume::Fat32TransferTarget target(path);bool cancel=false;
+          const auto result=volume::transfer_fat32_file(inputFile.h,target,identity,g[2]-g[0],plan,[&]{return cancel;},[&](auto){if(test==0)cancel=true;else if(test==1)throw std::runtime_error("fixture progress failure");});
+          if(test<2) {
+            need(result.failure&&result.deletion_requested&&result.cleanup_error==0,"owned cancellation cleanup failed");
+            bool original=false;try {std::rethrow_exception(result.failure);}catch(const std::system_error& e){original=test==0&&e.code()==std::make_error_code(std::errc::operation_canceled);}catch(const std::runtime_error& e){original=test==1&&std::string(e.what())=="fixture progress failure";}
+            need(original&&!fs::exists(path),"cleanup hid original failure or left visible target");record(0,"owned_cleanup",true,0,test);
+          } else {
+            need(!result.failure&&verify_pattern(path,MiB),"owned transfer content mismatch");
+            bool occupied=false;try {volume::Fat32TransferTarget duplicate(path);}catch(const std::system_error& e){occupied=e.code().value()==ERROR_FILE_EXISTS||e.code().value()==ERROR_ALREADY_EXISTS;}
+            need(occupied&&verify_pattern(path,MiB),"occupied target changed");need(::DeleteFileW(path.c_str()),"delete own successful fixture");record(0,"owned_success_and_collision",true);
+          }
+          bool consumed=false;try {static_cast<void>(volume::transfer_fat32_file(inputFile.h,target,identity,g[2]-g[0],plan));}catch(const std::logic_error&){consumed=true;}need(consumed,"consumed target reused");
+        }
+        volumeHandle.close();m.close();m.open();
+        need(unchanged_files(beforeFiles,existing_files(m.root())),"owned cleanup changed retained files");
+        {auto fresh=raw(m.drive);need(volume::scan_fat32_safe_space(fresh.h,g[1],g[2]-g[0]).free_bytes==beforeSpace,"owned cleanup space not restored after remount");}
+        record(0,"owned_cleanup_persisted",true);
       }
       const std::array<unsigned,5> starts{0,2,5,9,14};
       for(unsigned group=0;group<5;++group)for(unsigned j=0;j<=group;++j)need(::DeleteFileW((m.root()+L"s"+std::to_wstring(starts[group]+j)+L".bin").c_str()),"delete own fixture seed");
