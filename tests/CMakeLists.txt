@@ -1010,6 +1010,13 @@ add_test(
 set_tests_properties(secure_buffer_copy_is_rejected PROPERTIES WILL_FAIL TRUE)
 
 if(USB_VAULT_ENABLE_INTEGRATION_TESTS)
+  # Explicit opt-in executable only: creates and deliberately fills a NEW
+  # disposable hidden-volume fixture. Never run implicitly through CTest.
+  add_executable(decoy_maintenance_integration_tests EXCLUDE_FROM_ALL
+    decoy_maintenance_integration_tests.cpp)
+  target_link_libraries(decoy_maintenance_integration_tests PRIVATE usb_vault_core)
+  usb_vault_configure_target(decoy_maintenance_integration_tests)
+
   add_executable(volume_provider_integration_tests
     volume_provider_integration_tests.cpp
   )
