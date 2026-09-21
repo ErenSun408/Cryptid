@@ -940,12 +940,29 @@ int import_helper_run(wchar_t** argv) {
     try {treeCopy(L"tree-cancel",[&](const auto& p){treePercent=p.percent;if(p.percent>=51)stopTree=true;},[&]{return stopTree;});}
     catch(const std::system_error& e){treeError=e.what();treeCancelled=e.code()==volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled);}
     if(!treeCancelled||fs::exists(m.root()+L"tree-cancel"))throw std::runtime_error("tree rollback failed: percent="+std::to_string(treePercent)+" cancelled="+std::to_string(treeCancelled)+" exists="+std::to_string(fs::exists(m.root()+L"tree-cancel"))+" error="+treeError);
+    const auto oversized=tree/L"too-large.bin";
+    {
+      Handle file;file.h=::CreateFileW(oversized.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+      need(file.h!=INVALID_HANDLE_VALUE,"create sparse size-limit source");DWORD returned=0;
+      need(::DeviceIoControl(file.h,FSCTL_SET_SPARSE,nullptr,0,nullptr,0,&returned,nullptr),"make size-limit fixture sparse");
+      LARGE_INTEGER size{};size.QuadPart=1LL<<32;
+      need(::SetFilePointerEx(file.h,size,nullptr,FILE_BEGIN)&&::SetEndOfFile(file.h),"size-limit sparse EOF");
+    }
+    rejects([&]{volume_creation::import_protected_file(helper,m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner,oversized.native(),L"too-large.bin");});
+    rejects([&]{treeCopy(L"oversized-tree");});
+    need(!fs::exists(m.root()+L"too-large.bin")&&!fs::exists(m.root()+L"oversized-tree"),"oversized source created target");
+    const auto deep=output/L"deep";auto leaf=deep;
+    for(unsigned n=0;n<33;++n)leaf/=L"d";
+    need(fs::create_directories(leaf),"create depth-limit source");
+    rejects([&]{volume_creation::import_protected_file(helper,m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner,deep.native(),L"deep");});
+    need(!fs::exists(m.root()+L"deep"),"over-depth tree created destination");
     const auto crowded=output/L"crowded";need(fs::create_directory(crowded),"create bounded-source fixture");
     for(unsigned n=0;n<1024;++n){std::ofstream empty(crowded/(std::to_wstring(n)+L".bin"));need(empty.good(),"bounded source entry");}
     rejects([&]{volume_creation::import_protected_file(helper,m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner,crowded.native(),L"crowded");});
     need(!fs::exists(m.root()+L"crowded"),"over-limit tree created destination");
     need(!m.close(),"helper triggered protection");m.open();need(!fs::exists(m.root()+L"tree-cancel")&&!fs::exists(m.root()+L"cancel.bin")&&verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"helper remount persistence failed");
+    need(verify_pattern(m.root()+L"tree\\one.bin",8*MiB+513)&&verify_pattern(m.root()+L"tree\\nested\\two.bin",8*MiB+513)&&fs::is_directory(m.root()+L"tree\\nested\\empty")&&fs::file_size(m.root()+L"tree\\zero.bin")==0,"tree remount persistence failed");
     need(!m.close()&&digest(m.path,66977792,66977792)==hidden,"helper hidden integrity failed");
-    std::ofstream(output/L"complete.txt")<<"PASS medium-client protected import, traversal/stale identity/wrong password/collision rejection, cancellation cleanup, remount and hidden integrity.\n";return 0;
+    std::ofstream(output/L"complete.txt")<<"PASS medium-client protected import, traversal/stale identity/wrong password/collision rejection, cancellation cleanup, directory depth/entry/file-size limits, tree remount and hidden integrity.\n";return 0;
   } catch(const std::exception& e){if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}
 }
