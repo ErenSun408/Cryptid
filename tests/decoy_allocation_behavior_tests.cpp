@@ -927,7 +927,24 @@ int import_helper_run(wchar_t** argv) {
     bool cancel=false,cancelled=false;try {invoke(L"cancel.bin",identity.unique_id,inner,[&](const auto& progress){if(progress.percent>=1)cancel=true;},[&]{return cancel;});}
     catch(const std::system_error& error){cancelled=error.code()==volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled);}
     need(cancelled&&!fs::exists(m.root()+L"cancel.bin"),"helper cancellation cleanup failed");
-    need(!m.close(),"helper triggered protection");m.open();need(!fs::exists(m.root()+L"cancel.bin")&&verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"helper remount persistence failed");
+    const auto tree=output/L"tree-source";
+    need(fs::create_directories(tree/L"nested"/L"empty"),"tree fixture directories");
+    need(fs::copy_file(payload,tree/L"one.bin")&&fs::copy_file(payload,tree/L"nested"/L"two.bin"),"tree fixture payloads");
+    {std::ofstream empty(tree/L"zero.bin",std::ios::binary);need(empty.good(),"empty tree file");}
+    const auto treeCopy=[&](std::wstring_view name,const volume_creation::ProgressCallback& progress=volume_creation::ProgressCallback{},const volume_creation::CancellationQuery& stop=volume_creation::CancellationQuery{}) {
+      volume_creation::import_protected_file(helper,m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner,tree.native(),name,progress,stop);
+    };
+    treeCopy(L"tree");need(verify_pattern(m.root()+L"tree\\one.bin",8*MiB+513)&&verify_pattern(m.root()+L"tree\\nested\\two.bin",8*MiB+513)&&fs::is_directory(m.root()+L"tree\\nested\\empty")&&fs::file_size(m.root()+L"tree\\zero.bin")==0,"tree copy differs");
+    rejects([&]{treeCopy(L"tree");});need(verify_pattern(m.root()+L"tree\\one.bin",8*MiB+513),"tree collision changed old content");
+    bool stopTree=false,treeCancelled=false;std::string treeError;unsigned treePercent=0;
+    try {treeCopy(L"tree-cancel",[&](const auto& p){treePercent=p.percent;if(p.percent>=51)stopTree=true;},[&]{return stopTree;});}
+    catch(const std::system_error& e){treeError=e.what();treeCancelled=e.code()==volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled);}
+    if(!treeCancelled||fs::exists(m.root()+L"tree-cancel"))throw std::runtime_error("tree rollback failed: percent="+std::to_string(treePercent)+" cancelled="+std::to_string(treeCancelled)+" exists="+std::to_string(fs::exists(m.root()+L"tree-cancel"))+" error="+treeError);
+    const auto crowded=output/L"crowded";need(fs::create_directory(crowded),"create bounded-source fixture");
+    for(unsigned n=0;n<1024;++n){std::ofstream empty(crowded/(std::to_wstring(n)+L".bin"));need(empty.good(),"bounded source entry");}
+    rejects([&]{volume_creation::import_protected_file(helper,m.path.native(),m.drive,identity.unique_id,identity.disk_length,outer,inner,crowded.native(),L"crowded");});
+    need(!fs::exists(m.root()+L"crowded"),"over-limit tree created destination");
+    need(!m.close(),"helper triggered protection");m.open();need(!fs::exists(m.root()+L"tree-cancel")&&!fs::exists(m.root()+L"cancel.bin")&&verify_pattern(m.root()+L"folder\\copied.bin",8*MiB+513),"helper remount persistence failed");
     need(!m.close()&&digest(m.path,66977792,66977792)==hidden,"helper hidden integrity failed");
     std::ofstream(output/L"complete.txt")<<"PASS medium-client protected import, traversal/stale identity/wrong password/collision rejection, cancellation cleanup, remount and hidden integrity.\n";return 0;
   } catch(const std::exception& e){if(created)std::ofstream(fs::path(argv[4])/L"failure.txt")<<e.what()<<std::endl;return 1;}

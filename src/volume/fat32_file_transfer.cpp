@@ -18,11 +18,19 @@ DWORD Fat32TransferTarget::close() noexcept {
   const auto file = std::exchange(file_, INVALID_HANDLE_VALUE);
   return ::CloseHandle(file) ? ERROR_SUCCESS : ::GetLastError();
 }
+DWORD Fat32TransferTarget::discard() noexcept {
+  if (file_ == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
+  FILE_DISPOSITION_INFO disposition{TRUE};
+  const auto error = ::SetFileInformationByHandle(file_, FileDispositionInfo, &disposition, sizeof(disposition)) ? ERROR_SUCCESS : ::GetLastError();
+  const auto closed = close();
+  return error != ERROR_SUCCESS ? error : closed;
+}
 Fat32TransferResult transfer_fat32_file(HANDLE source, Fat32TransferTarget& target,
     const MountIdentity& expected, std::uint64_t boundary, const Fat32AllocationPlan& plan,
-    const std::function<bool()>& cancelled, const std::function<void(std::uint64_t)>& progress) {
-  if (target.file_ == INVALID_HANDLE_VALUE)
+    const std::function<bool()>& cancelled, const std::function<void(std::uint64_t)>& progress, bool retain_success) {
+  if (target.file_ == INVALID_HANDLE_VALUE || target.consumed_)
     throw std::logic_error("FAT32 transfer target already consumed");
+  target.consumed_ = true;
   Fat32TransferResult result;
   try {
     prepare_fat32_file(target.file_, expected, boundary, plan, cancelled);
@@ -34,6 +42,7 @@ Fat32TransferResult transfer_fat32_file(HANDLE source, Fat32TransferTarget& targ
       result.deletion_requested = true;
     else result.cleanup_error = ::GetLastError();
   }
+  if (!result.failure && retain_success) return result;
   const auto close_error = target.close();
   if (close_error != ERROR_SUCCESS) {
     if (result.failure) {

@@ -10,6 +10,7 @@
 
 #include <Windows.h>
 #include <winioctl.h>
+#include <winternl.h>
 #include <bcrypt.h>
 #include <cstring>
 
@@ -62,6 +63,10 @@ class Handle final {
   Handle(const Handle&) = delete;
   Handle& operator=(const Handle&) = delete;
   [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+  void reset(HANDLE value) noexcept {
+    if(handle_!=INVALID_HANDLE_VALUE&&handle_!=nullptr)static_cast<void>(::CloseHandle(handle_));
+    handle_=value;
+  }
 
  private:
   HANDLE handle_;
@@ -472,6 +477,141 @@ std::uint64_t scan_protected_space(HANDLE pipe, Request& request) {
   });
 }
 
+// FILE_CREATE returns ownership atomically; CreateDirectory followed by opening
+// a pathname would leave a replacement race before rollback ownership existed.
+HANDLE create_directory_handle(HANDLE parent, std::wstring_view name) {
+  using Create = NTSTATUS (NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+      PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+  using ToError = ULONG (WINAPI*)(NTSTATUS);
+  const auto module = ::GetModuleHandleW(L"ntdll.dll");
+  const auto create = reinterpret_cast<Create>(::GetProcAddress(module, "NtCreateFile"));
+  const auto to_error = reinterpret_cast<ToError>(::GetProcAddress(module, "RtlNtStatusToDosError"));
+  if (!create || !to_error || name.empty() || name.size() > 255)
+    fail(CreationError::invalid_request, "directory creation unavailable");
+  UNICODE_STRING text{};
+  text.Buffer=const_cast<PWSTR>(name.data());text.Length=static_cast<USHORT>(name.size()*sizeof(wchar_t));text.MaximumLength=text.Length;
+  OBJECT_ATTRIBUTES attributes{};attributes.Length=sizeof(attributes);attributes.RootDirectory=parent;
+  attributes.ObjectName=&text;attributes.Attributes=OBJ_CASE_INSENSITIVE;
+  IO_STATUS_BLOCK status{};HANDLE result=INVALID_HANDLE_VALUE;
+  // FILE_CREATE, FILE_DIRECTORY_FILE, FILE_WRITE_THROUGH, synchronous nonalert.
+  const auto code=create(&result,FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES|DELETE|SYNCHRONIZE,
+      &attributes,&status,nullptr,FILE_ATTRIBUTE_DIRECTORY,FILE_SHARE_READ,2,0x1|0x2|0x20,nullptr,0);
+  if(code<0)throw std::system_error(static_cast<int>(to_error(code)),std::system_category(),"create owned import directory");
+  return result;
+}
+
+struct ImportTreeEntry final {
+  std::wstring relative;
+  std::unique_ptr<Handle> source;
+  std::uint64_t bytes{};
+  bool directory{};
+  std::size_t parent{};
+};
+
+std::uint64_t import_tree(HANDLE pipe, Request& request, HANDLE raw,
+    const volume::MountIdentity& identity, std::uint64_t boundary,
+    const std::function<bool()>& cancelled,
+    const std::function<void(std::uint64_t,std::uint64_t)>& progress) {
+  const auto space=volume::scan_fat32_safe_space(raw,identity.disk_length,boundary);
+  const auto destination=volume::resolve_volume_entry_path(identity.drive_letter,request.destination_relative).substr(3);
+  const auto root=std::wstring(LR"(\\?\GLOBALROOT\Device\VeraCryptVolume)")+identity.drive_letter+L"\\";
+  std::vector<ImportTreeEntry> entries;
+  std::uint64_t total=0,allocation=0;
+  const auto stop=[&] {if(cancelled())fail(CreationError::operation_cancelled,"tree import cancelled");};
+  std::function<void(std::wstring,std::size_t,unsigned)> survey;
+  survey=[&](std::wstring relative,std::size_t parent,unsigned depth) {
+    stop();
+    if(entries.size()>=1024 || depth>32)fail(CreationError::invalid_request,"import tree limit exceeded");
+    static_cast<void>(volume::resolve_volume_entry_path(identity.drive_letter,destination+(relative.empty()?L"":L"\\"+relative)));
+    const auto path=request.source_path+(relative.empty()?L"":L"\\"+relative);
+    std::unique_ptr<Handle> handle;
+    {
+      const Impersonation caller(pipe);
+      handle=std::make_unique<Handle>(::CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
+          FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS,nullptr));
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    if(handle->get()==INVALID_HANDLE_VALUE || ::GetFileType(handle->get())!=FILE_TYPE_DISK ||
+       !::GetFileInformationByHandle(handle->get(),&info) || (info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+      fail(CreationError::target_access_denied,"tree source unavailable or linked");
+    const bool directory=(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+    const auto bytes=(static_cast<std::uint64_t>(info.nFileSizeHigh)<<32)|info.nFileSizeLow;
+    if(!directory && bytes>UINT32_MAX)fail(CreationError::invalid_request,"tree file exceeds FAT32 limit");
+    const auto index=entries.size();
+    entries.push_back({relative,std::move(handle),directory?0:bytes,directory,parent});
+    if(!directory){total+=bytes;allocation+=(bytes/space.cluster_size+(bytes%space.cluster_size!=0))*space.cluster_size;return;}
+    WIN32_FIND_DATAW found{};
+    const auto search=[&] {const Impersonation caller(pipe);return ::FindFirstFileW((path+L"\\*").c_str(),&found);}();
+    if(search==INVALID_HANDLE_VALUE){if(::GetLastError()==ERROR_FILE_NOT_FOUND)return;fail(CreationError::io_error,"enumerate import source");}
+    struct FindClose {HANDLE value;~FindClose(){::FindClose(value);}} closer{search};
+    do {
+      const std::wstring name=found.cFileName;
+      if(name==L"."||name==L"..")continue;
+      // Enumerate under caller rights, but recursive opens manage their own
+      // impersonation scope; no privileged filesystem action occurs here.
+      survey(relative.empty()?name:relative+L"\\"+name,index,depth+1);
+    } while(::FindNextFileW(search,&found));
+    if(::GetLastError()!=ERROR_NO_MORE_FILES)fail(CreationError::io_error,"finish import enumeration");
+  };
+  survey(L"",0,0);
+  if(allocation>space.free_bytes)fail(CreationError::insufficient_tail_space,"insufficient safe space for import tree");
+  std::vector<std::unique_ptr<Handle>> pinned;
+  std::vector<std::unique_ptr<Handle>> directories(entries.size());
+  std::vector<std::unique_ptr<volume::Fat32TransferTarget>> files;
+  files.reserve(entries.size());
+  const auto guard=[&] {stop();volume::VolumeProvider provider;
+    if(provider.mount_identity(identity.drive_letter)!=identity)fail(CreationError::invalid_request,"tree mount changed");};
+  {
+    const Impersonation caller(pipe);
+    const auto pin=[&](std::wstring path){auto h=std::make_unique<Handle>(::CreateFileW(path.c_str(),FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
+      BY_HANDLE_FILE_INFORMATION info{};
+      if(h->get()==INVALID_HANDLE_VALUE||!::GetFileInformationByHandle(h->get(),&info)||!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+        fail(CreationError::target_access_denied,"tree parent unavailable");
+      pinned.push_back(std::move(h));};
+    pin(root);
+    for(auto at=destination.find(L'\\');at!=std::wstring::npos;at=destination.find(L'\\',at+1))pin(root+destination.substr(0,at));
+  }
+  std::uint64_t copied=0;
+  try {
+    for(std::size_t i=0;i<entries.size();++i) {
+      guard();const auto& entry=entries[i];
+      const auto relative=destination+(entry.relative.empty()?L"":L"\\"+entry.relative);
+      if(entry.directory) {
+        const auto name=std::filesystem::path(relative).filename().native();
+        const Impersonation caller(pipe);
+        directories[i]=std::make_unique<Handle>();
+        directories[i]->reset(create_directory_handle(i==0?pinned.back()->get():directories[entry.parent]->get(),name));
+        guard();
+      } else {
+        const auto plan=volume::plan_fat32_allocation(raw,identity.disk_length,boundary,entry.bytes);
+        {const Impersonation caller(pipe);files.push_back(std::make_unique<volume::Fat32TransferTarget>(root+relative));}
+        const auto result=volume::transfer_fat32_file(entry.source->get(),*files.back(),identity,boundary,plan,
+            cancelled,[&](std::uint64_t done){progress(copied+done,total);},true);
+        if(result.failure)std::rethrow_exception(result.failure);
+        copied+=entry.bytes;
+      }
+    }
+    guard();
+    const auto device=std::wstring(LR"(\\?\GLOBALROOT\Device\VeraCryptVolume)")+identity.drive_letter;
+    const Handle flush(::CreateFileW(device.c_str(),GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,0,nullptr));
+    if(flush.get()==INVALID_HANDLE_VALUE||!::FlushFileBuffers(flush.get()))
+      throw std::system_error(static_cast<int>(::GetLastError()),std::system_category(),"flush imported tree");
+    guard();
+  } catch(...) {
+    const auto original=std::current_exception();
+    for(auto& file:files)static_cast<void>(file->discard());
+    files.clear();
+    for(auto i=directories.size();i>0;--i)if(directories[i-1]) {
+      FILE_DISPOSITION_INFO remove{TRUE};
+      static_cast<void>(::SetFileInformationByHandle(directories[i-1]->get(),FileDispositionInfo,&remove,sizeof(remove)));
+      directories[i-1].reset();
+    }
+    std::rethrow_exception(original);
+  }
+  return total;
+}
+
 std::uint64_t import_protected(HANDLE pipe, Request& request) {
   return with_protected_volume(pipe, request, [&](HANDLE raw, const volume::MountIdentity& identity, std::uint64_t boundary) -> std::uint64_t {
     std::uint32_t percent = 0;
@@ -488,13 +628,28 @@ std::uint64_t import_protected(HANDLE pipe, Request& request) {
     const auto source = [&] {
       const Impersonation caller(pipe);
       return Handle(::CreateFileW(request.source_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-          OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+          OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
     }();
     BY_HANDLE_FILE_INFORMATION info{};
     if (source.get() == INVALID_HANDLE_VALUE || ::GetFileType(source.get()) != FILE_TYPE_DISK ||
         !::GetFileInformationByHandle(source.get(), &info) ||
-        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
-      fail(CreationError::target_access_denied, "caller source is not a readable regular file");
+        (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+      fail(CreationError::target_access_denied, "caller source is not a readable regular entry");
+    if(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      try {
+        return import_tree(pipe,request,raw,identity,boundary,cancelled,[&](std::uint64_t done,std::uint64_t total) {
+          const auto next=total?static_cast<std::uint32_t>(std::min<std::uint64_t>(99,done*100/total)):99;
+          if(next!=percent) {
+            percent=next;
+            write_response(pipe,Response{.type=MessageType::progress,.stage=CreationStage::copying,.percent=percent});
+            reported=std::chrono::steady_clock::now();
+          }
+        });
+      } catch(const std::system_error& error) {
+        if(error.code()==std::make_error_code(std::errc::operation_canceled))fail(CreationError::operation_cancelled,"tree import cancelled; recovery required");
+        throw;
+      }
+    }
     const auto size = (static_cast<std::uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
     const auto plan = volume::plan_fat32_allocation(raw, identity.disk_length, boundary, size);
     // FAT32 geometry has been validated before creating any filesystem entry.
