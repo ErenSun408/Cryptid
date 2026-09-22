@@ -99,6 +99,47 @@ void unit_tests() {
   }
   std::cout << "PASS: " << cases << " partition assessment cases\n";
 }
+void snapshot_tests() {
+  PartitionCandidate selected{};
+  selected.volume_path = L"native-test-identity";
+  selected.disk_number = 2; selected.partition_number = 3;
+  selected.offset_bytes = 1048576; selected.length_bytes = 1073741824;
+  selected.logical_sector_bytes = 512; selected.availability = A::candidate;
+  selected.layout = PartitionLayout::gpt; selected.partition_id[0] = 7;
+  selected.filesystem_serial = 123;
+  std::vector<PartitionCandidate> current{selected};
+  require(matches_partition_snapshot(selected, current), "unchanged snapshot rejected");
+  for (int change = 0; change < 12; ++change) {
+    auto altered = selected;
+    if (change == 0) altered.volume_path += L"other";
+    if (change == 1) ++altered.disk_number;
+    if (change == 2) ++altered.partition_number;
+    if (change == 3) altered.offset_bytes += 512;
+    if (change == 4) altered.length_bytes -= 512;
+    if (change == 5) altered.logical_sector_bytes = 4096;
+    if (change == 6) altered.availability = A::windows_volume;
+    if (change == 7) altered.query_error = ERROR_ACCESS_DENIED;
+    if (change == 8) altered.layout = PartitionLayout::mbr;
+    if (change == 9) ++altered.partition_id[0];
+    if (change == 10) ++altered.filesystem_serial;
+    if (change == 11) altered.layout = PartitionLayout::unknown;
+    current = {altered};
+    require(!matches_partition_snapshot(selected, current), "changed snapshot accepted");
+    require(!matches_partition_snapshot(altered, {&selected, 1}), "reverse mismatch accepted");
+  }
+  require(!matches_partition_snapshot(selected, {}), "missing target accepted");
+  current = {selected, selected};
+  require(!matches_partition_snapshot(selected, current), "duplicate identity accepted");
+  current.resize(4097, selected);
+  require(!matches_partition_snapshot(selected, current), "oversized inventory accepted");
+  selected.layout = PartitionLayout::unknown;
+  require(!matches_partition_snapshot(selected, {&selected, 1}), "unknown layout accepted");
+  selected.layout = PartitionLayout::gpt; selected.partition_id = {};
+  require(!matches_partition_snapshot(selected, {&selected, 1}), "missing GPT identity accepted");
+  selected.layout = PartitionLayout::mbr;
+  require(matches_partition_snapshot(selected, {&selected, 1}), "MBR snapshot rejected");
+  std::cout << "PASS: partition snapshot replacement, format, ambiguity and bounds checks\n";
+}
 void scan() {
   // Explicit opt-in read-only native smoke. Never print identities or paths.
   const auto first = enumerate_partition_candidates();
@@ -108,6 +149,7 @@ void scan() {
   for (const auto& entry : second) {
     if (entry.availability == A::candidate) {
       ++candidates;
+      require(matches_partition_snapshot(entry, first), "candidate changed between read-only scans");
       require(entry.partition_number && entry.offset_bytes && entry.length_bytes &&
           entry.logical_sector_bytes == 512 && !entry.query_error, "incomplete candidate");
     } else ++blocked;
@@ -121,7 +163,7 @@ void scan() {
 }
 int main(int argc, char** argv) {
   try {
-    if (argc == 1) unit_tests();
+    if (argc == 1) { unit_tests(); snapshot_tests(); }
     else if (argc == 2 && std::string_view(argv[1]) == "--scan") scan();
     else throw std::runtime_error("expected no arguments or --scan");
     return 0;

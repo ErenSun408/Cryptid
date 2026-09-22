@@ -58,7 +58,7 @@ window.navigationFixture = {
     beginPartitionRefresh: () => { fixture.partitionScans = (fixture.partitionScans || 0) + 1; return true; },
     getPartitionRefreshStatus: () => fixture.partitionPending ? 1 : 2,
     getPartitionList: () => fixture.partitionList ?? "1,0,3,1073741824,0\n2,0,1,536870912,1",
-    selectPartition: id => { fixture.partitionSelected = id; return true; },
+    selectPartition: id => { fixture.partitionSelected = 0; if (fixture.partitionSelectionFails) throw new Error("stale target"); fixture.partitionSelected = id; return true; },
     clearPartitions: async () => { fixture.partitionSelected = 0; },
     openDiskManagement: () => { if (fixture.partitionToolFails) throw new Error("tool failed"); fixture.partitionTools = (fixture.partitionTools || 0) + 1; return true; },
     getAutoMountEnabled: () => {

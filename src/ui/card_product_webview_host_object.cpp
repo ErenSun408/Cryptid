@@ -1244,12 +1244,21 @@ class CardProductWebViewHostObject final : public IDispatch {
       if (partition_status_.load() != 2) return E_UNEXPECTED;
       if (member == kPartitionSelectedId) return partition_number(partition_selected_, result);
       if (member == kPartitionSelectId) {
+        partition_selected_ = 0;
         std::uint32_t id{};
         if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
         const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
         if (found == partition_items_.end() ||
             found->target.availability != volume::PartitionAvailability::candidate || found->target.query_error)
           return E_ACCESSDENIED;
+        const auto current = partition_services_.enumerate();
+        if (!volume::matches_partition_snapshot(found->target, current) ||
+            creation_work_->interrupted.load() || partition_epoch_ != creation_work_->card_epoch.load() ||
+            controller_.state() != CardProductUiState::authenticated) {
+          partition_items_.clear();
+          partition_status_.store(4);
+          return E_ACCESSDENIED;
+        }
         partition_selected_ = id;
         return complete_selection(true, result);
       }

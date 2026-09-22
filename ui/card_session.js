@@ -3393,7 +3393,10 @@
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) partitionSelected = id;
     } catch (_) {
-      partitionSelected = 0; partitionStatus.textContent = "分区选择已失效，请刷新后重新选择。";
+      if (revision === partitionRevision) {
+        discardPartitions();
+        partitionStatus.textContent = "分区选择已失效，请刷新后重新选择。";
+      }
     } finally {
       busy = false; render(messageForCurrentState());
       if (externalRefreshPending) void refreshAfterExternalChange();

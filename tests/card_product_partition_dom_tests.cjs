@@ -43,6 +43,13 @@ async function until(check) { for(let i=0;i<200;i++){if(check())return; await sl
  assert.equal($('#partition-list-body [aria-pressed="true"]'),null);
  assert.match($('#partition-selection').textContent,/尚未选择/);
  $('#partition-list-body button').click(); await until(()=>$('#partition-selection').textContent.includes('已选择：'));
+ w.navigationFixture.partitionSelectionFails=true;
+ $('#partition-list-body button').click(); await until(()=>!$('#partition-refresh').disabled);
+ assert.equal($('#partition-list-body button'),null);
+ assert.match($('#partition-status').textContent,/选择已失效/);
+ assert.equal(w.navigationFixture.partitionSelected,0);
+ w.navigationFixture.partitionSelectionFails=false;
+ $('#partition-refresh').click(); await until(()=>!$('#partition-refresh').disabled);
  w.navigationFixture.partitionToolFails=true;
  $('#partition-open-management').click(); await until(()=>!$('#partition-refresh').disabled);
  assert.match($('#partition-status').textContent,/无法打开磁盘管理/);

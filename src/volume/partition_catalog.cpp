@@ -2,6 +2,7 @@
 #include "volume/partition_catalog_detail.h"
 
 #include <array>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
@@ -87,10 +88,21 @@ PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volum
   observed.extent_known = query(handle.get(), IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, observed.extents, error);
   observed.geometry_known = query(handle.get(), IOCTL_DISK_GET_DRIVE_GEOMETRY, observed.geometry, error);
   std::array<wchar_t, 32> filesystem{};
-  observed.filesystem_known = ::GetVolumeInformationW(path, nullptr, 0, nullptr, nullptr, nullptr,
+  DWORD filesystem_serial{};
+  observed.filesystem_known = ::GetVolumeInformationW(path, nullptr, 0, &filesystem_serial, nullptr, nullptr,
       filesystem.data(), static_cast<DWORD>(filesystem.size())) != FALSE;
   if (!observed.filesystem_known && !error) error = ::GetLastError();
+  result.filesystem_serial = filesystem_serial;
   observed.filesystem = filesystem.data();
+  if (observed.partition_known) {
+    if (observed.partition.PartitionStyle == PARTITION_STYLE_GPT) {
+      result.layout = PartitionLayout::gpt;
+      static_assert(sizeof(observed.partition.Gpt.PartitionId) == 16);
+      std::memcpy(result.partition_id.data(), &observed.partition.Gpt.PartitionId, 16);
+    } else if (observed.partition.PartitionStyle == PARTITION_STYLE_MBR) {
+      result.layout = PartitionLayout::mbr;
+    }
+  }
   result.availability = detail::assess_partition(observed);
   result.query_error = error;
   if (observed.partition_known && observed.partition.StartingOffset.QuadPart >= 0 &&
@@ -138,6 +150,25 @@ PartitionAvailability detail::assess_partition(const PartitionObservation& value
   if (!value.filesystem_known) return A::metadata_unavailable;
   if (value.filesystem != L"NTFS") return A::unsupported_filesystem;
   return A::candidate;
+}
+
+bool matches_partition_snapshot(const PartitionCandidate& selected,
+    const std::span<const PartitionCandidate> current) noexcept {
+  if (selected.availability != PartitionAvailability::candidate || selected.query_error ||
+      selected.volume_path.empty() || !selected.partition_number || !selected.offset_bytes ||
+      !selected.length_bytes || selected.logical_sector_bytes != 512 ||
+      (selected.layout != PartitionLayout::mbr && selected.layout != PartitionLayout::gpt) ||
+      current.size() > 4096) return false;
+  if (selected.layout == PartitionLayout::gpt && selected.partition_id == std::array<std::uint8_t, 16>{}) return false;
+  std::size_t matching_paths{};
+  bool unchanged{};
+  for (const auto& item : current) {
+    // Enumerator spelling is stable. Fail closed even on a case-only change.
+    if (item.volume_path != selected.volume_path) continue;
+    ++matching_paths;
+    unchanged = item == selected;
+  }
+  return matching_paths == 1 && unchanged;
 }
 
 std::vector<PartitionCandidate> enumerate_partition_candidates() {

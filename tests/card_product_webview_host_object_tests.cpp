@@ -3303,14 +3303,25 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   bool fail{};
   bool tool_success{true};
   int tool_calls{};
+  bool changed{};
+  bool missing{};
+  bool duplicate{};
+  usb_vault::ui::CreationWorkState* expire_on_read{};
   std::vector<usb_vault::volume::PartitionCandidate> enumerate() override {
     while (delay.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (fail) throw std::runtime_error("scan failure");
     usb_vault::volume::PartitionCandidate item{};
     item.volume_path = L"private-native-identity";
     item.partition_number = 3; item.length_bytes = 1073741824;
+    item.offset_bytes = 1048576; item.logical_sector_bytes = 512;
+    item.layout = usb_vault::volume::PartitionLayout::mbr;
+    if (changed) ++item.filesystem_serial;
+    if (expire_on_read) expire_on_read->card_epoch.fetch_add(1);
     item.availability = usb_vault::volume::PartitionAvailability::candidate;
+    if (missing) return {};
+    if (duplicate) return {item, item};
     auto blocked = item;
+    blocked.volume_path = L"other-private-identity";
     blocked.availability = usb_vault::volume::PartitionAvailability::windows_volume;
     return {item, blocked};
   }
@@ -3355,6 +3366,21 @@ void test_partition_selection_lifecycle() {
   work.interrupted.store(false);
   require(SUCCEEDED(call(L"beginPartitionRefresh")), "session rescan"); wait();
   require(SUCCEEDED(call(L"clearPartitions")) && FAILED(call(L"getPartitionList")), "clear retained snapshot");
+  for (int scenario = 0; scenario < 5; ++scenario) {
+    require(SUCCEEDED(call(L"beginPartitionRefresh")), "fresh validation scan"); wait();
+    require(SUCCEEDED(call(L"getPartitionList")), "fresh validation list");
+    const auto id = static_cast<unsigned int>(std::stoul(result.bstrVal));
+    require(SUCCEEDED(select(id)), "unchanged target rejected");
+    services.changed = scenario == 0;
+    services.missing = scenario == 1;
+    services.duplicate = scenario == 2;
+    services.fail = scenario == 3;
+    services.expire_on_read = scenario == 4 ? &work : nullptr;
+    require(FAILED(select(id)), "stale or uncertain target accepted");
+    require(FAILED(call(L"getSelectedPartition")), "failed validation retained selection");
+    services.changed = services.missing = services.duplicate = services.fail = false;
+    services.expire_on_read = nullptr;
+  }
   ::VariantClear(&result);
 }
 
