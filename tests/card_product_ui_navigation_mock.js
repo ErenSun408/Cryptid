@@ -197,6 +197,7 @@ window.navigationFixture = {
     getContainerCount: () => fixture.containers.length,
     getContainerId: (i) => displayContainers()[i].id,
     getContainerName: (i) => displayContainers()[i].name,
+    getContainerPartition: (i) => Boolean(displayContainers()[i].partition),
     getContainerMounted: (i) => displayContainers()[i].mounted,
     getContainerSizeMib: (i) => displayContainers()[i].size,
     getContainerDriveLetter: (i) => displayContainers()[i].drive,
@@ -208,6 +209,21 @@ window.navigationFixture = {
         resolve: () => { fixture.creationProgress = "2,5,100,90,3"; },
         reject: () => { fixture.creationProgress = "3,3,41,0,3"; },
       };
+    },
+    beginPartitionCreate: (id) => {
+      if (!id || id !== fixture.partitionSelected) throw new Error("stale partition consent");
+      fixture.partitionCreated = id;
+      fixture.partitionSelected = 0;
+      fixture.creationProgress = "1,3,20,0,3";
+      fixture.pendingCreation = {
+        resolve: () => {
+          fixture.containers.push({id: 100, name: "磁盘容器 100", mounted: true, size: 1024, drive: "W:", partition: true});
+          fixture.creationProgress = "2,5,100,87,3";
+        },
+        reject: () => { fixture.creationProgress = "3,3,41,0,3"; },
+        cancel: () => { fixture.creationProgress = "4,3,41,0,3"; },
+      };
+      return true;
     },
     beginCreateContainerMib: () => {
       fixture.creationProgress = "1,0,0,0,0";

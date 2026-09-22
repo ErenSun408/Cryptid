@@ -2259,7 +2259,8 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                         .name = container.name,
                         .mounted = false,
                         .size_bytes = 0,
-                        .drive_letter = wchar_t{}});
+                        .drive_letter = wchar_t{},
+                        .partition = container.partition.has_value()});
       continue;
     }
     // The driver is the only authority on an attached volume: it alone knows
@@ -2275,7 +2276,8 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                       .name = container.name,
                       .mounted = true,
                       .size_bytes = *size,
-                      .drive_letter = container.drive_letter});
+                      .drive_letter = container.drive_letter,
+                      .partition = container.partition.has_value()});
   }
   return result;
 }

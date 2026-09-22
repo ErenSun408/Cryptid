@@ -335,6 +335,21 @@ class Handle final {
   bool partition_confirmed = false;
   bool partition_challenged = false;
   for (;;) {
+    if (formatting_partition && partition_confirmed) {
+      // The elevated policy query can be quiet for seconds. Cancellation must
+      // reach it without waiting for the first destructive progress callback.
+      for (;;) {
+        DWORD available{};
+        if (!::PeekNamedPipe(pipe.get(), nullptr, 0, nullptr, &available, nullptr))
+          throw_creation(CreationError::protocol_error, "partition helper disconnected");
+        if (!cancel_sent && cancelled && cancelled()) {
+          detail::write_cancel_request(pipe.get(), nonce);
+          cancel_sent = true;
+        }
+        if (available >= sizeof(detail::Response)) break;
+        ::Sleep(10);
+      }
+    }
     const detail::Response response = detail::read_response(pipe.get());
     if (formatting_partition) {
       if (response.value != 0) throw_creation(CreationError::protocol_error, "unexpected partition result");

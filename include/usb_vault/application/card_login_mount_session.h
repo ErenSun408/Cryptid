@@ -68,6 +68,7 @@ struct ContainerStatus final {
   bool mounted{};
   std::uint64_t size_bytes{};
   wchar_t drive_letter{};
+  bool partition{};
 };
 
 // One best-effort, process-local fact from the current authenticated session.

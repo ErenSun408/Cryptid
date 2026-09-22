@@ -370,6 +370,19 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
         count == bytes.size(), "read NTFS header probe");
     return bytes;
   };
+  // Give only this owned VHD an original access path, then prove consent
+  // refusal preserves it and successful creation removes it.
+  std::wstring original_root;
+  const DWORD used = ::GetLogicalDrives();
+  require(used != 0, "drive inventory failed");
+  for (wchar_t letter = L'Z'; letter >= L'D'; --letter) {
+    if (!(used & (1UL << (letter - L'A')))) {
+      original_root = std::wstring(1, letter) + L":\\";
+      if (::SetVolumeMountPointW(original_root.c_str(), candidate.volume_path.c_str())) break;
+      original_root.clear();
+    }
+  }
+  require(!original_root.empty(), "cannot assign owned NTFS access path");
   const auto before = read_header();
   // Declining and throwing must both leave the original NTFS identity intact.
   for (int decision = 0; decision < 2; ++decision) {
@@ -379,6 +392,9 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
     }); } catch (const std::system_error& error) { cancelled = error.code() == make_error_code(CreationError::operation_cancelled); }
     require(cancelled && calls == 1, "declined partition confirmation did not stop");
     require(read_header() == before, "declined confirmation changed volume header");
+    wchar_t original_volume[64]{};
+    require(::GetVolumeNameForVolumeMountPointW(original_root.c_str(), original_volume, 64) &&
+        candidate.volume_path == original_volume, "declined confirmation removed original access");
     require(usb_vault::volume::matches_partition_snapshot(candidate,
         usb_vault::volume::enumerate_partition_candidates()), "declined format modified NTFS identity");
   }
@@ -394,6 +410,10 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
     throw std::runtime_error(std::string("confirmed NTFS helper format: ") + error.what());
   }
   require(confirmations == 1 && reports > 1, "partition confirmation/progress missing");
+  wchar_t remaining_paths[32768]{}; DWORD needed{};
+  require(::GetVolumePathNamesForVolumeNameW(candidate.volume_path.c_str(), remaining_paths, 32768, &needed) &&
+      !remaining_paths[0], "original access path survived creation");
+  std::cout << "PASS: consent refusal preserves original drive; creation removes all original access paths" << std::endl;
   const auto located = usb_vault::volume::resolve_partition_location(saved,
       usb_vault::volume::enumerate_partition_locations());
   require(located.has_value(), "ciphertext location lost after formatting");

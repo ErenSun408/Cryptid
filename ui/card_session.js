@@ -948,7 +948,7 @@
     const hiddenVolume = creationStorage === "file" && creationKind === "hidden";
     const choosing = creationStep === "type";
     const authenticated = currentState === nativeState.authenticated;
-    const ready = choosing
+    const ready = creationStorage === "disk" ? partitionSelected !== 0 && partitionErase.checked : choosing
       ? encrypted || hiddenVolume
       : encrypted
         ? containerCapacityMib() !== null &&
@@ -956,7 +956,7 @@
         : hiddenVolume && containerBInputReady();
     creationDialog.dataset.step = creationStep;
     creationDialog.dataset.storage = creationStorage;
-    creationDiskStep.hidden = creationStorage !== "disk";
+    creationDiskStep.hidden = creationStorage !== "disk" || creationRunning || creationResult !== "";
     creationStorageSwitch.hidden = creationRunning || creationResult !== "";
     for (const button of creationStorageButtons) {
       button.setAttribute("aria-pressed", String(button.dataset.createStorage === creationStorage));
@@ -1015,7 +1015,7 @@
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
-    creationContinueButton.textContent = creationStorage === "disk" ? "暂不可创建" : choosing ? "下一步" : "创建容器";
+    creationContinueButton.textContent = creationStorage === "disk" ? "清空并创建加密盘" : choosing ? "下一步" : "创建容器";
     creationContinueButton.hidden = creationResult !== "";
     creationCancelLabel.textContent =
       creationResult === "error" || creationResult === "cancelled" ? "关闭" : creationCompleted
@@ -2155,16 +2155,17 @@
       // so a copy taken now is a copy of something in flight. The box says so
       // by being unusable rather than by accepting a tick the export refuses.
       const pick = () => {
-        if (busy || container.mounted) return;
+        if (busy || container.mounted || container.partition) return;
         migrateContainerId =
           migrateContainerId === container.id ? 0 : container.id;
         setMigrateStatus("");
         renderBackupCentre();
       };
       const tail = checkBox(container.id === migrateContainerId);
-      tail.classList.add(container.mounted ? "off" : "selectable");
+      tail.classList.add(container.mounted || container.partition ? "off" : "selectable");
+      if (container.partition) tail.title = "暂不支持分区密文导出";
       tail.dataset.migrateSelect = String(container.id);
-      if (!container.mounted) {
+      if (!container.mounted && !container.partition) {
         tail.addEventListener("click", (event) => {
           event.stopPropagation();
           pick();
@@ -2200,7 +2201,7 @@
     renderMigrateContainers();
     let migrateReady = false;
     for (const container of containers) {
-      if (container.id === migrateContainerId && !container.mounted) {
+      if (container.id === migrateContainerId && !container.mounted && !container.partition) {
         migrateReady = true;
       }
     }
@@ -3309,6 +3310,8 @@
   const partitionStatus = document.getElementById("partition-status");
   const partitionSelection = document.getElementById("partition-selection");
   const partitionCheck = document.getElementById("partition-check");
+  const partitionErase = document.getElementById("partition-erase-consent");
+  partitionErase.addEventListener("change", () => updateCreationAvailability());
   const partitionRefresh = document.getElementById("partition-refresh");
   const partitionManagement = document.getElementById("partition-open-management");
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
@@ -3318,6 +3321,7 @@
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
   const renderPartitions = () => {
     const disabled = !partitionPickerVisible() || busy || currentState !== nativeState.authenticated;
+    partitionErase.disabled = disabled || !partitionSelected;
     partitionRefresh.disabled = disabled;
     partitionCheck.disabled = disabled || !partitionSelected;
     partitionManagement.disabled = disabled;
@@ -3346,7 +3350,7 @@
     partitionSelection.textContent = selected ? `已选择：${partitionName(selected)}。尚未执行加密。` : "尚未选择分区。";
   };
   const discardPartitions = () => {
-    ++partitionRevision; partitionRows = []; partitionSelected = 0;
+    ++partitionRevision; partitionRows = []; partitionSelected = 0; partitionErase.checked = false;
     partitionStatus.textContent = "请刷新分区列表。";
     renderPartitions();
   };
@@ -3390,6 +3394,7 @@
   const selectPartitionRow = async id => {
     if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
     const revision = partitionRevision;
+    partitionErase.checked = false;
     busy = true; render(messageForCurrentState());
     try {
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
@@ -3420,7 +3425,7 @@
         if (state === 1) await new Promise(resolve => window.setTimeout(resolve, 100));
       } while (state === 1);
       if (state !== 2) throw new Error("partition check failed");
-      if (revision === partitionRevision) partitionStatus.textContent = "分区身份及使用状态检查通过；加密创建尚未开放。";
+      if (revision === partitionRevision) partitionStatus.textContent = "分区身份及使用状态检查通过；创建前仍会重新检查。";
     } catch (_) {
       if (revision === partitionRevision) {
         discardPartitions();
@@ -4090,6 +4095,7 @@
         const mounted = await bridge.getContainerMounted(index);
         const sizeMib = await bridge.getContainerSizeMib(index);
         const drive = await bridge.getContainerDriveLetter(index);
+        const partition = await bridge.getContainerPartition(index);
         const validId = Number.isInteger(id) && id > 0;
         const validName = typeof name === "string" && name.length !== 0;
         const validMounted = mounted === true || mounted === false;
@@ -4099,10 +4105,10 @@
           ((mounted === true && /^[A-Z]:$/.test(drive) && nextActiveVolumes) ||
            (mounted !== true && drive === ""));
         if (!validId || !validName || !validMounted || !validSize ||
-            !validDrive) {
+            !validDrive || typeof partition !== "boolean") {
           throw new Error("invalid container status");
         }
-        nextContainers.push({ id, name, mounted, sizeMib, drive });
+        nextContainers.push({ id, name, mounted, sizeMib, drive, partition });
       }
 
       const operationCount = await bridge.getOperationCount();
@@ -5242,6 +5248,46 @@
     }
   };
 
+  const createPartition = async () => {
+    if (!partitionSelected || !partitionErase.checked || busy || currentState !== nativeState.authenticated) return;
+    const id = partitionSelected;
+    const previousIds = new Set(containers.map(container => container.id));
+    const revision = batchSessionRevision;
+    partitionErase.checked = false;
+    busy = true;
+    creationStatus.textContent = "正在创建加密盘，请确认管理员权限。";
+    creationStatus.dataset.tone = "";
+    render(messageForCurrentState());
+    try {
+      startCreationProgress();
+      await paintCreationProgress();
+      if (await bridge.beginPartitionCreate(id) !== true) throw new Error("partition creation rejected");
+      await waitForCreation();
+      confirmCreationResult();
+      await refreshNativeState();
+      if (revision === batchSessionRevision && !externalRefreshPending) markNewContainers(previousIds);
+      busy = false;
+      render(messageForCurrentState());
+      creationCompleted = true;
+      setCreationDescription("加密盘已经创建并挂载。");
+      creationStatus.textContent = "创建成功，可以开始使用。";
+      creationStatus.dataset.tone = "success";
+    } catch (_) {
+      try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
+      busy = false;
+      render(messageForCurrentState());
+      if (!creationDialog.hidden && currentState === nativeState.authenticated) {
+        creationStatus.textContent = "创建未完成。若已开始写入，分区可能只有部分内容，原盘符也可能已移除。请保留已保存的容器记录，不要直接重复格式化。创建前须开启设置中的记住容器。";
+        creationStatus.dataset.tone = "error";
+      }
+    } finally {
+      discardPartitions();
+      finishCreationProgress();
+      updateCreationAvailability();
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  };
+
   const createContainer = async () => {
     const previousIds = new Set(containers.map((container) => container.id));
     const arrivalRevision = batchSessionRevision;
@@ -5736,7 +5782,8 @@
   containerBBrowse.addEventListener(
     "click", () => void browseForDirectory(containerBDirectory));
   creationContinueButton.addEventListener("click", async () => {
-    if (busy || creationStorage !== "file" || creationDialog.hidden || currentState !== nativeState.authenticated) return;
+    if (busy || creationDialog.hidden || currentState !== nativeState.authenticated) return;
+    if (creationStorage === "disk") { await createPartition(); return; }
     if (creationStep === "type") {
       enterCreationParameters();
       return;

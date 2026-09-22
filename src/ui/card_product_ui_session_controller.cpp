@@ -281,6 +281,12 @@ std::wstring CardProductUiSessionController::browse_for_container_directory() {
   return file_chooser_.choose_container_directory();
 }
 
+void CardProductUiSessionController::create_partition(
+    const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("partition creation requires authentication");
+  static_cast<void>(volume_session_.create_partition(target, confirm));
+}
+
 void CardProductUiSessionController::create_container(
     const std::wstring_view name, const std::wstring_view directory,
     const std::uint32_t size_mib) {
@@ -628,7 +634,8 @@ CardProductUiSessionController::container_statuses() {
                       .name = status.name,
                       .mounted = status.mounted,
                       .size_mib = displayable_size_mib(status.size_bytes),
-                      .drive_letter = status.drive_letter});
+                      .drive_letter = status.drive_letter,
+                      .partition = status.partition});
   }
   return result;
 }

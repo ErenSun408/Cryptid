@@ -138,6 +138,20 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     for (int i = 0; pause_finalization.load() && i < 2000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
+  int partition_creations{};
+  usb_vault::volume::PartitionCandidate created_partition;
+  std::uint32_t create_partition(const usb_vault::volume::PartitionCandidate& target,
+      const std::function<bool(const usb_vault::volume::PartitionCandidate&)>& confirm) override {
+    await_creation();
+    auto wrong = target; ++wrong.length_bytes;
+    require(!confirm(wrong), "confirmation accepted different target");
+    if (!confirm(target)) throw std::runtime_error("partition consent expired");
+    ++partition_creations;
+    created_partition = target;
+    await_publication();
+    return 42;
+  }
+
   std::uint32_t create_container(const std::wstring_view path,
                                  const std::uint64_t size_bytes) override {
     await_creation();
@@ -3414,6 +3428,43 @@ void test_partition_selection_lifecycle() {
   ::VariantClear(&result);
 }
 
+void test_partition_creation_snapshot_and_epoch() {
+  for (int scenario = 0; scenario != 3; ++scenario) {
+    Fixture fixture;
+    usb_vault::ui::CreationWorkState work;
+    FakePartitionServices services;
+    ComPtr<IDispatch> host;
+    require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work, nullptr, &services)), "partition create host");
+    VARIANT result{};
+    const auto call = [&](const wchar_t* name) { ::VariantClear(&result); return invoke_no_arguments(*host.Get(), name, &result); };
+    const auto number = [&](const wchar_t* name, unsigned id) { ::VariantClear(&result); return invoke_with_number(*host.Get(), name, id, &result, nullptr); };
+    const auto wait = [&] {
+      for (int i = 0; work.running.load() && i < 3000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      require(!work.running.load(), "partition create worker timeout");
+    };
+    require(FAILED(number(L"beginPartitionCreate", 1)), "unauthenticated create accepted");
+    fixture.authentication.establish(root_secret());
+    require(SUCCEEDED(call(L"beginPartitionRefresh")), "create scan"); wait();
+    require(SUCCEEDED(number(L"selectPartition", 1)), "create select");
+    require(FAILED(number(L"beginPartitionCreate", 999)), "unselected create accepted");
+    // The invalid request clears selection, so acquire a new scoped identifier.
+    require(SUCCEEDED(call(L"beginPartitionRefresh")), "create rescan"); wait();
+    require(SUCCEEDED(number(L"selectPartition", 3)), "create reselect");
+    if (scenario == 1) work.card_epoch.fetch_add(1);
+    if (scenario == 2) work.interrupted.store(true);
+    const auto started = number(L"beginPartitionCreate", 3);
+    if (scenario) {
+      require(FAILED(started) && fixture.volume.partition_creations == 0, "expired card created partition");
+    } else {
+      require(SUCCEEDED(started), "partition create start"); wait();
+      require(SUCCEEDED(call(L"getCreationProgress")) && fixture.volume.partition_creations == 1,
+          "partition create not routed through creation worker");
+      require(FAILED(number(L"beginPartitionCreate", 3)), "partition create replay accepted");
+    }
+    ::VariantClear(&result);
+  }
+}
+
 void test_leave_application_routes() {
   Fixture fixture;
   RecordingCloseSink sink;
@@ -3547,6 +3598,7 @@ void test_login_reset_bridge_lifecycle() {
 int main() {
   try {
     test_partition_selection_lifecycle();
+    test_partition_creation_snapshot_and_epoch();
     test_login_reset_bridge_lifecycle();
     test_protection_query_is_boolean_scoped_and_serialized();
     test_leave_application_routes();

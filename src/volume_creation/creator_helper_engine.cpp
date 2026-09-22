@@ -54,6 +54,35 @@ class Failure final : public std::system_error {
   throw Failure(error, context);
 }
 
+// Only remove access paths of the consented, retained volume. Never change
+// the partition table or system-wide automount policy, and never restore an
+// access path after a potentially partial encrypted write.
+void remove_partition_access_paths(HANDLE handle, const volume::PartitionCandidate& expected) {
+  if (!volume::detail::matches_partition_handle_identity(handle, expected))
+    fail(CreationError::target_access_denied, "partition changed before access removal");
+  std::vector<wchar_t> paths(32768);
+  DWORD required{};
+  if (!::GetVolumePathNamesForVolumeNameW(expected.volume_path.c_str(), paths.data(),
+      static_cast<DWORD>(paths.size()), &required))
+    fail(CreationError::target_access_denied, "cannot enumerate partition access paths");
+  for (std::size_t offset = 0; offset < paths.size() && paths[offset];) {
+    const auto end = std::find(paths.begin() + offset, paths.end(), L'\0');
+    if (end == paths.end()) fail(CreationError::target_access_denied, "invalid access path list");
+    const std::wstring path(paths.begin() + offset, end);
+    wchar_t volume_name[64]{};
+    if (!::GetVolumeNameForVolumeMountPointW(path.c_str(), volume_name, 64) ||
+        ::CompareStringOrdinal(volume_name, -1, expected.volume_path.c_str(), -1, TRUE) != CSTR_EQUAL ||
+        !volume::detail::matches_partition_handle_identity(handle, expected) ||
+        !::DeleteVolumeMountPointW(path.c_str()))
+      fail(CreationError::target_access_denied, "cannot remove verified partition access path");
+    offset += path.size() + 1;
+  }
+  paths.assign(32768, L'\0');
+  if (!::GetVolumePathNamesForVolumeNameW(expected.volume_path.c_str(), paths.data(),
+      static_cast<DWORD>(paths.size()), &required) || paths[0])
+    fail(CreationError::target_access_denied, "partition access path remains");
+}
+
 class Handle final {
  public:
   explicit Handle(const HANDLE handle = INVALID_HANDLE_VALUE) noexcept
@@ -1001,6 +1030,9 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
         fail(CreationError::target_access_denied, "partition changed after confirmation");
       if (cancel_requested(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition format cancelled before write");
+      remove_partition_access_paths(handle.get(), expected);
+      if (cancel_requested(pipe, request.nonce))
+        fail(CreationError::operation_cancelled, "partition cancelled after access removal");
       backend.format_partition(handle.get(), target, request.first_password);
     }
     return 0; // No target deletion, implicit retry or retained consent.

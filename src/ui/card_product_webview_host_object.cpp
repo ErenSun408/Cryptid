@@ -31,6 +31,8 @@ constexpr DISPID kPartitionClearId = 105;
 constexpr DISPID kPartitionToolId = 106;
 constexpr DISPID kPartitionCheckId = 107;
 constexpr DISPID kPartitionCheckStatusId = 108;
+constexpr DISPID kPartitionCreateId = 109;
+constexpr DISPID kGetContainerPartitionId = 110;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -437,6 +439,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"clearPartitions")) { ids[0] = kPartitionClearId; return S_OK; }
     if (matches(names[0], L"beginPartitionCheck")) { ids[0] = kPartitionCheckId; return S_OK; }
     if (matches(names[0], L"getPartitionCheckStatus")) { ids[0] = kPartitionCheckStatusId; return S_OK; }
+    if (matches(names[0], L"getContainerPartition")) { ids[0] = kGetContainerPartitionId; return S_OK; }
+    if (matches(names[0], L"beginPartitionCreate")) { ids[0] = kPartitionCreateId; return S_OK; }
     if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
     if (matches(names[0], L"returnToLogin")) { ids[0] = kReturnToLoginId; return S_OK; }
     if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
@@ -696,11 +700,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     if (!creation_work_->running.load() &&
-        !(member >= kPartitionBeginId && member <= kPartitionCheckStatusId)) partition_mode_ = false;
+        !(member >= kPartitionBeginId && member <= kPartitionCreateId)) partition_mode_ = false;
     if (!creation_work_->running.load() &&
         (controller_.state() != CardProductUiState::authenticated ||
          partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
-    if (member >= kPartitionBeginId && member <= kPartitionCheckStatusId)
+    if (member >= kPartitionBeginId && member <= kPartitionCreateId)
       return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
@@ -1032,6 +1036,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetContainerNameId:
       case kGetContainerMountedId:
       case kGetContainerSizeMibId:
+      case kGetContainerPartitionId:
       case kGetContainerDriveLetterId:
         return invoke_container_fact(
             member, parameters, result, argument_error);
@@ -1189,7 +1194,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     return S_OK;
   }
   HRESULT invoke_partition(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
-    if (member == kPartitionSelectId) {
+    if (member == kPartitionSelectId || member == kPartitionCreateId) {
       if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg)
         return DISP_E_BADPARAMCOUNT;
     } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -1203,6 +1208,29 @@ class CardProductWebViewHostObject final : public IDispatch {
       return E_ACCESSDENIED;
     }
     try {
+      if (member == kPartitionCreateId) {
+        std::uint32_t id{};
+        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        volume::PartitionCandidate target;
+        const auto epoch = creation_work_->card_epoch.load();
+        {
+          std::lock_guard lock(partition_mutex_);
+          if (partition_epoch_ != epoch || partition_status_.load() != 2 || partition_selected_ != id)
+            return E_ACCESSDENIED;
+          const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
+          if (found == partition_items_.end() || found->target.availability != volume::PartitionAvailability::candidate)
+            return E_ACCESSDENIED;
+          target = found->target;
+        }
+        clear_partitions(); // Consume consent and snapshot; retries require a fresh selection.
+        partition_mode_ = false;
+        return begin_creation([this, target, epoch] {
+          controller_.create_partition(target, [this, target, epoch](const volume::PartitionCandidate& confirmed) {
+            return target == confirmed && !creation_work_->interrupted.load() && creation_work_->card_epoch.load() == epoch &&
+                   !creation_work_->cancellation_requested();
+          });
+        }, result);
+      }
       if (member == kPartitionBeginId || member == kPartitionToolId) {
         last_volume_member_ = 0;
         clear_batch(); clear_survey(); clear_space();
@@ -1611,7 +1639,10 @@ class CardProductWebViewHostObject final : public IDispatch {
         try {
           if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
           controller_.set_creation_cancellation(
-              [this]() { return creation_work_->cancellation_requested(); });
+              [this, epoch = creation_work_->card_epoch.load()]() {
+                return creation_work_->cancellation_requested() || creation_work_->interrupted.load() ||
+                       creation_work_->card_epoch.load() != epoch;
+              });
           controller_.set_creation_feedback([this](unsigned int stage, unsigned int percent, wchar_t drive) {
             if (stage == 4 && creation_work_->interrupted.load()) throw std::runtime_error("card removed during creation");
             // Both session creation paths emit stage 4 before publishing,
@@ -2299,6 +2330,10 @@ class CardProductWebViewHostObject final : public IDispatch {
           return complete_string(status.name.c_str(),
                                  static_cast<UINT>(status.name.size()),
                                  result);
+        case kGetContainerPartitionId:
+          result->vt = VT_BOOL;
+          result->boolVal = status.partition ? VARIANT_TRUE : VARIANT_FALSE;
+          return S_OK;
         case kGetContainerDriveLetterId:
         default: {
           const wchar_t drive[] = {status.drive_letter, L':'};

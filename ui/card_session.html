@@ -1791,14 +1791,14 @@
         <p id="create-volume-description">容器是一个加密文件，挂载后显示为一个普通磁盘。请选择要创建的容器类型：</p>
         <section id="create-disk-step" aria-labelledby="partitions-title">
           <div class="section-header">
-            <div><h4 id="partitions-title">选择已有的数据分区</h4><p class="section-note">当前可查看和选择分区，并检查 MBR 分区的身份和使用状态；暂不可创建磁盘容器。</p></div>
+            <div><h4 id="partitions-title">选择已有的数据分区</h4><p class="section-note">将已有 MBR 数据分区清空并创建加密盘。仅支持 512 字节扇区、未启用 BitLocker 的 NTFS 数据分区。</p></div>
             <div class="overview-actions">
               <button id="partition-open-management" class="shell-button" type="button">打开磁盘管理</button>
               <button id="partition-check" class="shell-button" type="button" disabled>检查所选分区</button>
               <button id="partition-refresh" class="shell-button" type="button">刷新分区</button>
             </div>
           </div>
-          <p class="section-note">没有合适的分区？可在磁盘管理中准备，完成后返回刷新。此处不会创建或修改分区。</p>
+          <p class="section-note">没有合适的分区？可在磁盘管理中准备，完成后返回刷新。应用不调整分区表；创建加密盘会清空所选分区，原有数据无法保留。请先在设置中开启“记住容器”，以加密保存找回分区所需的记录。</p>
           <div class="files-card">
             <table class="files-table">
               <thead><tr><th>分区</th><th>容量</th><th>状态</th><th>选择</th></tr></thead>
@@ -1807,6 +1807,7 @@
           </div>
           <output id="partition-status" class="section-note" aria-live="polite">尚未读取分区。</output>
           <p id="partition-selection" class="section-note" aria-live="polite">尚未选择分区。</p>
+          <label><input id="partition-erase-consent" type="checkbox" disabled>我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。</label>
         </section>
         <div id="create-type-step" class="type-picks" role="radiogroup" aria-label="容器类型">
           <button class="type-pick" type="button" role="radio" aria-checked="true" data-create-kind="encrypted">
