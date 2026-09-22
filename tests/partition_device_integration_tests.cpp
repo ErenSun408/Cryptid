@@ -377,12 +377,17 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
     require(usb_vault::volume::matches_partition_snapshot(candidate,
         usb_vault::volume::enumerate_partition_candidates()), "declined format modified NTFS identity");
   }
+  std::cout << "PASS: declined and throwing confirmation preserve NTFS identity and first 64 KiB" << std::endl;
   unsigned confirmations{}, reports{};
-  creator.format_partition(candidate, password, [&] { disk.verify(); ++confirmations; return true; },
-      [&](const CreationProgress& progress) {
-        require(progress.percent <= 100 && (progress.stage == CreationStage::authorized ||
-            progress.stage == CreationStage::formatting), "unexpected partition progress"); ++reports;
-      });
+  try {
+    creator.format_partition(candidate, password, [&] { disk.verify(); ++confirmations; return true; },
+        [&](const CreationProgress& progress) {
+          require(progress.percent <= 100 && (progress.stage == CreationStage::authorized ||
+              progress.stage == CreationStage::formatting), "unexpected partition progress"); ++reports;
+        });
+  } catch (const std::exception& error) {
+    throw std::runtime_error(std::string("confirmed NTFS helper format: ") + error.what());
+  }
   require(confirmations == 1 && reports > 1, "partition confirmation/progress missing");
   std::cout << "PASS: elevated NTFS partition format, declined/throwing consent and single-use confirmation\n";
 }

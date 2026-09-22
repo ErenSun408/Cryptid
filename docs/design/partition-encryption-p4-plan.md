@@ -203,3 +203,9 @@ API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win3
 扩展显式 `partition_device_integration_tests --run-owned-vhd-helper`：只能自行新建 VHD，按已持有镜像与盘号／分区号／范围找到自己的卷，再用系统 format.com 准备 NTFS；拒绝／抛错确认后比对首 64 KiB 和 NTFS 身份，确认后走真实 helper 及挂载写读回。**本轮启动该夹具的 Windows UAC 返回用户取消，夹具未运行，未创建测试磁盘；以上设备闭环、NTFS 候选后端和拒绝无写入的实机结果均未验收。** 隔离运行目录保留二进制供后续复测，未用旧 RAW／只读测试替代此结果。
 
 夹具使用系统命令依据：[Microsoft format](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/format)。该命令仅用于测试夹具准备自己新建的镜像，不加入产品建卷实现。
+
+## NTFS helper 首次实测结果（2026-09-22，未通过）
+
+后续重新运行 --run-owned-vhd-helper，Windows 提权成功。原审阅候选 94D37A2D…0225309 在自己新建的 MBR／512 VHD 上完成 NTFS 准备、拒绝与抛错确认的首 64 KiB／文件系统身份不变检查；确认后的 helper 格式化返回 I/O 错误，退出 1，未进入挂载读回。失败可能发生在锁卷／控制码／核心写入／收尾路径，具体 API 尚未定位，不能宣称没有开始写入。镜像已确认脱离，作为失败证据保留。
+
+夹具现在即时输出拒绝阶段结果，并为确认后的失败标明阶段。临时诊断候选只在 out 构建；再次提权被系统以“用户取消”结束，诊断未运行。恢复原候选 DLL 和 include 后停止重试。本结果替代此前“未运行”的当前状态，但不改变历史记录；NTFS/helper 设备验收仍未通过，产品 DLL 与创建入口维持原状。
