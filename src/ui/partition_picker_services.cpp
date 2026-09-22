@@ -1,5 +1,7 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 #include <Windows.h>
+#include <stdexcept>
 #include <shellapi.h>
 #include <array>
 #include <string>
@@ -8,6 +10,13 @@ namespace usb_vault::ui {
 namespace {
 class NativePartitionServices final : public IUiPartitionServices {
  public:
+  NativePartitionServices() = default;
+  explicit NativePartitionServices(const std::filesystem::path& helper)
+      : creator_(std::make_unique<volume_creation::VolumeCreator>(helper)) {}
+  void check(const volume::PartitionCandidate& candidate) override {
+    if (!creator_) throw std::runtime_error("partition helper is not configured");
+    creator_->check_partition(candidate);
+  }
   std::vector<volume::PartitionCandidate> enumerate() override {
     return volume::enumerate_partition_candidates();
   }
@@ -29,7 +38,12 @@ class NativePartitionServices final : public IUiPartitionServices {
       return ::ShellExecuteExW(&info) != FALSE;
     } catch (...) { return false; }
   }
+ private:
+  std::unique_ptr<volume_creation::VolumeCreator> creator_;
 };
+}
+std::unique_ptr<IUiPartitionServices> make_partition_services(const std::filesystem::path& helper) {
+  return std::make_unique<NativePartitionServices>(helper);
 }
 IUiPartitionServices& native_partition_services() noexcept {
   static NativePartitionServices services;

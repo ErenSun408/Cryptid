@@ -1791,9 +1791,10 @@
         <p id="create-volume-description">容器是一个加密文件，挂载后显示为一个普通磁盘。请选择要创建的容器类型：</p>
         <section id="create-disk-step" aria-labelledby="partitions-title">
           <div class="section-header">
-            <div><h4 id="partitions-title">选择已有的数据分区</h4><p class="section-note">当前仅支持查看和选择分区，暂不可创建磁盘容器。</p></div>
+            <div><h4 id="partitions-title">选择已有的数据分区</h4><p class="section-note">当前可查看和选择分区，并检查 MBR 分区身份；暂不可创建磁盘容器。</p></div>
             <div class="overview-actions">
               <button id="partition-open-management" class="shell-button" type="button">打开磁盘管理</button>
+              <button id="partition-check" class="shell-button" type="button" disabled>检查所选分区</button>
               <button id="partition-refresh" class="shell-button" type="button">刷新分区</button>
             </div>
           </div>

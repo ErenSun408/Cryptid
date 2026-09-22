@@ -29,6 +29,8 @@ constexpr DISPID kPartitionSelectId = 103;
 constexpr DISPID kPartitionSelectedId = 104;
 constexpr DISPID kPartitionClearId = 105;
 constexpr DISPID kPartitionToolId = 106;
+constexpr DISPID kPartitionCheckId = 107;
+constexpr DISPID kPartitionCheckStatusId = 108;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -433,6 +435,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"selectPartition")) { ids[0] = kPartitionSelectId; return S_OK; }
     if (matches(names[0], L"getSelectedPartition")) { ids[0] = kPartitionSelectedId; return S_OK; }
     if (matches(names[0], L"clearPartitions")) { ids[0] = kPartitionClearId; return S_OK; }
+    if (matches(names[0], L"beginPartitionCheck")) { ids[0] = kPartitionCheckId; return S_OK; }
+    if (matches(names[0], L"getPartitionCheckStatus")) { ids[0] = kPartitionCheckStatusId; return S_OK; }
     if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
     if (matches(names[0], L"returnToLogin")) { ids[0] = kReturnToLoginId; return S_OK; }
     if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
@@ -672,13 +676,13 @@ class CardProductWebViewHostObject final : public IDispatch {
     const bool external_drop_query =
         member == kExternalDropStatusId || member == kCancelExternalDropId || member == kExternalFileProgressId || member == kExternalDropBoundsId || member == kExternalDropButtonBoundsId;
     if (partition_mode_ && creation_work_->running.load() &&
-        !external_drop_query && member != kPartitionStatusId) {
+        !external_drop_query && member != kPartitionStatusId && member != kPartitionCheckStatusId) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
     }
     if (creation_work_->running.load() && !external_drop_query &&
-        !(partition_mode_ && member == kPartitionStatusId) &&
+        !(partition_mode_ && (member == kPartitionStatusId || member == kPartitionCheckStatusId)) &&
         !(reset_mode_ && member == kLoginResetStatusId) &&
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
@@ -692,11 +696,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     if (!creation_work_->running.load() &&
-        !(member >= kPartitionBeginId && member <= kPartitionToolId)) partition_mode_ = false;
+        !(member >= kPartitionBeginId && member <= kPartitionCheckStatusId)) partition_mode_ = false;
     if (!creation_work_->running.load() &&
         (controller_.state() != CardProductUiState::authenticated ||
          partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
-    if (member >= kPartitionBeginId && member <= kPartitionToolId)
+    if (member >= kPartitionBeginId && member <= kPartitionCheckStatusId)
       return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
@@ -1177,6 +1181,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     partition_items_.clear();
     partition_selected_ = 0;
     partition_status_.store(0);
+    partition_check_status_.store(0);
   }
   static HRESULT partition_number(std::uint32_t value, VARIANT* result) noexcept {
     if (!result) return E_POINTER;
@@ -1189,7 +1194,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         return DISP_E_BADPARAMCOUNT;
     } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
     if (!result) return E_POINTER;
-    if (member == kPartitionStatusId && creation_work_->running.load()) {
+    if ((member == kPartitionStatusId || member == kPartitionCheckStatusId) && creation_work_->running.load()) {
       return partition_number(1, result);
     }
     if (controller_.state() != CardProductUiState::authenticated || creation_work_->interrupted.load()) {
@@ -1238,13 +1243,47 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (member == kPartitionToolId && !partition_services_.open_disk_management()) return E_FAIL;
         return complete_selection(true, result);
       }
+      if (member == kPartitionCheckId) {
+        volume::PartitionCandidate target;
+        const auto epoch = creation_work_->card_epoch.load();
+        {
+          std::lock_guard lock(partition_mutex_);
+          const auto found = std::ranges::find(partition_items_, partition_selected_, &PartitionItem::id);
+          if (partition_status_.load() != 2 || partition_epoch_ != epoch || !partition_selected_ || found == partition_items_.end()) return E_ACCESSDENIED;
+          target = found->target;
+        }
+        if (creation_thread_.joinable()) creation_thread_.join();
+        partition_mode_ = true;
+        partition_check_status_.store(1);
+        creation_work_->volume_operation.store(true);
+        creation_work_->running.store(true);
+        creation_thread_ = std::thread([this, epoch, target = std::move(target)] {
+          unsigned int status = 3;
+          try {
+            if (!creation_work_->interrupted.load() && creation_work_->card_epoch.load() == epoch) {
+              partition_services_.check(target);
+              status = 2;
+            }
+          } catch (...) {}
+          {
+            std::lock_guard lock(partition_mutex_);
+            if (creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch) status = 4;
+            if (status != 2) { partition_items_.clear(); partition_selected_ = 0; partition_status_.store(status); }
+            partition_check_status_.store(status);
+          }
+          creation_work_->running.store(false);
+        });
+        return complete_selection(true, result);
+      }
       std::lock_guard lock(partition_mutex_);
       if (partition_epoch_ != creation_work_->card_epoch.load()) return E_ACCESSDENIED;
       if (member == kPartitionStatusId) return partition_number(partition_status_.load(), result);
+      if (member == kPartitionCheckStatusId) return partition_number(partition_check_status_.load(), result);
       if (partition_status_.load() != 2) return E_UNEXPECTED;
       if (member == kPartitionSelectedId) return partition_number(partition_selected_, result);
       if (member == kPartitionSelectId) {
         partition_selected_ = 0;
+        partition_check_status_.store(0);
         std::uint32_t id{};
         if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
         const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
@@ -1272,7 +1311,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
     } catch (...) {
-      if (member == kPartitionBeginId) creation_work_->running.store(false);
+      if (member == kPartitionBeginId || member == kPartitionCheckId) creation_work_->running.store(false);
       clear_partitions();
       return E_FAIL;
     }
@@ -2567,6 +2606,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::mutex partition_mutex_;
   std::vector<PartitionItem> partition_items_;
   std::atomic<unsigned int> partition_status_{0}; // 0 idle, 1 scanning, 2 ready, 3 failed, 4 expired.
+  std::atomic<unsigned int> partition_check_status_{0}; // 0 idle, 1 checking, 2 verified, 3 failed, 4 expired.
   bool partition_mode_{}; // COM thread only; only this worker may expose its progress.
   std::uint64_t partition_epoch_{};
   std::uint32_t partition_next_id_{}; // Never reused by this bridge after refresh.

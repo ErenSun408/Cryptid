@@ -23,6 +23,28 @@ async function until(check) { for(let i=0;i<200;i++){if(check())return; await sl
  assert.equal(buttons[0].disabled,false); assert.equal(buttons[1].disabled,true);
  buttons[0].click(); await until(()=>$('#partition-selection').textContent.includes('已选择：'));
  assert.equal(w.navigationFixture.partitionSelected,1);
+ assert.equal($('#partition-check').disabled,false);
+ $('#partition-check').click(); await until(()=>!$('#partition-check').disabled);
+ assert.equal(w.navigationFixture.partitionChecks,1);
+ assert.match($('#partition-status').textContent,/身份检查通过/);
+ assert.equal($('#create-volume-continue').disabled,true);
+ w.navigationFixture.partitionCheckPending=true;
+ $('#partition-check').click(); await sleep(20);
+ assert.equal($('#partition-refresh').disabled,true);
+ assert.equal($('[data-create-storage="file"]').disabled,true);
+ $('[data-create-storage="file"]').dispatchEvent(new w.MouseEvent('click'));
+ assert.equal($('#create-volume-dialog').dataset.storage,'disk');
+ w.navigationFixture.partitionCheckPending=false;
+ await until(()=>!$('#partition-check').disabled);
+ w.navigationFixture.partitionCheckFails=true;
+ $('#partition-check').click(); await until(()=>!$('#partition-refresh').disabled);
+ assert.equal($('#partition-list-body button'),null);
+ assert.match($('#partition-status').textContent,/检查未完成/);
+ assert.equal($('#partition-check').disabled,true);
+ w.navigationFixture.partitionCheckFails=false;
+ $('#partition-refresh').click(); await until(()=>!$('#partition-refresh').disabled);
+ $('#partition-list-body button').click(); await until(()=>!$('#partition-check').disabled);
+
  $('[data-create-storage="file"]').click();
  await until(()=>w.navigationFixture.partitionSelected===0);
  assert.equal($('#create-disk-step').hidden,true);

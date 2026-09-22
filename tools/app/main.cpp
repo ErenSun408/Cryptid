@@ -267,6 +267,7 @@ std::unique_ptr<
     usb_vault::platform::windows::ShellContainerFileChooser>
     g_container_file_chooser;
 std::unique_ptr<usb_vault::ui::ProviderLoginResetMountAccess> g_reset_mount_access;
+std::unique_ptr<usb_vault::ui::IUiPartitionServices> g_partition_services;
 std::unique_ptr<usb_vault::ui::CardProductUiSessionController> g_ui_session;
 std::unique_ptr<
     usb_vault::card::vikey::development::WindowsCredentialProvider>
@@ -489,6 +490,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   auto file_chooser = std::make_unique<
       usb_vault::platform::windows::ShellContainerFileChooser>(window);
   g_reset_mount_access = std::make_unique<usb_vault::ui::ProviderLoginResetMountAccess>(*g_volume_provider);
+  auto partition_services = usb_vault::ui::make_partition_services(child_path(directory, L"usb_vault_volume_creator.exe"));
   auto ui_session = std::make_unique<
       usb_vault::ui::CardProductUiSessionController>(
           *entry, *authentication, *volume_session, *password_policy,
@@ -513,6 +515,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   g_password_policy = std::move(password_policy);
   g_container_file_chooser = std::move(file_chooser);
   g_ui_session = std::move(ui_session);
+  g_partition_services = std::move(partition_services);
   g_card_presence_controller = std::move(presence);
   g_card_lifecycle_controller = std::move(lifecycle);
   g_card_device_notifications = std::move(notifications);
@@ -549,6 +552,7 @@ void clear_application_session() noexcept {
   g_card_entry.reset();
   g_card_enrollment.reset();
   g_reset_mount_access.reset();
+  g_partition_services.reset();
   g_volume_provider.reset();
   g_vikey_credential_provider.reset();
   g_deployment_artifacts.clear();
@@ -643,7 +647,7 @@ void notify_webview_session_changed() noexcept {
             g_configuration_host, &host_object)
       : usb_vault::ui::create_card_product_webview_host_object(
             *g_ui_session, &g_close_sink, &host_object, &g_window_size_sink,
-            &g_creation_work, g_drop_target);
+            &g_creation_work, g_drop_target, g_partition_services.get());
   if (FAILED(result)) return result;
   VARIANT host_value{};
   ::VariantInit(&host_value);

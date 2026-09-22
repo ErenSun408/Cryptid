@@ -3305,6 +3305,9 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   int tool_calls{};
   bool changed{};
   bool device_replaced{};
+  bool check_fails{};
+  std::atomic<bool> check_delay{false};
+  int check_calls{};
   bool missing{};
   bool duplicate{};
   usb_vault::ui::CreationWorkState* expire_on_read{};
@@ -3328,6 +3331,12 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
     blocked.availability = usb_vault::volume::PartitionAvailability::windows_volume;
     return {item, blocked};
   }
+  void check(const usb_vault::volume::PartitionCandidate& candidate) override {
+    ++check_calls;
+    require(candidate.device_id[0] == 9 && candidate.partition_number == 3, "wrong target sent to helper service");
+    while (check_delay.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (check_fails) throw std::runtime_error("helper rejected");
+  }
   bool open_disk_management() noexcept override { ++tool_calls; return tool_success; }
 };
 
@@ -3350,6 +3359,8 @@ void test_partition_selection_lifecycle() {
   require(SUCCEEDED(call(L"getPartitionList")) && result.vt == VT_BSTR && std::wstring(result.bstrVal) == L"1,0,3,1073741824,0\n2,0,3,1073741824,1", "partition projection leaked identity or incorrect facts");
   require(select(2) == E_ACCESSDENIED && select(0) == DISP_E_TYPEMISMATCH && select(999) == E_ACCESSDENIED, "invalid partition selected");
   require(SUCCEEDED(select(1)) && SUCCEEDED(call(L"getSelectedPartition")) && result.ulVal == 1, "selection missing");
+  require(SUCCEEDED(call(L"beginPartitionCheck")), "check start"); wait();
+  require(SUCCEEDED(call(L"getPartitionCheckStatus")) && result.ulVal == 2 && services.check_calls == 1, "successful check not reported");
   require(SUCCEEDED(call(L"beginPartitionRefresh")), "refresh start"); wait();
   require(select(1) == E_ACCESSDENIED && SUCCEEDED(call(L"getSelectedPartition")) && result.ulVal == 0 && SUCCEEDED(select(3)), "stale selection reused");
   services.tool_success = false;
@@ -3385,6 +3396,20 @@ void test_partition_selection_lifecycle() {
     services.changed = services.missing = services.duplicate = services.fail = false;
     services.expire_on_read = nullptr;
     services.device_replaced = false;
+  }
+  for (bool expire : {false, true}) {
+    require(SUCCEEDED(call(L"beginPartitionRefresh")), "helper scan"); wait();
+    require(SUCCEEDED(call(L"getPartitionList")), "helper list");
+    const auto id = static_cast<unsigned int>(std::stoul(result.bstrVal));
+    require(SUCCEEDED(select(id)), "helper select");
+    services.check_delay.store(true); services.check_fails = !expire;
+    require(SUCCEEDED(call(L"beginPartitionCheck")), "delayed check start");
+    const bool check_pending = SUCCEEDED(call(L"getPartitionCheckStatus")) && result.ulVal == 1;
+    const bool blocked = call(L"beginPartitionRefresh") == E_PENDING && select(id) == E_PENDING && call(L"openDiskManagement") == E_PENDING;
+    if (expire) work.card_epoch.fetch_add(1);
+    services.check_delay.store(false); wait();
+    require(check_pending && blocked && FAILED(call(L"getSelectedPartition")), "helper failure retained selection or allowed concurrent action");
+    if (!expire) require(SUCCEEDED(call(L"getPartitionCheckStatus")) && result.ulVal == 3, "helper failure state missing");
   }
   ::VariantClear(&result);
 }

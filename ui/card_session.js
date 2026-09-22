@@ -3308,6 +3308,7 @@
   const partitionBody = document.getElementById("partition-list-body");
   const partitionStatus = document.getElementById("partition-status");
   const partitionSelection = document.getElementById("partition-selection");
+  const partitionCheck = document.getElementById("partition-check");
   const partitionRefresh = document.getElementById("partition-refresh");
   const partitionManagement = document.getElementById("partition-open-management");
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
@@ -3318,6 +3319,7 @@
   const renderPartitions = () => {
     const disabled = !partitionPickerVisible() || busy || currentState !== nativeState.authenticated;
     partitionRefresh.disabled = disabled;
+    partitionCheck.disabled = disabled || !partitionSelected;
     partitionManagement.disabled = disabled;
     partitionBody.replaceChildren();
     if (!partitionRows.length) {
@@ -3391,7 +3393,10 @@
     busy = true; render(messageForCurrentState());
     try {
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
-      if (revision === partitionRevision) partitionSelected = id;
+      if (revision === partitionRevision) {
+        partitionSelected = id;
+        partitionStatus.textContent = "已选择分区，可检查其身份；检查需要管理员确认，不会修改分区。";
+      }
     } catch (_) {
       if (revision === partitionRevision) {
         discardPartitions();
@@ -3402,6 +3407,30 @@
       if (externalRefreshPending) void refreshAfterExternalChange();
     }
   };
+  partitionCheck.addEventListener("click", async () => {
+    if (!partitionPickerVisible() || busy || !partitionSelected || bridge === null || currentState !== nativeState.authenticated) return;
+    const revision = partitionRevision;
+    busy = true; render(messageForCurrentState());
+    partitionStatus.textContent = "正在检查分区身份，请完成管理员确认…";
+    try {
+      if (await bridge.beginPartitionCheck() !== true) throw new Error("partition check rejected");
+      let state;
+      do {
+        state = await bridge.getPartitionCheckStatus();
+        if (state === 1) await new Promise(resolve => window.setTimeout(resolve, 100));
+      } while (state === 1);
+      if (state !== 2) throw new Error("partition check failed");
+      if (revision === partitionRevision) partitionStatus.textContent = "分区身份检查通过；加密创建尚未开放。";
+    } catch (_) {
+      if (revision === partitionRevision) {
+        discardPartitions();
+        partitionStatus.textContent = "检查未完成或分区已变化，请刷新重试。当前仅支持 MBR 数据分区的检查。";
+      }
+    } finally {
+      busy = false; render(messageForCurrentState());
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  });
   partitionRefresh.addEventListener("click", () => { void refreshPartitions(); });
   partitionManagement.addEventListener("click", async () => {
     if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;

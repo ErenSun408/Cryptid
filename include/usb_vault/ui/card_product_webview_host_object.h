@@ -8,6 +8,8 @@
 #include <atomic>
 #include <cstdint>
 #include <string_view>
+#include <filesystem>
+#include <memory>
 
 namespace usb_vault::ui {
 
@@ -52,8 +54,10 @@ class IUiPartitionServices {
   virtual ~IUiPartitionServices() noexcept = default;
   virtual std::vector<volume::PartitionCandidate> enumerate() = 0;
   virtual bool open_disk_management() noexcept = 0;
+  virtual void check(const volume::PartitionCandidate& candidate) = 0;
 };
 [[nodiscard]] IUiPartitionServices& native_partition_services() noexcept;
+[[nodiscard]] std::unique_ptr<IUiPartitionServices> make_partition_services(const std::filesystem::path& helper);
 
 class IUiWindowSizeSink {
  public:
@@ -148,7 +152,10 @@ class IUiCloseRequestSink {
 // selectPartition re-enumerates and compares the snapshot before accepting its
 // local uint32 ID, never a page path. A changed target expires the list. Refresh,
 // clearPartitions, openDiskManagement and card changes retire old selections.
-// No selection is write authorization; no partition facts are persisted.
+// beginPartitionCheck uses the selected native target on the exclusive worker;
+// getPartitionCheckStatus: 0 idle, 1 running, 2 verified, 3 failed, 4 expired.
+// Failure clears selection. Card changes invalidate completion; no check result
+// is write authorization and no partition facts are persisted.
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,
