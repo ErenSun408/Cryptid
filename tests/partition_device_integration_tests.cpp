@@ -146,6 +146,7 @@ class OwnedDisk {
         info.Mbr.PartitionType == PARTITION_IFS && !info.Mbr.BootIndicator, "owned target identity mismatch");
   }
   const std::wstring& target() const { return target_; }
+  std::filesystem::path container_path() const { return directory_ / L"regression.hc"; }
   void cleanup() {
     check(::DetachVirtualDisk(disk_, DETACH_VIRTUAL_DISK_FLAG_NONE, 0), "detach fixture"); attached_ = false;
     static_cast<void>(::CloseHandle(std::exchange(disk_, INVALID_HANDLE_VALUE)));
@@ -162,6 +163,16 @@ class OwnedDisk {
   std::filesystem::path directory_, image_; std::wstring physical_, target_;
 };
 
+struct FormatProgress {
+  int calls{};
+  bool invalid{};
+  bool cancel{};
+  static BOOL CALLBACK observe(int percent, void* data) {
+    auto& state = *static_cast<FormatProgress*>(data);
+    ++state.calls; state.invalid = state.invalid || percent < 0 || percent > 100;
+    return state.cancel ? FALSE : TRUE;
+  }
+};
 class Backend {
  public:
   Backend() {
@@ -179,11 +190,12 @@ class Backend {
     if (!initialize || !shutdown_ || !format_) throw std::runtime_error("FormatDLL export missing");
     require(initialize() == fmt::kSuccess, "FormatDLL initialization failed"); initialized_ = true;
   }
-  void format(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
+  void format(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool same_handle, bool cancel_only = false) {
     disk.verify();
     usb_vault::volume::VolumeProvider provider;
     for (const auto& mounted : provider.mounted_volumes())
       require(mounted.volume_path != disk.target(), "owned native path already mounted");
+    if (same_handle) { format_handle(disk, password, cancel_only); return; }
     fmt::Options options{};
     options.path = disk.target().c_str(); options.is_device = TRUE;
     options.password = reinterpret_cast<const char*>(password.data()); options.size = kPartitionBytes;
@@ -191,6 +203,104 @@ class Backend {
     options.filesystem = L"FAT"; options.quick_format = TRUE;
     const int code = format_(&options, static_cast<std::uint32_t>(password.size()));
     require(code == fmt::kSuccess, "owned partition format failed");
+  }
+  void file_regression(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
+    const auto file = disk.container_path();
+    require(!std::filesystem::exists(file), "regression file already exists");
+    fmt::Options options{};
+    options.path = file.c_str(); options.password = reinterpret_cast<const char*>(password.data());
+    options.size = 64ULL * 1024 * 1024; options.encryption_algorithm = L"AES";
+    options.hash_algorithm = L"SHA-512"; options.filesystem = L"FAT"; options.quick_format = TRUE;
+    require(format_(&options, 64) == fmt::kSuccess, "file-format regression");
+    usb_vault::security::SecureBuffer hidden(64);
+    std::copy(password.bytes().begin(), password.bytes().end(), hidden.bytes().begin());
+    hidden.bytes().back() ^= std::byte{0x80};
+    usb_vault::volume::VolumeProvider provider;
+    const auto verify_mount = [&](const auto& key, usb_vault::volume::VolumeType type) {
+      const DWORD used = ::GetLogicalDrives(); require(used, "regression drive list");
+      wchar_t drive = L'Z'; while (drive >= L'D' && (used & (DWORD{1} << (drive - L'A')))) --drive;
+      require(drive >= L'D', "no regression drive");
+      static_cast<void>(provider.mount_file(file.native(), key, {.drive_letter = drive, .notify_shell = false}));
+      const auto identity = provider.mount_identity(drive);
+      try {
+        const auto list = provider.mounted_volumes();
+        const auto item = std::ranges::find(list, drive, &usb_vault::volume::MountedVolume::drive_letter);
+        require(item != list.end() && item->type == type, "regression mounted wrong volume type");
+        static_cast<void>(usb_vault::volume::unmount_with_retry(provider, drive, {.notify_shell = false}));
+      } catch (...) {
+        if (provider.mount_identity(drive) == identity)
+          static_cast<void>(provider.unmount(drive, {.force = true, .notify_shell = false}));
+        throw;
+      }
+    };
+    verify_mount(password, usb_vault::volume::VolumeType::normal);
+    options.password = reinterpret_cast<const char*>(hidden.data());
+    options.hidden_volume = TRUE; options.hidden_volume_host_size = options.size;
+    options.size = 16ULL * 1024 * 1024;
+    require(format_(&options, 64) == fmt::kSuccess, "hidden file-format regression");
+    verify_mount(hidden, usb_vault::volume::VolumeType::hidden);
+    require(::DeleteFileW(file.c_str()) != FALSE, "regression file cleanup failed");
+    std::cout << "PASS: existing normal and hidden file-container formats and mounts\n";
+  }
+  void format_handle(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool cancel_only) {
+    const auto format = reinterpret_cast<fmt::FormatPartitionBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionBinary"));
+    if (!format) throw std::runtime_error("candidate same-handle export missing");
+    const auto* secret = reinterpret_cast<const unsigned char*>(password.data());
+    const std::wstring path = LR"(\\?\GLOBALROOT)" + disk.target();
+    Handle target(::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+    require(target.get() != INVALID_HANDLE_VALUE, "open fixture partition for same-handle format");
+    const auto sample = [&] {
+      // Aligned sector reads also work for DASD handles treated as noncached.
+      alignas(4096) std::array<unsigned char, 512> sector{};
+      std::array<unsigned char, 1024> result{};
+      for (int i = 0; i < 2; ++i) {
+        LARGE_INTEGER offset{}; offset.QuadPart = i ? kPartitionBytes - 512 : 0;
+        DWORD read{};
+        require(::SetFilePointerEx(target.get(), offset, nullptr, FILE_BEGIN) &&
+            ::ReadFile(target.get(), sector.data(), static_cast<DWORD>(sector.size()), &read, nullptr) && read == sector.size(), "read fixture boundary sectors");
+        std::copy(sector.begin(), sector.end(), result.begin() + i * 512);
+      }
+      return result;
+    };
+    const auto before = sample();
+    std::array<wchar_t, 32> filesystem{};
+    const BOOL known_filesystem = ::GetVolumeInformationByHandleW(target.get(), nullptr, 0, nullptr, nullptr, nullptr,
+        filesystem.data(), static_cast<DWORD>(filesystem.size()));
+    require(known_filesystem && std::wstring_view(filesystem.data()) == L"RAW", "new fixture is not explicitly RAW");
+    require(format(nullptr, kOffset, kPartitionBytes, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "null target accepted");
+    Handle event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
+    require(event.get() != nullptr, "fixture event unavailable");
+    require(format(event.get(), kOffset, kPartitionBytes, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "non-disk handle accepted");
+    require(format(target.get(), 0, kPartitionBytes, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "zero offset accepted");
+    require(format(target.get(), kOffset, kPartitionBytes + 1, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "unaligned length accepted");
+    require(format(target.get(), kOffset, kPartitionBytes, secret, 63, nullptr, nullptr) == fmt::kInvalidParameter, "password length accepted");
+    require(format(target.get(), kOffset + 512, kPartitionBytes, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "wrong offset accepted");
+    require(format(target.get(), kOffset, kPartitionBytes + 512, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "wrong length accepted");
+    require(sample() == before, "invalid request modified boundary sectors");
+    {
+      Handle busy(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+      require(busy.get() != INVALID_HANDLE_VALUE, "busy fixture handle unavailable");
+      require(format(target.get(), kOffset, kPartitionBytes, secret, 64, nullptr, nullptr) == fmt::kAccessDenied, "busy target did not reject before format");
+    }
+    require(sample() == before, "busy rejection modified boundary sectors");
+    std::cout << "PASS: same-handle shape, offset, length and busy guards; boundary sectors unchanged\n";
+    if (cancel_only) {
+      FormatProgress cancelled; cancelled.cancel = true;
+      require(format(target.get(), kOffset, kPartitionBytes, secret, 64, &FormatProgress::observe, &cancelled) == fmt::kUserAbort &&
+          cancelled.calls > 0 && !cancelled.invalid, "cancellation did not report abort");
+      DWORD flags{};
+      require(::GetHandleInformation(target.get(), &flags) != FALSE, "cancel consumed caller handle");
+      std::cout << "PASS: cancellation returns abort and retains caller handle; partial fixture will be discarded\n";
+      return;
+    }
+    FormatProgress completed;
+    const int result = format(target.get(), kOffset, kPartitionBytes, secret, 64, &FormatProgress::observe, &completed);
+    if (result != fmt::kSuccess) { std::cerr << "same-handle format code " << result << '\n'; throw std::runtime_error("same-handle format failed"); }
+    require(completed.calls > 0 && !completed.invalid, "format progress invalid");
+    DWORD flags{};
+    require(::GetHandleInformation(target.get(), &flags) != FALSE, "backend consumed caller handle");
+    std::cout << "PASS: bounded progress and caller handle retained after same-handle format\n";
   }
  private: HMODULE module_{}; fmt::Shutdown shutdown_{}; fmt::FormatBinary format_{}; bool initialized_{};
 };
@@ -264,7 +374,7 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || std::wstring_view(argv[1]) != L"--run-owned-vhd") {
+  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -275,7 +385,10 @@ int wmain(int argc, wchar_t** argv) {
     usb_vault::security::SecureBuffer password(64);
     require(::BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(password.data()), static_cast<ULONG>(password.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0, "fixture password generation");
     password.bytes()[0] = std::byte{0}; // Exercise explicit binary length.
-    OwnedDisk disk; disk.create(); backend.format(disk, password); roundtrip(disk, password); disk.cleanup();
+    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") {
+      OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
+    }
+    OwnedDisk disk; disk.create(); backend.format(disk, password, std::wstring_view(argv[1]) == L"--run-owned-vhd-handle"); roundtrip(disk, password); if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") backend.file_regression(disk, password); disk.cleanup();
     std::cout << "PASS: owned MBR/512 VHD partition format, mount, write, unmount, remount and read; fixture removed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

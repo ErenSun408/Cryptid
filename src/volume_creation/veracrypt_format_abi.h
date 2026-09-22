@@ -33,6 +33,12 @@ struct Options final {
   std::uint64_t hidden_volume_host_size;
 };
 
+// Candidate-only MBR/512 partition writer. Borrowed synchronous RW handle;
+// caller must authorize and identify the target. The DLL locks, dismounts and
+// checks offset/length on this same object; fixed AES/SHA-512/FAT, 64-byte secret.
+using FormatPartitionBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
+    const unsigned char*, std::uint32_t, ProgressCallback, void*);
+
 using Initialize = int(__cdecl*)();
 using Shutdown = void(__cdecl*)();
 using FormatBinary = int(__cdecl*)(const Options*, std::uint32_t);

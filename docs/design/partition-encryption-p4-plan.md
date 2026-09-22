@@ -112,3 +112,22 @@ P4.1b 已按用户授权提交为 `67e26a2`，不推送。本片复核 P4 最小
 安全审阅发现 SDK 将 `bForceOperation` 设为 TRUE，设备打开失败可能退回共享打开；现有 SDK 还可能使用内部临时盘符。此行为只在完全自建的隔离设备上验证，**不能直接暴露为产品设备创建接口**。下一片须为独立设备动作明确无强制共享回退的 backend 合约，并继续完成目标身份／系统与分页依赖／BitLocker／锁定复验、卡派生密码和清空确认。正常暂停续作仍是后续独立工作，不引入任意断电无损承诺。
 
 API 依据：[CreateVirtualDisk](https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/nf-virtdisk-createvirtualdisk)、[CREATE_DISK](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-create_disk)。
+
+## P4.1e — 候选同句柄分区格式化后端
+
+P4.1d 已按用户授权提交 `c4f94a1`。本片先实现可独立审阅的 DLL 设备动作合约，不把现有候选列表直接变成提权写入口。新增 `VeraCryptFormatPartitionBinary` 及产品侧 ABI 镜像，正式 helper／页面尚未调用。
+
+- 接受专用同步读写句柄、预期偏移／长度、64 字节二进制密码和进度回调，不接收设备路径。调用者负责鉴权和目标授权；DLL 复制同一对象的句柄，在锁卷前后复查分区范围／几何，锁失败即拒绝，禁止强制共享打开、重新按路径打开和临时盘符分支。
+- 当前限定 MBR 非活动 IFS／512 字节、RAW 或 NTFS 输入、AES／SHA-512／FAT 快速格式化。仅明确识别为 RAW 时跳过其不支持的扩展 DASD 控制；NTFS 必须成功申请该控制。NTFS 输入分支尚未做设备验收，不据此宣称产品支持。
+- 核心原先依赖新开句柄的初始指针为零；测试读取末尾扇区暴露了复制句柄共享位置导致的越界写失败，现已在首个卷头写入前显式定位到分区起点。
+- 上游快速 FAT 设备路径忽略最终回调的停止返回值，现仅对新句柄分支改为停止；包装层记录取消并返回中止。进度 100 不等于成功，只有格式化、flush、解锁全部成功才返回 0。
+- 取消可能留下部分格式化分区，不承诺原句柄／文件系统状态可复用，更不是原地加密暂停；夹具以独立自建 VHD 验证取消并清理，正常闭环使用另一块新建 VHD。
+- 密码副本使用独立锁页内存、析构清零；回调异常转换为中止，不能越过上游 C 清理。原公开 Options ABI 和文件容器创建接口不变，新增字段仅在 DLL 内部格式参数中使用。
+
+验证：固定上游加现有两补丁和新补丁，可复现候选五个修改源文件（比较时归一化 BOM／换行）；首次补丁复现因 CRLF 上下文失败，改用 LF 后通过。Crypto／Zip／MIDL／FormatDLL 构建及正式应用构建通过；7 个导出含新接口。最终管理员测试返回 0，覆盖错误／非磁盘句柄、密码长度、对齐、偏移／长度、占用拒绝及边界扇区不变、独立取消、进度、调用者句柄保留、设备读回闭环以及普通／隐藏文件容器回归。四组相关 CTest 4/4 通过，测试夹具 `/analyze` 通过；第三方完整 DLL 未做 `/analyze`／ASan 或完整故障注入。
+
+失败记录：初次控制顺序和 RAW 扩展控制返回 87、复制句柄文件指针导致核心错误、取消结果传播以及试图复用已中止格式化句柄的运行均不算通过；按最终合约修复并重跑。最终无驱动挂载，先前失败的 9 个镜像确认脱离后定点清理，未操作生产分区。
+
+候选摘要 `94D37A2D8C70707190076680587833CFA3C26ABD3426629EFAE9F31DA0225309`；产品依赖仍为 `416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184`，未改允许列表或交付包。完整合约与重建说明见 `third_party/veracrypt_format/README.md`。下一片继续独立 helper 动作、持久设备身份与提权复验、卡派生密码和清空确认；真实物理分区验收仍必须单独进行，本片不等同客户设备验收。
+
+API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl-dismount-volume)、[DASD 访问](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea)。

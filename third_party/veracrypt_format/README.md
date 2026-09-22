@@ -107,3 +107,64 @@ helper. The allowlist was updated after source comparison against the pinned
 upstream and reviewed patches, geometry boundary tests, and authenticated
 measurement/upload integration on disposable containers. Full application
 hardware acceptance remains a separate requirement.
+
+## Candidate partition-handle boundary (P4.1)
+
+This candidate is **not** the packaged/allowlisted DLL above. Apply
+`veracrypt-1.26.29-partition.patch` after the existing two patches and copy
+`UsbVaultPartition.inl` beside the SDK source. Build with the same pinned
+upstream, Crypto, Zip and generated MIDL header. The patch adds one export;
+it does not change the public options structure or replace existing file APIs.
+Future distribution must include the third patch and the new include as well
+as the existing source/notice obligations. Do not promote the candidate by
+copying it into local dependency storage without a separate review.
+
+Candidate SHA-256 from this run:
+`94D37A2D8C70707190076680587833CFA3C26ABD3426629EFAE9F31DA0225309`.
+The candidate exports `VeraCryptFormatPartitionBinary(HANDLE, uint64_t offset,
+uint64_t length, const unsigned char* password, uint32_t passwordBytes,
+VeraCrypt_Progress_Callback, void*)`. Initialization is required. The caller
+supplies a dedicated synchronous read/write partition handle and exactly 64
+password bytes. The handle remains caller-owned; duplicates share its file
+position, so the caller must not use or close it concurrently. Close it after
+the operation; failure is not a promise that its original filesystem state or
+position can be reused. No secret, handle or raw target comes from the page.
+
+The export fixes AES/SHA-512/PIM 0, ordinary FAT quick format, no hidden volume,
+MBR recognized non-active IFS partitions and 512-byte logical sectors. It checks
+partition offset/length, device partition number, actual length and geometry on
+the same object before and after acquiring a filesystem lock. It only accepts
+an explicitly identified RAW or NTFS filesystem. RAW has no filesystem bounds
+to extend and rejects extended-DASD control on the tested system; only positively
+identified RAW skips that control. NTFS must grant it. Dismount follows a
+successful lock; every error stops the operation. No path reopen, temporary
+drive, pseudo-format or forced shared-open fallback is used by this export.
+
+The core duplicates the held handle and explicitly seeks to partition offset
+zero before its first header write. The caller's password copy is held in
+locked allocated pages and burned on exit. Completion requires successful
+format, flush and unlock. Progress is bounded to 0–100 but is not completion:
+only return code 0 proves success. A rejected/throwing callback latches
+cancellation; the device quick-FAT branch stops instead of ignoring its final
+callback. Abort returns 16 and may leave a partially formatted partition. This
+is neither NTFS in-place encryption nor pause/resume. No failure deletes,
+reformats or automatically retries a target.
+
+This is a backend I/O contract, **not target authorization**. The future helper
+must bind the handle to the authenticated card operation, stable disk/partition
+identity and the user's explicit destructive-format confirmation, exclude
+system/boot/paging/BitLocker and unsupported targets, and revalidate at the
+privilege boundary. Locking alone is not that authorization. Existing legacy
+exports still retain their legacy behavior; production device creation must
+use the new contract after review, never silently fall back to them.
+
+For isolated verification, put the opt-in `partition_device_integration_tests`
+executable beside the candidate and run `--run-owned-vhd-handle` as administrator.
+It accepts no existing disk input. Tests cover invalid/non-disk handles,
+password length, offset/length/alignment, lock contention with unchanged boundary
+sectors, an independent disposable cancellation fixture, progress and retained
+caller handles, device format/mount/write/unmount/remount/readback, and existing
+normal/hidden file-container format and mount regressions. Final run returned
+0 with no retained mounts. MBR/512 RAW VHD was exercised; NTFS input, real disks,
+GPT, 4Kn, helper IPC, card authentication, full fault injection and in-place
+pause/resume are not validated by this candidate run.

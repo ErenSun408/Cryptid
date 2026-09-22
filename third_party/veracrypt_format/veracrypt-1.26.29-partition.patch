@@ -1,0 +1,92 @@
+--- a/src/Common/Format.h
++++ b/src/Common/Format.h
+@@ -27,6 +27,9 @@
+ typedef struct
+ {
+ 	BOOL bDevice;
++#ifdef VCSDK_DLL
++	HANDLE usbVaultDeviceHandle; // Borrowed locked partition; core duplicates it.
++#endif
+ 	BOOL hiddenVol;
+ 	wchar_t *volumePath;
+ 	unsigned __int64 size;
+--- a/src/Common/Format.c
++++ b/src/Common/Format.c
+@@ -142,7 +142,11 @@
+ 
+ 	num_sectors = dataAreaSize / FormatSectorSize;
+ 
+-	if (volParams->bDevice)
++	if (volParams->bDevice
++#ifdef VCSDK_DLL
++		&& !volParams->usbVaultDeviceHandle
++#endif
++	)
+ 	{
+ 		StringCchCopyW (deviceName, ARRAYSIZE(deviceName), volParams->volumePath);
+ 
+@@ -184,6 +188,23 @@
+ 
+ begin_format:
+ 
++#ifdef VCSDK_DLL
++    if (volParams->usbVaultDeviceHandle)
++    {
++        LARGE_INTEGER beginning;
++        beginning.QuadPart = 0;
++        // No pathname reopen, shared-open fallback, temporary drive or pseudo-format.
++        if (!volParams->bDevice || volParams->hiddenVol || volParams->fileSystem != FILESYS_FAT
++            || !DuplicateHandle(GetCurrentProcess(), volParams->usbVaultDeviceHandle,
++                GetCurrentProcess(), &dev, 0, FALSE, DUPLICATE_SAME_ACCESS)
++            || !SetFilePointerEx(dev, beginning, NULL, FILE_BEGIN))
++        {
++            nStatus = ERR_OS_ERROR;
++            goto error;
++        }
++    }
++    else
++#endif
+ 	if (volParams->bDevice)
+ 	{
+ 		/* Device-hosted volume */
+--- a/src/Common/Fat.c
++++ b/src/Common/Fat.c
+@@ -544,6 +544,14 @@
+ 		if (volParams->progress_callback)
+ 		{
+ 			// Call the progress callback function if it is set
++#ifdef VCSDK_DLL
++            if (volParams->usbVaultDeviceHandle)
++            {
++                if (!volParams->progress_callback ((uint64) ft->num_sectors * ft->sector_size, volParams->progress_callback_user_data))
++                    goto fail;
++            }
++            else
++#endif
+ 			volParams->progress_callback ((uint64) ft->num_sectors * ft->sector_size, volParams->progress_callback_user_data);
+ 		}
+ 		else
+--- a/src/FormatDLL/VeraCryptFormatSDK.cpp
++++ b/src/FormatDLL/VeraCryptFormatSDK.cpp
+@@ -493,3 +493,5 @@
+ 	}
+ }
+ #include "UsbVaultGeometry.inl"
++
++#include "UsbVaultPartition.inl"
+--- a/src/FormatDLL/VeraCryptFormatSDK.h
++++ b/src/FormatDLL/VeraCryptFormatSDK.h
+@@ -203,6 +203,13 @@
+ 	const char* oldPassword, int oldPim, const wchar_t* oldHash,
+ 	const char* newPassword, int newPim, const wchar_t* newHash);
+ 
++// The caller supplies a synchronous RW handle to an authorized disposable MBR
++// partition. This export has no path opens and no UI/force/shared fallback.
++VCF_API int __cdecl VeraCryptFormatPartitionBinary(
++    HANDLE target, uint64_t expectedOffset, uint64_t expectedLength,
++    const unsigned char* password, uint32_t passwordBytes,
++    VeraCrypt_Progress_Callback progress, void* context);
++
+ #ifdef __cplusplus
+ }
+ #endif
