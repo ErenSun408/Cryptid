@@ -257,9 +257,20 @@ void CardProductUiSessionController::submit_initialization(
       consume_password_utf8(mutable_password_utf8);
   security::SecureBuffer confirmation =
       consume_password_utf8(mutable_confirmation_utf8);
+  // Keep only a locked native copy, and hand it off only after independent
+  // confirmation and a verified card initialization have both succeeded.
+  security::SecureBuffer session_password = duplicate(password);
+  SecureBufferGuard session_password_guard(session_password);
   security::ConfirmedPassword confirmed = security::confirm_password(
       password_policy_, std::move(password), std::move(confirmation));
   entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
+  try {
+    volume_session_.complete_initialization(std::move(session_password));
+  } catch (...) {
+    volume_session_.release_session_secrets();
+    authentication_.clear_authentication();
+    throw;
+  }
 }
 
 std::wstring CardProductUiSessionController::browse_for_container_directory() {

@@ -527,6 +527,13 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::wstring created_b_path;
   std::uint64_t created_outer_bytes{};
   std::uint64_t created_hidden_bytes{};
+  void complete_initialization(SecureBuffer password) override {
+    ++initialization_handoffs;
+    if (reject_initialization_handoff) throw std::runtime_error("handoff failed");
+    session_password.assign(password.bytes().begin(), password.bytes().end());
+  }
+  int initialization_handoffs{};
+  bool reject_initialization_handoff{};
   SecureBuffer copy_session_password() override {
     ++session_password_calls;
     SecureBuffer copy(session_password.size());
@@ -848,12 +855,50 @@ void test_initialization_normalizes_both_inputs_and_creates_proof() {
   std::vector<std::byte> expected = bytes("aaaaaaaaaaa");
   expected.push_back(std::byte{0xC3});
   expected.push_back(std::byte{0xA9});
+  require(fixture.volume.initialization_handoffs == 1 &&
+              equals(fixture.volume.session_password, expected),
+          "initialization did not hand the normalized password to the session");
   require_wiped(password, "initialization password was not wiped");
   require_wiped(confirmation, "initialization confirmation was not wiped");
   require(equals(fixture.entry.initialization_bytes, expected) &&
               fixture.entry.initialization_calls == 1 &&
               fixture.controller.state() == CardProductUiState::authenticated,
           "initialization did not normalize, prove, or authenticate");
+}
+
+void test_initialization_immediately_supports_hidden_creation() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::initialization_required;
+  fixture.volume.session_password.clear();
+  auto password = bytes("new-login-password-value");
+  auto confirmation = bytes("new-login-password-value");
+  fixture.controller.submit_initialization(password, confirmation);
+  auto second = bytes("second-password-value");
+  auto second_confirmation = bytes("second-password-value");
+  fixture.controller.create_container_b(L"after-init", fixture.directory.wide(),
+      64, 16, second, second_confirmation);
+  require(fixture.entry.login_calls == 0 && fixture.volume.initialization_handoffs == 1 &&
+              fixture.entry.second_password_calls == 1 && fixture.volume.create_b_calls == 1 &&
+              equals(fixture.entry.existing_password_bytes, bytes("new-login-password-value")),
+          "initialization did not support hidden creation without another login");
+  require_wiped(password, "initialization input survived hidden creation");
+  require_wiped(second, "second input survived hidden creation");
+}
+
+void test_failed_initialization_handoff_clears_authentication() {
+  Fixture fixture;
+  fixture.entry.route = CardEntryRoute::initialization_required;
+  fixture.volume.session_password.clear();
+  fixture.volume.reject_initialization_handoff = true;
+  auto password = bytes("new-login-password-value");
+  auto confirmation = bytes("new-login-password-value");
+  require_throws<std::runtime_error>([&] {
+    fixture.controller.submit_initialization(password, confirmation);
+  }, "failed session handoff reported initialization success");
+  require(!fixture.authentication.authenticated() && fixture.volume.session_password.empty(),
+          "failed handoff retained incomplete authentication");
+  require_wiped(password, "failed handoff retained page password");
+  require_wiped(confirmation, "failed handoff retained confirmation");
 }
 
 void test_initialization_rejections_wipe_both_before_entry_action() {
@@ -1972,6 +2017,8 @@ int main() {
     test_login_normalizes_wipes_and_preserves_retry_semantics();
     test_post_authentication_failure_projects_authenticated_state();
     test_initialization_normalizes_both_inputs_and_creates_proof();
+    test_initialization_immediately_supports_hidden_creation();
+    test_failed_initialization_handoff_clears_authentication();
     test_initialization_rejections_wipe_both_before_entry_action();
     test_wrong_route_wipes_without_secret_processing();
     test_overlapping_initialization_inputs_are_rejected_and_wiped();

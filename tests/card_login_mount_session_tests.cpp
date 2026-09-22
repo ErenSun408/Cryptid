@@ -1656,6 +1656,30 @@ void test_manual_policy_authenticates_without_mounting() {
           "an existing container was projected as mounted after manual login");
 }
 
+void test_initialization_handoff_supports_hidden_creation() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  require_throws<std::logic_error>([&] { session.complete_initialization(bytes("new-password")); },
+      "initialization handoff accepted an unauthenticated session");
+  authentication.establish(root_secret());
+  require_throws<std::logic_error>([&] { session.complete_initialization(SecureBuffer()); },
+      "initialization handoff accepted an empty password");
+  session.complete_initialization(bytes("new-password"));
+  require(runtime.events.empty() && !session.mounted(), "initialization handoff touched storage or mounted");
+  const auto expected = bytes("new-password");
+  const auto retained = session.copy_session_password();
+  require(std::ranges::equal(expected.bytes(), retained.bytes()), "initialization password was not retained");
+  require_throws<std::logic_error>([&] { session.complete_initialization(bytes("replacement")); },
+      "initialization handoff replaced an existing session password");
+  const auto id = session.create_container_b(L"C:\\vault\\fresh.hc", 64ULL * 1024 * 1024,
+      16ULL * 1024 * 1024, bytes("decoy-password"));
+  require(id != 0 && session.mounted(), "hidden creation after initialization did not mount");
+  session.unmount_active();
+  session.release_session_secrets();
+  require(session.copy_session_password().empty(), "initialization password survived session cleanup");
+}
+
 void test_manual_policy_still_serializes_and_allows_creation() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -3745,6 +3769,7 @@ int main() {
     test_capacity_reports_the_attached_volume_not_the_file();
     test_container_a_status_projects_live_file_and_mount_facts();
     test_manual_policy_authenticates_without_mounting();
+    test_initialization_handoff_supports_hidden_creation();
     test_manual_policy_still_serializes_and_allows_creation();
     test_multiple_standard_containers_get_distinct_drive_letters();
     test_container_paths_are_adopted_once();

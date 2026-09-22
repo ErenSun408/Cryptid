@@ -259,6 +259,13 @@ void test_reset_returns_the_card_to_the_provisioning_marker() {
           "a reset card could not be initialized again");
   require(!std::ranges::equal(root.bytes(), fresh.bytes()),
           "reinitialization reused the old root secret");
+  service.set_second_password(secure_text("service-new-daily-v1"),
+                              secure_text("service-new-decoy-v1"));
+  for (const auto* password : {"service-new-daily-v1", "service-new-decoy-v1"}) {
+    auto reopened = service.authenticate(secure_text(password));
+    require(std::ranges::equal(fresh.bytes(), reopened.bytes()),
+            "post-reset second password changed or lost the fresh root");
+  }
 }
 
 void test_reset_requires_an_initialized_record() {

@@ -196,6 +196,14 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // unauthenticated session returns an empty buffer.
   [[nodiscard]] virtual security::SecureBuffer copy_session_password() = 0;
 
+  // Only after successful initialization with this independently confirmed,
+  // normalized input. Completes a fresh authenticated session without mounting
+  // or touching the card. Consumes the buffer into the existing locked storage.
+  virtual void complete_initialization(security::SecureBuffer password_utf8) {
+    password_utf8.clear();
+    throw std::logic_error("initialization session handoff unsupported");
+  }
+
   // Adopts and mounts an existing container at the caller-selected path. The
   // standard derivation is attempted first and the login-input derivation
   // second, so both container classes are reached through one entry point and
@@ -519,6 +527,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8) override;
   [[nodiscard]] security::SecureBuffer copy_session_password() override;
+  void complete_initialization(security::SecureBuffer password_utf8) override;
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
   void mount_adopted_all() override;

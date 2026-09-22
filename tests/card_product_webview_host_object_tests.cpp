@@ -162,7 +162,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, outer_size_bytes);
   }
 
+  SecureBuffer initialized_password;
+  void complete_initialization(SecureBuffer password) override { initialized_password = std::move(password); }
   SecureBuffer copy_session_password() override {
+    if (!initialized_password.empty()) {
+      SecureBuffer copy(initialized_password.size());
+      std::copy(initialized_password.bytes().begin(), initialized_password.bytes().end(), copy.bytes().begin());
+      return copy;
+    }
     const std::vector<std::byte> retained = bytes("login-password");
     SecureBuffer copy(retained.size());
     for (std::size_t index = 0; index < retained.size(); ++index) {

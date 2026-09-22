@@ -401,6 +401,10 @@ std::uint32_t CardLoginMountSession::create_container_b(
                                         decoy_password_utf8);
 }
 
+void CardLoginMountSession::complete_initialization(security::SecureBuffer password_utf8) {
+  impl_->core.complete_initialization(std::move(password_utf8));
+}
+
 security::SecureBuffer CardLoginMountSession::copy_session_password() {
   return impl_->core.copy_session_password();
 }
@@ -1662,6 +1666,18 @@ bool CardLoginMountSessionCore::verify_decoy_maintenance(
   entry.maintenance_identity.reset();
   entry.drive_letter = wchar_t{};
   return true;
+}
+
+void CardLoginMountSessionCore::complete_initialization(security::SecureBuffer password_utf8) {
+  if (!authentication_.authenticated() || password_utf8.empty() ||
+      state_.mounted() || !state_.containers.empty() || !state_.login_password.empty()) {
+    throw std::logic_error("initialization handoff requires a fresh authenticated session");
+  }
+  // Move the exact normalized password confirmed before card initialization.
+  // No second card authentication, key derivation, or automatic mount occurs.
+  state_.login_password = std::move(password_utf8);
+  clear_operation_history();
+  record_operation(OperationKind::session_opened, OperationOutcome::succeeded);
 }
 
 security::SecureBuffer CardLoginMountSessionCore::copy_session_password() {

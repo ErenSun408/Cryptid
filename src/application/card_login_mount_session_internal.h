@@ -233,6 +233,7 @@ class CardLoginMountSessionCore final {
       std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8);
   [[nodiscard]] security::SecureBuffer copy_session_password();
+  void complete_initialization(security::SecureBuffer password_utf8);
   std::uint32_t mount_container(std::wstring_view path);
   std::uint32_t adopt_container(std::wstring_view path);
   void unmount_container(std::uint32_t id);

@@ -138,8 +138,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   // The page no longer sends the login input back, so the card record has to
   // get it from here. Handing out exactly what the login consumed is what
   // makes the entry fake's check meaningful.
+  SecureBuffer initialized_password;
+  void complete_initialization(SecureBuffer password) override { initialized_password = std::move(password); }
   SecureBuffer copy_session_password() override {
     ++session_password_calls;
+    if (!initialized_password.empty()) {
+      SecureBuffer copy(initialized_password.size());
+      std::copy(initialized_password.bytes().begin(), initialized_password.bytes().end(), copy.bytes().begin());
+      return copy;
+    }
     SecureBuffer copy(std::size(kLoginPassword));
     for (std::size_t index = 0; index < std::size(kLoginPassword); ++index) {
       copy.bytes()[index] = kLoginPassword[index];
@@ -440,6 +447,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
 class FakeEntry final : public ICardEntryActions {
  public:
+  std::vector<std::byte> initialized_password_bytes;
   void initialize_and_authenticate(
       CardAuthenticationSession& authentication,
       ConfirmedPassword confirmed_daily_password) override {
@@ -450,6 +458,7 @@ class FakeEntry final : public ICardEntryActions {
         std::byte{0xA9}};
     SecureBuffer password = std::move(confirmed_daily_password).take();
     initialization_payload_matched = equals(password.bytes(), kExpected);
+    initialized_password_bytes.assign(password.bytes().begin(), password.bytes().end());
     password.clear();
     route = CardEntryRoute::unavailable;
     authentication.establish(root_secret());
@@ -478,7 +487,7 @@ class FakeEntry final : public ICardEntryActions {
                                 SecureBuffer second_password_utf8) override {
     ++second_password_calls;
     second_password_existing_matched =
-        equals(existing_password_utf8.bytes(), kLoginPassword);
+        equals(existing_password_utf8.bytes(), initialized_password_bytes);
     second_password_new_matched =
         equals(second_password_utf8.bytes(), kSecondPassword);
     existing_password_utf8.clear();
