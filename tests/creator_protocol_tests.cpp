@@ -75,6 +75,70 @@ void expect(const bool condition, const char* const message) {
   return result;
 }
 
+void test_partition_check_protocol() {
+  const std::wstring path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+  PartitionTarget target{}; target.device_id[0] = 7; target.partition_number = 2;
+  target.offset_bytes = 1048576; target.length_bytes = 256ULL * 1024 * 1024;
+  RequestHeader header{.operation = Operation::check_partition, .path_characters = 49,
+      .partition_target_bytes = sizeof(PartitionTarget)};
+  header.nonce[0] = std::byte{0x91};
+  expect(valid_partition_path(path) && valid_partition_target(target) && valid_request_header(header), "valid partition check rejected");
+  const SecureBuffer empty;
+  const auto pipe = make_pipe();
+  write_request(pipe.write.get(), header, path, empty, empty, {}, {}, &target);
+  const auto read = read_request(pipe.read.get(), header.nonce);
+  expect(read.operation == Operation::check_partition && read.partition_target &&
+      read.partition_target->device_id == target.device_id && read.partition_target->offset_bytes == target.offset_bytes &&
+      read.partition_target->length_bytes == target.length_bytes && read.target_path == path &&
+      read.first_password.empty() && read.second_password.empty(), "partition IPC round trip");
+  for (int field = 0; field < 10; ++field) {
+    auto bad = target;
+    if (field == 0) bad.device_id = {};
+    if (field == 1) bad.device_flags = 1;
+    if (field == 2) bad.layout = 2;
+    if (field == 3) bad.sector_bytes = 4096;
+    if (field == 4) bad.partition_number = 0;
+    if (field == 5) bad.offset_bytes++;
+    if (field == 6) bad.length_bytes = 1;
+    if (field == 7) bad.offset_bytes = UINT64_MAX - 511;
+    if (field == 8) bad.reserved = 1;
+    if (field == 9) bad.disk_number = UINT32_MAX;
+    expect(!valid_partition_target(bad), "unsafe partition payload accepted");
+    auto wire = make_pipe(); write_exact(wire.write.get(), &header, sizeof(header));
+    write_exact(wire.write.get(), &bad, sizeof(bad));
+    bool rejected{};
+    try { static_cast<void>(read_request(wire.read.get(), header.nonce)); } catch (const std::system_error&) { rejected = true; }
+    expect(rejected, "untrusted partition payload reached path read");
+  }
+  for (int field = 0; field < 8; ++field) {
+    auto bad = header;
+    if (field == 0) bad.first_password_bytes = 64;
+    if (field == 1) bad.second_password_bytes = 64;
+    if (field == 2) bad.outer_size_bytes = target.length_bytes;
+    if (field == 3) bad.hidden_size_bytes = 512;
+    if (field == 4) bad.mounted_drive = 1;
+    if (field == 5) bad.partition_target_bytes--;
+    if (field == 6) bad.path_characters++;
+    if (field == 7) bad.operation = Operation::create_standard;
+    expect(!valid_request_header(bad), "cross-operation partition fields accepted");
+  }
+  for (const auto bad : {L"C:\\data.hc", LR"(\\.\PhysicalDrive0)", LR"(\\?\GLOBALROOT\Device\Harddisk0\Partition1)",
+      LR"(\\?\Volume{00000000-0000-0000-0000-000000000000}\)"})
+    expect(!valid_partition_path(bad), "arbitrary partition path accepted");
+  auto bad_path = path; bad_path[11] = L'x';
+  auto wire = make_pipe(); write_exact(wire.write.get(), &header, sizeof(header));
+  write_exact(wire.write.get(), &target, sizeof(target)); write_exact(wire.write.get(), bad_path.data(), bad_path.size() * sizeof(wchar_t));
+  bool rejected{};
+  try { static_cast<void>(read_request(wire.read.get(), header.nonce)); } catch (const std::system_error&) { rejected = true; }
+  expect(rejected, "malformed volume GUID read accepted");
+  // An old prefix must be rejected without waiting for a larger new header.
+  auto old = header; old.version = 5; old.header_size = 76;
+  auto legacy = make_pipe(); write_exact(legacy.write.get(), &old, offsetof(RequestHeader, operation));
+  rejected = false;
+  try { static_cast<void>(read_request(legacy.read.get(), header.nonce)); } catch (const std::system_error&) { rejected = true; }
+  expect(rejected, "legacy protocol accepted");
+}
+
 void test_binary_password_round_trip() {
   const Pipe pipe = make_pipe();
   const SecureBuffer first = password({0x41, 0x00, 0x42, 0xff});
@@ -551,6 +615,7 @@ void test_pipe_dacl_names_system_and_token_user_explicitly() {
 
 int main() {
   try {
+    test_partition_check_protocol();
     test_binary_password_round_trip();
     test_cancel_request_round_trip();
     test_cancel_request_rejects_another_nonce();

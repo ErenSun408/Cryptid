@@ -20,7 +20,7 @@ namespace {
 }
 
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
-  return operation == Operation::create_standard ||
+  return operation == Operation::check_partition || operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
          operation == Operation::scan_protected_space || operation == Operation::scan_maintenance_space || operation == Operation::import_protected_file;
@@ -36,6 +36,28 @@ namespace {
 
 }  // namespace
 
+bool valid_partition_target(const PartitionTarget& target) noexcept {
+  constexpr std::uint64_t max_bytes = 1ULL << 40;
+  return target.reserved == 0 && target.layout == 1 && target.sector_bytes == 512 &&
+      target.device_id != std::array<std::uint8_t, 16>{} && (target.device_flags & ~4u) == 0 &&
+      target.disk_number != UINT32_MAX && target.partition_number > 0 && target.partition_number != UINT32_MAX &&
+      target.offset_bytes > 0 && target.offset_bytes % 512 == 0 &&
+      target.length_bytes >= 20ULL * 1024 * 1024 && target.length_bytes <= max_bytes &&
+      target.length_bytes % 512 == 0 && target.offset_bytes <= INT64_MAX - target.length_bytes;
+}
+
+bool valid_partition_path(const std::wstring_view path) noexcept {
+  if (path.size() != 49 || !path.starts_with(LR"(\\?\Volume{)") || path.substr(47) != LR"(}\)") return false;
+  bool nonzero{};
+  for (std::size_t i = 11; i < 47; ++i) {
+    if (i == 19 || i == 24 || i == 29 || i == 34) { if (path[i] != L'-') return false; continue; }
+    const wchar_t c = path[i];
+    if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F'))) return false;
+    nonzero = nonzero || c != L'0';
+  }
+  return nonzero;
+}
+
 bool valid_request_header(const RequestHeader& header) noexcept {
   if (header.magic != kProtocolMagic ||
       header.version != kProtocolVersion ||
@@ -45,6 +67,13 @@ bool valid_request_header(const RequestHeader& header) noexcept {
     return false;
   }
 
+  if (header.operation == Operation::check_partition) {
+    return header.partition_target_bytes == sizeof(PartitionTarget) && header.path_characters == 49 &&
+        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == 0 &&
+        header.second_password_bytes == 0 && header.mounted_drive == 0 && header.mount_id == 0 &&
+        header.source_characters == 0 && header.destination_characters == 0;
+  }
+  if (header.partition_target_bytes != 0) return false;
   if (header.operation == Operation::import_protected_file) {
     if (header.source_characters == 0 || header.source_characters > kMaxPathCharacters ||
         header.destination_characters == 0 || header.destination_characters > 256) return false;
@@ -139,7 +168,8 @@ void write_request(const HANDLE pipe, const RequestHeader& header,
                    const std::wstring_view target_path,
                    const security::SecureBuffer& first_password,
                    const security::SecureBuffer& second_password,
-                   std::wstring_view source_path, std::wstring_view destination_relative) {
+                   std::wstring_view source_path, std::wstring_view destination_relative,
+                   const PartitionTarget* partition_target) {
   if (!valid_request_header(header) ||
       target_path.size() != header.path_characters ||
       source_path.size() != header.source_characters || destination_relative.size() != header.destination_characters ||
@@ -147,7 +177,11 @@ void write_request(const HANDLE pipe, const RequestHeader& header,
       second_password.size() != header.second_password_bytes) {
     throw std::invalid_argument("invalid volume-creation request");
   }
+  if ((header.operation == Operation::check_partition) != (partition_target != nullptr) ||
+      (partition_target && (!valid_partition_target(*partition_target) || !valid_partition_path(target_path))))
+    throw std::invalid_argument("invalid partition check request");
   write_exact(pipe, &header, sizeof(header));
+  if (partition_target) write_exact(pipe, partition_target, sizeof(*partition_target));
   write_exact(pipe, target_path.data(),
               target_path.size() * sizeof(wchar_t));
   write_exact(pipe, first_password.data(), first_password.size());
@@ -160,11 +194,21 @@ Request read_request(
     const HANDLE pipe,
     const std::array<std::byte, kNonceSize>& expected_nonce) {
   RequestHeader header{};
-  read_exact(pipe, &header, sizeof(header));
+  constexpr auto prefix_bytes = offsetof(RequestHeader, operation);
+  read_exact(pipe, &header, prefix_bytes);
+  if (header.magic != kProtocolMagic || header.version != kProtocolVersion || header.header_size != sizeof(header))
+    throw_protocol_error("unsupported creation protocol prefix");
+  read_exact(pipe, reinterpret_cast<std::byte*>(&header) + prefix_bytes, sizeof(header) - prefix_bytes);
   if (!valid_request_header(header) || header.nonce != expected_nonce) {
     throw_protocol_error("invalid volume-creation request header");
   }
 
+  std::optional<PartitionTarget> target;
+  if (header.partition_target_bytes) {
+    target.emplace();
+    read_exact(pipe, &*target, sizeof(*target));
+    if (!valid_partition_target(*target)) throw_protocol_error("invalid partition target facts");
+  }
   Request request{
       .operation = header.operation,
       .outer_size_bytes = header.outer_size_bytes,
@@ -178,6 +222,7 @@ Request read_request(
       .second_password =
           security::SecureBuffer(header.second_password_bytes),
       .nonce = header.nonce,
+      .partition_target = target,
   };
   read_exact(pipe, request.target_path.data(),
              request.target_path.size() * sizeof(wchar_t));
@@ -191,6 +236,8 @@ Request read_request(
   if (request.source_path.find(L'\0') != std::wstring::npos || request.destination_relative.find(L'\0') != std::wstring::npos || request.target_path.find(L'\0') != std::wstring::npos) {
     throw_protocol_error("target path contains an embedded NUL");
   }
+  if (request.operation == Operation::check_partition && !valid_partition_path(request.target_path))
+    throw_protocol_error("invalid partition volume name");
   return request;
 }
 

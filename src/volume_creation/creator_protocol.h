@@ -9,11 +9,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <optional>
 
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 5;
+constexpr std::uint16_t kProtocolVersion = 6;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -27,6 +28,7 @@ enum class Operation : std::uint32_t {
   import_protected_file = 5,
   // Explicit consent for measurement and import within one bound mount.
   scan_maintenance_space = 6,
+  check_partition = 7, // Read-only identity check, no formatting or password.
 };
 
 enum class MessageType : std::uint32_t {
@@ -35,6 +37,19 @@ enum class MessageType : std::uint32_t {
 };
 
 #pragma pack(push, 1)
+// Dedicated MBR/512 target facts. Never reuse file sizes or hidden-volume fields.
+struct PartitionTarget final {
+  std::array<std::uint8_t, 16> device_id{};
+  std::uint32_t device_flags{};
+  std::uint32_t disk_number{};
+  std::uint32_t partition_number{};
+  std::uint32_t sector_bytes{512};
+  std::uint32_t layout{1}; // MBR only for the initial formatting backend.
+  std::uint32_t filesystem_serial{};
+  std::uint64_t offset_bytes{};
+  std::uint64_t length_bytes{};
+  std::uint32_t reserved{};
+};
 struct RequestHeader final {
   std::uint32_t magic{kProtocolMagic};
   std::uint16_t version{kProtocolVersion};
@@ -51,6 +66,7 @@ struct RequestHeader final {
   std::uint32_t source_characters{};
   std::uint32_t destination_characters{};
   std::array<std::byte, kNonceSize> nonce{};
+  std::uint32_t partition_target_bytes{};
 };
 
 struct Response final {
@@ -78,7 +94,8 @@ struct CancelRequest final {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(RequestHeader) == 76);
+static_assert(sizeof(RequestHeader) == 80);
+static_assert(sizeof(PartitionTarget) == 60);
 static_assert(sizeof(Response) == 36);
 static_assert(sizeof(CancelRequest) == 24);
 
@@ -95,8 +112,11 @@ struct Request final {
   security::SecureBuffer second_password;
   // Kept so the helper can recognise this caller's cancel while formatting.
   std::array<std::byte, kNonceSize> nonce{};
+  std::optional<PartitionTarget> partition_target;
 };
 
+[[nodiscard]] bool valid_partition_target(const PartitionTarget& target) noexcept;
+[[nodiscard]] bool valid_partition_path(std::wstring_view path) noexcept;
 [[nodiscard]] bool valid_request_header(const RequestHeader& header) noexcept;
 [[nodiscard]] bool valid_response(const Response& response) noexcept;
 
@@ -108,7 +128,8 @@ void write_request(HANDLE pipe, const RequestHeader& header,
                    const security::SecureBuffer& first_password,
                    const security::SecureBuffer& second_password,
                    std::wstring_view source_path = {},
-                   std::wstring_view destination_relative = {});
+                   std::wstring_view destination_relative = {},
+                   const PartitionTarget* partition_target = nullptr);
 
 [[nodiscard]] Request read_request(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce);
