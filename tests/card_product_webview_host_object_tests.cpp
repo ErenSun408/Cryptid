@@ -3304,6 +3304,7 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   bool tool_success{true};
   int tool_calls{};
   bool changed{};
+  bool device_replaced{};
   bool missing{};
   bool duplicate{};
   usb_vault::ui::CreationWorkState* expire_on_read{};
@@ -3315,7 +3316,9 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
     item.partition_number = 3; item.length_bytes = 1073741824;
     item.offset_bytes = 1048576; item.logical_sector_bytes = 512;
     item.layout = usb_vault::volume::PartitionLayout::mbr;
+    item.device_id[0] = 9;
     if (changed) ++item.filesystem_serial;
+    if (device_replaced) ++item.device_id[0];
     if (expire_on_read) expire_on_read->card_epoch.fetch_add(1);
     item.availability = usb_vault::volume::PartitionAvailability::candidate;
     if (missing) return {};
@@ -3366,11 +3369,12 @@ void test_partition_selection_lifecycle() {
   work.interrupted.store(false);
   require(SUCCEEDED(call(L"beginPartitionRefresh")), "session rescan"); wait();
   require(SUCCEEDED(call(L"clearPartitions")) && FAILED(call(L"getPartitionList")), "clear retained snapshot");
-  for (int scenario = 0; scenario < 5; ++scenario) {
+  for (int scenario = 0; scenario < 6; ++scenario) {
     require(SUCCEEDED(call(L"beginPartitionRefresh")), "fresh validation scan"); wait();
     require(SUCCEEDED(call(L"getPartitionList")), "fresh validation list");
     const auto id = static_cast<unsigned int>(std::stoul(result.bstrVal));
     require(SUCCEEDED(select(id)), "unchanged target rejected");
+    services.device_replaced = scenario == 5;
     services.changed = scenario == 0;
     services.missing = scenario == 1;
     services.duplicate = scenario == 2;
@@ -3380,6 +3384,7 @@ void test_partition_selection_lifecycle() {
     require(FAILED(call(L"getSelectedPartition")), "failed validation retained selection");
     services.changed = services.missing = services.duplicate = services.fail = false;
     services.expire_on_read = nullptr;
+    services.device_replaced = false;
   }
   ::VariantClear(&result);
 }

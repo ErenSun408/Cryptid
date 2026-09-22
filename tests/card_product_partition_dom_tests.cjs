@@ -57,6 +57,14 @@ async function until(check) { for(let i=0;i<200;i++){if(check())return; await sl
  w.navigationFixture.partitionToolFails=false;
  $('#partition-open-management').click(); await until(()=>!$('#partition-refresh').disabled);
  assert.equal(w.navigationFixture.partitionTools,1);
+ w.navigationFixture.partitionList='1,0,3,1073741824,8';
+ $('#partition-refresh').click(); await until(()=>!$('#partition-refresh').disabled);
+ assert.match($('#partition-list-body').textContent,/无法确认磁盘身份/);
+ assert.equal($('#partition-list-body button').disabled,true);
+ w.navigationFixture.partitionList='1,0,3,1073741824,9';
+ $('#partition-refresh').click(); await until(()=>!$('#partition-refresh').disabled);
+ assert.match($('#partition-status').textContent,/无法读取/);
+ assert.equal($('#partition-list-body button'),null);
  w.navigationFixture.partitionList='1,0,3,123,0\n1,0,4,123,0';
  $('#partition-refresh').click(); await until(()=>!$('#partition-refresh').disabled);
  assert.match($('#partition-status').textContent,/无法读取/);

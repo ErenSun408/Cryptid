@@ -11,7 +11,7 @@ namespace usb_vault::volume {
 enum class PartitionAvailability {
   candidate, windows_volume, metadata_unavailable, unsupported_layout,
   protected_partition, inconsistent_extent, unsupported_sector_size,
-  unsupported_filesystem
+  unsupported_filesystem, device_identity_unavailable
 };
 enum class PartitionLayout { unknown, mbr, gpt };
 struct PartitionCandidate final {
@@ -26,6 +26,8 @@ struct PartitionCandidate final {
   PartitionLayout layout{PartitionLayout::unknown};
   std::array<std::uint8_t, 16> partition_id{}; // GPT only; not a hardware identity.
   std::uint32_t filesystem_serial{}; // Detects ordinary reformatting, not cloning.
+  std::array<std::uint8_t, 16> device_id{}; // Driver-derived hardware GUID, native only.
+  std::uint32_t device_id_flags{};
   bool operator==(const PartitionCandidate&) const = default;
 };
 // Enumerates volume-backed partitions only, including those without drive letters.
@@ -34,7 +36,8 @@ struct PartitionCandidate final {
 // Throws if Windows-volume identification or the enumeration itself fails.
 [[nodiscard]] std::vector<PartitionCandidate> enumerate_partition_candidates();
 // Requires exactly one unchanged, eligible native snapshot. This is selection
-// freshness only, never a retained handle, hardware identity or write permit.
+// freshness only, never a retained handle or a write permit. Device identity
+// comes from the storage driver and is not proof against forged hardware IDs.
 [[nodiscard]] bool matches_partition_snapshot(const PartitionCandidate& selected,
     std::span<const PartitionCandidate> current) noexcept;
 }  // namespace usb_vault::volume

@@ -3312,7 +3312,7 @@
   const partitionManagement = document.getElementById("partition-open-management");
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
   const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区布局",
-    "受保护的分区", "分区信息不一致", "暂不支持的扇区大小", "暂不支持的文件系统"];
+    "受保护的分区", "分区信息不一致", "暂不支持的扇区大小", "暂不支持的文件系统", "无法确认磁盘身份"];
   const partitionName = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
   const renderPartitions = () => {
@@ -3354,7 +3354,7 @@
     if (rows.length > 4096) throw new Error("partition list too large");
     const ids = new Set();
     return rows.map(line => {
-      if (!/^[1-9]\d*,\d+,\d+,\d+,[0-7]$/.test(line)) throw new Error("invalid partition row");
+      if (!/^[1-9]\d*,\d+,\d+,\d+,[0-8]$/.test(line)) throw new Error("invalid partition row");
       const [id, disk, part, bytes, state] = line.split(",").map(Number);
       if (![id, disk, part].every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) ||
           !Number.isSafeInteger(bytes) || bytes < 0 || ids.has(id) || (state === 0 && (!part || !bytes)))

@@ -28,6 +28,12 @@ PartitionObservation valid() {
   value.extents.Extents[0].ExtentLength = value.partition.PartitionLength;
   value.geometry.BytesPerSector = 512;
   value.filesystem = L"NTFS";
+  value.device_known = true;
+  value.device.Version = value.device.Size = sizeof(STORAGE_DEVICE_NUMBER_EX);
+  value.device.DeviceType = FILE_DEVICE_DISK;
+  value.device.DeviceNumber = value.extents.Extents[0].DiskNumber;
+  value.device.PartitionNumber = value.partition.PartitionNumber;
+  value.device.DeviceGuid.Data1 = 123;
   return value;
 }
 void unit_tests() {
@@ -97,6 +103,26 @@ void unit_tests() {
     value = valid(); value.filesystem = fs;
     check(value, A::unsupported_filesystem, "unvalidated filesystem accepted");
   }
+  for (int bad = 0; bad < 12; ++bad) {
+    value = valid();
+    if (bad == 0) value.device_known = false;
+    if (bad == 1) value.device.Version = 0;
+    if (bad == 2) --value.device.Size;
+    if (bad == 3) ++value.device.Size;
+    if (bad == 4) value.device.DeviceType = FILE_DEVICE_CD_ROM;
+    if (bad == 5) value.device.Flags = STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_CONFLICT;
+    if (bad == 6) value.device.Flags = STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_NOHWID;
+    if (bad == 7) value.device.Flags = 0x80000000;
+    if (bad == 8) value.device.DeviceGuid = {};
+    if (bad == 9) ++value.device.DeviceNumber;
+    if (bad == 10) ++value.device.PartitionNumber;
+    if (bad == 11) value.device.DeviceNumber = MAXDWORD;
+    check(value, A::device_identity_unavailable, "unreliable device identity accepted");
+  }
+  value = valid(); value.device.Flags = STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID;
+  check(value, A::candidate, "page83 identity rejected");
+  value.device.Flags |= STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_CONFLICT;
+  check(value, A::device_identity_unavailable, "page83 masked conflict flag");
   std::cout << "PASS: " << cases << " partition assessment cases\n";
 }
 void snapshot_tests() {
@@ -107,9 +133,10 @@ void snapshot_tests() {
   selected.logical_sector_bytes = 512; selected.availability = A::candidate;
   selected.layout = PartitionLayout::gpt; selected.partition_id[0] = 7;
   selected.filesystem_serial = 123;
+  selected.device_id[0] = 9;
   std::vector<PartitionCandidate> current{selected};
   require(matches_partition_snapshot(selected, current), "unchanged snapshot rejected");
-  for (int change = 0; change < 12; ++change) {
+  for (int change = 0; change < 14; ++change) {
     auto altered = selected;
     if (change == 0) altered.volume_path += L"other";
     if (change == 1) ++altered.disk_number;
@@ -123,6 +150,8 @@ void snapshot_tests() {
     if (change == 9) ++altered.partition_id[0];
     if (change == 10) ++altered.filesystem_serial;
     if (change == 11) altered.layout = PartitionLayout::unknown;
+    if (change == 12) ++altered.device_id[0];
+    if (change == 13) altered.device_id_flags = STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_NOHWID;
     current = {altered};
     require(!matches_partition_snapshot(selected, current), "changed snapshot accepted");
     require(!matches_partition_snapshot(altered, {&selected, 1}), "reverse mismatch accepted");

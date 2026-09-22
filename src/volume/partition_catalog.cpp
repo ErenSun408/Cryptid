@@ -87,6 +87,7 @@ PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volum
   observed.partition_known = query(handle.get(), IOCTL_DISK_GET_PARTITION_INFO_EX, observed.partition, error);
   observed.extent_known = query(handle.get(), IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, observed.extents, error);
   observed.geometry_known = query(handle.get(), IOCTL_DISK_GET_DRIVE_GEOMETRY, observed.geometry, error);
+  observed.device_known = query(handle.get(), IOCTL_STORAGE_GET_DEVICE_NUMBER_EX, observed.device, error);
   std::array<wchar_t, 32> filesystem{};
   DWORD filesystem_serial{};
   observed.filesystem_known = ::GetVolumeInformationW(path, nullptr, 0, &filesystem_serial, nullptr, nullptr,
@@ -102,6 +103,11 @@ PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volum
     } else if (observed.partition.PartitionStyle == PARTITION_STYLE_MBR) {
       result.layout = PartitionLayout::mbr;
     }
+  }
+  if (observed.device_known) {
+    static_assert(sizeof(observed.device.DeviceGuid) == 16);
+    std::memcpy(result.device_id.data(), &observed.device.DeviceGuid, 16);
+    result.device_id_flags = observed.device.Flags;
   }
   result.availability = detail::assess_partition(observed);
   result.query_error = error;
@@ -149,6 +155,15 @@ PartitionAvailability detail::assess_partition(const PartitionObservation& value
     return A::inconsistent_extent;
   if (!value.filesystem_known) return A::metadata_unavailable;
   if (value.filesystem != L"NTFS") return A::unsupported_filesystem;
+  // Random GUIDs (missing hardware identity or collisions) are not stable.
+  // Reject future/unknown flags and versions instead of guessing their meaning.
+  const auto& device = value.device;
+  if (!value.device_known || device.Version != sizeof(STORAGE_DEVICE_NUMBER_EX) ||
+      device.Size != sizeof(STORAGE_DEVICE_NUMBER_EX) || device.DeviceType != FILE_DEVICE_DISK ||
+      (device.Flags & ~STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID) != 0 ||
+      ::IsEqualGUID(device.DeviceGuid, GUID{}) || device.DeviceNumber == MAXDWORD ||
+      device.DeviceNumber != extent.DiskNumber || device.PartitionNumber != part.PartitionNumber)
+    return A::device_identity_unavailable;
   return A::candidate;
 }
 
@@ -158,7 +173,8 @@ bool matches_partition_snapshot(const PartitionCandidate& selected,
       selected.volume_path.empty() || !selected.partition_number || !selected.offset_bytes ||
       !selected.length_bytes || selected.logical_sector_bytes != 512 ||
       (selected.layout != PartitionLayout::mbr && selected.layout != PartitionLayout::gpt) ||
-      current.size() > 4096) return false;
+      current.size() > 4096 || selected.device_id == std::array<std::uint8_t, 16>{} ||
+      (selected.device_id_flags & ~STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID) != 0) return false;
   if (selected.layout == PartitionLayout::gpt && selected.partition_id == std::array<std::uint8_t, 16>{}) return false;
   std::size_t matching_paths{};
   bool unchanged{};
