@@ -1157,3 +1157,13 @@ target_link_libraries(partition_catalog_tests PRIVATE usb_vault_core)
 usb_vault_configure_target(partition_catalog_tests)
 add_test(NAME partition_catalog_tests COMMAND partition_catalog_tests)
 # --scan is an explicit read-only native smoke test; not part of default CTest.
+
+# Explicitly built and invoked only; no existing device input, never default CTest.
+add_executable(partition_device_integration_tests EXCLUDE_FROM_ALL partition_device_integration_tests.cpp)
+target_include_directories(partition_device_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(partition_device_integration_tests PRIVATE usb_vault_core VirtDisk Ole32 Bcrypt)
+usb_vault_configure_target(partition_device_integration_tests)
+if(USB_VAULT_FORMAT_DLL)
+  add_custom_command(TARGET partition_device_integration_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${USB_VAULT_FORMAT_DLL}" "$<TARGET_FILE_DIR:partition_device_integration_tests>/VeraCryptFormat.dll")
+endif()
