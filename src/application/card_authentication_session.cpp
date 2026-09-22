@@ -2,6 +2,7 @@
 
 #include "usb_vault/card/card_record_v1.h"
 
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -19,7 +20,12 @@ void CardAuthenticationSession::establish(
     throw std::logic_error(
         "card authentication session is already active");
   }
+  if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
+    root_secret.clear();
+    throw std::overflow_error("card session generation exhausted");
+  }
   root_secret_ = std::move(root_secret);
+  ++generation_;
 }
 
 void CardAuthenticationSession::clear_authentication() noexcept {

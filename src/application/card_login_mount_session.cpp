@@ -143,6 +143,16 @@ class ProductionCardLoginMountSessionRuntime final
                                                 salt);
   }
 
+  void format_partition(const volume::PartitionCandidate& target,
+      const security::SecureBuffer& volume_password,
+      const std::function<bool()>& confirm_erase,
+      const CreationCancellation& cancelled) override {
+    creator_.format_partition(target, volume_password, confirm_erase,
+        [this](const volume_creation::CreationProgress& progress) {
+          report_creation(progress, 0, 0);
+        }, cancelled);
+  }
+
   void create_standard(
       const std::wstring_view target_path, const std::uint64_t size_bytes,
       const security::SecureBuffer& volume_password) override {
@@ -384,6 +394,12 @@ void CardLoginMountSession::consume_authenticated_login(
 void CardLoginMountSession::create_container_a(
     const std::uint64_t size_bytes) {
   impl_->core.create_container_a(size_bytes);
+}
+
+void CardLoginMountSession::format_partition(
+    const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) {
+  impl_->core.format_partition(target, confirm_erase);
 }
 
 std::uint32_t CardLoginMountSession::create_container(
@@ -1094,6 +1110,61 @@ wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
     }
   }
   return letter;
+}
+
+void CardLoginMountSessionCore::format_partition(
+    const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) {
+  if (!authentication_.authenticated() || partition_format_active_) {
+    throw std::logic_error("partition format requires an idle authenticated session");
+  }
+  if (!confirm_erase) throw std::invalid_argument("partition erase confirmation required");
+  const volume::PartitionCandidate snapshot = target;
+  const auto confirmation = confirm_erase;
+  const auto cancellation = runtime_.creation_cancelled;
+  if (!cancellation) throw std::invalid_argument("partition cancellation query required");
+  const auto generation = authentication_.generation_;
+  partition_format_active_ = true;
+  struct Reset final {
+    bool& active;
+    ~Reset() { active = false; }
+  } reset{partition_format_active_};
+  // This session is serialized. Physical-card events reach the worker through
+  // the captured atomic cancellation query, not concurrent secret mutation.
+  const auto cancelled = [&] {
+    return !authentication_.authenticated() ||
+        authentication_.generation_ != generation ||
+        (cancellation && cancellation());
+  };
+  const auto check = [&] {
+    if (cancelled()) throw std::system_error(volume_creation::make_error_code(
+        volume_creation::CreationError::operation_cancelled),
+        "partition format was cancelled");
+  };
+  check();
+  auto password = derive_standard_password();
+  if (password.size() != security::kKdfV1OutputSize) {
+    throw std::logic_error("partition password derivation returned an invalid size");
+  }
+  check();
+  bool requested = false;
+  bool accepted = false;
+  const auto confirm = [&] {
+    if (requested || cancelled()) return false;
+    requested = true;
+    try {
+      accepted = confirmation(snapshot) && !cancelled();
+    } catch (...) {
+      accepted = false;
+    }
+    return accepted;
+  };
+  runtime_.format_partition(snapshot, password, confirm, cancelled);
+  password.clear();
+  check();
+  if (!accepted) throw std::logic_error("partition format completed without consent");
+  // No file staging, removal, publication, index entry or mount is appropriate
+  // here. A failure can leave partial ciphertext and must never trigger retry.
 }
 
 std::uint32_t CardLoginMountSessionCore::create_container(

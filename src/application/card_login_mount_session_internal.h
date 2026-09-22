@@ -66,6 +66,11 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& password_input,
       const security::SecureBuffer& root_secret,
       const security::KdfV1Salt& salt) = 0;
+  // Synchronous: callbacks and secret references cannot escape this call.
+  virtual void format_partition(const volume::PartitionCandidate& target,
+      const security::SecureBuffer& volume_password,
+      const std::function<bool()>& confirm_erase,
+      const CreationCancellation& cancelled) = 0;
   virtual void create_standard(
       std::wstring_view target_path, std::uint64_t size_bytes,
       const security::SecureBuffer& volume_password) = 0;
@@ -203,6 +208,8 @@ class CardLoginMountSessionCore final {
   void consume_authenticated_login(
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8);
+  void format_partition(const volume::PartitionCandidate& target,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
   void create_container_a(std::uint64_t size_bytes);
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes);
@@ -354,6 +361,7 @@ class CardLoginMountSessionCore final {
                         std::wstring_view container_name = {},
                         wchar_t drive_letter = wchar_t{}) noexcept;
 
+  bool partition_format_active_{};
   CardAuthenticationSession& authentication_;
   CardLoginMountSessionRuntime& runtime_;
   ContainerLayout layout_;

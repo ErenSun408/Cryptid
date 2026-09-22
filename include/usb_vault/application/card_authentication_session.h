@@ -2,6 +2,8 @@
 
 #include "usb_vault/security/secure_buffer.h"
 
+#include <cstdint>
+
 namespace usb_vault::application {
 
 namespace detail {
@@ -54,6 +56,8 @@ class CardAuthenticationSession final
   friend class detail::CardLoginMountSessionCore;
 
   security::SecureBuffer root_secret_;
+  // Accessed only on the serialized native session worker. Never persisted.
+  std::uint64_t generation_{};
 };
 
 }  // namespace usb_vault::application

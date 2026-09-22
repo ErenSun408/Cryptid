@@ -221,3 +221,14 @@ API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win3
 这完成 MBR／512 NTFS 输入的底层 helper 实验，不等同产品清空提示／卡派生／会话撤销／分区记录／产品挂载验收。正式依赖仍为 416C9D…3F184，允许列表和页面创建开关未改。
 
 依据：[FSCTL_GET_NTFS_VOLUME_DATA](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_get_ntfs_volume_data)、[NTFS 引导扇区字段交叉核对](https://github.com/torvalds/linux/blob/master/fs/ntfs3/ntfs.h)。
+
+
+## 原生卡会话分区格式化边界（2026-09-22）
+
+`IAuthenticatedCardVolumeSession::format_partition` 接入已有卡根秘密及固定 diskA／A 盐派生规则，强制 64 字节锁页密码，经 production runtime 调用独立 helper 动作。该接口只表示破坏性格式化完成，不创建文件索引、不挂载、不提供原地加密或暂停续作；页面暂不调用它。
+
+操作复制目标与确认／取消回调，确认只接受一次并把不可变目标传回原生调用方；无认证、缺少确认或取消查询均在派生前拒绝。认证成功递增进程内代际（不持久化，溢出拒绝），清理后即使以相同根重新登录也使旧操作失效；重入格式化拒绝。确认拒绝／异常、取消、密码长度异常和 helper 异常均不触发自动重试或文件删除；锁页密码由 RAII 在异常路径清理。
+
+接口要求现有原生工作线程串行访问会话；代际不是并发同步原语，设备事件必须通过原子取消查询交接。下层仍负责目标真实性、提权侧复验、锁卷与单次协议。本片测试覆盖 14 个模拟场景，六组相关 CTest 及主程序构建通过；不替代实卡／隔离磁盘联合验收。特别是确认后的 helper WMI 复核到首次写入之间的取消响应窗口仍待收口；取消／失败可能已产生部分密文，不能宣称无写入或可恢复。
+
+下一边界为加密分区记录与重新识别／挂载，之后接页面清空确认及实际设备撤销验证，再审查产品 DLL 晋升。本片未替换产品依赖／允许列表，也未开放磁盘创建按钮。

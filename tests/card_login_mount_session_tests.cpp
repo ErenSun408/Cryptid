@@ -154,6 +154,25 @@ void require(const bool condition, const char* const message) {
 
 class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
+  bool partition_password_64{};
+  bool partition_skip_confirmation{};
+  bool partition_fail{};
+  bool partition_written{};
+  std::function<void()> before_partition_confirmation;
+  std::function<void()> after_partition_confirmation;
+  void format_partition(const usb_vault::volume::PartitionCandidate&,
+      const SecureBuffer& password, const std::function<bool()>& confirm,
+      const usb_vault::application::CreationCancellation& cancelled) override {
+    events.emplace_back("format:partition");
+    require(password.size() == 64, "partition password must be binary 64 bytes");
+    if (before_partition_confirmation) before_partition_confirmation();
+    if (partition_skip_confirmation) return;
+    if (cancelled() || !confirm()) throw std::runtime_error("partition refused");
+    require(!confirm(), "erase consent was reused");
+    if (after_partition_confirmation) after_partition_confirmation();
+    if (cancelled() || partition_fail) throw std::runtime_error("partition stopped");
+    partition_written = true;
+  }
   bool saved_logging{true};
   bool saved_force{};
   bool saved_auto{};
@@ -401,6 +420,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "creation did not use the fixed diskA input");
     require(salt == layout().container_a.salt,
             "every standard container must share the fixed A salt");
+    if (partition_password_64) return bytes(std::string(64, 'p'));
     return bytes("derived-container-a-password");
   }
 
@@ -3736,10 +3756,79 @@ void test_no_export_leaves_a_single_local_trace() {
           "nothing");
 }
 
+void test_partition_format_card_session_boundary() {
+  using usb_vault::volume::PartitionCandidate;
+  // Success, decline, throwing consent, pre-cancel, clear, same-root re-login,
+  // missing consent, short KDF, helper failure, late cancellation and reentry.
+  for (int scenario = 0; scenario != 14; ++scenario) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    runtime.partition_password_64 = scenario != 7;
+    CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+    if (scenario != 11) session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    runtime.events.clear();
+    bool cancelled = scenario == 3;
+    runtime.creation_cancelled = [&] { return cancelled; };
+    if (scenario == 13) runtime.creation_cancelled = {};
+    runtime.partition_skip_confirmation = scenario == 6;
+    runtime.partition_fail = scenario == 8;
+    if (scenario == 9) runtime.after_partition_confirmation = [&] { cancelled = true; };
+    PartitionCandidate target;
+    target.disk_number = 7;
+    target.partition_number = 2;
+    target.length_bytes = 64ULL * 1024 * 1024;
+    const auto expected = target;
+    // The caller's selection changing cannot redirect the immutable operation.
+    runtime.before_partition_confirmation = [&] { target.disk_number = 99; };
+    int confirmations = 0;
+    bool confirmed_expected_target = false;
+    std::function<bool(const PartitionCandidate&)> confirm = [&](const auto& frozen) {
+      ++confirmations;
+      confirmed_expected_target = frozen == expected;
+      require(confirmed_expected_target, "partition confirmation target changed");
+      if (scenario == 1) return false;
+      if (scenario == 2) throw std::runtime_error("dialog failed");
+      if (scenario == 4 || scenario == 5) authentication.clear_authentication();
+      if (scenario == 5) authentication.establish(root_secret());
+      if (scenario == 10) {
+        require_throws<std::logic_error>([&] { session.format_partition(target, confirm); },
+            "nested partition format was allowed");
+      }
+      return true;
+    };
+    if (scenario == 12) confirm = {};
+    bool failed = false;
+    try { session.format_partition(target, confirm); }
+    catch (const std::exception&) { failed = true; }
+    const bool success = scenario == 0 || scenario == 10;
+    require(failed != success && runtime.partition_written == success,
+            "partition session accepted an invalid transition");
+    const bool reached_confirmation = scenario != 3 && scenario != 6 &&
+        scenario != 7 && scenario != 11 && scenario != 12 && scenario != 13;
+    require(confirmations == (reached_confirmation ? 1 : 0),
+            "partition confirmation called at the wrong stage");
+    require(!reached_confirmation || confirmed_expected_target,
+            "caller target mutation redirected partition confirmation");
+    if (scenario == 3 || scenario == 11 || scenario == 12 || scenario == 13)
+      require(runtime.events.empty(), "invalid session derived or reached the helper");
+    for (const auto& event : runtime.events) {
+      require(event == "derive:A" || event == "format:partition",
+              "partition format used file publication, cleanup, index or mount");
+    }
+    if (scenario == 1 || scenario == 8) {
+      // Failed attempts release the guard; the next attempt needs fresh consent.
+      runtime.partition_fail = false;
+      session.format_partition(target, [](const auto&) { return true; });
+      require(runtime.partition_written, "format failure blocked a fresh attempt");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_partition_format_card_session_boundary();
     test_all_container_shapes_establish_authentication();
     test_mount_failures_do_not_revoke_card_authentication();
     test_failed_rollback_retains_only_residual_mount();

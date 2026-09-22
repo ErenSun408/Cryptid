@@ -4,6 +4,7 @@
 #include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/volume/volume_directory_listing.h"
+#include "usb_vault/volume/partition_catalog.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -173,6 +174,15 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // is the only handle the caller needs afterwards.
   virtual std::uint32_t create_container(std::wstring_view path,
                                          std::uint64_t size_bytes) = 0;
+
+  // Native-only destructive format, not adoption/mounting or in-place encryption.
+  // Confirmation receives the frozen target after elevated preflight. The caller
+  // must serialize session access and supply physical-card cancellation.
+  virtual void format_partition(
+      const volume::PartitionCandidate&,
+      const std::function<bool(const volume::PartitionCandidate&)>&) {
+    throw std::logic_error("partition formatting is unavailable");
+  }
 
   // Creates an independent outer+hidden container at the caller-selected
   // path, publishes it without replacement, and mounts its hidden volume on a
@@ -520,6 +530,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8) override;
   void create_container_a(std::uint64_t size_bytes) override;
+  void format_partition(const volume::PartitionCandidate& target,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) override;
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes) override;
   std::uint32_t create_container_b(
