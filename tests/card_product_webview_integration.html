@@ -363,13 +363,17 @@
   <div id="management-list-actions"></div>
   <span id="decoy-maintenance-total"></span><span id="decoy-maintenance-used"></span>
   <div id="decoy-empty-dialog" hidden><button id="decoy-empty-close" type="button">确定</button></div>
-<section id="dashboard-section-partitions" class="dashboard-section" hidden>
+<section id="create-disk-step" class="dashboard-section" hidden>
 <button id="partition-open-management" type="button">打开磁盘管理</button>
 <button id="partition-refresh" type="button">刷新分区</button>
 <table><tbody id="partition-list-body"></tbody></table>
 <output id="partition-status"></output><p id="partition-selection"></p>
 </section>
-  <script src="card_session.js?v=p2-17g-card-reset"></script>
+          <div id="create-storage-switch" class="storage-switch" role="group" aria-label="容器存储方式">
+          <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘容器</button>
+          <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件容器</button>
+        </div>
+<script src="card_session.js?v=p2-17g-card-reset"></script>
   <script src="card_product_webview_integration.js?v=p2-17g-card-reset"></script>
 
 </body>

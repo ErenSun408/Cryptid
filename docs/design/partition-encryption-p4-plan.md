@@ -131,3 +131,7 @@ P4.1d 已按用户授权提交 `c4f94a1`。本片先实现可独立审阅的 DLL
 候选摘要 `94D37A2D8C70707190076680587833CFA3C26ABD3426629EFAE9F31DA0225309`；产品依赖仍为 `416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184`，未改允许列表或交付包。完整合约与重建说明见 `third_party/veracrypt_format/README.md`。下一片继续独立 helper 动作、持久设备身份与提权复验、卡派生密码和清空确认；真实物理分区验收仍必须单独进行，本片不等同客户设备验收。
 
 API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl-dismount-volume)、[DASD 访问](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea)。
+
+## 新建入口交互决定（2026-09-22）
+
+用户要求新建容器向导使用“磁盘容器／文件容器”按钮切换，默认磁盘容器。磁盘分支选择真实磁盘已有分区，并复用刷新及打开磁盘管理入口；文件分支保留原有文件建卷流程。形态选择与密码角色、隐藏状态无关，不按身份改变默认值。已将分区列表、刷新与磁盘管理入口移入新建向导，移除独立侧栏入口。每次打开默认磁盘，用户点击刷新读取分区；切换时清空已选分区及文件表单（含诱饵密码）。磁盘创建保持禁用并说明原因，文件分支保留标准／隐藏卷两类流程；尚未开放磁盘写入。

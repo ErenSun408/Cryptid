@@ -260,6 +260,9 @@
   const resetStatus = document.getElementById("reset-card-status");
   const resetBlocked = document.getElementById("reset-card-blocked");
   const creationDialog = document.getElementById("create-volume-dialog");
+  const creationStorageSwitch = document.getElementById("create-storage-switch");
+  const creationStorageButtons = Array.from(document.querySelectorAll("[data-create-storage]"));
+  const creationDiskStep = document.getElementById("create-disk-step");
   const creationTypeStep = document.getElementById("create-type-step");
   const creationTitle = document.getElementById("create-volume-title");
   const creationDescription =
@@ -704,6 +707,7 @@
   document.addEventListener("click", (event) => {
     if (!batchControls.some((control) => control.split.contains(event.target))) closeBatchMenus();
   });
+  let creationStorage = "disk";
   let creationKind = null;
   // The dialog is one flow in two steps: "type" picks the container shape,
   // "params" collects what that shape needs.
@@ -940,8 +944,8 @@
   };
 
   const updateCreationAvailability = () => {
-    const encrypted = creationKind === "encrypted";
-    const hiddenVolume = creationKind === "hidden";
+    const encrypted = creationStorage === "file" && creationKind === "encrypted";
+    const hiddenVolume = creationStorage === "file" && creationKind === "hidden";
     const choosing = creationStep === "type";
     const authenticated = currentState === nativeState.authenticated;
     const ready = choosing
@@ -951,7 +955,14 @@
           containerLocationReady(containerName, containerDirectory)
         : hiddenVolume && containerBInputReady();
     creationDialog.dataset.step = creationStep;
-    creationTypeStep.hidden = !choosing;
+    creationDialog.dataset.storage = creationStorage;
+    creationDiskStep.hidden = creationStorage !== "disk";
+    creationStorageSwitch.hidden = creationRunning || creationResult !== "";
+    for (const button of creationStorageButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.createStorage === creationStorage));
+      button.disabled = busy || !authenticated || creationCompleted;
+    }
+    creationTypeStep.hidden = !choosing || creationStorage !== "file";
     containerForm.hidden = creationRunning || creationResult !== "" || choosing || !encrypted;
     containerBForm.hidden = creationRunning || creationResult !== "" || choosing || !hiddenVolume;
     // 8.7.2: both shapes are offered on every visit, in the same order and
@@ -960,9 +971,9 @@
       button.setAttribute(
           "aria-checked",
           button.dataset.createKind === creationKind ? "true" : "false");
-      button.disabled = busy || !authenticated || !choosing;
+      button.disabled = busy || !authenticated || !choosing || creationStorage !== "file";
     }
-    creationTypeNote.hidden = !choosing;
+    creationTypeNote.hidden = !choosing || creationStorage !== "file";
     containerCapacity.disabled = busy || !authenticated || choosing ||
       !encrypted || creationCompleted;
     containerName.disabled = containerCapacity.disabled;
@@ -1004,7 +1015,7 @@
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
-    creationContinueButton.textContent = choosing ? "下一步" : "创建容器";
+    creationContinueButton.textContent = creationStorage === "disk" ? "暂不可创建" : choosing ? "下一步" : "创建容器";
     creationContinueButton.hidden = creationResult !== "";
     creationCancelLabel.textContent =
       creationResult === "error" || creationResult === "cancelled" ? "关闭" : creationCompleted
@@ -1025,6 +1036,11 @@
   };
 
   const applyCreationStepCopy = () => {
+    if (creationStorage === "disk") {
+      creationTitle.textContent = "新建容器";
+      setCreationDescription("磁盘容器使用物理硬盘上已有的独立数据分区。");
+      return;
+    }
     if (creationStep === "type") {
       creationTitle.textContent = "新建容器";
       setCreationDescription(kCreationTypeLead);
@@ -1111,6 +1127,7 @@
   const closeCreationFlow = (force = false) => {
     if (busy && !force) return;
     resetCreationInputs();
+    clearCreationPartitions();
     creationDialog.hidden = true;
     creationKind = null;
     creationStep = "type";
@@ -3283,6 +3300,11 @@
     try { await bridge.cancelExternalDrop(); } catch (_) {}
   });
 
+  const partitionPickerVisible = () => !creationDialog.hidden && creationStorage === "disk";
+  const clearCreationPartitions = () => {
+    discardPartitions();
+    if (bridge !== null) void bridge.clearPartitions().catch(() => {});
+  };
   const partitionBody = document.getElementById("partition-list-body");
   const partitionStatus = document.getElementById("partition-status");
   const partitionSelection = document.getElementById("partition-selection");
@@ -3294,13 +3316,13 @@
   const partitionName = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
   const renderPartitions = () => {
-    const disabled = busy || currentState !== nativeState.authenticated;
+    const disabled = !partitionPickerVisible() || busy || currentState !== nativeState.authenticated;
     partitionRefresh.disabled = disabled;
     partitionManagement.disabled = disabled;
     partitionBody.replaceChildren();
     if (!partitionRows.length) {
       const cell = document.createElement("td"); cell.colSpan = 4;
-      cell.textContent = busy && activeSection === "partitions" ? "正在读取分区…" : "暂无分区列表，请刷新。";
+      cell.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无分区列表，请刷新。";
       const row = document.createElement("tr"); row.append(cell); partitionBody.append(row);
     }
     for (const item of partitionRows) {
@@ -3341,7 +3363,7 @@
     });
   };
   const refreshPartitions = async () => {
-    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
     discardPartitions(); const revision = partitionRevision;
     busy = true; render(messageForCurrentState()); partitionStatus.textContent = "正在读取分区…";
     try {
@@ -3353,7 +3375,7 @@
       } while (status === 1);
       if (status !== 2) throw new Error("scan did not complete");
       const rows = parsePartitionRows(await bridge.getPartitionList());
-      if (revision !== partitionRevision || activeSection !== "partitions") return;
+      if (revision !== partitionRevision || !partitionPickerVisible()) return;
       partitionRows = rows;
       partitionStatus.textContent = rows.length ? `已读取 ${rows.length} 个分区卷，${rows.filter(row => row.state === 0).length} 个可选择。` : "未发现可显示的分区卷。";
     } catch (_) {
@@ -3364,7 +3386,7 @@
     }
   };
   const selectPartitionRow = async id => {
-    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
     const revision = partitionRevision;
     busy = true; render(messageForCurrentState());
     try {
@@ -3379,7 +3401,7 @@
   };
   partitionRefresh.addEventListener("click", () => { void refreshPartitions(); });
   partitionManagement.addEventListener("click", async () => {
-    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
     discardPartitions(); const revision = partitionRevision; busy = true; render(messageForCurrentState());
     try {
       if (await bridge.openDiskManagement() !== true) throw new Error("tool launch failed");
@@ -3389,10 +3411,6 @@
   });
 
   const showDashboardSection = (sectionName) => {
-    if (activeSection === "partitions" && sectionName !== "partitions") {
-      discardPartitions();
-      if (bridge !== null) void bridge.clearPartitions().catch(() => {});
-    }
     if (sectionName === "history" && !operationLoggingEnabled) return;
     if (inDecoyFileView() && sectionName !== "decoy") {
       decoyMaintenancePath = [...filePath];
@@ -3430,7 +3448,6 @@
     // reads a directory when the user arrives at it or moves inside it.
     if (sectionName === "files") void refreshFileManager();
     if (sectionName === "backup") renderBackupCentre();
-    if (sectionName === "partitions") void refreshPartitions();
     if (sectionName === "decoy") {
       renderDecoySection();
       if (returningToMaintenance) void refreshFileManager();
@@ -3444,6 +3461,8 @@
     }
     // The flow always opens on the same step with the same preselection, so
     // opening it says nothing about which password is logged in.
+    creationStorage = "disk";
+    clearCreationPartitions();
     creationKind = "encrypted";
     creationStep = "type";
     creationCompleted = false;
@@ -3453,7 +3472,8 @@
     applyCreationStepCopy();
     creationDialog.hidden = false;
     updateCreationAvailability();
-    focusCreationType();
+    renderPartitions();
+    creationStorageButtons[0].focus();
   };
 
   const enterCreationParameters = () => {
@@ -5093,7 +5113,7 @@
     if (busy || hiddenReview.hidden || !containerBAcknowledge.checked) return;
     const sizes = containerBSizes();
     if (sizes === null || !containerBInputReady() ||
-        creationKind !== "hidden" ||
+        creationStorage !== "file" || creationKind !== "hidden" ||
         currentState !== nativeState.authenticated) {
       creationStatus.textContent = "请检查容量、诱饵密码与下方的确认项。";
       creationStatus.dataset.tone = "error";
@@ -5194,7 +5214,7 @@
     const previousIds = new Set(containers.map((container) => container.id));
     const arrivalRevision = batchSessionRevision;
     const sizeMib = containerCapacityMib();
-    if (sizeMib === null || creationKind !== "encrypted" ||
+    if (sizeMib === null || creationStorage !== "file" || creationKind !== "encrypted" ||
         currentState !== nativeState.authenticated) {
       creationStatus.textContent = "请检查容量设置。";
       creationStatus.dataset.tone = "error";
@@ -5579,9 +5599,21 @@
       openCreationFlow();
     });
   }
+  for (const button of creationStorageButtons) {
+    button.addEventListener("click", () => {
+      if (busy || creationCompleted || creationDialog.hidden || currentState !== nativeState.authenticated) return;
+      if (button.dataset.createStorage === creationStorage) return;
+      clearCreationPartitions();
+      creationStorage = button.dataset.createStorage === "file" ? "file" : "disk";
+      creationKind = "encrypted";
+      returnToCreationTypes();
+      renderPartitions();
+      button.focus();
+    });
+  }
   for (const button of creationTypeButtons) {
     button.addEventListener("click", () => {
-      if (busy || creationStep !== "type") return;
+      if (busy || creationStorage !== "file" || creationStep !== "type") return;
       creationKind =
         button.dataset.createKind === "hidden" ? "hidden" : "encrypted";
       updateCreationAvailability();
@@ -5672,7 +5704,7 @@
   containerBBrowse.addEventListener(
     "click", () => void browseForDirectory(containerBDirectory));
   creationContinueButton.addEventListener("click", async () => {
-    if (busy) return;
+    if (busy || creationStorage !== "file" || creationDialog.hidden || currentState !== nativeState.authenticated) return;
     if (creationStep === "type") {
       enterCreationParameters();
       return;

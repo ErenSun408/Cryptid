@@ -395,6 +395,7 @@
     check(order(home) === "1,3,2", "Row body does not start a reorder");
 
     $('[data-create-container]').click();
+    $('[data-create-storage="file"]').click();
     $('[data-create-kind="hidden"]').click();
     $('#create-volume-continue').click();
     const enterCreationValue = (id, value) => {
@@ -464,6 +465,7 @@
     check($('#creation-progress').hidden && $('#creation-progress-time').textContent === "",
       "Failed creation stops and clears the running view");
     $('[data-create-container]').click();
+    $('[data-create-storage="file"]').click();
     $('[data-create-kind="encrypted"]').click();
     $('#create-volume-continue').click();
     enterCreationValue('#create-container-name', 'standard-review');
@@ -507,6 +509,7 @@
       // after cancellation must not inherit its terminal state or controls.
       for (const status of [3, 4, 2, 5]) {
         $('[data-create-container]').click();
+    $('[data-create-storage="file"]').click();
         $(`[data-create-kind="${kind}"]`).click();
         $('#create-volume-continue').click();
         const prefix = kind === 'hidden' ? '#create-container-b' : '#create-container';
@@ -1180,6 +1183,7 @@
     check(!$(".container-new") && order(home).startsWith("99,"), "Session refresh restores order without replaying highlight");
     window.navigationFixture.pendingCreation = null;
     $('[data-create-container]').click();
+    $('[data-create-storage="file"]').click();
     $('[data-create-kind="encrypted"]').click();
     $('#create-volume-continue').click();
     enterCreationValue('#create-container-name', 'new-highlight');

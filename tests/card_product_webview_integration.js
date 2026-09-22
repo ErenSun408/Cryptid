@@ -285,6 +285,7 @@ chrome.webview.postMessage("driver-loaded");
   // The single entry opens on the type step: both shapes are offered, the
   // standard one is preselected, and nothing is asked for until 下一步.
   containersCreate.click();
+  document.querySelector('[data-create-storage="file"]').click();
   if (creationDialog.hidden || typeStep.hidden ||
       creationTitle.textContent !== "新建容器" ||
       creationContinue.textContent !== "下一步" ||
@@ -445,6 +446,7 @@ chrome.webview.postMessage("driver-loaded");
   // fields, then commits the card record and creates the volume through one
   // six-argument bridge call; the fakes verify every position and the path.
   containersCreate.click();
+  document.querySelector('[data-create-storage="file"]').click();
   hiddenPick.click();
   if (hiddenPick.getAttribute("aria-checked") !== "true" ||
       standardPick.getAttribute("aria-checked") !== "false") {
