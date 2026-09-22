@@ -155,6 +155,7 @@ void require(const bool condition, const char* const message) {
 class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
   bool partition_mount_fail{};
+  std::function<void()> after_partition_mount;
   usb_vault::volume::MountResult mount_partition(const usb_vault::volume::PartitionIdentity& identity,
       const SecureBuffer& password, const usb_vault::volume::MountOptions& options) override {
     require(usb_vault::volume::valid_partition_identity(identity) && password.size() == 64,
@@ -162,6 +163,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     events.emplace_back("mount:partition");
     if (partition_mount_fail) throw std::runtime_error("partition unavailable");
     attached_volume_sizes[options.drive_letter] = identity.length_bytes - 262144;
+    if (after_partition_mount) after_partition_mount();
     return {};
   }
   bool partition_password_64{};
@@ -3816,6 +3818,50 @@ void test_partition_creation_persistence_and_mounting() {
   }
 }
 
+void test_partition_card_removal_and_drive_conflicts() {
+  for (int scenario = 0; scenario < 5; ++scenario) {
+    CardAuthenticationSession auth;
+    FakeRuntime runtime;
+    runtime.partition_password_64 = true;
+    runtime.remember_paths = true;
+    bool cancelled = false;
+    runtime.creation_cancelled = [&] { return cancelled; };
+    CardLoginMountSessionCore session(auth, runtime, layout(), LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    usb_vault::volume::PartitionCandidate target;
+    target.layout = usb_vault::volume::PartitionLayout::mbr;
+    target.device_id[0] = 9; target.offset_bytes = 1048576;
+    target.length_bytes = 64ULL * 1024 * 1024; target.logical_sector_bytes = 512;
+    if (scenario == 1 || scenario == 2) runtime.after_partition_mount = [&] { cancelled = true; };
+    runtime.fail_manual_force = scenario == 2;
+    if (scenario == 3) runtime.free_drive_letters.clear();
+    if (scenario == 4) {
+      runtime.other_existing.push_back(L"D:\\existing.hc");
+      const auto file = session.adopt_container(L"D:\\existing.hc");
+      runtime.partition_password_64 = false;
+      runtime.other_size_bytes = 64ULL * 1024 * 1024;
+      session.mount_adopted_container(file);
+      runtime.partition_password_64 = true;
+      runtime.free_drive_letters = {session.container_statuses()[0].drive_letter};
+    }
+    bool failed = false;
+    try { static_cast<void>(session.create_partition(target, [](const auto&) { return true; })); }
+    catch (...) { failed = true; }
+    require(failed == (scenario != 0), "partition lifecycle failure outcome");
+    const auto statuses = session.container_statuses();
+    const auto found = std::ranges::find_if(statuses, [](const auto& status) { return status.partition; });
+    require(found != statuses.end(), "partition failure lost saved identity");
+    require(found->mounted == (scenario == 0 || scenario == 2), "partition cleanup state imprecise");
+    if (scenario == 3 || scenario == 4)
+      require(std::ranges::find(runtime.events, "mount:partition") == runtime.events.end(), "drive conflict reached driver");
+    runtime.fail_manual_force = false;
+    auth.clear_authentication();
+    static_cast<void>(session.force_unmount_active());
+    require(!session.mounted() && runtime.attached_volume_sizes.empty(), "card removal left partition mounted");
+    require_throws<std::logic_error>([&] { session.mount_adopted_container(found->id); }, "removed card remounted partition");
+  }
+}
+
 void test_partition_format_card_session_boundary() {
   using usb_vault::volume::PartitionCandidate;
   // Success, decline, throwing consent, pre-cancel, clear, same-root re-login,
@@ -3889,6 +3935,7 @@ void test_partition_format_card_session_boundary() {
 int main() {
   try {
     test_partition_creation_persistence_and_mounting();
+    test_partition_card_removal_and_drive_conflicts();
     test_partition_format_card_session_boundary();
     test_all_container_shapes_establish_authentication();
     test_mount_failures_do_not_revoke_card_authentication();

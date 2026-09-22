@@ -1169,6 +1169,13 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     throw_if_creation_cancelled(runtime_);
     mount_adopted_container(id);
+    try { throw_if_creation_cancelled(runtime_); }
+    catch (...) {
+      // Removal can arrive inside the driver mount. Track the mount first so
+      // failed cleanup remains visible to the deferred card-removal retry.
+      unmount_container_impl(id, true);
+      throw;
+    }
     return id;
   } catch (...) {
     if (!recorded) std::erase_if(state_.containers, [id](const auto& entry) { return entry.id == id; });

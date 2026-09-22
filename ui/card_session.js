@@ -1101,6 +1101,10 @@
     if (busy || currentState !== nativeState.authenticated) return;
     pendingForgetId = id;
     forgetName.textContent = name;
+    document.getElementById("forget-container-description").textContent =
+      containers.find(container => container.id === id)?.partition
+        ? "只移除加密身份记录，不会删除分区或解密数据。当前版本无法通过文件导入找回分区；移除后将失去应用中的挂载入口，请确认不再需要此记录。"
+        : "只移除记录，不会删除容器文件。文件仍在原路径，可通过「导入」重新添加至列表。";
     forgetStatus.textContent = "";
     forgetStatus.dataset.tone = "";
     forgetDialog.hidden = false;

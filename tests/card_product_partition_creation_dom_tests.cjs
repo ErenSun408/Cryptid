@@ -25,7 +25,21 @@ async function run(outcome) {
   assert.equal($('#create-volume-continue').disabled,true);
   w.navigationFixture.pendingCreation[outcome]();
   await until(()=>!$('#create-volume-cancel').disabled);
-  if(outcome==='resolve') assert.match($('#create-volume-status').textContent,/创建成功/);
+  if(outcome==='resolve') {
+    assert.match($('#create-volume-status').textContent,/创建成功/);
+    $('#create-volume-cancel').click();
+    w.navigationFixture.containers.find(c=>c.id===100).mounted=false;
+    w.navigationFixture.containers.find(c=>c.id===100).drive='';
+    w.navigationFixture.containers.find(c=>c.id===100).size=0;
+    w.dispatchEvent(new w.Event('usb-vault-session-changed'));
+    await until(()=>w.document.querySelector('[data-container-id="100"][data-container-action="forget"]') && !w.document.querySelector('[data-container-id="100"][data-container-action="forget"]').disabled);
+    const migrate = $('[data-migrate-select="100"]');
+    assert.ok(migrate && migrate.classList.contains('off'));
+    assert.match(migrate.title,/暂不支持分区密文导出/);
+    $('[data-container-id="100"][data-container-action="forget"]').click();
+    assert.match($('#forget-container-description').textContent,/无法通过文件导入找回分区/);
+    assert.doesNotMatch($('#forget-container-description').textContent,/可通过「导入」/);
+  }
   else {
     assert.match($('#create-volume-status').textContent,/可能只有部分内容/);
     assert.doesNotMatch($('#create-volume-status').textContent,/没有留下|未修改/);
