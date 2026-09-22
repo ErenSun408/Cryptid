@@ -46,6 +46,26 @@
       event.preventDefault(); closeSessionTools(); sessionToolsToggle.focus();
     }
   });
+  const appExit = document.getElementById("app-exit");
+  const appExitToggle = document.getElementById("app-exit-toggle");
+  const appExitMenu = document.getElementById("app-exit-menu");
+  const returnToLogin = document.getElementById("return-to-login");
+  const exitApplication = document.getElementById("exit-application");
+  const closeAppExit = () => {
+    appExitMenu.hidden = true;
+    appExitToggle.setAttribute("aria-expanded", "false");
+  };
+  appExitToggle.addEventListener("click", () => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    const open = appExitMenu.hidden;
+    appExitMenu.hidden = !open;
+    appExitToggle.setAttribute("aria-expanded", String(open));
+    if (open) returnToLogin.focus();
+  });
+  document.addEventListener("click", event => { if (!appExit.contains(event.target)) closeAppExit(); });
+  appExit.addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); closeAppExit(); appExitToggle.focus(); }
+  });
   const stateTitle = document.getElementById("card-state-title");
   const passwordFields = document.getElementById("password-fields");
   const passwordLabel = document.getElementById("card-password-label");
@@ -3679,6 +3699,10 @@
   };
 
   const render = (message, error = "") => {
+    appExitToggle.disabled = busy || currentState !== nativeState.authenticated;
+    returnToLogin.disabled = appExitToggle.disabled;
+    exitApplication.disabled = appExitToggle.disabled;
+    if (appExitToggle.disabled) closeAppExit();
     sessionTools.hidden = currentState === nativeState.authenticated;
     sessionToolsToggle.disabled = busy || currentState === null || bridge === null;
     if (busy || sessionTools.hidden) closeSessionTools();
@@ -4607,6 +4631,33 @@
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   };
+
+  const leaveApplication = async (toLogin) => {
+    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    closeAppExit();
+    busy = true;
+    disarmDecoyDrop();
+    render(toLogin ? "正在返回登录页" : "正在退出应用");
+    setDashboardStatus("正在安全卸载当前会话的磁盘…");
+    try {
+      await waitForVolumeOperation(() => bridge.beginUnmount());
+      if (toLogin) await bridge.returnToLogin();
+      else await bridge.exitApplication();
+      // A login transition replaces this document and retires the old bridge.
+      if (toLogin) return;
+      busy = false;
+      render(messageForCurrentState());
+      setDashboardStatus("");
+    } catch (_) {
+      try { await refreshNativeState(); } catch (_) {}
+      busy = false;
+      render(messageForCurrentState());
+      setDashboardStatus("未能离开，请等待当前操作结束，并关闭占用磁盘的文件后重试。", "error");
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  };
+  returnToLogin.addEventListener("click", () => { void leaveApplication(true); });
+  exitApplication.addEventListener("click", () => { void leaveApplication(false); });
 
   const unmount = async () => {
     if (busy || bridge === null || !volumeOperationDialog.hidden || !batchResultDialog.hidden) return;

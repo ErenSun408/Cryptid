@@ -310,6 +310,13 @@
 
     .app-layout { display: grid; grid-template-columns: 13.5rem 1fr; min-height: calc(100vh - 3.25rem); }
     .sidebar { padding: .75rem .6rem; border-right: 1px solid var(--line); background: var(--ink-850); }
+    .app-exit { position: fixed; left: 1.25rem; bottom: 1.25rem; z-index: 6; display: flex; flex-direction: column; align-items: flex-start; gap: .7rem; }
+    .app-exit-toggle { display: grid; place-items: center; width: 2.8rem; height: 2.8rem; color: var(--danger); background: transparent; border: none; cursor: pointer; }
+    .app-exit-toggle svg { width: 1.5rem; height: 1.5rem; stroke-width: 2.2; transform: scaleX(-1); }
+    .app-exit-toggle:hover:not(:disabled) { color: #ef958c; }
+    .app-exit-toggle:disabled { opacity: .45; cursor: default; }
+    .app-exit .session-tools-menu { transform-origin: bottom left; }
+    .sidebar { padding-bottom: 5rem; }
     .sidebar-label {
       padding: .8rem .75rem .35rem; font-size: .63rem; font-weight: 600;
       letter-spacing: .16em; text-transform: uppercase; color: var(--text-3);
@@ -1065,6 +1072,7 @@
       .topbar-left { flex-direction: column; align-items: flex-start; gap: .4rem; }
       .app-layout { grid-template-columns: 3.5rem 1fr; }
       .sidebar { padding-inline: .35rem; }
+      .app-exit { left: .35rem; }
       .sidebar-label, .nav-label, .nav-count { display: none; }
       .nav-item { justify-content: center; padding-inline: .4rem; }
       .stats-row { grid-template-columns: 1fr; }
@@ -1253,6 +1261,15 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.6 7.6 0 000-2l2-1.5-2-3.4-2.4 1a8 8 0 00-1.7-1L14.9 3H9.1l-.4 3.1a8 8 0 00-1.7 1l-2.4-1-2 3.4L4.6 11a7.6 7.6 0 000 2l-2 1.5 2 3.4 2.4-1a8 8 0 001.7 1l.4 3.1h5.8l.4-3.1a8 8 0 001.7-1l2.4 1 2-3.4-2-1.5z"></path></svg>
           <span class="nav-label">系统设置</span>
         </button>
+        <div id="app-exit" class="app-exit">
+          <div id="app-exit-menu" class="session-tools-menu" aria-label="离开选项" hidden>
+            <button id="return-to-login" class="shell-button" type="button">退至登录页</button>
+            <button id="exit-application" class="shell-button danger" type="button">退出应用</button>
+          </div>
+          <button id="app-exit-toggle" class="app-exit-toggle" type="button" aria-label="离开" aria-expanded="false" aria-controls="app-exit-menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4v16h6M9 12h12M16 7l5 5-5 5"></path></svg>
+          </button>
+        </div>
       </nav>
 
       <main class="content">

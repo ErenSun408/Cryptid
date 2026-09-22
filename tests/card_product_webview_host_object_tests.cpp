@@ -910,6 +910,9 @@ class RecordingCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
   void request_close() noexcept override { ++close_calls; }
 
   bool request_configuration() noexcept override { ++configuration_calls; return allow_configuration; }
+  bool request_login() noexcept override { ++login_calls; return allow_login; }
+  int login_calls{};
+  bool allow_login{true};
   int configuration_calls{};
   bool allow_configuration{true};
   int close_calls{};
@@ -3294,6 +3297,46 @@ void test_protection_query_is_boolean_scoped_and_serialized() {
   require(FAILED(query(7)), "interrupted card state leaked");
 }
 
+void test_leave_application_routes() {
+  Fixture fixture;
+  RecordingCloseSink sink;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, &sink, &host, nullptr, &work)), "leave host failed");
+  const auto invoke = [&](const wchar_t* name) {
+    DISPPARAMS args{};
+    return host->Invoke(member_id(*host.Get(), name), IID_NULL,
+        LOCALE_INVARIANT, DISPATCH_METHOD, &args, nullptr, nullptr, nullptr);
+  };
+  require(invoke_with_number(*host.Get(), L"returnToLogin", 1, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "login return accepted arguments");
+  require(invoke_with_number(*host.Get(), L"exitApplication", 1, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "exit accepted arguments");
+  fixture.authentication.clear_authentication();
+  require(invoke(L"returnToLogin") == E_ACCESSDENIED, "unauthenticated login return accepted");
+  fixture.authentication.establish(root_secret());
+  fixture.volume.mounted_state = true;
+  require(invoke(L"returnToLogin") == E_ACCESSDENIED, "mounted login return accepted");
+  // Exit asks the window guard, even with a mount; the bridge never destroys it.
+  require(SUCCEEDED(invoke(L"exitApplication")) && sink.close_calls == 1,
+          "exit did not reach normal window guard");
+  require(fixture.volume.mounted_state && fixture.authentication.authenticated(),
+          "exit bridge discarded active session");
+  work.running.store(true);
+  require(invoke(L"returnToLogin") == E_PENDING, "return interrupted worker");
+  require(invoke(L"exitApplication") == E_PENDING, "exit interrupted worker");
+  work.running.store(false);
+  require(sink.login_calls == 0 && sink.close_calls == 1, "denied leave reached sink");
+  fixture.volume.mounted_state = false;
+  sink.allow_login = false;
+  require(FAILED(invoke(L"returnToLogin")), "failed return reported success");
+  sink.allow_login = true;
+  require(SUCCEEDED(invoke(L"returnToLogin")), "safe login return failed");
+  require(invoke(L"getSessionState") == E_PENDING && invoke(L"exitApplication") == E_PENDING,
+          "retired bridge still accepts calls");
+}
+
 void test_configuration_transition() {
   Fixture fixture;
   usb_vault::ui::CreationWorkState work;
@@ -3388,6 +3431,7 @@ int main() {
   try {
     test_login_reset_bridge_lifecycle();
     test_protection_query_is_boolean_scoped_and_serialized();
+    test_leave_application_routes();
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();

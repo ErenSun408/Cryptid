@@ -99,6 +99,8 @@ class IUiCloseRequestSink {
   // Deferred transition; the caller blocks further bridge mutations once
   // accepted. Only offered without authentication, mounted volumes or work.
   virtual bool request_configuration() noexcept { return false; }
+  // Rebuilds an authenticated, unmounted session after retiring its bridge.
+  virtual bool request_login() noexcept { return false; }
 
  protected:
   IUiCloseRequestSink() noexcept = default;

@@ -153,6 +153,7 @@ MainWindowSizeSink g_window_size_sink;
 class MainWindowCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
  public:
   bool request_configuration() noexcept override;
+  bool request_login() noexcept override;
   void request_close() noexcept override {
     if (g_main_window != nullptr) {
       static_cast<void>(::PostMessageW(g_main_window, WM_CLOSE, 0, 0));
@@ -551,6 +552,17 @@ void clear_application_session() noexcept {
   g_volume_provider.reset();
   g_vikey_credential_provider.reset();
   g_deployment_artifacts.clear();
+}
+
+bool MainWindowCloseSink::request_login() noexcept {
+  if (!g_main_window || !g_ui_session || g_view_switch_pending ||
+      g_creation_work.running.load() || g_ui_session->mounted() ||
+      g_ui_session->state() != usb_vault::ui::CardProductUiState::authenticated)
+    return false;
+  if (!::PostMessageW(g_main_window, kShowSessionMessage, 0, 0)) return false;
+  disarm_external_drops();
+  g_view_switch_pending = true;
+  return true;
 }
 
 bool MainWindowCloseSink::request_configuration() noexcept {
@@ -1011,6 +1023,11 @@ void show_session(const HWND window) noexcept {
   ::KillTimer(window, 2);
   disarm_external_drops();
   detach_host_object();
+  // Retire keys, history, container identities and the one-shot login context
+  // before probing a fresh session. The accepted request has no mounts/work.
+  clear_application_session();
+  g_deferred_removal = false;
+  g_deferred_arrival = false;
   g_view = StartupView::session;
   try {
     // The card is probed again from here, so the session that starts is built

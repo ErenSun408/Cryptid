@@ -22,6 +22,8 @@
 namespace usb_vault::ui {
 namespace {
 
+constexpr DISPID kReturnToLoginId = 98;
+constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
 constexpr DISPID kBeginLoginResetPreparationId = 91;
 constexpr DISPID kLoginResetStatusId = 92;
@@ -416,6 +418,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       return S_OK;
     }
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
+    if (matches(names[0], L"returnToLogin")) { ids[0] = kReturnToLoginId; return S_OK; }
+    if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -713,6 +717,19 @@ class CardProductWebViewHostObject final : public IDispatch {
         return complete_string(kSessionView,
                                static_cast<UINT>(std::size(kSessionView) - 1),
                                result);
+      case kReturnToLoginId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (controller_.state() != CardProductUiState::authenticated || controller_.mounted())
+          return E_ACCESSDENIED;
+        if (!close_sink_ || !close_sink_->request_login()) return E_FAIL;
+        configuration_pending_ = true;
+        return S_OK;
+      case kExitApplicationId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!close_sink_) return E_FAIL;
+        // The window's normal close guard owns cleanup and can refuse to exit.
+        close_sink_->request_close();
+        return S_OK;
       case kOpenConfigurationId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (controller_.state() == CardProductUiState::authenticated || controller_.mounted())
