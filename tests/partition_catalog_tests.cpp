@@ -1,5 +1,7 @@
 #include "usb_vault/volume/partition_catalog.h"
 #include "volume/partition_catalog_detail.h"
+#include "usb_vault/volume_creation/volume_creator.h"
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -243,6 +245,29 @@ void scan(bool handles = false) {
 }
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--probe-helper") {
+      const auto candidates = enumerate_partition_candidates();
+      for (const auto& candidate : candidates) {
+        if (candidate.availability != A::candidate || candidate.layout != PartitionLayout::mbr ||
+            candidate.length_bytes < 20ULL * 1024 * 1024 || candidate.length_bytes > (1ULL << 40)) continue;
+        std::array<wchar_t, 32768> module{};
+        const auto n = ::GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size()));
+        require(n && n < module.size(), "locate helper test");
+        const auto helper = std::filesystem::path(module.data()).parent_path().parent_path() / L"usb_vault_volume_creator.exe";
+        usb_vault::volume_creation::VolumeCreator creator(helper);
+        creator.check_partition(candidate);
+        auto stale = candidate; stale.device_id[0] ^= 1;
+        bool rejected{};
+        try { creator.check_partition(stale); } catch (const std::system_error& error) {
+          rejected = error.code() == usb_vault::volume_creation::make_error_code(usb_vault::volume_creation::CreationError::target_access_denied);
+        }
+        require(rejected, "helper accepted replaced device");
+        std::cout << "PASS: read-only helper request and changed-identity rejection\n";
+        return 0;
+      }
+      std::cout << "SKIP: no supported MBR candidate for read-only helper integration\n";
+      return 77;
+    }
     if (argc == 1) { unit_tests(); snapshot_tests(); rejected_handles(); }
     else if (argc == 2 && std::string_view(argv[1]) == "--scan") scan();
     else if (argc == 2 && std::string_view(argv[1]) == "--scan-handles") scan(true);

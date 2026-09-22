@@ -1,5 +1,6 @@
 #include "volume_creation/creator_helper_engine.h"
 #include "volume_creation/import_unique_name.h"
+#include "volume/partition_catalog_detail.h"
 
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -261,6 +262,15 @@ class FormatBackend final {
 };
 
 void validate_request(const Request& request) {
+  if (request.operation == Operation::check_partition) {
+    if (!request.partition_target || !valid_partition_target(*request.partition_target) ||
+        !valid_partition_path(request.target_path) || request.outer_size_bytes || request.hidden_size_bytes ||
+        request.mounted_drive || request.mount_id || !request.first_password.empty() || !request.second_password.empty() ||
+        !request.source_path.empty() || !request.destination_relative.empty())
+      fail(CreationError::invalid_request, "invalid partition identity request");
+    return;
+  }
+  if (request.partition_target) fail(CreationError::invalid_request, "partition facts in file request");
   if (request.target_path.empty() ||
       !std::filesystem::path(request.target_path).is_absolute()) {
     fail(CreationError::invalid_request, "invalid creation request values");
@@ -485,6 +495,7 @@ HANDLE create_directory_handle(HANDLE parent, std::wstring_view name) {
       PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
   using ToError = ULONG (WINAPI*)(NTSTATUS);
   const auto module = ::GetModuleHandleW(L"ntdll.dll");
+  if (!module) fail(CreationError::invalid_request, "directory creation module unavailable");
   const auto create = reinterpret_cast<Create>(::GetProcAddress(module, "NtCreateFile"));
   const auto to_error = reinterpret_cast<ToError>(::GetProcAddress(module, "RtlNtStatusToDosError"));
   if (!create || !to_error || name.empty() || name.size() > 255)
@@ -933,6 +944,32 @@ void serve_maintenance_session(HANDLE pipe, const std::array<std::byte, kNonceSi
 
 std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
+  if (request.operation == Operation::check_partition) {
+    const auto& target = *request.partition_target;
+    volume::PartitionCandidate expected{};
+    expected.volume_path = request.target_path;
+    expected.disk_number = target.disk_number;
+    expected.partition_number = target.partition_number;
+    expected.offset_bytes = target.offset_bytes;
+    expected.length_bytes = target.length_bytes;
+    expected.logical_sector_bytes = target.sector_bytes;
+    expected.layout = volume::PartitionLayout::mbr;
+    expected.filesystem_serial = target.filesystem_serial;
+    expected.device_id = target.device_id;
+    expected.device_id_flags = target.device_flags;
+    expected.availability = volume::PartitionAvailability::candidate;
+    // Independent enumeration excludes the current Windows volume before any
+    // readable handle is opened. This operation grants no write authorization.
+    if (!volume::matches_partition_snapshot(expected, volume::enumerate_partition_candidates()))
+      fail(CreationError::target_access_denied, "partition snapshot no longer matches");
+    std::wstring path = request.target_path;
+    path.pop_back(); // Only the validated volume GUID name reaches CreateFile.
+    const Handle handle(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, 0, nullptr));
+    if (handle.get() == INVALID_HANDLE_VALUE || !volume::detail::matches_partition_handle_identity(handle.get(), expected))
+      fail(CreationError::target_access_denied, "partition handle identity mismatch");
+    return 0; // No format DLL, password, mount, cleanup deletion or retained consent.
+  }
   if (request.operation == Operation::scan_tail_space) {
     // Nothing is created, so the format backend is never loaded and there is
     // no progress to report: the number is the whole exchange.

@@ -139,6 +139,30 @@ void test_partition_check_protocol() {
   expect(rejected, "legacy protocol accepted");
 }
 
+void test_partition_helper_rejects_invalid_requests() {
+  for (int field = 0; field < 8; ++field) {
+    Request request{}; request.operation = Operation::check_partition;
+    request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+    request.partition_target.emplace();
+    request.partition_target->device_id[0] = 1;
+    request.partition_target->partition_number = 1;
+    request.partition_target->offset_bytes = 1048576;
+    request.partition_target->length_bytes = 256ULL * 1024 * 1024;
+    if (field == 0) request.partition_target.reset();
+    if (field == 1) request.target_path = LR"(\\.\PhysicalDrive0)";
+    if (field == 2) request.first_password = password({1});
+    if (field == 3) request.outer_size_bytes = 512;
+    if (field == 4) request.mounted_drive = 1;
+    if (field == 5) request.source_path = L"unexpected";
+    if (field == 6) request.partition_target->reserved = 1;
+    if (field == 7) request.operation = Operation::create_standard;
+    bool rejected{};
+    try { static_cast<void>(execute_request(INVALID_HANDLE_VALUE, request)); }
+    catch (const std::system_error& error) { rejected = error.code() == make_error_code(CreationError::invalid_request); }
+    expect(rejected, "invalid partition action reached native target or formatter");
+  }
+}
+
 void test_binary_password_round_trip() {
   const Pipe pipe = make_pipe();
   const SecureBuffer first = password({0x41, 0x00, 0x42, 0xff});
@@ -616,6 +640,7 @@ void test_pipe_dacl_names_system_and_token_user_explicitly() {
 int main() {
   try {
     test_partition_check_protocol();
+    test_partition_helper_rejects_invalid_requests();
     test_binary_password_round_trip();
     test_cancel_request_round_trip();
     test_cancel_request_rejects_another_nonce();

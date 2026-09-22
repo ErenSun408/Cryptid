@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/volume/partition_catalog.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -66,6 +67,10 @@ using CancellationQuery = std::function<bool()>;
 class VolumeCreator final {
  public:
   explicit VolumeCreator(std::filesystem::path helper_path);
+
+  // Separate read-only UAC operation. Checks the snapshot on a readable volume
+  // handle; success is not formatting permission and retains no session.
+  void check_partition(const volume::PartitionCandidate& target) const;
 
   void create_standard(std::wstring_view target_path,
                        std::uint64_t size_bytes,

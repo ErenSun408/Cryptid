@@ -274,13 +274,18 @@ class Handle final {
     const security::SecureBuffer& first_password,
     const security::SecureBuffer& second_password,
     const ProgressCallback& progress,
-    const CancellationQuery& cancelled) {
+    const CancellationQuery& cancelled,
+    const detail::PartitionTarget* partition_target = nullptr) {
+  const bool checking_partition = operation == detail::Operation::check_partition;
   const bool measuring = operation == detail::Operation::scan_tail_space;
   // A measurement names a volume root, which is not a container path and does
   // not pass the checks meant for one.
   const std::wstring normalized_path =
-      measuring ? std::wstring(path) : validated_target_path(path);
-  if (measuring) {
+      measuring || checking_partition ? std::wstring(path) : validated_target_path(path);
+  if (checking_partition != (partition_target != nullptr) ||
+      (checking_partition && (!detail::valid_partition_path(path) || !detail::valid_partition_target(*partition_target))))
+    throw std::invalid_argument("invalid partition identity request");
+  if (measuring || checking_partition) {
     if (outer_size != 0 || hidden_size != 0 || !first_password.empty() ||
         !second_password.empty()) {
       throw std::invalid_argument("invalid volume-measurement request values");
@@ -314,13 +319,16 @@ class Handle final {
       .second_password_bytes =
           static_cast<std::uint32_t>(second_password.size()),
       .nonce = nonce,
+      .partition_target_bytes = checking_partition ? static_cast<std::uint32_t>(sizeof(detail::PartitionTarget)) : 0,
   };
   detail::write_request(pipe.get(), header, normalized_path, first_password,
-                        second_password);
+                        second_password, {}, {}, partition_target);
 
   bool cancel_sent = false;
   for (;;) {
     const detail::Response response = detail::read_response(pipe.get());
+    if (checking_partition && (response.type != detail::MessageType::result || response.value != 0))
+      throw_creation(CreationError::protocol_error, "unexpected partition check response");
     if (response.type == detail::MessageType::progress) {
       if (progress) {
         progress({.stage = response.stage, .percent = response.percent});
@@ -609,6 +617,19 @@ std::uint64_t VolumeMeasurementSession::measure(
 
 VolumeCreator::VolumeCreator(std::filesystem::path helper_path)
     : helper_path_(validated_helper_path(helper_path)) {}
+
+void VolumeCreator::check_partition(const volume::PartitionCandidate& candidate) const {
+  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}) || candidate.layout != volume::PartitionLayout::mbr)
+    throw std::invalid_argument("invalid partition check candidate");
+  const detail::PartitionTarget target{
+      .device_id = candidate.device_id, .device_flags = candidate.device_id_flags,
+      .disk_number = candidate.disk_number, .partition_number = candidate.partition_number,
+      .sector_bytes = candidate.logical_sector_bytes, .layout = 1,
+      .filesystem_serial = candidate.filesystem_serial, .offset_bytes = candidate.offset_bytes,
+      .length_bytes = candidate.length_bytes};
+  static_cast<void>(invoke(helper_path_, detail::Operation::check_partition, candidate.volume_path,
+      0, 0, security::SecureBuffer{}, security::SecureBuffer{}, {}, {}, &target));
+}
 
 void VolumeCreator::create_standard(
     const std::wstring_view target_path, const std::uint64_t size_bytes,
