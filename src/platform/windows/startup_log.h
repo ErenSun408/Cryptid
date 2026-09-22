@@ -9,7 +9,7 @@
 namespace usb_vault::platform::windows {
 enum class StartupStep : unsigned int {
   entry = 1, maintenance = 2, ole = 3, preflight = 4, window = 5,
-  artifacts = 6, session = 7, webview = 8, ready = 9, failure = 10, end = 11
+  artifacts = 6, session = 7, webview = 8, ready = 9, failure = 10, end = 11, card_state = 12
 };
 enum class StartupOutcome : unsigned int { begin = 0, completed = 1, failed = 2 };
 
@@ -31,6 +31,8 @@ class StartupLog final {
     finish();
     error_ = 0;
     sequence_ = 0;
+    last_card_failure_ = {};
+    finalizing_page_ = false;
     try {
       const DWORD attributes = ::GetFileAttributesW(directory.c_str());
       if (attributes == INVALID_FILE_ATTRIBUTES) { error_ = ::GetLastError(); return false; }
@@ -65,16 +67,9 @@ class StartupLog final {
   void record(StartupStep step, StartupOutcome outcome,
       card::FailureDiagnostic failure = {}, unsigned int event_kind = 0,
       unsigned int event_code = 0, unsigned int substep = 0) noexcept {
-    if (file_ == INVALID_HANDLE_VALUE || error_ || sequence_ >= 128) return;
-    const auto clean = [](card::FailureDetail value) noexcept {
-      if (value.code < 1000 || value.code > 9999) return card::FailureDetail{};
-      if (value.code != 2011 || value.step > card::kProcessSecurityStepCount) value.step = 0;
-      if (value.reason > 18) value.reason = 0;
-      if (value.native_kind < 1 || value.native_kind > 3) {
-        value.native_kind = 0; value.native_code = 0;
-      }
-      return value;
-    };
+    // Reserve the final snapshot, page-ready marker and end marker.
+    if (file_ == INVALID_HANDLE_VALUE || error_ || sequence_ >=
+        (finalizing_page_ || step == StartupStep::end ? 128u : 125u)) return;
     const auto primary = clean(failure.primary);
     const auto cleanup = clean(failure.cleanup);
     if (event_kind > 2) { event_kind = 0; event_code = 0; }
@@ -112,6 +107,28 @@ class StartupLog final {
     if (valid) write(text, static_cast<DWORD>(used));
     else { error_ = ERROR_INVALID_DATA; close(); }
   }
+  void record_card_state(card::FailureDiagnostic failure, bool initial = false) noexcept {
+    if (file_ == INVALID_HANDLE_VALUE || error_) return;
+    failure = {.primary = clean(failure.primary), .cleanup = clean(failure.cleanup)};
+    const bool failed = failure.primary.code || failure.cleanup.code;
+    const bool changed = !same(failure.primary, last_card_failure_.primary) ||
+                         !same(failure.cleanup, last_card_failure_.cleanup);
+    if (initial || (failed && changed)) {
+      const auto before = sequence_;
+      record(initial ? StartupStep::session : StartupStep::card_state,
+          failed ? StartupOutcome::failed : StartupOutcome::completed, failure);
+      if (before == sequence_) return; // Preserve a capped event for the final snapshot.
+    }
+    last_card_failure_ = failure;
+  }
+  void finish_page(card::FailureDiagnostic failure) noexcept {
+    if (file_ == INVALID_HANDLE_VALUE) return;
+    finalizing_page_ = true;
+    record_card_state(failure);
+    record(StartupStep::ready, StartupOutcome::completed);
+    finish();
+    finalizing_page_ = false;
+  }
   void finish() noexcept {
     if (file_ == INVALID_HANDLE_VALUE) return;
     record(StartupStep::end, StartupOutcome::completed);
@@ -119,6 +136,19 @@ class StartupLog final {
   }
   [[nodiscard]] DWORD error() const noexcept { return error_; }
  private:
+  static card::FailureDetail clean(card::FailureDetail value) noexcept {
+    if (value.code < 1000 || value.code > 9999) return {};
+    if (value.code != 2011 || value.step > card::kProcessSecurityStepCount) value.step = 0;
+    if (value.reason > 18) value.reason = 0;
+    if (value.native_kind < 1 || value.native_kind > 3) {
+      value.native_kind = 0; value.native_code = 0;
+    }
+    return value;
+  }
+  static bool same(const card::FailureDetail& a, const card::FailureDetail& b) noexcept {
+    return a.code == b.code && a.reason == b.reason && a.native_kind == b.native_kind &&
+        a.native_code == b.native_code && a.step == b.step;
+  }
   static const char* stage_name(StartupStep step, unsigned int substep) noexcept {
     switch (step) {
       case StartupStep::entry: return "应用启动";
@@ -135,6 +165,7 @@ class StartupLog final {
         }
       case StartupStep::window: return "应用窗口创建";
       case StartupStep::artifacts: return "界面文件准备";
+      case StartupStep::card_state: return "启动期间安全卡诊断";
       case StartupStep::session: return "会话初始化与首次安全卡探测";
       case StartupStep::webview:
         if (substep == 1305) return "WebView 控制器创建";
@@ -163,5 +194,7 @@ class StartupLog final {
   HANDLE file_{INVALID_HANDLE_VALUE};
   DWORD error_{};
   unsigned int sequence_{};
+  card::FailureDiagnostic last_card_failure_{};
+  bool finalizing_page_{};
 };
 }  // namespace usb_vault::platform::windows

@@ -15,11 +15,77 @@ std::string read(const fs::path& path) {
   require(file.good(), "cannot read log");
   return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 }
+void verify_card_snapshots(const fs::path& root) {
+  using usb_vault::card::FailureDiagnostic;
+  const FailureDiagnostic failure{
+      .primary = {.code = 2011, .reason = 1, .native_kind = 1, .native_code = 5, .step = 56},
+      .cleanup = {.code = 2015, .reason = 1, .native_kind = 1, .native_code = 32}};
+  const auto count = [](const std::string& text, const std::string& needle) {
+    size_t result = 0;
+    for (size_t at = 0; (at = text.find(needle, at)) != std::string::npos; at += needle.size()) ++result;
+    return result;
+  };
+  for (unsigned short scenario = 0; scenario < 7; ++scenario) {
+    SYSTEMTIME time{2026, 9, 0, 22, 12, 0, scenario, 0};
+    wchar_t name[80]{};
+    swprintf_s(name, L"startup-log-20260922-1200%02u.txt", static_cast<unsigned int>(scenario));
+    const auto path = root / name;
+    StartupLog log;
+    require(log.open(root, time), "cannot open snapshot fixture");
+    log.record_card_state(scenario == 1 ? failure : FailureDiagnostic{}, true);
+    auto final = failure;
+    size_t expected = 1;
+    if (scenario == 0 || scenario == 1) {
+      // Arrival (direct or deferred) and final snapshot must not duplicate a fault.
+      log.record_card_state(failure);
+      log.record_card_state(failure);
+    } else if (scenario == 2) {
+      // A fault first observed at page-ready must still be logged.
+    } else if (scenario == 3) {
+      final = {};
+      expected = 0; // Normal no-card startup.
+    } else if (scenario == 4) {
+      log.record_card_state(failure);
+      final.cleanup.native_code = 33;
+      log.record_card_state(final);
+      final.primary.step = 58;
+      log.record_card_state(final);
+      expected = 3; // Both cleanup and security-step changes are material.
+    } else if (scenario == 5) {
+      log.record_card_state(failure);
+      log.record_card_state({}); // Removal/recovery resets duplicate suppression.
+      log.record_card_state(failure);
+      expected = 2;
+    } else {
+      for (int i = 0; i < 1000; ++i) log.record(StartupStep::webview, StartupOutcome::begin);
+      log.record_card_state(failure); // Capped notification cannot consume final snapshot.
+    }
+    log.finish_page(final);
+    const auto text = read(path);
+    require(count(text, "错误码：2011") == expected, "card failure lost or duplicated");
+    const auto ready = text.find("[完成] 页面就绪");
+    const auto end = text.find("[完成] 启动日志结束");
+    require(ready != std::string::npos && end > ready, "final markers missing or reordered");
+    if (expected) {
+      require(text.rfind("错误码：2011") < ready &&
+          text.find("安全步骤码：56；原因码：1；Win32 错误：5") != std::string::npos &&
+          text.find("附加清理错误码：2015") != std::string::npos,
+          "final card diagnostic lost fields or followed page-ready");
+    }
+    require(text.size() < 65536 && std::count(text.begin(), text.end(), '\n') <= 129,
+        "snapshot exceeded log budget");
+    log.record_card_state(failure);
+    log.finish_page(failure);
+    require(read(path) == text, "runtime card event reopened completed startup log");
+    fs::remove(path);
+  }
+}
 int main() {
   const auto root = fs::current_path() / (L"startup-log-tests-" + std::to_wstring(::GetCurrentProcessId()) +
       L"-" + std::to_wstring(::GetTickCount64()));
   try {
     require(fs::create_directory(root), "fixture already exists");
+    verify_card_snapshots(root);
     const SYSTEMTIME time{2026, 9, 0, 20, 17, 12, 34, 0};
     const auto first = root / L"startup-log-20260920-171234.txt";
     const auto second = root / L"startup-log-20260920-171234-01.txt";
@@ -76,7 +142,8 @@ int main() {
     bounded.finish();
     const auto third = root / L"startup-log-20260920-171234-02.txt";
     const auto limited = read(third);
-    require(limited.size() < 65536 && std::count(limited.begin(), limited.end(), '\n') == 129,
+    require(limited.size() < 65536 && std::count(limited.begin(), limited.end(), '\n') <= 129 &&
+            limited.find("启动日志结束") != std::string::npos,
             "log exceeded fixed record budget");
     StartupLog unavailable;
     require(!unavailable.open(root / L"missing", time) && unavailable.error() != 0,

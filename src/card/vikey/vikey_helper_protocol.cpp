@@ -113,6 +113,12 @@ bool valid_response(const Response& response,
       response.native_kind > static_cast<std::uint32_t>(NativeCodeKind::process_exit) ||
       (response.diagnostic == 0 && response.native_kind != 0) ||
       (response.diagnostic != 0 && response.native_kind == 0 && response.detail != 0)) return false;
+  if (response.diagnostic == static_cast<std::uint32_t>(DiagnosticStage::process_security)) {
+    if (response.status != static_cast<std::int32_t>(CardError::backend_unavailable) ||
+        response.security_step < 90 || response.security_step > 108) return false;
+    const bool api = response.security_step >= 107;
+    if (response.native_kind != (api ? static_cast<std::uint32_t>(NativeCodeKind::win32) : 0u)) return false;
+  } else if (response.security_step != 0) return false;
   if (response.status == 0) {
     if (response.diagnostic != 0 || response.native_kind != 0) return false;
     if (response.security_properties == 0) return false;

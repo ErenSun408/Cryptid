@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 13;
+constexpr std::uint16_t kVersion = 14;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -340,11 +340,13 @@ struct Response final {
   std::uint32_t logical_state{};
   std::uint32_t diagnostic{};
   std::uint32_t native_kind{};
+  // Only helper environment rejection steps 90..108; zero on all other responses.
+  std::uint32_t security_step{};
   std::array<std::byte, kNonceSize> nonce{};
 };
 
 static_assert(sizeof(Request) == 32);
-static_assert(sizeof(Response) == 56);
+static_assert(sizeof(Response) == 60);
 
 [[nodiscard]] bool valid_request(const Request& request) noexcept;
 [[nodiscard]] bool valid_response(const Response& response,

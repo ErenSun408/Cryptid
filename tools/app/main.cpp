@@ -758,7 +758,8 @@ void poll_webview_ready() {
               static_cast<void>(g_webview_startup.ready(generation));
               if (text != L"1") g_startup_log.record(StartupStep::failure, StartupOutcome::failed,
                   {.primary = {.code = text == L"1407" ? 1407u : 1108u}});
-              g_startup_log.record(StartupStep::ready, StartupOutcome::completed);
+              g_startup_log.finish_page(g_card_entry ? g_card_entry->startup_failure()
+                  : usb_vault::card::FailureDiagnostic{});
               finish_startup_log();
               ::KillTimer(g_main_window, 2);
               notify_webview_session_changed();
@@ -1082,6 +1083,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         using Transition = usb_vault::application::CardPresenceTransition;
         if (transition.entry_changed ||
             transition.presence != Transition::no_change) {
+          g_startup_log.record_card_state(g_card_entry ? g_card_entry->startup_failure()
+              : usb_vault::card::FailureDiagnostic{});
           g_creation_work.card_epoch.fetch_add(1);
           // The page re-arms from the maintenance screen it rebuilds; until
           // then a drag onto this window has nowhere it is allowed to land.
@@ -1118,6 +1121,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           if (transition.presence == Transition::active_session_remains) {
             show_failure(L"安全卡已拔出，强制卸载仍然失败。请关闭占用磁盘的程序并重试安全卸载。");
           }
+          g_startup_log.record_card_state(g_card_entry ? g_card_entry->startup_failure()
+              : usb_vault::card::FailureDiagnostic{});
           g_deferred_removal = false;
         }
         if (g_deferred_arrival) {
@@ -1125,7 +1130,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           g_deferred_arrival = false;
         }
         g_creation_work.interrupted.store(false);
-        if (changed) notify_webview_session_changed();
+        if (changed) {
+          g_startup_log.record_card_state(g_card_entry ? g_card_entry->startup_failure()
+              : usb_vault::card::FailureDiagnostic{});
+          notify_webview_session_changed();
+        }
       }
       return 0;
     case WM_SIZE:
@@ -1337,8 +1346,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
       g_startup_log.record(StartupStep::session, StartupOutcome::begin);
       initialize_application_session(window);
       const auto failure = g_card_entry ? g_card_entry->startup_failure() : usb_vault::card::FailureDiagnostic{};
-      g_startup_log.record(StartupStep::session,
-          failure.primary.code ? StartupOutcome::failed : StartupOutcome::completed, failure);
+      g_startup_log.record_card_state(failure, true);
     }
     initialize_webview(window);
     if (g_view == StartupView::session &&

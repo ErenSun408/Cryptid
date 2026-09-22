@@ -208,6 +208,13 @@ target_include_directories(startup_log_tests PRIVATE ${PROJECT_SOURCE_DIR}/src $
 usb_vault_configure_target(startup_log_tests)
 add_test(NAME startup_log_tests COMMAND startup_log_tests)
 
+add_executable(process_security_log_matrix_tests process_security_log_matrix_tests.cpp)
+target_include_directories(process_security_log_matrix_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(process_security_log_matrix_tests PRIVATE usb_vault_core)
+usb_vault_configure_target(process_security_log_matrix_tests)
+add_test(NAME process_security_log_matrix_tests COMMAND process_security_log_matrix_tests)
+
+
 add_executable(card_entry_initialization_controller_tests
   card_entry_initialization_controller_tests.cpp
 )
@@ -724,6 +731,14 @@ target_link_libraries(vikey_helper_protocol_tests PRIVATE
 usb_vault_configure_target(vikey_helper_protocol_tests)
 
 add_test(NAME vikey_helper_protocol_tests COMMAND vikey_helper_protocol_tests)
+
+add_executable(helper_environment_tests helper_environment_tests.cpp)
+target_include_directories(helper_environment_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(helper_environment_tests PRIVATE usb_vault_vikey_helper_protocol)
+usb_vault_configure_target(helper_environment_tests)
+add_dependencies(helper_environment_tests usb_vault_vikey_helper)
+add_test(NAME helper_environment_tests COMMAND helper_environment_tests $<TARGET_FILE:usb_vault_vikey_helper>)
+
 
 add_executable(vikey_helper_stall_fixture WIN32
   vikey_helper_stall_fixture.cpp

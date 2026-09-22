@@ -26,12 +26,14 @@
 
 安装完成页此前继承 TEMP，快捷方式此前指向已删除的事务暂存目录；`a0686c6` 已修正。**尚未证明该差异就是首次卡探测失败的根因。** helper 自身采用显式绝对路径、独立工作目录和裁剪后的环境，不宜只凭主进程工作目录推断 SDK 出错。
 
+启动日志在首次同步探卡后记录一次结果，并在初始页面就绪前采集直接及延迟设备事件的卡诊断变化；页面就绪前再次读取当前诊断，随后关闭日志。连续相同的规范化主错／清理错去重，清除后再失败重新记录；日志预留三条收尾记录，总上限仍为 128 条。“页面就绪”不代表卡可用。以上只读取已有诊断，不新增卡操作；运行期事件不写入已结束日志。
+
 ## 2. 数字码规则
 
 - 页面保留状态标题，下方只显示红色“错误码：xxxx”，不显示原因／底层／清理附码，不提供复制入口；这些数值保存在启动日志中。`0000` 表示无错误，不把正常无卡或待配置计为故障。
 - 主码分区：10xx 启动前/入口，11xx 前置检查，12xx 原生会话，13xx WebView，14xx 页面/桥，15xx 设备事件，20xx 已有诊断阶段，30xx 缺少阶段时的卡错误，40xx 入口/记录判定，90xx 未分类故障。
 - 主码优先选择实际失败的、可证实的最具体阶段。已有 `DiagnosticStage = n` 映射到 `2000+n`，**不更改原有枚举或 helper 协议数值**。无阶段但存在 `CardError = n` 时用 `3000+n`。明确的本地步骤另用本表代码。
-- 2011 另保留本地固定安全步骤码 `step`（0 表示未取得，详见文末），不改变 helper 协议。
+- 2011 保留固定安全步骤码 `step`（0 表示未取得，详见文末）；协议 v14 为 helper 环境拒绝携带专用 `security_step`，主程序与 helper 必须成套升级。
 - 同时保留独立的数字字段：`reason`（现有 CardError 1～18，0 表示无可用卡错误）、`native_kind`（0 无、1 Win32、2 HRESULT、3 进程退出码）、`native_code`（无符号 32 位十进制）。类别不是卡错误时不得把同值的系统错误冒充 CardError。
 - 示例：主码 **2019**、原因 **18**、底层类别 **0**、底层码 **0**，只表示等待辅助进程响应超时；不能解释为 PIN 错误或已经确认网络故障。底层码 0 在类别 0 时表示**未取得**，不是操作成功。
 - HRESULT 如需内部十六进制转换，应在诊断工具中进行；用户页面及导出的编号仍用数字。未知阶段/原因不得误解成成功；本地归为 9001，非法 IPC 枚举仍按 2018 拒绝。
@@ -130,7 +132,7 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | 2008 | 8 file_state；属性读取失败、非普通文件、大小越界/为空、待删除状态 | 已接入 | 不继续加载，不删除用户文件 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2009 | 9 sdk_stage；复制 DLL、设置安全标签、准备暂存文件失败 | 已接入 | 保留复制/标签/复核子步骤与系统码 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2010 | 10 process_start；CreateProcess 或 ResumeThread 失败 | 已接入 | 检查可执行制品/权限/系统码；不是卡接触问题 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
-| 2011 | 11 process_security；token、权限裁剪、Job、缓解策略、AppContainer、父子安全属性不符合要求 | 已接入 | 拒绝降级；区分当前联网开发分支与隔离分支，不能直接假定提权 | 已补本地固定安全步骤及 Win32/HRESULT；捕获与日志回归通过，未逐出口实机注入，helper 集成仍有既有路径校验阻塞 |
+| 2011 | 11 process_security；token、权限裁剪、Job、缓解策略、AppContainer、父子安全属性不符合要求 | 已接入 | 拒绝降级；区分当前联网开发分支与隔离分支，不能直接假定提权 | 已补 114 个固定步骤及 Win32/HRESULT，环境拒绝跨 IPC 传递；1026 场景矩阵通过，16 种真实 helper 环境拒绝通过；其他 Windows API 尚未逐出口注入，集成限制见验证报告 |
 | 2012 | 12 sdk_load；LoadLibraryExW 失败 | 已接入 | 记录加载结果，可能缺依赖、格式/架构不匹配或拒绝访问 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2013 | 13 sdk_export；DLL 缺少要求的导出入口 | 已接入 | 使用匹配 SDK；原生 GetProcAddress 路径保存 Win32 码，模拟加载器路径可没有底层码 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
 | 2014 | 14 process_exit；提前退出、响应后未及时退出、退出码查询失败或非零退出 | 已接入 | 需区分子步骤；这类等待期限失败目前不一定是原因 18 | 已接线并构建，未逐项实机注入；具体执行记录见开发日志 |
@@ -268,9 +270,13 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 
 本表同时保存触发条件、接入状态和实际验证边界；没有为每一种失败做实机注入，也没有宣称已复现用户的首次启动故障。底层系统和 SDK 的具体外因仍须结合编号与实机证据判断。
 
-## 2011 安全步骤码（本地主进程）
+## 2011 安全步骤码（主进程与 helper）
 
-主码和原因码保持 2011 / 1；新增安全步骤码只进入启动日志，不改页面或 helper IPC。Win32 调用失败立即取系统码；HRESULT 直接保留调用结果；逻辑条件不满足不读取残留 GetLastError。旧日志无法回补。下列编号固定，不因后续插入检查而重排。
+2026-09-22 当前实现：既有 1–89 编号保留，复合 SID 条件拆分至 109–114；helper 环境诊断为 90–108。全部 114 步的捕获到日志矩阵共 1026 场景通过；环境检查另有真实 helper 拒绝和 API 注入测试。详细证据和限制见 [2011 启动诊断验证](process-security-log-verification.md)。
+
+主码和原因码保持 2011 / 1；步骤码只进入启动日志，页面继续显示主码。helper 协议升级到 v14（响应 60 字节），仅允许 helper 返回 90–108；成功、其他阶段、错误类别不匹配及未知步骤一律拒绝为协议错误，不伪装成可解释的 2011。主进程本地步骤不允许由 helper 冒用。所有现有正常生成的 2011 均有固定步骤，旧日志不能回补。
+
+Win32 API 失败立即取得系统码，HRESULT 保留调用结果；逻辑校验不使用残留系统码。编号定位的是首先发现的失败条件，不能仅凭 API 拒绝访问证明是杀毒软件、组策略或某个第三方组件造成。多个环境问题按扫描及固定检查顺序记录首错；环境拒绝同时遇到释放失败时保留原拒绝，当前 IPC 不携带这项次生错误。
 
 | 步骤码 | 固定检查点 | 底层类别 |
 |---|---|---|
@@ -308,7 +314,7 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | 32 | size ViKey helper AppContainer identity | Win32 |
 | 33 | invalid size: size ViKey helper AppContainer identity | 无（逻辑校验） |
 | 34 | inspect ViKey helper AppContainer identity | Win32 |
-| 35 | ViKey helper AppContainer identity is invalid | 无（逻辑校验） |
+| 35 | helper AppContainer SID 与预期 SID 不符 | 无（逻辑校验） |
 | 36 | size ViKey helper capabilities | Win32 |
 | 37 | invalid size: size ViKey helper capabilities | 无（逻辑校验） |
 | 38 | inspect ViKey helper capabilities | Win32 |
@@ -325,7 +331,7 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | 49 | inspect helper handles mitigation | Win32 |
 | 50 | inspect helper extensions mitigation | Win32 |
 | 51 | inspect helper images mitigation | Win32 |
-| 52 | create ephemeral ViKey helper AppContainer profile | HRESULT（API 失败）；无（SID 校验失败） |
+| 52 | CreateAppContainerProfile API 失败（旧版也包含 SID 逻辑失败） | HRESULT |
 | 53 | format ViKey helper AppContainer identity | Win32 |
 | 54 | null formatted helper SID | 无（逻辑校验） |
 | 55 | open ViKey helper process token | Win32 |
@@ -363,6 +369,31 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 | 87 | combined missing sanitized_environment | 无（逻辑校验） |
 | 88 | combined security properties contain unexpected bits | 无（逻辑校验） |
 | 89 | zero attribute size | 无（逻辑校验） |
+| 90 | 环境条目没有等号或变量名为空 | 无（逻辑校验） |
+| 91 | 出现白名单外环境变量 | 无（逻辑校验） |
+| 92 | 白名单变量名大小写不符合固定格式 | 无（逻辑校验） |
+| 93 | 同名环境变量重复 | 无（逻辑校验） |
+| 94 | 缺少 LOCALAPPDATA | 无（逻辑校验） |
+| 95 | LOCALAPPDATA 为空 | 无（逻辑校验） |
+| 96 | 缺少 TEMP | 无（逻辑校验） |
+| 97 | TEMP 为空 | 无（逻辑校验） |
+| 98 | 缺少 TMP | 无（逻辑校验） |
+| 99 | TMP 为空 | 无（逻辑校验） |
+| 100 | TEMP 与 TMP 不一致 | 无（逻辑校验） |
+| 101 | TEMP 不等于 LOCALAPPDATA 加 \Temp | 无（逻辑校验） |
+| 102 | 有 WINDIR 但缺少 SystemRoot | 无（逻辑校验） |
+| 103 | SystemRoot 为空 | 无（逻辑校验） |
+| 104 | 有 SystemRoot 但缺少 WINDIR | 无（逻辑校验） |
+| 105 | WINDIR 为空 | 无（逻辑校验） |
+| 106 | SystemRoot 与 WINDIR 不一致 | 无（逻辑校验） |
+| 107 | GetEnvironmentStringsW 失败 | Win32 |
+| 108 | FreeEnvironmentStringsW 失败且此前无环境拒绝 | Win32 |
+| 109 | CreateAppContainerProfile 成功但 SID 为空 | 无（逻辑校验） |
+| 110 | CreateAppContainerProfile 成功但 SID 无效 | 无（逻辑校验） |
+| 111 | 查询到的 helper AppContainer SID 为空 | 无（逻辑校验） |
+| 112 | 查询到的 helper 完整性 SID 为空 | 无（逻辑校验） |
+| 113 | helper 完整性 SID 没有子授权项 | 无（逻辑校验） |
+| 114 | 查询到的 helper AppContainer SID 无效 | 无（逻辑校验） |
 
 
 ### 2026-09-21：2005 的桌面启动环境对照
@@ -372,3 +403,8 @@ WebView 用户数据目录权限、文件占用、运行时安装不完整、安
 同一 Release EXE 经现有 Windows 桌面 Explorer 启动，首次卡探测、页面导航和页面就绪均完成；同一 helper 与制品安全测试通过 2/2。仅增加 `KF_FLAG_RETURN_FILTER_REDIRECTION_TARGET` 的试验在此环境无效，已撤回。生产路径、重解析和摘要校验均未放宽；从带包目录虚拟化的宿主直接启动仍可能被拒绝，应使用普通桌面启动做对照。本结果不证明所有 2005 或历史安装完成页首次启动问题具有相同原因，也不代表完成登录和全部实卡操作验收。
 
 参考：微软 [KNOWN_FOLDER_FLAG](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ne-shlobj_core-known_folder_flag) 对文件系统重定向目标的说明，以及 [通过 Explorer 发起启动](https://devblogs.microsoft.com/oldnewthing/20131118-00/?p=2643)。
+
+
+### 2026-09-22：当前诊断版的路径一致集成重测
+
+当前协议 v14／114 步构建由 Explorer 桌面对象启动后，沿用生产同样的 KnownFolder 查询，创建唯一空探针并核验请求路径与句柄最终路径一致；随后 helper_process 与 artifact 两组测试 2/2 通过（2.95 秒），无跳过。首次通用 Shell.Application 启动仍重定向，预检拒绝且没有执行测试。未修改产品路径或放宽安全规则；Codex 宿主直接启动的重定向边界仍存在，用户实机 2011 未因此视为复现或修复。证据目录：out/path-retest-20260922-005829。

@@ -785,6 +785,39 @@ void test_diagnostic_round_trip() {
   expect(!valid_response(sent, Operation::probe), "unknown native code kind accepted");
 }
 
+void test_security_step_round_trip() {
+  for (std::uint32_t step = 90; step <= 108; ++step) {
+    const Pipe pipe = make_pipe();
+    Response sent{};
+    sent.status = static_cast<std::int32_t>(CardError::backend_unavailable);
+    sent.diagnostic = 11;
+    sent.security_step = step;
+    sent.native_kind = step >= 107 ? 1u : 0u;
+    sent.detail = step >= 107 ? 5u : 0u;
+    write_response(pipe.write.get(), sent, Operation::probe);
+    const auto got = read_response(pipe.read.get(), sent.nonce, Operation::probe);
+    expect(got.security_step == step && got.detail == sent.detail && got.native_kind == sent.native_kind,
+        "security step lost in pipe round trip");
+    auto bad = sent;
+    bad.security_step = 0;
+    expect(!valid_response(bad, Operation::probe), "unspecified 2011 accepted");
+    bad.security_step = 109;
+    expect(!valid_response(bad, Operation::probe), "parent-only step accepted from helper");
+    bad.security_step = 0xffffffffu;
+    expect(!valid_response(bad, Operation::probe), "unknown step accepted");
+    bad = sent; bad.native_kind = step >= 107 ? 0u : 1u; bad.detail = 0;
+    expect(!valid_response(bad, Operation::probe), "incorrect security error category accepted");
+    bad = sent; bad.diagnostic = 12;
+    expect(!valid_response(bad, Operation::probe), "security step attached to another stage");
+    bad = sent; bad.status = 0;
+    expect(!valid_response(bad, Operation::probe), "security failure accepted as success");
+    bad = sent; bad.status = static_cast<std::int32_t>(CardError::operation_timed_out);
+    expect(!valid_response(bad, Operation::probe), "security failure with wrong reason accepted");
+    bad = sent; bad.version = 13;
+    expect(!valid_response(bad, Operation::probe), "old protocol version accepted");
+  }
+}
+
 void test_nonce_mismatch_is_rejected() {
   const Pipe pipe = make_pipe();
   Response sent{};
@@ -824,6 +857,7 @@ int main() {
     test_response_validation();
     test_nonce_mismatch_is_rejected();
     test_diagnostic_round_trip();
+    test_security_step_round_trip();
     std::cout << "vikey_helper_protocol_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "card/vikey/helper_environment.h"
 using usb_vault::card::diagnostic_native;
 using usb_vault::card::diagnostic_stage;
 using usb_vault::card::diagnostic_kind;
@@ -29,12 +30,6 @@ namespace {
 using usb_vault::card::CardError;
 using usb_vault::card::card_error_category;
 using namespace usb_vault::card::vikey::helper;
-
-enum class EnvironmentBoundary {
-  invalid,
-  zero_network_app_container,
-  network_enabled_development,
-};
 
 class Module final {
  public:
@@ -79,58 +74,11 @@ class File final {
   return handle;
 }
 
-[[nodiscard]] EnvironmentBoundary sanitized_environment() {
-  wchar_t* const environment = ::GetEnvironmentStringsW();
-  if (environment == nullptr) {
-    throw std::runtime_error("cannot inspect helper environment");
-  }
-  std::wstring local_app_data;
-  std::wstring temp;
-  std::wstring tmp;
-  std::wstring system_root;
-  std::wstring windir;
-  std::size_t count = 0;
-  for (const wchar_t* entry = environment; *entry != L'\0';) {
-    const std::wstring value(entry);
-    entry += value.size() + 1;
-    ++count;
-    constexpr wchar_t kLocalAppData[] = L"LOCALAPPDATA=";
-    constexpr wchar_t kTemp[] = L"TEMP=";
-    constexpr wchar_t kTmp[] = L"TMP=";
-    constexpr wchar_t kSystemRoot[] = L"SystemRoot=";
-    constexpr wchar_t kWindowsDirectory[] = L"WINDIR=";
-    if (value.starts_with(kLocalAppData)) {
-      local_app_data = value.substr(std::size(kLocalAppData) - 1);
-    } else if (value.starts_with(kTemp)) {
-      temp = value.substr(std::size(kTemp) - 1);
-    } else if (value.starts_with(kTmp)) {
-      tmp = value.substr(std::size(kTmp) - 1);
-    } else if (value.starts_with(kSystemRoot)) {
-      system_root = value.substr(std::size(kSystemRoot) - 1);
-    } else if (value.starts_with(kWindowsDirectory)) {
-      windir = value.substr(std::size(kWindowsDirectory) - 1);
-    } else {
-      count = 0;
-      break;
-    }
-  }
-  if (::FreeEnvironmentStringsW(environment) == FALSE) {
-    throw std::runtime_error("cannot release helper environment");
-  }
-  const bool base_valid = !local_app_data.empty() && temp == tmp &&
-                          temp == local_app_data + L"\\Temp";
-  const bool isolated_environment =
-      count == 3 && system_root.empty() && windir.empty();
-  const bool development_environment =
-      count == 5 && !system_root.empty() && windir == system_root;
-  if (!base_valid) return EnvironmentBoundary::invalid;
-  if (isolated_environment) {
-    return EnvironmentBoundary::zero_network_app_container;
-  }
-  if (development_environment) {
-    return EnvironmentBoundary::network_enabled_development;
-  }
-  return EnvironmentBoundary::invalid;
+[[nodiscard]] EnvironmentCheck sanitized_environment() noexcept {
+  return inspect_helper_environment(
+      [] { return ::GetEnvironmentStringsW(); },
+      [](wchar_t* block) { return ::FreeEnvironmentStringsW(block) != FALSE; },
+      [] { return static_cast<std::uint32_t>(::GetLastError()); });
 }
 
 [[nodiscard]] std::filesystem::path staged_vendor_dll() {
@@ -842,7 +790,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     response.nonce = request.nonce;
     usb_vault::security::SecureBuffer response_blob;
     try {
-      const EnvironmentBoundary environment = sanitized_environment();
+      const auto environment_check = sanitized_environment();
+      const auto environment = environment_check.boundary;
       if (environment != EnvironmentBoundary::invalid) {
         OperationResult result{};
         if (request.operation == Operation::development_session_probe ||
@@ -939,9 +888,11 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       } else {
         response.status =
             static_cast<std::int32_t>(CardError::backend_unavailable);
-        response.detail = ERROR_BAD_ENVIRONMENT;
+        response.detail = environment_check.native;
+        response.security_step = environment_check.step;
         response.diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::process_security);
-        response.native_kind = static_cast<std::uint32_t>(usb_vault::card::NativeCodeKind::win32);
+        response.native_kind = environment_check.step >= 107
+            ? static_cast<std::uint32_t>(usb_vault::card::NativeCodeKind::win32) : 0;
       }
       if (response.status == 0) {
         response.security_properties =
@@ -959,6 +910,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
           static_cast<std::int32_t>(CardError::backend_unavailable);
       response.security_properties = 0;
       response.payload_bytes = 0;
+      response.security_step = 0;
       response.detail = ERROR_GEN_FAILURE;
       response.diagnostic = static_cast<std::uint32_t>(usb_vault::card::DiagnosticStage::unexpected);
       response.native_kind = static_cast<std::uint32_t>(usb_vault::card::NativeCodeKind::win32);

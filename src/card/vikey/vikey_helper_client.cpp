@@ -430,8 +430,9 @@ void filter_development_process_privileges(const HANDLE token) {
     const auto* const app_container =
         reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(
             app_container_storage.data());
-    if (app_container->TokenAppContainer == nullptr ||
-        ::EqualSid(app_container->TokenAppContainer,
+    if (app_container->TokenAppContainer == nullptr) throw_process_security(111, "missing helper AppContainer SID");
+    if (::IsValidSid(app_container->TokenAppContainer) == FALSE) throw_process_security(114, "invalid helper AppContainer SID");
+    if (::EqualSid(app_container->TokenAppContainer,
                    expected_app_container_sid) == FALSE) {
       throw_process_security(35, "ViKey helper AppContainer identity is invalid");
     }
@@ -477,14 +478,14 @@ void filter_development_process_privileges(const HANDLE token) {
     const auto* const integrity =
         reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(
             integrity_storage.data());
-    if (integrity->Label.Sid == nullptr ||
-        ::IsValidSid(integrity->Label.Sid) == FALSE) {
+    if (integrity->Label.Sid == nullptr) throw_process_security(112, "missing helper integrity SID");
+    if (::IsValidSid(integrity->Label.Sid) == FALSE) {
       throw_process_security(43, "ViKey helper integrity SID is invalid");
     }
     const UCHAR subauthority_count =
         *::GetSidSubAuthorityCount(integrity->Label.Sid);
-    if (subauthority_count == 0 ||
-        *::GetSidSubAuthority(integrity->Label.Sid,
+    if (subauthority_count == 0) throw_process_security(113, "missing helper integrity subauthority");
+    if (*::GetSidSubAuthority(integrity->Label.Sid,
                               subauthority_count - 1) >
             SECURITY_MANDATORY_LOW_RID) {
       throw_process_security(44, "ViKey helper integrity level is too high");
@@ -618,11 +619,12 @@ create_ephemeral_app_container() {
       moniker.c_str(), L"usb-vault ViKey helper",
       L"Ephemeral zero-network ViKey helper boundary", nullptr, 0, &sid);
   if (FAILED(result) || sid == nullptr || ::IsValidSid(sid) == FALSE) {
+    const std::uint32_t step = FAILED(result) ? 52u : sid == nullptr ? 109u : 110u;
     if (sid != nullptr) static_cast<void>(::FreeSid(sid));
     if (SUCCEEDED(result)) {
       static_cast<void>(::DeleteAppContainerProfile(moniker.c_str()));
     }
-    throw_process_security(52, "create ephemeral ViKey helper AppContainer profile", FAILED(result) ? static_cast<std::uint32_t>(result) : 0, FAILED(result) ? NativeCodeKind::hresult : NativeCodeKind::none);
+    throw_process_security(step, "create ephemeral ViKey helper AppContainer profile", FAILED(result) ? static_cast<std::uint32_t>(result) : 0, FAILED(result) ? NativeCodeKind::hresult : NativeCodeKind::none);
   }
   return std::make_unique<EphemeralAppContainer>(std::move(moniker), sid);
 }
@@ -1354,7 +1356,7 @@ namespace {
       throw DiagnosticError(make_error_code(static_cast<CardError>(response.status)),
           static_cast<DiagnosticStage>(response.diagnostic), "helper operation failed",
           response.diagnostic ? response.detail : 0,
-          static_cast<NativeCodeKind>(response.native_kind));
+          static_cast<NativeCodeKind>(response.native_kind), response.security_step);
     }
     const std::uint32_t security_properties =
         parent_security_properties | response.security_properties;
