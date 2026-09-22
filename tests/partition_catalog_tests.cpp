@@ -1,5 +1,6 @@
 #include "usb_vault/volume/partition_catalog.h"
 #include "volume/partition_catalog_detail.h"
+#include "volume/partition_write_policy.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include <filesystem>
 #include <iostream>
@@ -171,6 +172,29 @@ void snapshot_tests() {
   require(matches_partition_snapshot(selected, {&selected, 1}), "MBR snapshot rejected");
   std::cout << "PASS: partition snapshot replacement, format, ambiguity and bounds checks\n";
 }
+void write_policy_tests() {
+  using detail::PartitionWriteFacts;
+  // Exhaustive unknown/false/true flags, with every documented conversion state
+  // and unknown/out-of-range values. Only fully known, unprotected data passes.
+  unsigned cases{};
+  for (int boot = -1; boot <= 1; ++boot)
+    for (int system = -1; system <= 1; ++system)
+      for (int paging = -1; paging <= 1; ++paging)
+        for (int conversion = -1; conversion <= 6; ++conversion) {
+          PartitionWriteFacts facts;
+          if (boot >= 0) facts.boot_volume = boot != 0;
+          if (system >= 0) facts.system_volume = system != 0;
+          if (paging >= 0) facts.page_file_present = paging != 0;
+          if (conversion >= 0) facts.conversion_status = static_cast<std::uint32_t>(conversion);
+          require(detail::permits_partition_write(facts) ==
+              (boot == 0 && system == 0 && paging == 0 && conversion == 0),
+              "unsafe/unknown volume write policy accepted");
+          ++cases;
+        }
+  require(!detail::check_partition_write_policy(nullptr, {}), "invalid policy handle accepted");
+  require(!detail::check_partition_write_policy(INVALID_HANDLE_VALUE, {}), "invalid policy handle accepted");
+  std::cout << "PASS: " << cases << " write-policy combinations and invalid handles\n";
+}
 void rejected_handles() {
   PartitionCandidate expected{};
   expected.volume_path = L"native-only-label";
@@ -268,7 +292,7 @@ int main(int argc, char** argv) {
       std::cout << "SKIP: no supported MBR candidate for read-only helper integration\n";
       return 77;
     }
-    if (argc == 1) { unit_tests(); snapshot_tests(); rejected_handles(); }
+    if (argc == 1) { unit_tests(); snapshot_tests(); rejected_handles(); write_policy_tests(); }
     else if (argc == 2 && std::string_view(argv[1]) == "--scan") scan();
     else if (argc == 2 && std::string_view(argv[1]) == "--scan-handles") scan(true);
     else throw std::runtime_error("expected no arguments, --scan or --scan-handles");

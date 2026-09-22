@@ -164,6 +164,7 @@ add_library(usb_vault_core STATIC
   src/ui/ui_close_guard.cpp
   src/ui/webview_password_array.cpp
   src/volume/partition_catalog.cpp
+  src/volume/partition_write_policy.cpp
   src/volume/mount_request.cpp
   src/volume/unmount_retry.cpp
   src/volume/volume_containment.cpp
@@ -194,6 +195,7 @@ target_link_libraries(usb_vault_core PRIVATE
   Bcrypt
   Ole32
   OleAut32
+  Wbemuuid
   Shell32
 )
 

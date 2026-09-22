@@ -1,0 +1,20 @@
+#pragma once
+#include "usb_vault/volume/partition_catalog.h"
+#include <Windows.h>
+#include <optional>
+
+namespace usb_vault::volume::detail {
+// Missing facts must never be interpreted as false / fully decrypted.
+struct PartitionWriteFacts final {
+  std::optional<bool> boot_volume;
+  std::optional<bool> system_volume;
+  std::optional<bool> page_file_present;
+  std::optional<std::uint32_t> conversion_status;
+};
+[[nodiscard]] bool permits_partition_write(const PartitionWriteFacts& facts) noexcept;
+// Read-only preflight, not a reusable write permit. The writer must run this
+// against its retained target handle, then obtain an exclusive volume lock and
+// revalidate identity before modifying anything. No lock/dismount/write here.
+[[nodiscard]] bool check_partition_write_policy(
+    HANDLE handle, const PartitionCandidate& expected) noexcept;
+}  // namespace usb_vault::volume::detail

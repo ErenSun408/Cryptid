@@ -3395,7 +3395,7 @@
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) {
         partitionSelected = id;
-        partitionStatus.textContent = "已选择分区，可检查其身份；检查需要管理员确认，不会修改分区。";
+        partitionStatus.textContent = "已选择分区，可检查身份及系统、分页和 BitLocker 状态；检查需要管理员确认，不会修改分区。";
       }
     } catch (_) {
       if (revision === partitionRevision) {
@@ -3411,7 +3411,7 @@
     if (!partitionPickerVisible() || busy || !partitionSelected || bridge === null || currentState !== nativeState.authenticated) return;
     const revision = partitionRevision;
     busy = true; render(messageForCurrentState());
-    partitionStatus.textContent = "正在检查分区身份，请完成管理员确认…";
+    partitionStatus.textContent = "正在检查分区身份及使用状态，请完成管理员确认…";
     try {
       if (await bridge.beginPartitionCheck() !== true) throw new Error("partition check rejected");
       let state;
@@ -3420,11 +3420,11 @@
         if (state === 1) await new Promise(resolve => window.setTimeout(resolve, 100));
       } while (state === 1);
       if (state !== 2) throw new Error("partition check failed");
-      if (revision === partitionRevision) partitionStatus.textContent = "分区身份检查通过；加密创建尚未开放。";
+      if (revision === partitionRevision) partitionStatus.textContent = "分区身份及使用状态检查通过；加密创建尚未开放。";
     } catch (_) {
       if (revision === partitionRevision) {
         discardPartitions();
-        partitionStatus.textContent = "检查未完成或分区已变化，请刷新重试。当前仅支持 MBR 数据分区的检查。";
+        partitionStatus.textContent = "检查未完成、分区受保护或状态无法确认，请刷新重试。仅支持未启用 BitLocker 的 MBR 数据分区。";
       }
     } finally {
       busy = false; render(messageForCurrentState());

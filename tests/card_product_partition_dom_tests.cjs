@@ -26,7 +26,7 @@ async function until(check) { for(let i=0;i<200;i++){if(check())return; await sl
  assert.equal($('#partition-check').disabled,false);
  $('#partition-check').click(); await until(()=>!$('#partition-check').disabled);
  assert.equal(w.navigationFixture.partitionChecks,1);
- assert.match($('#partition-status').textContent,/身份检查通过/);
+ assert.match($('#partition-status').textContent,/身份及使用状态检查通过/);
  assert.equal($('#create-volume-continue').disabled,true);
  w.navigationFixture.partitionCheckPending=true;
  $('#partition-check').click(); await sleep(20);

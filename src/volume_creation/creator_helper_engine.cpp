@@ -1,6 +1,7 @@
 #include "volume_creation/creator_helper_engine.h"
 #include "volume_creation/import_unique_name.h"
 #include "volume/partition_catalog_detail.h"
+#include "volume/partition_write_policy.h"
 
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -968,6 +969,8 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
         nullptr, OPEN_EXISTING, 0, nullptr));
     if (handle.get() == INVALID_HANDLE_VALUE || !volume::detail::matches_partition_handle_identity(handle.get(), expected))
       fail(CreationError::target_access_denied, "partition handle identity mismatch");
+    if (!volume::detail::check_partition_write_policy(handle.get(), expected))
+      fail(CreationError::target_access_denied, "partition write policy rejected");
     return 0; // No format DLL, password, mount, cleanup deletion or retained consent.
   }
   if (request.operation == Operation::scan_tail_space) {

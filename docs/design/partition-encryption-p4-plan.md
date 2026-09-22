@@ -177,3 +177,15 @@ API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win3
 ## 向导只读管理员检查（2026-09-22）
 
 “检查所选分区”已接入原生后台工作线程。产品使用已验证并锁定的部署 helper 路径，页面不提供目标路径或设备身份；仅消费当前选中快照。检查期间禁止冲突操作，失败／会话 epoch 变化清空目标，成功仅展示身份核对结果，不开放创建。UI 明确首版检查限 MBR；GPT 可发现与选择，但本检查暂不支持。UAC 取消、查询失败和目标变化均归未完成，要求刷新，不保存检查结果作为写许可。页面与原生测试及静态分析通过，真实 WebView／实卡点击验收尚未执行。
+
+## 提权侧系统用途与 BitLocker 门禁（2026-09-22）
+
+在只读检查动作中新增正式 `partition_write_policy`：先验证同一可读卷句柄及重新枚举快照，再通过本机 WMI 的 Win32_Volume 查询 BootVolume／SystemVolume／PageFilePresent，三项均明确为 false 才继续。对相同卷 GUID 查询 Win32_EncryptableVolume，并调用只读 GetConversionStatus；只有方法成功且 ConversionStatus=0（FullyDecrypted）通过。保护暂停、加解密中、未知状态、缺失／重复目标、权限不足、提供程序不可用及查询失败全部拒绝；没有 BitLocker 实例不等同未加密。查询之后重新核对句柄及枚举身份，不以盘符连接两个数据源。
+
+使用固定 WQL，输入路径不拼入查询；只连接本机固定命名空间、仅调用只读方法，严格检查 CIM／VARIANT 类型与字符串长度／内嵌 NUL。枚举最多 4096 项，每次枚举总等待及方法结果等待各限 5 秒；ConnectServer 使用 Windows 的 MAX_WAIT（上限 2 分钟），这不是整个检查的 5 秒截止时间。COM／BSTR／VARIANT 由作用域释放，异常统一拒绝，不记录卷 GUID 或系统用途。WMI 提供程序不可用的 Windows 版本暂不支持，不增加推断安全的回退。
+
+该门禁已接入“检查所选分区”，检查成功仍不能创建，也不能缓存为写许可。清空确认应在实际创建动作前与当前目标／卡会话绑定，一次性消费；本片不提前保存清空同意。接入写入时仍需在保留的写句柄上重新执行门禁、取得独占锁并复核身份，处理写保护和占用。WMI 是系统状态快照，不是原子锁；本片不宣称已消除并发配置／设备替换竞态，不保证识别未运行的其他操作系统全部启动依赖。
+
+验证：216 组用途／转换状态组合、无效句柄拒绝及 5 组相关 CTest 通过，Release 正式应用／helper 与新模块静态分析通过。自建 256 MiB MBR NTFS VHD 的真实提权检查通过并拒绝修改设备身份，镜像已脱离并删除。未配置真实分页卷或 BitLocker 卷进行变更测试，未做实卡／物理盘写入及全量验收。
+
+依据：[Win32_Volume](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/vdswmi/win32-volume)、[GetConversionStatus](https://learn.microsoft.com/en-us/windows/win32/secprov/getconversionstatus-win32-encryptablevolume)、[IWbemServices::ExecMethod](https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-iwbemservices-execmethod)。
