@@ -169,32 +169,84 @@ void snapshot_tests() {
   require(matches_partition_snapshot(selected, {&selected, 1}), "MBR snapshot rejected");
   std::cout << "PASS: partition snapshot replacement, format, ambiguity and bounds checks\n";
 }
-void scan() {
+void rejected_handles() {
+  PartitionCandidate expected{};
+  expected.volume_path = L"native-only-label";
+  expected.partition_number = 1; expected.offset_bytes = 1048576;
+  expected.length_bytes = 1073741824; expected.logical_sector_bytes = 512;
+  expected.layout = PartitionLayout::mbr; expected.device_id[0] = 1;
+  expected.availability = A::candidate;
+  require(!detail::matches_partition_handle_identity(nullptr, expected), "null handle accepted");
+  require(!detail::matches_partition_handle_identity(INVALID_HANDLE_VALUE, expected), "invalid handle accepted");
+  const HANDLE event = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  require(event != nullptr, "create test event");
+  const bool event_rejected = !detail::matches_partition_handle_identity(event, expected);
+  const bool event_retained = ::SetEvent(event) != FALSE;
+  ::CloseHandle(event);
+  require(event_rejected && event_retained, "non-disk handle accepted or consumed");
+  std::array<wchar_t, 32768> name{};
+  const auto count = ::GetModuleFileNameW(nullptr, name.data(), static_cast<DWORD>(name.size()));
+  require(count && count < name.size(), "locate test executable");
+  const HANDLE file = ::CreateFileW(name.data(), GENERIC_READ, FILE_SHARE_READ,
+      nullptr, OPEN_EXISTING, 0, nullptr);
+  require(file != INVALID_HANDLE_VALUE, "open test executable");
+  LARGE_INTEGER position{}; position.QuadPart = 17;
+  require(::SetFilePointerEx(file, position, nullptr, FILE_BEGIN) != FALSE, "set test cursor");
+  const bool file_rejected = !detail::matches_partition_handle_identity(file, expected);
+  LARGE_INTEGER zero{}, after{};
+  const bool file_retained = ::SetFilePointerEx(file, zero, &after, FILE_CURRENT) != FALSE;
+  ::CloseHandle(file);
+  require(file_rejected && file_retained && after.QuadPart == 17, "file accepted or handle cursor changed");
+  std::cout << "PASS: invalid and non-device handles rejected without ownership or cursor changes\n";
+}
+void scan(bool handles = false) {
   // Explicit opt-in read-only native smoke. Never print identities or paths.
   const auto first = enumerate_partition_candidates();
   const auto second = enumerate_partition_candidates();
   require(!first.empty() && !second.empty(), "empty Windows volume inventory");
-  std::size_t candidates{}, blocked{}, windows{};
+  std::size_t candidates{}, blocked{}, windows{}, verified_handles{};
   for (const auto& entry : second) {
     if (entry.availability == A::candidate) {
       ++candidates;
+      if (handles) {
+        auto device = entry.volume_path;
+        device.pop_back();
+        const HANDLE handle = ::CreateFileW(device.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr, OPEN_EXISTING, 0, nullptr);
+        require(handle != INVALID_HANDLE_VALUE, "open read-only candidate");
+        const bool matched = detail::matches_partition_handle_identity(handle, entry);
+        auto changed = entry; changed.device_id[0] ^= 1;
+        const bool replaced_rejected = !detail::matches_partition_handle_identity(handle, changed);
+        changed = entry; changed.offset_bytes += 512;
+        const bool moved_rejected = !detail::matches_partition_handle_identity(handle, changed);
+        changed = entry; ++changed.filesystem_serial;
+        const bool reformatted_rejected = !detail::matches_partition_handle_identity(handle, changed);
+        DWORD flags{};
+        const bool retained = ::GetHandleInformation(handle, &flags) != FALSE;
+        ::CloseHandle(handle);
+        require(matched && replaced_rejected && moved_rejected && reformatted_rejected && retained,
+            "same-handle identity verification failed");
+        ++verified_handles;
+      }
       require(matches_partition_snapshot(entry, first), "candidate changed between read-only scans");
       require(entry.partition_number && entry.offset_bytes && entry.length_bytes &&
           entry.logical_sector_bytes == 512 && !entry.query_error, "incomplete candidate");
     } else ++blocked;
     if (entry.availability == A::windows_volume) ++windows;
   }
+  require(candidates > 0, "no eligible candidate exercised same-handle checks");
   require(windows == 1, "Windows volume not excluded exactly once");
   std::cout << "PASS: read-only refresh; volumes=" << second.size()
             << " candidates=" << candidates << " blocked=" << blocked
-            << " windows_excluded=" << windows << '\n';
+            << " windows_excluded=" << windows << " handle_checks=" << verified_handles << '\n';
 }
 }
 int main(int argc, char** argv) {
   try {
-    if (argc == 1) { unit_tests(); snapshot_tests(); }
+    if (argc == 1) { unit_tests(); snapshot_tests(); rejected_handles(); }
     else if (argc == 2 && std::string_view(argv[1]) == "--scan") scan();
-    else throw std::runtime_error("expected no arguments or --scan");
+    else if (argc == 2 && std::string_view(argv[1]) == "--scan-handles") scan(true);
+    else throw std::runtime_error("expected no arguments, --scan or --scan-handles");
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "partition_catalog_tests failed: " << error.what() << '\n';

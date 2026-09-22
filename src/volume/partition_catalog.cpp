@@ -61,37 +61,23 @@ bool query(HANDLE handle, DWORD code, T& value, DWORD& first_error) noexcept {
   }
   return true;
 }
-PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volume) {
-  PartitionCandidate result{.volume_path = path};
+PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_path = nullptr) {
+  PartitionCandidate result{};
   detail::PartitionObservation observed;
-  const int comparison = ::CompareStringOrdinal(path, -1, system_volume.c_str(), -1, TRUE);
-  if (!comparison) fail(::GetLastError(), "compare Windows volume identity");
-  observed.windows_volume = comparison == CSTR_EQUAL;
-  if (observed.windows_volume) {
-    result.availability = PartitionAvailability::windows_volume;
-    return result;
-  }
-  // Paths only come from FindFirst/NextVolume, never from a caller or page.
-  if (!result.volume_path.starts_with(L"\\\\?\\Volume{") || result.volume_path.back() != L'\\')
-    fail(ERROR_INVALID_DATA, "unexpected enumerated volume name");
-  std::wstring device = result.volume_path;
-  device.pop_back();
-  // Zero desired access: query metadata only, including on access-limited hosts.
-  const Handle handle(::CreateFileW(device.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
-      nullptr, OPEN_EXISTING, 0, nullptr));
-  if (handle.get() == INVALID_HANDLE_VALUE) {
-    result.query_error = ::GetLastError();
-    return result;
-  }
   DWORD error{};
-  observed.partition_known = query(handle.get(), IOCTL_DISK_GET_PARTITION_INFO_EX, observed.partition, error);
-  observed.extent_known = query(handle.get(), IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, observed.extents, error);
-  observed.geometry_known = query(handle.get(), IOCTL_DISK_GET_DRIVE_GEOMETRY, observed.geometry, error);
-  observed.device_known = query(handle.get(), IOCTL_STORAGE_GET_DEVICE_NUMBER_EX, observed.device, error);
+  observed.partition_known = query(handle, IOCTL_DISK_GET_PARTITION_INFO_EX, observed.partition, error);
+  observed.extent_known = query(handle, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, observed.extents, error);
+  observed.geometry_known = query(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY, observed.geometry, error);
+  observed.device_known = query(handle, IOCTL_STORAGE_GET_DEVICE_NUMBER_EX, observed.device, error);
   std::array<wchar_t, 32> filesystem{};
   DWORD filesystem_serial{};
-  observed.filesystem_known = ::GetVolumeInformationW(path, nullptr, 0, &filesystem_serial, nullptr, nullptr,
-      filesystem.data(), static_cast<DWORD>(filesystem.size())) != FALSE;
+  // Unprivileged discovery retains the path query. The helper prerequisite
+  // never supplies this argument and reads only its already-open handle.
+  observed.filesystem_known = (discovery_path
+      ? ::GetVolumeInformationW(discovery_path, nullptr, 0, &filesystem_serial, nullptr, nullptr,
+          filesystem.data(), static_cast<DWORD>(filesystem.size()))
+      : ::GetVolumeInformationByHandleW(handle, nullptr, 0, &filesystem_serial, nullptr, nullptr,
+          filesystem.data(), static_cast<DWORD>(filesystem.size()))) != FALSE;
   if (!observed.filesystem_known && !error) error = ::GetLastError();
   result.filesystem_serial = filesystem_serial;
   observed.filesystem = filesystem.data();
@@ -122,6 +108,31 @@ PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volum
   if (observed.geometry_known) result.logical_sector_bytes = observed.geometry.BytesPerSector;
   return result;
 }
+PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volume) {
+  PartitionCandidate result{.volume_path = path};
+  const int comparison = ::CompareStringOrdinal(path, -1, system_volume.c_str(), -1, TRUE);
+  if (!comparison) fail(::GetLastError(), "compare Windows volume identity");
+  if (comparison == CSTR_EQUAL) {
+    result.availability = PartitionAvailability::windows_volume;
+    return result;
+  }
+  // Paths only come from FindFirst/NextVolume, never from a caller or page.
+  if (!result.volume_path.starts_with(L"\\\\?\\Volume{") || result.volume_path.back() != L'\\')
+    fail(ERROR_INVALID_DATA, "unexpected enumerated volume name");
+  std::wstring device = result.volume_path;
+  device.pop_back();
+  // Zero desired access: query metadata only, including on access-limited hosts.
+  const Handle handle(::CreateFileW(device.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, 0, nullptr));
+  if (handle.get() == INVALID_HANDLE_VALUE) {
+    result.query_error = ::GetLastError();
+    return result;
+  }
+  auto current = inspect_handle(handle.get(), path);
+  current.volume_path = std::move(result.volume_path);
+  return current;
+}
+
 }  // namespace
 
 PartitionAvailability detail::assess_partition(const PartitionObservation& value) noexcept {
@@ -165,6 +176,22 @@ PartitionAvailability detail::assess_partition(const PartitionObservation& value
       device.DeviceNumber != extent.DiskNumber || device.PartitionNumber != part.PartitionNumber)
     return A::device_identity_unavailable;
   return A::candidate;
+}
+
+bool detail::matches_partition_handle_identity(const HANDLE handle,
+    const PartitionCandidate& expected) noexcept {
+  if (!handle || handle == INVALID_HANDLE_VALUE ||
+      !matches_partition_snapshot(expected, {&expected, 1})) return false;
+  try {
+    auto current = inspect_handle(handle);
+    // A kernel handle, not a reopened path, supplies every comparison fact.
+    // The discovery path is only a label; it cannot establish handle identity.
+    auto facts = expected;
+    facts.volume_path.clear();
+    return current == facts;
+  } catch (...) {
+    return false;
+  }
 }
 
 bool matches_partition_snapshot(const PartitionCandidate& selected,

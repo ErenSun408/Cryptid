@@ -20,4 +20,12 @@ struct PartitionObservation final {
 };
 [[nodiscard]] PartitionAvailability assess_partition(
     const PartitionObservation& observation) noexcept;
+// Read-only prerequisite for an elevated caller that already owns the target
+// read-capable synchronous volume handle (GENERIC_READ, typically elevated).
+// Does not open/reopen, close, duplicate, seek, lock or dismount it.
+// No system/paging/BitLocker authorization or backend support is implied. The
+// writer must retain this same handle and apply those separate policy gates.
+// Currently requires the discovered NTFS filesystem; RAW is not accepted.
+[[nodiscard]] bool matches_partition_handle_identity(
+    HANDLE handle, const PartitionCandidate& expected) noexcept;
 }  // namespace usb_vault::volume::detail
