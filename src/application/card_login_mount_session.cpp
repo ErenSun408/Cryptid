@@ -153,6 +153,11 @@ class ProductionCardLoginMountSessionRuntime final
         }, cancelled);
   }
 
+  volume::MountResult mount_partition(const volume::PartitionIdentity& identity,
+      const security::SecureBuffer& password, const volume::MountOptions& options) override {
+    return provider_.mount_partition(identity, password, options);
+  }
+
   void create_standard(
       const std::wstring_view target_path, const std::uint64_t size_bytes,
       const security::SecureBuffer& volume_password) override {
@@ -394,6 +399,11 @@ void CardLoginMountSession::consume_authenticated_login(
 void CardLoginMountSession::create_container_a(
     const std::uint64_t size_bytes) {
   impl_->core.create_container_a(size_bytes);
+}
+
+std::uint32_t CardLoginMountSession::create_partition(const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  return impl_->core.create_partition(target, confirm);
 }
 
 void CardLoginMountSession::format_partition(
@@ -712,7 +722,7 @@ void throw_if_creation_cancelled(
     CardLoginMountSessionState& state,
     const std::wstring_view path) noexcept {
   for (SessionContainer& container : state.containers) {
-    if (container.path == path) return &container;
+    if (!container.partition && container.path == path) return &container;
   }
   return nullptr;
 }
@@ -745,6 +755,20 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
     std::rotate(state.containers.begin(), state.containers.end() - 1, state.containers.end());
     return state.containers.front();
   }
+  return state.containers.back();
+}
+
+SessionContainer& adopt_partition(CardLoginMountSessionState& state,
+    const volume::PartitionIdentity& identity) {
+  if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
+  for (auto& entry : state.containers) if (entry.partition == identity) return entry;
+  if (state.next_container_id == UINT32_MAX) throw std::overflow_error("container IDs exhausted");
+  SessionContainer entry;
+  entry.id = state.next_container_id++;
+  entry.name = L"磁盘容器 " + std::to_wstring(entry.id);
+  entry.derivation_known = true;
+  entry.partition = identity;
+  state.containers.push_back(std::move(entry));
   return state.containers.back();
 }
 
@@ -995,7 +1019,7 @@ void CardLoginMountSessionCore::reorder_containers(
         [id](const auto& item) { return item.id == id; }))
       throw std::invalid_argument("invalid container order");
     ordered.push_back(*entry);
-    paths.push_back(entry->path);
+    if (!entry->partition) paths.push_back(entry->path);
   }
   if (runtime_.remember_container_paths()) {
     auto key = container_index_key();
@@ -1035,7 +1059,9 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     const std::vector<std::byte> file = runtime_.read_container_index();
     const std::vector<std::wstring> paths =
         list_container_index_paths_v1(key.bytes(), file);
+    const auto partitions = list_container_index_partitions(key.bytes(), file);
     key.clear();
+    for (const auto& partition : partitions) static_cast<void>(adopt_partition(state_, partition));
     for (const std::wstring& path : paths) {
       // A remembered path whose file is not here is passed over and left in
       // the index. A container on a drive that is not plugged in is absent in
@@ -1110,6 +1136,44 @@ wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
     }
   }
   return letter;
+}
+
+std::uint32_t CardLoginMountSessionCore::create_partition(
+    const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  if (!authentication_.authenticated()) throw std::logic_error("partition creation requires authentication");
+  if (!runtime_.remember_container_paths()) throw std::logic_error("partition creation requires remembering containers");
+  const volume::PartitionIdentity identity{target.device_id, target.device_id_flags,
+      target.layout == volume::PartitionLayout::mbr ? 1U : 0U,
+      target.logical_sector_bytes, target.offset_bytes, target.length_bytes};
+  if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
+  for (const auto& entry : state_.containers)
+    if (entry.partition == identity) throw std::logic_error("partition already recorded");
+  auto key = container_index_key();
+  auto index = runtime_.read_container_index();
+  const auto insertion = add_container_index_partition(key.bytes(), index, identity);
+  if (insertion != ContainerIndexWriteV1::added) throw std::runtime_error("partition index unavailable or already recorded");
+  key.clear();
+  // Allocate the session row before irreversible work, but remove it on failure.
+  const auto id = adopt_partition(state_, identity).id;
+  bool recorded = false;
+  try {
+    format_partition(target, [&](const auto& frozen) {
+      if (!confirm || !confirm(frozen)) return false;
+      // Persist identity before any destructive write; failure refuses consent.
+      // A later cancellation may leave an unmounted record, never a lost volume.
+      runtime_.write_container_index(index);
+      recorded = true;
+      return true;
+    });
+    if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
+    throw_if_creation_cancelled(runtime_);
+    mount_adopted_container(id);
+    return id;
+  } catch (...) {
+    if (!recorded) std::erase_if(state_.containers, [id](const auto& entry) { return entry.id == id; });
+    throw;
+  }
 }
 
 void CardLoginMountSessionCore::format_partition(
@@ -1372,6 +1436,7 @@ SessionContainer& CardLoginMountSessionCore::maintenance_target(
     throw std::invalid_argument(
         "no container is adopted under that identifier");
   }
+  if (entry->partition) throw DecoyMaintenanceRefused();
   return *entry;
 }
 
@@ -1379,6 +1444,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
     SessionContainer& entry,
     const security::SecureBuffer& outer_password,
     const MaintenanceMount mode) {
+  if (entry.partition) throw DecoyMaintenanceRefused();
   // One file cannot serve two volumes, so whatever it serves now goes first.
   // Force is this flow's standing answer, agreed to before any of it starts.
   if (entry.mounted) unmount_container_impl(entry.id, true);
@@ -1778,6 +1844,19 @@ void CardLoginMountSessionCore::mount_adopted_container(
         "no container is adopted under that identifier");
   }
   if (entry->mounted) return;
+  if (entry->partition) {
+    auto password = derive_standard_password();
+    if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
+    const wchar_t drive = reserve_drive_letter();
+    static_cast<void>(runtime_.mount_partition(*entry->partition, password,
+        {.drive_letter = drive, .notify_shell = false}));
+    password.clear();
+    entry->drive_letter = drive;
+    entry->mounted = true;
+    record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, entry->name, drive);
+    runtime_.notify_mounted(drive);
+    return;
+  }
   const std::wstring container_name = entry->name;
   security::SecureBuffer standard_password;
   bool mounted = false;
@@ -1996,6 +2075,13 @@ void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
     }
     // The path is copied out before the entry goes, because forgetting it is
     // what the caller asked for and the entry is where it is written down.
+    if (entry->partition) {
+      auto key = container_index_key();
+      auto index = runtime_.read_container_index();
+      if (remove_container_index_partition(key.bytes(), index, *entry->partition)) runtime_.write_container_index(index);
+      state_.containers.erase(entry);
+      return;
+    }
     const std::wstring path = entry->path;
     state_.containers.erase(entry);
     forget_container_path(path);
@@ -2140,6 +2226,7 @@ void CardLoginMountSessionCore::export_container_file(
     throw std::invalid_argument(
         "no container is adopted under that identifier");
   }
+  if (entry->partition) throw std::logic_error("partition ciphertext export is unsupported");
   // 🔴 A mounted container is one the driver is writing to, so a copy taken
   // now is a copy of something in flight. Q-04 forbids handing back an
   // incomplete copy as a usable migration result, and the only way to be sure

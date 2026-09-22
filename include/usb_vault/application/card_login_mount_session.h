@@ -184,6 +184,11 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("partition formatting is unavailable");
   }
 
+  virtual std::uint32_t create_partition(const volume::PartitionCandidate&,
+      const std::function<bool(const volume::PartitionCandidate&)>&) {
+    throw std::logic_error("partition creation unavailable");
+  }
+
   // Creates an independent outer+hidden container at the caller-selected
   // path, publishes it without replacement, and mounts its hidden volume on a
   // freshly allocated drive letter. The outer volume opens with the decoy
@@ -529,6 +534,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void consume_authenticated_login(
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8) override;
+  std::uint32_t create_partition(const volume::PartitionCandidate& target,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) override;
   void create_container_a(std::uint64_t size_bytes) override;
   void format_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) override;

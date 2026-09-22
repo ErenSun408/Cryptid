@@ -154,6 +154,16 @@ void require(const bool condition, const char* const message) {
 
 class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
+  bool partition_mount_fail{};
+  usb_vault::volume::MountResult mount_partition(const usb_vault::volume::PartitionIdentity& identity,
+      const SecureBuffer& password, const usb_vault::volume::MountOptions& options) override {
+    require(usb_vault::volume::valid_partition_identity(identity) && password.size() == 64,
+            "partition mount identity or password invalid");
+    events.emplace_back("mount:partition");
+    if (partition_mount_fail) throw std::runtime_error("partition unavailable");
+    attached_volume_sizes[options.drive_letter] = identity.length_bytes - 262144;
+    return {};
+  }
   bool partition_password_64{};
   bool partition_skip_confirmation{};
   bool partition_fail{};
@@ -3756,6 +3766,56 @@ void test_no_export_leaves_a_single_local_trace() {
           "nothing");
 }
 
+void test_partition_creation_persistence_and_mounting() {
+  for (int scenario = 0; scenario != 5; ++scenario) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    runtime.partition_password_64 = true;
+    CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    runtime.creation_cancelled = [] { return false; };
+    runtime.remember_paths = true;
+    runtime.fail_index_write = scenario == 1;
+    runtime.partition_mount_fail = scenario == 2;
+    runtime.partition_fail = scenario == 3;
+    usb_vault::volume::PartitionCandidate target;
+    target.layout = usb_vault::volume::PartitionLayout::mbr;
+    target.device_id[0] = 7;
+    target.offset_bytes = 1048576;
+    target.length_bytes = 64ULL * 1024 * 1024;
+    target.logical_sector_bytes = 512;
+    bool failed = false;
+    std::uint32_t id{};
+    try { id = session.create_partition(target, [&](const auto&) { return scenario != 4; }); }
+    catch (...) { failed = true; }
+    require(failed == (scenario != 0), "partition creation outcome wrong");
+    require(runtime.partition_written == (scenario == 0 || scenario == 2), "failed persistence allowed format");
+    auto key = usb_vault::application::derive_shared_container_index_key_v1(root_secret().bytes());
+    const auto records = usb_vault::application::list_container_index_partitions(key.bytes(), runtime.container_index);
+    require(records.size() == ((scenario == 0 || scenario == 2 || scenario == 3) ? 1U : 0U),
+            "partition identity was lost or recorded without consent");
+    if (scenario != 0) continue;
+    require(session.container_statuses().back().mounted, "new partition was not mounted");
+    require_throws<std::logic_error>([&] { session.export_container_file(id, L"D:\\exports"); },
+        "partition ciphertext exported as a file");
+    session.unmount_container(id);
+    require_throws<usb_vault::application::DecoyMaintenanceRefused>([&] {
+      static_cast<void>(session.open_decoy_maintenance(id, bytes("decoy")));
+    }, "partition entered hidden maintenance");
+    CardAuthenticationSession next_auth;
+    CardLoginMountSessionCore next(next_auth, runtime, layout(), LoginMountPolicy::manual);
+    next.consume_authenticated_login(root_secret(), bytes("other-login-password"));
+    const auto restored = next.container_statuses();
+    require(restored.size() == 1 && !restored[0].mounted, "partition was not restored after login");
+    next.mount_adopted_container(restored[0].id);
+    require(next.container_statuses()[0].mounted, "restored partition could not mount");
+    next.unmount_container(restored[0].id);
+    next.forget_container(restored[0].id);
+    require(usb_vault::application::list_container_index_partitions(key.bytes(), runtime.container_index).empty(),
+            "forget did not remove partition record");
+  }
+}
+
 void test_partition_format_card_session_boundary() {
   using usb_vault::volume::PartitionCandidate;
   // Success, decline, throwing consent, pre-cancel, clear, same-root re-login,
@@ -3828,6 +3888,7 @@ void test_partition_format_card_session_boundary() {
 
 int main() {
   try {
+    test_partition_creation_persistence_and_mounting();
     test_partition_format_card_session_boundary();
     test_all_container_shapes_establish_authentication();
     test_mount_failures_do_not_revoke_card_authentication();

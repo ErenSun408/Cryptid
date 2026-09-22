@@ -1,6 +1,7 @@
 #include "usb_vault/volume/volume_provider.h"
 
 #include "volume/locked_driver_buffer.h"
+#include "volume/partition_catalog_detail.h"
 #include "volume/mount_request.h"
 #include "volume/mount_identity.h"
 #include "volume/veracrypt_driver_abi.h"
@@ -233,6 +234,65 @@ MountResult VolumeProvider::mount_file(
   detail::LockedDriverBuffer<detail::abi::MountRequest> locked_request;
   detail::abi::MountRequest& request = locked_request.get();
   detail::populate_mount_request(request, volume_path, volume_password, options);
+
+  const auto start = std::chrono::steady_clock::now();
+  const DriverHandle driver = open_driver();
+  require_supported_version(driver.get());
+  transact(driver.get(), kMountVolume, request, "mount VeraCrypt volume");
+
+  const std::int32_t return_code = request.return_code;
+  if (return_code != 0) {
+    locked_request.clear();
+    throw_driver_error(return_code, "VeraCrypt mount rejected");
+  }
+
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  const MountResult result{
+      .filesystem_dirty = request.filesystem_dirty != 0,
+      .read_only_after_access_denied =
+          request.read_only_after_access_denied != 0,
+      .read_only_after_device_write_protected =
+          request.read_only_after_device_write_protected != 0,
+      .is_ntfs = request.is_ntfs != 0,
+      .master_key_vulnerable = request.master_key_vulnerable != 0,
+      .elapsed = elapsed,
+  };
+  const std::int32_t drive_number = request.drive_number;
+  locked_request.clear();
+
+  if (options.notify_shell) {
+    notify_shell(SHCNE_DRIVEADD, drive_number);
+  }
+  return result;
+}
+
+MountResult VolumeProvider::mount_partition(
+    const PartitionIdentity& identity,
+    const security::SecureBuffer& volume_password,
+    const MountOptions& options) const {
+  require_active(impl_);
+  if (!valid_partition_identity(identity) || volume_password.size() != 64 || options.hidden_volume_protection)
+    throw std::invalid_argument("invalid partition mount request");
+  const auto located = resolve_partition_location(identity, enumerate_partition_locations());
+  if (!located) throw std::runtime_error("partition is absent or ambiguous");
+  auto path = located->volume_path; path.pop_back();
+  const DriverHandle retained(::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, 0, nullptr));
+  if (retained.get() == INVALID_HANDLE_VALUE ||
+      !detail::matches_partition_location_handle(retained.get(), *located))
+    throw std::runtime_error("partition identity changed before mount");
+  const std::wstring native = L"\\Device\\Harddisk" + std::to_wstring(located->disk_number) +
+      L"\\Partition" + std::to_wstring(located->partition_number);
+  if (resolve_partition_location(identity, enumerate_partition_locations()) != located)
+    throw std::runtime_error("partition location changed before mount");
+  detail::LockedDriverBuffer<detail::abi::MountRequest> locked_request;
+  detail::abi::MountRequest& request = locked_request.get();
+  detail::populate_mount_request(request, located->volume_path, volume_password, options);
+  std::fill(std::begin(request.volume_path), std::end(request.volume_path), L'\0');
+  if (native.size() >= std::size(request.volume_path)) throw std::invalid_argument("partition path too long");
+  std::ranges::copy(native, request.volume_path);
+  request.preserve_timestamp = 0;
 
   const auto start = std::chrono::steady_clock::now();
   const DriverHandle driver = open_driver();

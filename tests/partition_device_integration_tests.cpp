@@ -415,19 +415,20 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
 // Experiment-only driver request: the product mount_file path policy stays intact.
 void mount_owned(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, wchar_t drive) {
   disk.verify();
-  usb_vault::volume::detail::LockedDriverBuffer<abi::MountRequest> buffer;
-  auto& request = buffer.get();
-  usb_vault::volume::detail::populate_mount_request(request, L"C:\\unused-fixture-placeholder", password,
-      {.drive_letter = drive, .notify_shell = false});
-  std::fill(std::begin(request.volume_path), std::end(request.volume_path), L'\0');
-  require(disk.target().size() < std::size(request.volume_path), "native target too long");
-  std::ranges::copy(disk.target(), request.volume_path);
-  request.preserve_timestamp = 0;
-  Handle driver(::CreateFileW(L"\\\\.\\VeraCrypt", 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
-  require(driver.get() != INVALID_HANDLE_VALUE, "VeraCrypt driver unavailable");
-  ioctl(driver.get(), CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS),
-      &request, sizeof(request), &request, sizeof(request));
-  require(request.return_code == 0, "owned partition mount failed");
+  const auto locations = usb_vault::volume::enumerate_partition_locations();
+  std::optional<usb_vault::volume::PartitionIdentity> identity;
+  for (const auto& location : locations) {
+    const auto native = L"\\Device\\Harddisk" + std::to_wstring(location.disk_number) +
+        L"\\Partition" + std::to_wstring(location.partition_number);
+    if (native == disk.target()) {
+      require(!identity, "owned partition identity ambiguous");
+      identity = location.identity;
+    }
+  }
+  require(identity.has_value(), "owned partition not discovered");
+  usb_vault::volume::VolumeProvider provider;
+  static_cast<void>(provider.mount_partition(*identity, password,
+      {.drive_letter = drive, .notify_shell = false}));
 }
 wchar_t free_letter() {
   const DWORD used = ::GetLogicalDrives(); require(used != 0, "drive list unavailable");

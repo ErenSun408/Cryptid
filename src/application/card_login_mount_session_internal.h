@@ -71,6 +71,10 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& volume_password,
       const std::function<bool()>& confirm_erase,
       const CreationCancellation& cancelled) = 0;
+  virtual volume::MountResult mount_partition(const volume::PartitionIdentity&,
+      const security::SecureBuffer&, const volume::MountOptions&) {
+    throw std::logic_error("partition mounting unavailable");
+  }
   virtual void create_standard(
       std::wstring_view target_path, std::uint64_t size_bytes,
       const security::SecureBuffer& volume_password) = 0;
@@ -160,6 +164,7 @@ struct SessionContainer final {
   bool maintenance{};
   std::optional<volume::MountIdentity> maintenance_identity;
   bool maintenance_recovery_required{};
+  std::optional<volume::PartitionIdentity> partition;
 };
 
 struct CardLoginMountSessionState final {
@@ -209,6 +214,8 @@ class CardLoginMountSessionCore final {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8);
   void format_partition(const volume::PartitionCandidate& target,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
+  std::uint32_t create_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
   void create_container_a(std::uint64_t size_bytes);
   std::uint32_t create_container(std::wstring_view path,

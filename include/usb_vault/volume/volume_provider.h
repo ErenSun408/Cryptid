@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/volume/partition_identity.h"
 
 #include <array>
 #include <chrono>
@@ -126,6 +127,9 @@ class VolumeProvider final {
       std::wstring_view volume_path,
       const security::SecureBuffer& volume_password,
       const MountOptions& options) const;
+
+  [[nodiscard]] MountResult mount_partition(const PartitionIdentity& identity,
+      const security::SecureBuffer& volume_password, const MountOptions& options) const;
 
   [[nodiscard]] UnmountResult unmount(
       wchar_t drive_letter,
