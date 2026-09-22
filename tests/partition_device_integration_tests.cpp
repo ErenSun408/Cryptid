@@ -1,5 +1,7 @@
 // Opt-in feasibility evidence. Never accepts an existing disk or partition.
 #include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/volume/partition_catalog.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/unmount_retry.h"
 #include "volume/locked_driver_buffer.h"
@@ -144,6 +146,50 @@ class OwnedDisk {
         info.PartitionStyle == PARTITION_STYLE_MBR && info.PartitionNumber == 1 &&
         info.StartingOffset.QuadPart == kOffset && info.PartitionLength.QuadPart == kPartitionBytes &&
         info.Mbr.PartitionType == PARTITION_IFS && !info.Mbr.BootIndicator, "owned target identity mismatch");
+  }
+  usb_vault::volume::PartitionCandidate prepare_ntfs() const {
+    verify();
+    std::array<wchar_t, 64> name{};
+    const HANDLE search = ::FindFirstVolumeW(name.data(), static_cast<DWORD>(name.size()));
+    require(search != INVALID_HANDLE_VALUE, "fixture volume search");
+    std::wstring volume;
+    try {
+      do {
+        std::wstring path(name.data()); path.pop_back();
+        Handle handle(::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+        STORAGE_DEVICE_NUMBER number{}; DWORD count{};
+        if (handle.get() != INVALID_HANDLE_VALUE && ::DeviceIoControl(handle.get(), IOCTL_STORAGE_GET_DEVICE_NUMBER,
+            nullptr, 0, &number, sizeof(number), &count, nullptr) && count >= sizeof(number) &&
+            number.DeviceType == FILE_DEVICE_DISK && number.DeviceNumber == disk_number_ && number.PartitionNumber == 1) {
+          require(volume.empty(), "ambiguous owned volume"); volume = name.data();
+        }
+      } while (::FindNextVolumeW(search, name.data(), static_cast<DWORD>(name.size())));
+      require(::GetLastError() == ERROR_NO_MORE_FILES, "fixture enumeration failed");
+    } catch (...) { ::FindVolumeClose(search); throw; }
+    ::FindVolumeClose(search);
+    require(volume.size() == 49 && volume.starts_with(LR"(\\?\Volume{)"), "owned volume missing");
+    verify();
+    std::array<wchar_t, MAX_PATH> system{};
+    const UINT length = ::GetSystemDirectoryW(system.data(), static_cast<UINT>(system.size()));
+    require(length && length < system.size(), "system formatter path");
+    const auto program = std::filesystem::path(system.data()) / L"format.com";
+    // Only the freshly created VHD's verified volume; no user-supplied target.
+    auto argument = volume; argument.pop_back();
+    std::wstring command = L"\"" + program.native() + L"\" " + argument + L" /FS:NTFS /Q /Y /V:UVFixture";
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    require(::CreateProcessW(program.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+        nullptr, nullptr, &startup, &process) != FALSE, "start owned NTFS preparation");
+    Handle child(process.hProcess), thread(process.hThread);
+    require(::WaitForSingleObject(child.get(), INFINITE) == WAIT_OBJECT_0, "wait NTFS preparation");
+    DWORD code{}; require(::GetExitCodeProcess(child.get(), &code) && code == 0, "owned NTFS preparation failed");
+    verify();
+    for (const auto& candidate : usb_vault::volume::enumerate_partition_candidates()) {
+      if (candidate.volume_path == volume && candidate.disk_number == disk_number_ && candidate.partition_number == 1 &&
+          candidate.offset_bytes == kOffset && candidate.length_bytes == kPartitionBytes &&
+          candidate.availability == usb_vault::volume::PartitionAvailability::candidate) return candidate;
+    }
+    throw std::runtime_error("prepared NTFS fixture not eligible");
   }
   const std::wstring& target() const { return target_; }
   std::filesystem::path container_path() const { return directory_ / L"regression.hc"; }
@@ -305,6 +351,42 @@ class Backend {
  private: HMODULE module_{}; fmt::Shutdown shutdown_{}; fmt::FormatBinary format_{}; bool initialized_{};
 };
 
+void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
+  using namespace usb_vault::volume_creation;
+  const auto candidate = disk.prepare_ntfs();
+  VolumeCreator creator(executable_directory() / L"usb_vault_volume_creator.exe");
+  const auto read_header = [&] {
+    auto path = candidate.volume_path; path.pop_back();
+    Handle handle(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, 0, nullptr));
+    require(handle.get() != INVALID_HANDLE_VALUE, "open NTFS header probe");
+    std::array<std::byte, 65536> bytes{}; DWORD count{};
+    require(::ReadFile(handle.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) &&
+        count == bytes.size(), "read NTFS header probe");
+    return bytes;
+  };
+  const auto before = read_header();
+  // Declining and throwing must both leave the original NTFS identity intact.
+  for (int decision = 0; decision < 2; ++decision) {
+    unsigned calls{}; bool cancelled{};
+    try { creator.format_partition(candidate, password, [&]() -> bool {
+      ++calls; if (decision == 1) throw std::runtime_error("fixture declined"); return false;
+    }); } catch (const std::system_error& error) { cancelled = error.code() == make_error_code(CreationError::operation_cancelled); }
+    require(cancelled && calls == 1, "declined partition confirmation did not stop");
+    require(read_header() == before, "declined confirmation changed volume header");
+    require(usb_vault::volume::matches_partition_snapshot(candidate,
+        usb_vault::volume::enumerate_partition_candidates()), "declined format modified NTFS identity");
+  }
+  unsigned confirmations{}, reports{};
+  creator.format_partition(candidate, password, [&] { disk.verify(); ++confirmations; return true; },
+      [&](const CreationProgress& progress) {
+        require(progress.percent <= 100 && (progress.stage == CreationStage::authorized ||
+            progress.stage == CreationStage::formatting), "unexpected partition progress"); ++reports;
+      });
+  require(confirmations == 1 && reports > 1, "partition confirmation/progress missing");
+  std::cout << "PASS: elevated NTFS partition format, declined/throwing consent and single-use confirmation\n";
+}
+
 // Experiment-only driver request: the product mount_file path policy stays intact.
 void mount_owned(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, wchar_t drive) {
   disk.verify();
@@ -374,7 +456,7 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle")) {
+  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -388,7 +470,10 @@ int wmain(int argc, wchar_t** argv) {
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") {
       OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
-    OwnedDisk disk; disk.create(); backend.format(disk, password, std::wstring_view(argv[1]) == L"--run-owned-vhd-handle"); roundtrip(disk, password); if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") backend.file_regression(disk, password); disk.cleanup();
+    OwnedDisk disk; disk.create();
+    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-helper") helper_format(disk, password);
+    else backend.format(disk, password, std::wstring_view(argv[1]) == L"--run-owned-vhd-handle");
+    roundtrip(disk, password); if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") backend.file_regression(disk, password); disk.cleanup();
     std::cout << "PASS: owned MBR/512 VHD partition format, mount, write, unmount, remount and read; fixture removed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

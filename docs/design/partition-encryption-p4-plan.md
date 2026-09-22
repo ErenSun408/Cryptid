@@ -189,3 +189,17 @@ API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win3
 验证：216 组用途／转换状态组合、无效句柄拒绝及 5 组相关 CTest 通过，Release 正式应用／helper 与新模块静态分析通过。自建 256 MiB MBR NTFS VHD 的真实提权检查通过并拒绝修改设备身份，镜像已脱离并删除。未配置真实分页卷或 BitLocker 卷进行变更测试，未做实卡／物理盘写入及全量验收。
 
 依据：[Win32_Volume](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/vdswmi/win32-volume)、[GetConversionStatus](https://learn.microsoft.com/en-us/windows/win32/secprov/getconversionstatus-win32-encryptablevolume)、[IWbemServices::ExecMethod](https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-iwbemservices-execmethod)。
+
+## 独立分区格式化与单次确认协议（2026-09-22，设备闭环待验）
+
+新增底层 `VolumeCreator::format_partition`，固定 64 字节二进制密码、已有 MBR／512 目标载荷和独立动作，不复用文件创建、分配探测或失败删除。协议升级 v7；v6 及其他旧版在前缀处拒绝，应用／helper 必须一起更新。产品 DLL 仍为审定旧版，缺少分区导出时返回 backend unavailable，不替换允许列表，不开放页面创建。
+
+助手以 RW 打开经过枚举核验的标准卷 GUID，并在同一句柄上执行身份与系统／分页／BitLocker 策略；加载候选后端、确认导出可用后发送 partition_ready。客户端必需的确认回调在此处调用一次，前后检查取消；异常等同拒绝。固定 28 字节 UCP1 消息只接受本次随机 nonce、当前版本和明确 0／1，助手最多等待 30 秒，半包／断开／错误标志不触发格式化。收到明确同意后重新执行策略，再将原句柄交给候选 DLL 锁卷、几何复核和格式化。一个 helper 请求只消费一次同意，不保留许可，不自动重试。
+
+这个回调是原生接线边界，不是已完成的页面清空确认或卡认证。后续产品必须先展示实际目标与清空影响，并在回调中验证当次目标／卡 epoch，使用原有安全卡派生密码。回调确认后仍存在重新查询和格式化的时间窗口；取消是尽力停止，尚未保证拔卡发生后首个写入前一定被观察到。实际写入前需要完善产品会话生命周期／取消时序，不能把本片低层接口称为产品创建闭环。开始格式化后的取消／失败可留下部分密文，没有原地转换续作、恢复或清理删除承诺。
+
+测试：二进制密码往返、错误密码长度／夹带文件字段／旧版本拒绝、确认与拒绝往返、错误 nonce／版本／尺寸／标志拒绝、16 类 helper 调度参数拒绝通过；Release 正式应用／helper、6 组相关 CTest、协议／客户端／助手 MSVC 静态分析通过。
+
+扩展显式 `partition_device_integration_tests --run-owned-vhd-helper`：只能自行新建 VHD，按已持有镜像与盘号／分区号／范围找到自己的卷，再用系统 format.com 准备 NTFS；拒绝／抛错确认后比对首 64 KiB 和 NTFS 身份，确认后走真实 helper 及挂载写读回。**本轮启动该夹具的 Windows UAC 返回用户取消，夹具未运行，未创建测试磁盘；以上设备闭环、NTFS 候选后端和拒绝无写入的实机结果均未验收。** 隔离运行目录保留二进制供后续复测，未用旧 RAW／只读测试替代此结果。
+
+夹具使用系统命令依据：[Microsoft format](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/format)。该命令仅用于测试夹具准备自己新建的镜像，不加入产品建卷实现。

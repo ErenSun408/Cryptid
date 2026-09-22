@@ -205,6 +205,20 @@ class FormatBackend final {
     }
   }
 
+  void require_partition_export() {
+    partition_binary_ = symbol<format_abi::FormatPartitionBinary>("VeraCryptFormatPartitionBinary");
+  }
+  void format_partition(HANDLE handle, const PartitionTarget& target, const security::SecureBuffer& password) {
+    if (!partition_binary_) fail(CreationError::format_backend_unavailable, "partition export unavailable");
+    stage_ = CreationStage::formatting;
+    allocated_ = true; // Device targets never use file allocation or deletion paths.
+    const int code = partition_binary_(handle, target.offset_bytes, target.length_bytes,
+        reinterpret_cast<const unsigned char*>(password.data()), static_cast<std::uint32_t>(password.size()),
+        &FormatBackend::progress, this);
+    if (code == format_abi::kUserAbort) fail(CreationError::operation_cancelled, "partition format cancelled");
+    if (code != format_abi::kSuccess) fail(format_abi::map_error(code), "partition format failed");
+  }
+
  private:
   template <typename Function>
   [[nodiscard]] Function symbol(const char* const name) {
@@ -222,7 +236,8 @@ class FormatBackend final {
       // Asked first, and on every tick: answering FALSE here is the only way
       // to stop the format from inside, and it leaves the unwinding to the
       // caller below, which still holds a live pipe and can therefore delete
-      // the half-written container as the user who asked for it.
+      // the half-written file as the user who asked for it. Partition
+      // formatting has no deletion cleanup and keeps its partial result.
       if (cancel_requested(self.pipe_, self.nonce_)) {
         return FALSE;
       }
@@ -255,6 +270,7 @@ class FormatBackend final {
   format_abi::Initialize initialize_{};
   format_abi::Shutdown shutdown_{};
   format_abi::FormatBinary format_binary_{};
+  format_abi::FormatPartitionBinary partition_binary_{};
   CreationStage stage_{CreationStage::formatting};
   std::wstring target_path_;
   std::uint64_t expected_size_{};
@@ -263,10 +279,11 @@ class FormatBackend final {
 };
 
 void validate_request(const Request& request) {
-  if (request.operation == Operation::check_partition) {
+  if (request.operation == Operation::check_partition || request.operation == Operation::format_partition) {
     if (!request.partition_target || !valid_partition_target(*request.partition_target) ||
         !valid_partition_path(request.target_path) || request.outer_size_bytes || request.hidden_size_bytes ||
-        request.mounted_drive || request.mount_id || !request.first_password.empty() || !request.second_password.empty() ||
+        request.mounted_drive || request.mount_id ||
+        request.first_password.size() != (request.operation == Operation::format_partition ? 64u : 0u) || !request.second_password.empty() ||
         !request.source_path.empty() || !request.destination_relative.empty())
       fail(CreationError::invalid_request, "invalid partition identity request");
     return;
@@ -945,7 +962,7 @@ void serve_maintenance_session(HANDLE pipe, const std::array<std::byte, kNonceSi
 
 std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
-  if (request.operation == Operation::check_partition) {
+  if (request.operation == Operation::check_partition || request.operation == Operation::format_partition) {
     const auto& target = *request.partition_target;
     volume::PartitionCandidate expected{};
     expected.volume_path = request.target_path;
@@ -960,18 +977,33 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     expected.device_id_flags = target.device_flags;
     expected.availability = volume::PartitionAvailability::candidate;
     // Independent enumeration excludes the current Windows volume before any
-    // readable handle is opened. This operation grants no write authorization.
+    // target handle is opened. Passing enumeration alone grants no write authorization.
     if (!volume::matches_partition_snapshot(expected, volume::enumerate_partition_candidates()))
       fail(CreationError::target_access_denied, "partition snapshot no longer matches");
     std::wstring path = request.target_path;
     path.pop_back(); // Only the validated volume GUID name reaches CreateFile.
-    const Handle handle(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    const bool formatting = request.operation == Operation::format_partition;
+    const Handle handle(::CreateFileW(path.c_str(), GENERIC_READ | (formatting ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING, 0, nullptr));
     if (handle.get() == INVALID_HANDLE_VALUE || !volume::detail::matches_partition_handle_identity(handle.get(), expected))
       fail(CreationError::target_access_denied, "partition handle identity mismatch");
     if (!volume::detail::check_partition_write_policy(handle.get(), expected))
       fail(CreationError::target_access_denied, "partition write policy rejected");
-    return 0; // No format DLL, password, mount, cleanup deletion or retained consent.
+    if (formatting) {
+      FormatBackend backend(pipe, request.nonce);
+      backend.require_partition_export(); // Resolve before asking for destructive consent.
+      write_response(pipe, Response{.type = MessageType::progress, .stage = CreationStage::partition_ready});
+      if (!read_partition_confirmation(pipe, request.nonce))
+        fail(CreationError::operation_cancelled, "partition erase not confirmed");
+      // Confirmation can take time. Re-run every policy gate on the retained
+      // handle; the DLL then locks, rechecks geometry and formats that handle.
+      if (!volume::detail::check_partition_write_policy(handle.get(), expected))
+        fail(CreationError::target_access_denied, "partition changed after confirmation");
+      if (cancel_requested(pipe, request.nonce))
+        fail(CreationError::operation_cancelled, "partition format cancelled before write");
+      backend.format_partition(handle.get(), target, request.first_password);
+    }
+    return 0; // No target deletion, implicit retry or retained consent.
   }
   if (request.operation == Operation::scan_tail_space) {
     // Nothing is created, so the format backend is never loaded and there is

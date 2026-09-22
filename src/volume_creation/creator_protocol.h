@@ -14,7 +14,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 6;
+constexpr std::uint16_t kProtocolVersion = 7;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -29,6 +29,7 @@ enum class Operation : std::uint32_t {
   // Explicit consent for measurement and import within one bound mount.
   scan_maintenance_space = 6,
   check_partition = 7, // Read-only identity check, no formatting or password.
+  format_partition = 8, // Destructive, separate confirmation required.
 };
 
 enum class MessageType : std::uint32_t {
@@ -92,12 +93,20 @@ struct CancelRequest final {
   std::uint16_t size{sizeof(CancelRequest)};
   std::array<std::byte, kNonceSize> nonce{};
 };
+struct PartitionConfirmation final {
+  std::uint32_t magic{0x31504355U}; // "UCP1", distinct from cancellation.
+  std::uint16_t version{kProtocolVersion};
+  std::uint16_t size{sizeof(PartitionConfirmation)};
+  std::array<std::byte, kNonceSize> nonce{};
+  std::uint32_t erase_all_data{}; // Exactly 0 (decline) or 1 (confirm).
+};
 #pragma pack(pop)
 
 static_assert(sizeof(RequestHeader) == 80);
 static_assert(sizeof(PartitionTarget) == 60);
 static_assert(sizeof(Response) == 36);
 static_assert(sizeof(CancelRequest) == 24);
+static_assert(sizeof(PartitionConfirmation) == 28);
 
 struct Request final {
   Operation operation{Operation::create_standard};
@@ -114,6 +123,9 @@ struct Request final {
   std::array<std::byte, kNonceSize> nonce{};
   std::optional<PartitionTarget> partition_target;
 };
+
+void write_partition_confirmation(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce, bool confirmed);
+[[nodiscard]] bool read_partition_confirmation(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce);
 
 [[nodiscard]] bool valid_partition_target(const PartitionTarget& target) noexcept;
 [[nodiscard]] bool valid_partition_path(std::wstring_view path) noexcept;

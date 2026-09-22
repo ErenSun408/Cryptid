@@ -75,6 +75,56 @@ void expect(const bool condition, const char* const message) {
   return result;
 }
 
+void test_partition_format_protocol() {
+  const std::wstring path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+  PartitionTarget target{}; target.device_id[0] = 7; target.partition_number = 2;
+  target.offset_bytes = 1048576; target.length_bytes = 256ULL * 1024 * 1024;
+  RequestHeader header{.operation = Operation::format_partition, .path_characters = 49,
+      .first_password_bytes = 64, .partition_target_bytes = sizeof(PartitionTarget)};
+  header.nonce[0] = std::byte{0x91};
+  SecureBuffer secret(64); secret.bytes()[63] = std::byte{0xff};
+  const SecureBuffer empty;
+  auto wire = make_pipe();
+  write_request(wire.write.get(), header, path, secret, empty, {}, {}, &target);
+  const auto read = read_request(wire.read.get(), header.nonce);
+  expect(read.operation == Operation::format_partition && read.partition_target &&
+      read.first_password.size() == 64 && read.first_password.bytes()[0] == std::byte{0} &&
+      read.first_password.bytes()[63] == std::byte{0xff}, "binary partition format round trip");
+  for (int field = 0; field < 10; ++field) {
+    auto bad = header;
+    if (field == 0) bad.first_password_bytes = 0;
+    if (field == 1) bad.first_password_bytes = 63;
+    if (field == 2) bad.first_password_bytes = 65;
+    if (field == 3) bad.second_password_bytes = 64;
+    if (field == 4) bad.outer_size_bytes = 512;
+    if (field == 5) bad.hidden_size_bytes = 512;
+    if (field == 6) bad.source_characters = 1;
+    if (field == 7) bad.partition_target_bytes = 0;
+    if (field == 8) bad.operation = Operation::check_partition;
+    if (field == 9) bad.version--;
+    expect(!valid_request_header(bad), "malformed partition format accepted");
+  }
+  for (bool confirmed : {false, true}) {
+    auto pipe = make_pipe();
+    write_partition_confirmation(pipe.write.get(), header.nonce, confirmed);
+    expect(read_partition_confirmation(pipe.read.get(), header.nonce) == confirmed, "erase decision round trip");
+  }
+  for (int field = 0; field < 5; ++field) {
+    PartitionConfirmation bad{.nonce = header.nonce, .erase_all_data = 1};
+    if (field == 0) bad.magic ^= 1;
+    if (field == 1) bad.version--;
+    if (field == 2) bad.size--;
+    if (field == 3) bad.nonce[0] ^= std::byte{1};
+    if (field == 4) bad.erase_all_data = 2;
+    auto pipe = make_pipe(); write_exact(pipe.write.get(), &bad, sizeof(bad));
+    bool rejected{};
+    try { static_cast<void>(read_partition_confirmation(pipe.read.get(), header.nonce)); }
+    catch (const std::system_error&) { rejected = true; }
+    expect(rejected, "forged erase confirmation accepted");
+  }
+  expect(!valid_cancel_request(CancelRequest{.nonce = header.nonce}, {}), "nonce binding missing");
+}
+
 void test_partition_check_protocol() {
   const std::wstring path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
   PartitionTarget target{}; target.device_id[0] = 7; target.partition_number = 2;
@@ -140,26 +190,29 @@ void test_partition_check_protocol() {
 }
 
 void test_partition_helper_rejects_invalid_requests() {
-  for (int field = 0; field < 8; ++field) {
-    Request request{}; request.operation = Operation::check_partition;
-    request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
-    request.partition_target.emplace();
-    request.partition_target->device_id[0] = 1;
-    request.partition_target->partition_number = 1;
-    request.partition_target->offset_bytes = 1048576;
-    request.partition_target->length_bytes = 256ULL * 1024 * 1024;
-    if (field == 0) request.partition_target.reset();
-    if (field == 1) request.target_path = LR"(\\.\PhysicalDrive0)";
-    if (field == 2) request.first_password = password({1});
-    if (field == 3) request.outer_size_bytes = 512;
-    if (field == 4) request.mounted_drive = 1;
-    if (field == 5) request.source_path = L"unexpected";
-    if (field == 6) request.partition_target->reserved = 1;
-    if (field == 7) request.operation = Operation::create_standard;
-    bool rejected{};
-    try { static_cast<void>(execute_request(INVALID_HANDLE_VALUE, request)); }
-    catch (const std::system_error& error) { rejected = error.code() == make_error_code(CreationError::invalid_request); }
-    expect(rejected, "invalid partition action reached native target or formatter");
+  for (auto operation : {Operation::check_partition, Operation::format_partition}) {
+    for (int field = 0; field < 8; ++field) {
+      Request request{}; request.operation = operation;
+      if (operation == Operation::format_partition) request.first_password = SecureBuffer(64);
+      request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+      request.partition_target.emplace();
+      request.partition_target->device_id[0] = 1;
+      request.partition_target->partition_number = 1;
+      request.partition_target->offset_bytes = 1048576;
+      request.partition_target->length_bytes = 256ULL * 1024 * 1024;
+      if (field == 0) request.partition_target.reset();
+      if (field == 1) request.target_path = LR"(\\.\PhysicalDrive0)";
+      if (field == 2) request.first_password = password({1});
+      if (field == 3) request.outer_size_bytes = 512;
+      if (field == 4) request.mounted_drive = 1;
+      if (field == 5) request.source_path = L"unexpected";
+      if (field == 6) request.partition_target->reserved = 1;
+      if (field == 7) request.operation = Operation::create_standard;
+      bool rejected{};
+      try { static_cast<void>(execute_request(INVALID_HANDLE_VALUE, request)); }
+      catch (const std::system_error& error) { rejected = error.code() == make_error_code(CreationError::invalid_request); }
+      expect(rejected, "invalid partition action reached native target or formatter");
+    }
   }
 }
 
@@ -639,6 +692,7 @@ void test_pipe_dacl_names_system_and_token_user_explicitly() {
 
 int main() {
   try {
+    test_partition_format_protocol();
     test_partition_check_protocol();
     test_partition_helper_rejects_invalid_requests();
     test_binary_password_round_trip();

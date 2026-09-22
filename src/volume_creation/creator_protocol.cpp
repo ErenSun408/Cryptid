@@ -1,6 +1,7 @@
 #include "volume_creation/creator_protocol.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -20,14 +21,14 @@ namespace {
 }
 
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
-  return operation == Operation::check_partition || operation == Operation::create_standard ||
+  return operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
          operation == Operation::scan_protected_space || operation == Operation::scan_maintenance_space || operation == Operation::import_protected_file;
 }
 
 [[nodiscard]] bool valid_stage(const CreationStage stage) noexcept {
-  return stage == CreationStage::formatting ||
+  return stage == CreationStage::partition_ready || stage == CreationStage::formatting ||
          stage == CreationStage::formatting_outer ||
          stage == CreationStage::scanning_tail_space ||
          stage == CreationStage::formatting_hidden ||
@@ -67,9 +68,9 @@ bool valid_request_header(const RequestHeader& header) noexcept {
     return false;
   }
 
-  if (header.operation == Operation::check_partition) {
+  if (header.operation == Operation::check_partition || header.operation == Operation::format_partition) {
     return header.partition_target_bytes == sizeof(PartitionTarget) && header.path_characters == 49 &&
-        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == 0 &&
+        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == (header.operation == Operation::format_partition ? 64u : 0u) &&
         header.second_password_bytes == 0 && header.mounted_drive == 0 && header.mount_id == 0 &&
         header.source_characters == 0 && header.destination_characters == 0;
   }
@@ -177,7 +178,7 @@ void write_request(const HANDLE pipe, const RequestHeader& header,
       second_password.size() != header.second_password_bytes) {
     throw std::invalid_argument("invalid volume-creation request");
   }
-  if ((header.operation == Operation::check_partition) != (partition_target != nullptr) ||
+  if ((header.operation == Operation::check_partition || header.operation == Operation::format_partition) != (partition_target != nullptr) ||
       (partition_target && (!valid_partition_target(*partition_target) || !valid_partition_path(target_path))))
     throw std::invalid_argument("invalid partition check request");
   write_exact(pipe, &header, sizeof(header));
@@ -236,9 +237,33 @@ Request read_request(
   if (request.source_path.find(L'\0') != std::wstring::npos || request.destination_relative.find(L'\0') != std::wstring::npos || request.target_path.find(L'\0') != std::wstring::npos) {
     throw_protocol_error("target path contains an embedded NUL");
   }
-  if (request.operation == Operation::check_partition && !valid_partition_path(request.target_path))
+  if ((request.operation == Operation::check_partition || request.operation == Operation::format_partition) && !valid_partition_path(request.target_path))
     throw_protocol_error("invalid partition volume name");
   return request;
+}
+
+void write_partition_confirmation(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce, bool confirmed) {
+  const PartitionConfirmation value{.nonce = nonce, .erase_all_data = confirmed ? 1u : 0u};
+  write_exact(pipe, &value, sizeof(value));
+}
+bool read_partition_confirmation(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce) {
+  // A partial/absent confirmation never extends this deadline or reaches writes.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  for (;;) {
+    DWORD bytes{};
+    if (!::PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr))
+      throw_last_error("read partition confirmation");
+    if (bytes >= sizeof(PartitionConfirmation)) break;
+    if (std::chrono::steady_clock::now() >= deadline)
+      throw_protocol_error("partition confirmation timed out");
+    ::Sleep(10);
+  }
+  PartitionConfirmation value{};
+  read_exact(pipe, &value, sizeof(value));
+  if (value.magic != PartitionConfirmation{}.magic || value.version != kProtocolVersion ||
+      value.size != sizeof(value) || value.nonce != nonce || value.erase_all_data > 1)
+    throw_protocol_error("invalid partition confirmation");
+  return value.erase_all_data == 1;
 }
 
 void write_response(const HANDLE pipe, const Response& response) {

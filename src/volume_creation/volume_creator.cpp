@@ -275,17 +275,24 @@ class Handle final {
     const security::SecureBuffer& second_password,
     const ProgressCallback& progress,
     const CancellationQuery& cancelled,
-    const detail::PartitionTarget* partition_target = nullptr) {
+    const detail::PartitionTarget* partition_target = nullptr,
+    const std::function<bool()>& confirm_erase = {}) {
   const bool checking_partition = operation == detail::Operation::check_partition;
+  const bool formatting_partition = operation == detail::Operation::format_partition;
+  const bool partition_operation = checking_partition || formatting_partition;
   const bool measuring = operation == detail::Operation::scan_tail_space;
   // A measurement names a volume root, which is not a container path and does
   // not pass the checks meant for one.
   const std::wstring normalized_path =
-      measuring || checking_partition ? std::wstring(path) : validated_target_path(path);
-  if (checking_partition != (partition_target != nullptr) ||
-      (checking_partition && (!detail::valid_partition_path(path) || !detail::valid_partition_target(*partition_target))))
+      measuring || partition_operation ? std::wstring(path) : validated_target_path(path);
+  if (partition_operation != (partition_target != nullptr) ||
+      (partition_operation && (!detail::valid_partition_path(path) || !detail::valid_partition_target(*partition_target))))
     throw std::invalid_argument("invalid partition identity request");
-  if (measuring || checking_partition) {
+  if (formatting_partition) {
+    if (outer_size || hidden_size || first_password.size() != 64 || !second_password.empty() || !confirm_erase)
+      throw std::invalid_argument("invalid destructive partition request");
+    if (cancelled && cancelled()) throw_creation(CreationError::operation_cancelled, "partition creation cancelled");
+  } else if (measuring || checking_partition) {
     if (outer_size != 0 || hidden_size != 0 || !first_password.empty() ||
         !second_password.empty()) {
       throw std::invalid_argument("invalid volume-measurement request values");
@@ -319,14 +326,35 @@ class Handle final {
       .second_password_bytes =
           static_cast<std::uint32_t>(second_password.size()),
       .nonce = nonce,
-      .partition_target_bytes = checking_partition ? static_cast<std::uint32_t>(sizeof(detail::PartitionTarget)) : 0,
+      .partition_target_bytes = partition_operation ? static_cast<std::uint32_t>(sizeof(detail::PartitionTarget)) : 0,
   };
   detail::write_request(pipe.get(), header, normalized_path, first_password,
                         second_password, {}, {}, partition_target);
 
   bool cancel_sent = false;
+  bool partition_confirmed = false;
+  bool partition_challenged = false;
   for (;;) {
     const detail::Response response = detail::read_response(pipe.get());
+    if (formatting_partition) {
+      if (response.value != 0) throw_creation(CreationError::protocol_error, "unexpected partition result");
+      if (response.type == detail::MessageType::progress && response.stage == CreationStage::partition_ready) {
+        if (partition_challenged || response.percent != 0)
+          throw_creation(CreationError::protocol_error, "repeated partition confirmation");
+        partition_challenged = true;
+        bool confirmed = false;
+        try { confirmed = (!cancelled || !cancelled()) && confirm_erase() && (!cancelled || !cancelled()); } catch (...) { confirmed = false; }
+        detail::write_partition_confirmation(pipe.get(), nonce, confirmed);
+        partition_confirmed = confirmed;
+        continue;
+      }
+      if ((response.type == detail::MessageType::progress &&
+          (!partition_confirmed || response.stage != CreationStage::formatting)) ||
+          (response.type == detail::MessageType::result && response.error == 0 && !partition_confirmed))
+        throw_creation(CreationError::protocol_error, "partition wrote without confirmation");
+    } else if (response.type == detail::MessageType::progress && response.stage == CreationStage::partition_ready) {
+      throw_creation(CreationError::protocol_error, "partition handshake in another operation");
+    }
     if (checking_partition && (response.type != detail::MessageType::result || response.value != 0))
       throw_creation(CreationError::protocol_error, "unexpected partition check response");
     if (response.type == detail::MessageType::progress) {
@@ -336,7 +364,8 @@ class Handle final {
       // Asked after the report rather than before it, so the page has seen
       // where the creation got to before it is told it stopped. The request
       // goes out once and the loop keeps reading: the helper answers it with
-      // a result of its own, after it has removed the container it started.
+      // a result of its own. File creation cleans up its incomplete file;
+      // partition formatting never deletes or retries the target.
       if (!cancel_sent && cancelled && cancelled()) {
         detail::write_cancel_request(pipe.get(), nonce);
         cancel_sent = true;
@@ -629,6 +658,21 @@ void VolumeCreator::check_partition(const volume::PartitionCandidate& candidate)
       .length_bytes = candidate.length_bytes};
   static_cast<void>(invoke(helper_path_, detail::Operation::check_partition, candidate.volume_path,
       0, 0, security::SecureBuffer{}, security::SecureBuffer{}, {}, {}, &target));
+}
+
+void VolumeCreator::format_partition(const volume::PartitionCandidate& candidate,
+    const security::SecureBuffer& password, const std::function<bool()>& confirm_erase,
+    const ProgressCallback& progress, const CancellationQuery& cancelled) const {
+  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}) || candidate.layout != volume::PartitionLayout::mbr)
+    throw std::invalid_argument("invalid partition format candidate");
+  const detail::PartitionTarget target{
+      .device_id = candidate.device_id, .device_flags = candidate.device_id_flags,
+      .disk_number = candidate.disk_number, .partition_number = candidate.partition_number,
+      .sector_bytes = candidate.logical_sector_bytes, .layout = 1,
+      .filesystem_serial = candidate.filesystem_serial, .offset_bytes = candidate.offset_bytes,
+      .length_bytes = candidate.length_bytes};
+  static_cast<void>(invoke(helper_path_, detail::Operation::format_partition, candidate.volume_path,
+      0, 0, password, security::SecureBuffer{}, progress, cancelled, &target, confirm_erase));
 }
 
 void VolumeCreator::create_standard(

@@ -44,6 +44,7 @@ enum class CreationStage : std::uint32_t {
   authorized = 5,
   allocated = 6,
   copying = 7,
+  partition_ready = 8, // Internal pre-write handshake, not format progress.
 };
 
 struct CreationProgress final {
@@ -57,7 +58,8 @@ using ProgressCallback = std::function<void(const CreationProgress&)>;
 // thread that started the creation, once per progress report, and must not
 // throw: the helper is inside the format backend when the answer is acted on,
 // and it needs this pipe alive afterwards to delete the half-written container
-// as the user who asked for it. Answering true is a request, not a guarantee:
+// as the user who asked for it. Partition formatting never deletes its target
+// and cancellation may leave partial ciphertext. Answering true is a request, not a guarantee:
 // a creation that has already finished stays finished.
 using CancellationQuery = std::function<bool()>;
 
@@ -71,6 +73,17 @@ class VolumeCreator final {
   // Separate read-only UAC operation. Checks the snapshot on a readable volume
   // handle; success is not formatting permission and retains no session.
   void check_partition(const volume::PartitionCandidate& target) const;
+
+  // Destructively formats one NTFS MBR/512 data partition. Required callback is
+  // evaluated once after elevated preflight; the caller must verify its explicit
+  // erase consent and current authenticated session/target at that moment.
+  // Failure/cancellation may leave partial ciphertext; never deletes the target.
+  // This low-level API is not yet exposed by the product creation wizard.
+  void format_partition(const volume::PartitionCandidate& target,
+                        const security::SecureBuffer& volume_password,
+                        const std::function<bool()>& confirm_erase,
+                        const ProgressCallback& progress = {},
+                        const CancellationQuery& cancelled = {}) const;
 
   void create_standard(std::wstring_view target_path,
                        std::uint64_t size_bytes,
