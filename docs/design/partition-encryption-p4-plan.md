@@ -53,4 +53,22 @@
 
 执行固定源 HEAD／干净状态校验、DLL SHA-256 和 PE 导出检查，结果如上。现有 `volume_provider_tests`、`mount_orchestrator_tests`、`creator_protocol_tests`、`container_target_path_tests` 共 4/4 通过（0.77 秒）；只是既有行为基线。
 
-未执行分区集成、UAC 设备权限、正常暂停续作、实卡或多机测试，未重建 DLL，也未执行断电故障注入。P4.1a 的输出为本审计与收窄后的规划，不代表 P4.1 整体完成；下一代码片从只读识别开始。用户已授权提交本片并继续下一片，不推送。
+未执行分区集成、UAC 设备权限、正常暂停续作、实卡或多机测试，未重建 DLL，也未执行断电故障注入。P4.1a 的输出为本审计与收窄后的规划，不代表 P4.1 整体完成；下一代码片从只读识别开始。本片已按用户授权提交为 `a17744e`，未推送。
+
+## P4.1b — 原生只读分区发现骨架
+
+2026-09-22：新增 `partition_catalog` 原生模块及测试，作为 P4.2 选择页面的数据来源前置。本片不接 WebView、提权 IPC 或任何写入动作；打开磁盘管理按钮、刷新 UI、会话内选择 ID 均留给下一接线片。核心 API 每次调用重新枚举，不使用持久缓存。
+
+- 数据源为 Windows `FindFirstVolumeW`／`FindNextVolumeW` 返回的卷 GUID；这是一份**卷对象承载的分区清单**，不是完整物理分区表，未暴露为卷的 MSR／恢复等分区可能不出现。不接受外部设备路径或盘符作为查询输入。
+- `CreateFileW` 以零 desired access、`OPEN_EXISTING` 打开枚举卷，只请求三个查询 IOCTL（分区信息、磁盘区段和几何），以及文件系统信息。无 `ReadFile`／`WriteFile`、锁卷、卸载、格式化、权限提升或注册表写入。
+- 返回卷 GUID、盘号、分区号、起点／长度、逻辑扇区、候选状态与首个查询错误；仅驻留原生内存。清单枚举或当前 Windows 卷身份确认失败则整体抛错；单项查询失败保留不可选项，不能伪装为可用。
+- 目前仅将 GPT 基本数据分区或已识别且非活动的 MBR IFS 分区、单磁盘区段、NTFS、512 字节逻辑扇区列为**候选**。GPT 只允许无属性或 NO_DRIVE_LETTER；平台必需、只读、影子副本、隐藏及未知属性拒绝。拒绝非正范围、加法溢出、未对齐与分区／区段不一致。
+- 当前 Windows 卷优先排除；GPT EFI／MSR／恢复类型及 MBR 活动分区不可选。已测当前 Windows 卷排除，但不宣称已识别所有启动依赖、异地分页文件、BitLocker 或存储池。没有卷对象的分区不因缺席被推断为可用。
+- **候选不是写入授权**：磁盘持久身份、设备替换／重新分区复核、BitLocker 状态、分页／启动依赖、容量支持、写保护与独占条件仍需在接入写入前补齐。当前盘号、偏移和卷路径的快照不能直接作为提权写目标；NTFS/512 筛选也不是加密支持矩阵的实测结论。
+- 单元测试覆盖 40 个判定场景；没有把真假 GUID 或设备路径写入测试输出。`partition_catalog_tests --scan` 为显式只读实机检查，不注册到默认 CTest，不改变产品启动行为；连续两次刷新并验证 Windows 卷恰有一项被排除。
+
+验证：新增模块 MSVC `/W4 /WX /sdl /analyze` 编译通过；Release 模块、测试与主应用构建通过；四组相关 CTest 4/4 通过（0.19 秒），40 个判定场景通过；当前机器只读枚举 5 卷、2 候选、3 不可选，Windows 卷排除 1。首次应用构建命令使用不存在的目标名而失败，修正为既有 `usb_vault_vikey_p2_development_app` 后通过。未执行全量测试、ASan、API 故障注入、设备建卷或卡认证实测。
+
+安全审查：检查 API 失败默认拒绝、变长枚举上限 4096、IOCTL 返回长度、范围溢出、RAII 句柄释放与原生路径来源；没有扩大现有容器接口权限，枚举事实未持久化。热插拔可让快照过期，后续写入必须重新验证，本片无写入口。用户已授权提交本片并继续下一接线片。
+
+API 依据：[CreateFile 查询访问](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea)、[GPT 分区属性](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-partition_information_gpt)。

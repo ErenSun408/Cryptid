@@ -1150,3 +1150,10 @@ add_executable(card_operation_lease_tests card_operation_lease_tests.cpp)
 target_include_directories(card_operation_lease_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
 usb_vault_configure_target(card_operation_lease_tests)
 add_test(NAME card_operation_lease_tests COMMAND card_operation_lease_tests)
+
+add_executable(partition_catalog_tests partition_catalog_tests.cpp)
+target_include_directories(partition_catalog_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(partition_catalog_tests PRIVATE usb_vault_core)
+usb_vault_configure_target(partition_catalog_tests)
+add_test(NAME partition_catalog_tests COMMAND partition_catalog_tests)
+# --scan is an explicit read-only native smoke test; not part of default CTest.
