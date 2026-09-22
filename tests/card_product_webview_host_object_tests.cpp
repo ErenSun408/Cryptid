@@ -3297,6 +3297,67 @@ void test_protection_query_is_boolean_scoped_and_serialized() {
   require(FAILED(query(7)), "interrupted card state leaked");
 }
 
+class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
+ public:
+  std::atomic<bool> delay{false};
+  bool fail{};
+  bool tool_success{true};
+  int tool_calls{};
+  std::vector<usb_vault::volume::PartitionCandidate> enumerate() override {
+    while (delay.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (fail) throw std::runtime_error("scan failure");
+    usb_vault::volume::PartitionCandidate item{};
+    item.volume_path = L"private-native-identity";
+    item.partition_number = 3; item.length_bytes = 1073741824;
+    item.availability = usb_vault::volume::PartitionAvailability::candidate;
+    auto blocked = item;
+    blocked.availability = usb_vault::volume::PartitionAvailability::windows_volume;
+    return {item, blocked};
+  }
+  bool open_disk_management() noexcept override { ++tool_calls; return tool_success; }
+};
+
+void test_partition_selection_lifecycle() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  FakePartitionServices services;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work, nullptr, &services)), "partition host failed");
+  VARIANT result{};
+  const auto call = [&](const wchar_t* name) { ::VariantClear(&result); return invoke_no_arguments(*host.Get(), name, &result); };
+  const auto select = [&](unsigned int id) { ::VariantClear(&result); return invoke_with_number(*host.Get(), L"selectPartition", id, &result, nullptr); };
+  const auto wait = [&] {
+    for (int i = 0; work.running.load() && i < 3000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(), "partition timeout");
+  };
+  require(call(L"beginPartitionRefresh") == E_ACCESSDENIED && call(L"openDiskManagement") == E_ACCESSDENIED && services.tool_calls == 0, "partition unauthenticated access");
+  fixture.authentication.establish(root_secret());
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "scan start"); wait();
+  require(SUCCEEDED(call(L"getPartitionList")) && result.vt == VT_BSTR && std::wstring(result.bstrVal) == L"1,0,3,1073741824,0\n2,0,3,1073741824,1", "partition projection leaked identity or incorrect facts");
+  require(select(2) == E_ACCESSDENIED && select(0) == DISP_E_TYPEMISMATCH && select(999) == E_ACCESSDENIED, "invalid partition selected");
+  require(SUCCEEDED(select(1)) && SUCCEEDED(call(L"getSelectedPartition")) && result.ulVal == 1, "selection missing");
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "refresh start"); wait();
+  require(select(1) == E_ACCESSDENIED && SUCCEEDED(call(L"getSelectedPartition")) && result.ulVal == 0 && SUCCEEDED(select(3)), "stale selection reused");
+  services.tool_success = false;
+  require(call(L"openDiskManagement") == E_FAIL && FAILED(select(3)), "failed launcher retained selection");
+  services.tool_success = true;
+  require(SUCCEEDED(call(L"openDiskManagement")) && services.tool_calls == 2, "launcher routing");
+  services.fail = true;
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "failed scan start"); wait();
+  require(SUCCEEDED(call(L"getPartitionRefreshStatus")) && result.ulVal == 3 && FAILED(call(L"getPartitionList")), "scan failure invented candidates");
+  services.fail = false; services.delay.store(true);
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "delayed scan start");
+  const bool excluded = select(3) == E_PENDING && call(L"openDiskManagement") == E_PENDING && call(L"getVolumeOperationStatus") == E_PENDING;
+  work.card_epoch.fetch_add(1); work.interrupted.store(true);
+  const bool pending = SUCCEEDED(call(L"getPartitionRefreshStatus")) && result.ulVal == 1;
+  services.delay.store(false); wait();
+  require(excluded && pending && call(L"getPartitionList") == E_ACCESSDENIED, "worker/session boundary failed");
+  work.interrupted.store(false);
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "session rescan"); wait();
+  require(SUCCEEDED(call(L"clearPartitions")) && FAILED(call(L"getPartitionList")), "clear retained snapshot");
+  ::VariantClear(&result);
+}
+
 void test_leave_application_routes() {
   Fixture fixture;
   RecordingCloseSink sink;
@@ -3429,6 +3490,7 @@ void test_login_reset_bridge_lifecycle() {
 
 int main() {
   try {
+    test_partition_selection_lifecycle();
     test_login_reset_bridge_lifecycle();
     test_protection_query_is_boolean_scoped_and_serialized();
     test_leave_application_routes();

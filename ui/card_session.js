@@ -3283,7 +3283,116 @@
     try { await bridge.cancelExternalDrop(); } catch (_) {}
   });
 
+  const partitionBody = document.getElementById("partition-list-body");
+  const partitionStatus = document.getElementById("partition-status");
+  const partitionSelection = document.getElementById("partition-selection");
+  const partitionRefresh = document.getElementById("partition-refresh");
+  const partitionManagement = document.getElementById("partition-open-management");
+  let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
+  const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区布局",
+    "受保护的分区", "分区信息不一致", "暂不支持的扇区大小", "暂不支持的文件系统"];
+  const partitionName = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
+    row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
+  const renderPartitions = () => {
+    const disabled = busy || currentState !== nativeState.authenticated;
+    partitionRefresh.disabled = disabled;
+    partitionManagement.disabled = disabled;
+    partitionBody.replaceChildren();
+    if (!partitionRows.length) {
+      const cell = document.createElement("td"); cell.colSpan = 4;
+      cell.textContent = busy && activeSection === "partitions" ? "正在读取分区…" : "暂无分区列表，请刷新。";
+      const row = document.createElement("tr"); row.append(cell); partitionBody.append(row);
+    }
+    for (const item of partitionRows) {
+      const row = document.createElement("tr");
+      for (const text of [partitionName(item), item.bytes ? `${(item.bytes / (1024 ** 3)).toFixed(2)} GiB` : "—",
+        partitionReasons[item.state]]) {
+        const cell = document.createElement("td"); cell.textContent = text; row.append(cell);
+      }
+      const cell = document.createElement("td"), button = document.createElement("button");
+      button.type = "button"; button.className = "shell-button";
+      button.textContent = partitionSelected === item.id ? "已选择" : "选择";
+      button.setAttribute("aria-pressed", String(partitionSelected === item.id));
+      button.setAttribute("aria-label", `选择${partitionName(item)}`);
+      button.disabled = disabled || item.state !== 0;
+      button.addEventListener("click", () => { void selectPartitionRow(item.id); });
+      cell.append(button); row.append(cell); partitionBody.append(row);
+    }
+    const selected = partitionRows.find(row => row.id === partitionSelected);
+    partitionSelection.textContent = selected ? `已选择：${partitionName(selected)}。尚未执行加密。` : "尚未选择分区。";
+  };
+  const discardPartitions = () => {
+    ++partitionRevision; partitionRows = []; partitionSelected = 0;
+    partitionStatus.textContent = "请刷新分区列表。";
+    renderPartitions();
+  };
+  const parsePartitionRows = packed => {
+    if (typeof packed !== "string" || packed.length > 300000) throw new Error("invalid partition list");
+    const rows = packed ? packed.split("\n") : [];
+    if (rows.length > 4096) throw new Error("partition list too large");
+    const ids = new Set();
+    return rows.map(line => {
+      if (!/^[1-9]\d*,\d+,\d+,\d+,[0-7]$/.test(line)) throw new Error("invalid partition row");
+      const [id, disk, part, bytes, state] = line.split(",").map(Number);
+      if (![id, disk, part].every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) ||
+          !Number.isSafeInteger(bytes) || bytes < 0 || ids.has(id) || (state === 0 && (!part || !bytes)))
+        throw new Error("invalid partition facts");
+      ids.add(id); return {id, disk, part, bytes, state};
+    });
+  };
+  const refreshPartitions = async () => {
+    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    discardPartitions(); const revision = partitionRevision;
+    busy = true; render(messageForCurrentState()); partitionStatus.textContent = "正在读取分区…";
+    try {
+      if (await bridge.beginPartitionRefresh() !== true) throw new Error("scan rejected");
+      let status;
+      do {
+        status = await bridge.getPartitionRefreshStatus();
+        if (status === 1) await new Promise(resolve => setTimeout(resolve, 100));
+      } while (status === 1);
+      if (status !== 2) throw new Error("scan did not complete");
+      const rows = parsePartitionRows(await bridge.getPartitionList());
+      if (revision !== partitionRevision || activeSection !== "partitions") return;
+      partitionRows = rows;
+      partitionStatus.textContent = rows.length ? `已读取 ${rows.length} 个分区卷，${rows.filter(row => row.state === 0).length} 个可选择。` : "未发现可显示的分区卷。";
+    } catch (_) {
+      if (revision === partitionRevision) partitionStatus.textContent = "无法读取分区，请稍后刷新重试。";
+    } finally {
+      busy = false; render(messageForCurrentState());
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  };
+  const selectPartitionRow = async id => {
+    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    const revision = partitionRevision;
+    busy = true; render(messageForCurrentState());
+    try {
+      if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
+      if (revision === partitionRevision) partitionSelected = id;
+    } catch (_) {
+      partitionSelected = 0; partitionStatus.textContent = "分区选择已失效，请刷新后重新选择。";
+    } finally {
+      busy = false; render(messageForCurrentState());
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  };
+  partitionRefresh.addEventListener("click", () => { void refreshPartitions(); });
+  partitionManagement.addEventListener("click", async () => {
+    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    discardPartitions(); const revision = partitionRevision; busy = true; render(messageForCurrentState());
+    try {
+      if (await bridge.openDiskManagement() !== true) throw new Error("tool launch failed");
+      if (revision === partitionRevision) partitionStatus.textContent = "磁盘管理已打开，操作完成后请返回刷新。";
+    } catch (_) { if (revision === partitionRevision) partitionStatus.textContent = "无法打开磁盘管理，可从 Windows 开始菜单打开。"; }
+    finally { busy = false; render(messageForCurrentState()); if (externalRefreshPending) void refreshAfterExternalChange(); }
+  });
+
   const showDashboardSection = (sectionName) => {
+    if (activeSection === "partitions" && sectionName !== "partitions") {
+      discardPartitions();
+      if (bridge !== null) void bridge.clearPartitions().catch(() => {});
+    }
     if (sectionName === "history" && !operationLoggingEnabled) return;
     if (inDecoyFileView() && sectionName !== "decoy") {
       decoyMaintenancePath = [...filePath];
@@ -3321,6 +3430,7 @@
     // reads a directory when the user arrives at it or moves inside it.
     if (sectionName === "files") void refreshFileManager();
     if (sectionName === "backup") renderBackupCentre();
+    if (sectionName === "partitions") void refreshPartitions();
     if (sectionName === "decoy") {
       renderDecoySection();
       if (returningToMaintenance) void refreshFileManager();
@@ -3699,6 +3809,8 @@
   };
 
   const render = (message, error = "") => {
+    if (currentState !== nativeState.authenticated && partitionRows.length) discardPartitions();
+    renderPartitions();
     appExitToggle.disabled = busy || currentState !== nativeState.authenticated;
     returnToLogin.disabled = appExitToggle.disabled;
     exitApplication.disabled = appExitToggle.disabled;
@@ -4022,6 +4134,7 @@
   };
 
   const refreshAfterExternalChange = async () => {
+    discardPartitions();
     closeSessionTools();
     ++forgotRevision;
     if (!forgotDialog.hidden && !forgotRunning) await closeForgotPassword();

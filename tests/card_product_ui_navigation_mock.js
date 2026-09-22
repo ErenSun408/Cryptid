@@ -55,6 +55,12 @@ window.navigationFixture = {
       ...ids.map((id) => fixture.containers.find((item) => item.id === id)).filter(Boolean)];
   };
   const bridge = {
+    beginPartitionRefresh: () => { fixture.partitionScans = (fixture.partitionScans || 0) + 1; return true; },
+    getPartitionRefreshStatus: () => fixture.partitionPending ? 1 : 2,
+    getPartitionList: () => fixture.partitionList ?? "1,0,3,1073741824,0\n2,0,1,536870912,1",
+    selectPartition: id => { fixture.partitionSelected = id; return true; },
+    clearPartitions: async () => { fixture.partitionSelected = 0; },
+    openDiskManagement: () => { if (fixture.partitionToolFails) throw new Error("tool failed"); fixture.partitionTools = (fixture.partitionTools || 0) + 1; return true; },
     getAutoMountEnabled: () => {
       if (fixture.onAutoRead) {
         const callback = fixture.onAutoRead;

@@ -159,6 +159,7 @@ add_library(usb_vault_core STATIC
   src/ui/card_product_ui_session_controller.cpp
   src/ui/container_target_path.cpp
   src/ui/external_drop_target.cpp
+  src/ui/partition_picker_services.cpp
   src/ui/password_ingress.cpp
   src/ui/ui_close_guard.cpp
   src/ui/webview_password_array.cpp

@@ -22,6 +22,13 @@
 namespace usb_vault::ui {
 namespace {
 
+constexpr DISPID kPartitionBeginId = 100;
+constexpr DISPID kPartitionStatusId = 101;
+constexpr DISPID kPartitionListId = 102;
+constexpr DISPID kPartitionSelectId = 103;
+constexpr DISPID kPartitionSelectedId = 104;
+constexpr DISPID kPartitionClearId = 105;
+constexpr DISPID kPartitionToolId = 106;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -362,11 +369,13 @@ class CardProductWebViewHostObject final : public IDispatch {
       IUiCloseRequestSink* const close_sink,
       IUiWindowSizeSink* const window_size_sink,
       CreationWorkState* const creation_work,
-      IUiExternalDropTargetSink* const external_drop_sink) noexcept
+      IUiExternalDropTargetSink* const external_drop_sink,
+      IUiPartitionServices* const partition_services) noexcept
       : controller_(controller), close_sink_(close_sink),
         window_size_sink_(window_size_sink),
         creation_work_(creation_work ? creation_work : &local_creation_work_),
-        external_drop_sink_(external_drop_sink) {}
+        external_drop_sink_(external_drop_sink),
+        partition_services_(partition_services ? *partition_services : native_partition_services()) {}
 
   ~CardProductWebViewHostObject() {
     if (creation_thread_.joinable()) creation_thread_.join();
@@ -418,6 +427,13 @@ class CardProductWebViewHostObject final : public IDispatch {
       return S_OK;
     }
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
+    if (matches(names[0], L"beginPartitionRefresh")) { ids[0] = kPartitionBeginId; return S_OK; }
+    if (matches(names[0], L"getPartitionRefreshStatus")) { ids[0] = kPartitionStatusId; return S_OK; }
+    if (matches(names[0], L"getPartitionList")) { ids[0] = kPartitionListId; return S_OK; }
+    if (matches(names[0], L"selectPartition")) { ids[0] = kPartitionSelectId; return S_OK; }
+    if (matches(names[0], L"getSelectedPartition")) { ids[0] = kPartitionSelectedId; return S_OK; }
+    if (matches(names[0], L"clearPartitions")) { ids[0] = kPartitionClearId; return S_OK; }
+    if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
     if (matches(names[0], L"returnToLogin")) { ids[0] = kReturnToLoginId; return S_OK; }
     if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
@@ -655,7 +671,14 @@ class CardProductWebViewHostObject final : public IDispatch {
     // they carry no session state of their own and are answered from atomics.
     const bool external_drop_query =
         member == kExternalDropStatusId || member == kCancelExternalDropId || member == kExternalFileProgressId || member == kExternalDropBoundsId || member == kExternalDropButtonBoundsId;
+    if (partition_mode_ && creation_work_->running.load() &&
+        !external_drop_query && member != kPartitionStatusId) {
+      DispatchTextWiper text_wiper(parameters);
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return E_PENDING;
+    }
     if (creation_work_->running.load() && !external_drop_query &&
+        !(partition_mode_ && member == kPartitionStatusId) &&
         !(reset_mode_ && member == kLoginResetStatusId) &&
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
@@ -667,6 +690,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
     }
+
+    if (!creation_work_->running.load() &&
+        !(member >= kPartitionBeginId && member <= kPartitionToolId)) partition_mode_ = false;
+    if (!creation_work_->running.load() &&
+        (controller_.state() != CardProductUiState::authenticated ||
+         partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
+    if (member >= kPartitionBeginId && member <= kPartitionToolId)
+      return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
       return invoke_login_reset(member, parameters, result);
@@ -1137,6 +1168,103 @@ class CardProductWebViewHostObject final : public IDispatch {
     } catch (...) {
       creation_work_->running.store(false);
       clear_batch();
+      return E_FAIL;
+    }
+  }
+
+  void clear_partitions() noexcept {
+    std::lock_guard lock(partition_mutex_);
+    partition_items_.clear();
+    partition_selected_ = 0;
+    partition_status_.store(0);
+  }
+  static HRESULT partition_number(std::uint32_t value, VARIANT* result) noexcept {
+    if (!result) return E_POINTER;
+    ::VariantInit(result); result->vt = VT_UI4; result->ulVal = value;
+    return S_OK;
+  }
+  HRESULT invoke_partition(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    if (member == kPartitionSelectId) {
+      if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg)
+        return DISP_E_BADPARAMCOUNT;
+    } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    if (!result) return E_POINTER;
+    if (member == kPartitionStatusId && creation_work_->running.load()) {
+      return partition_number(1, result);
+    }
+    if (controller_.state() != CardProductUiState::authenticated || creation_work_->interrupted.load()) {
+      // No worker touches controller_; snapshots are protected by this mutex.
+      if (!creation_work_->running.load()) clear_partitions();
+      return E_ACCESSDENIED;
+    }
+    try {
+      if (member == kPartitionBeginId || member == kPartitionToolId) {
+        last_volume_member_ = 0;
+        clear_batch(); clear_survey(); clear_space();
+      }
+      if (member == kPartitionBeginId) {
+        if (creation_thread_.joinable()) creation_thread_.join();
+        clear_partitions();
+        partition_epoch_ = creation_work_->card_epoch.load();
+        const auto epoch = partition_epoch_;
+        partition_mode_ = true;
+        partition_status_.store(1);
+        creation_work_->volume_operation.store(true);
+        creation_work_->running.store(true);
+        creation_thread_ = std::thread([this, epoch] {
+          try {
+            auto discovered = partition_services_.enumerate();
+            std::lock_guard lock(partition_mutex_);
+            if (creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch) {
+              partition_status_.store(4);
+            } else if (discovered.size() > 4096 ||
+                discovered.size() > (std::numeric_limits<std::uint32_t>::max)() - partition_next_id_) {
+              partition_status_.store(3);
+            } else {
+              partition_items_.clear();
+              for (auto& item : discovered) partition_items_.push_back({++partition_next_id_, std::move(item)});
+              partition_status_.store(2);
+            }
+          } catch (...) {
+            std::lock_guard lock(partition_mutex_);
+            partition_items_.clear(); partition_status_.store(3);
+          }
+          creation_work_->running.store(false);
+        });
+        return complete_selection(true, result);
+      }
+      if (member == kPartitionClearId || member == kPartitionToolId) {
+        clear_partitions();
+        if (member == kPartitionToolId && !partition_services_.open_disk_management()) return E_FAIL;
+        return complete_selection(true, result);
+      }
+      std::lock_guard lock(partition_mutex_);
+      if (partition_epoch_ != creation_work_->card_epoch.load()) return E_ACCESSDENIED;
+      if (member == kPartitionStatusId) return partition_number(partition_status_.load(), result);
+      if (partition_status_.load() != 2) return E_UNEXPECTED;
+      if (member == kPartitionSelectedId) return partition_number(partition_selected_, result);
+      if (member == kPartitionSelectId) {
+        std::uint32_t id{};
+        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
+        if (found == partition_items_.end() ||
+            found->target.availability != volume::PartitionAvailability::candidate || found->target.query_error)
+          return E_ACCESSDENIED;
+        partition_selected_ = id;
+        return complete_selection(true, result);
+      }
+      std::wstring packed;
+      for (const auto& item : partition_items_) {
+        const auto& target = item.target;
+        if (!packed.empty()) packed += L"\n";
+        packed += std::to_wstring(item.id) + L"," + std::to_wstring(target.disk_number) + L"," +
+            std::to_wstring(target.partition_number) + L"," + std::to_wstring(target.length_bytes) + L"," +
+            std::to_wstring(static_cast<unsigned int>(target.availability));
+      }
+      return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+    } catch (...) {
+      if (member == kPartitionBeginId) creation_work_->running.store(false);
+      clear_partitions();
       return E_FAIL;
     }
   }
@@ -2425,6 +2553,15 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  struct PartitionItem { std::uint32_t id; volume::PartitionCandidate target; };
+  IUiPartitionServices& partition_services_;
+  std::mutex partition_mutex_;
+  std::vector<PartitionItem> partition_items_;
+  std::atomic<unsigned int> partition_status_{0}; // 0 idle, 1 scanning, 2 ready, 3 failed, 4 expired.
+  bool partition_mode_{}; // COM thread only; only this worker may expose its progress.
+  std::uint64_t partition_epoch_{};
+  std::uint32_t partition_next_id_{}; // Never reused by this bridge after refresh.
+  std::uint32_t partition_selected_{};
   std::atomic<ULONG> references_{1};
   CardProductUiSessionController& controller_;
   IUiCloseRequestSink* close_sink_{};
@@ -2481,12 +2618,13 @@ HRESULT create_card_product_webview_host_object(
     IDispatch** const result,
     IUiWindowSizeSink* const window_size_sink,
     CreationWorkState* const creation_work,
-    IUiExternalDropTargetSink* const external_drop_sink) noexcept {
+    IUiExternalDropTargetSink* const external_drop_sink,
+      IUiPartitionServices* const partition_services) noexcept {
   if (result == nullptr) return E_POINTER;
   *result = nullptr;
   auto* const object =
       new (std::nothrow) CardProductWebViewHostObject(controller, close_sink,
-          window_size_sink, creation_work, external_drop_sink);
+          window_size_sink, creation_work, external_drop_sink, partition_services);
   if (object == nullptr) return E_OUTOFMEMORY;
   *result = object;
   return S_OK;

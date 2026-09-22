@@ -2,6 +2,8 @@
 
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
+#include "usb_vault/volume/partition_catalog.h"
+
 #include <oaidl.h>
 #include <atomic>
 #include <cstdint>
@@ -42,6 +44,16 @@ struct CreationWorkState final {
   enum class Phase { idle, cancellable, cancel_requested, finalizing };
   std::atomic<Phase> phase_{Phase::idle};
 };
+
+// Injectable read-only discovery and explicit system-tool launch boundary.
+// The source outlives its bridge, including the bridge's background worker.
+class IUiPartitionServices {
+ public:
+  virtual ~IUiPartitionServices() noexcept = default;
+  virtual std::vector<volume::PartitionCandidate> enumerate() = 0;
+  virtual bool open_disk_management() noexcept = 0;
+};
+[[nodiscard]] IUiPartitionServices& native_partition_services() noexcept;
 
 class IUiWindowSizeSink {
  public:
@@ -129,12 +141,20 @@ class IUiCloseRequestSink {
 // Only batch queries are available during batch execution. Card changes or
 // authentication loss deny old snapshots; another mutation discards them.
 // No batch outcome grants single-volume force permission or manual cancellation.
+// Partition discovery is read-only and authenticated. beginPartitionRefresh
+// starts the exclusive worker; getPartitionRefreshStatus is its only progress
+// query (1 running, 2 ready, 3 failed, 4 expired; 0 no snapshot).
+// getPartitionList: newline-separated "id,disk,partition,bytes,availability".
+// selectPartition takes a snapshot-local uint32 ID, never a path. Refresh,
+// clearPartitions, openDiskManagement and card changes retire old selections.
+// No selection is write authorization; no partition facts are persisted.
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,
     IDispatch** result,
     IUiWindowSizeSink* window_size_sink = nullptr,
     CreationWorkState* creation_work = nullptr,
-    IUiExternalDropTargetSink* external_drop_sink = nullptr) noexcept;
+    IUiExternalDropTargetSink* external_drop_sink = nullptr,
+    IUiPartitionServices* partition_services = nullptr) noexcept;
 
 }  // namespace usb_vault::ui
