@@ -2,6 +2,7 @@
 
 #include "usb_vault/security/secure_buffer.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -47,14 +48,38 @@ inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
     std::span<const std::byte> key, std::wstring_view path,
     std::optional<std::uint32_t> order = std::nullopt);
 
+// Stable identity of one supported MBR/512 partition. No drive letter, disk
+// number, discovery path, preformat filesystem serial, password or role is
+// persisted. A match locates a candidate; only authenticated mounting proves it.
+struct ContainerIndexPartition {
+  std::array<std::uint8_t, 16> device_id{};
+  std::uint32_t device_id_flags{};
+  std::uint32_t layout{1}; // MBR only in the initial support matrix.
+  std::uint32_t logical_sector_bytes{512};
+  std::uint64_t offset_bytes{};
+  std::uint64_t length_bytes{};
+  bool operator==(const ContainerIndexPartition&) const = default;
+};
+[[nodiscard]] bool valid_container_index_partition(
+    const ContainerIndexPartition& partition) noexcept;
+
+// Version 3 is a partition payload inside the same sealed slot. Never store
+// this metadata in a sidecar. Older applications cannot safely edit v3 indexes.
+[[nodiscard]] security::SecureBuffer seal_container_index_partition(
+    std::span<const std::byte> key, const ContainerIndexPartition& partition,
+    std::optional<std::uint32_t> order = std::nullopt);
+
 // Version 2 adds an authenticated order at offset 524, inside the same sealed
 // slot. Version 1 remains readable and has no order. Physical slot placement
 // remains random and conveys no display order.
 struct ContainerIndexEntry {
   std::wstring path;
   std::optional<std::uint32_t> order;
+  // v3: path is empty; v1/v2: partition is empty.
+  std::optional<ContainerIndexPartition> partition;
 };
 
+// Opens supported file and partition payloads; callers must inspect partition.
 [[nodiscard]] std::optional<ContainerIndexEntry> try_open_container_index_entry(
     std::span<const std::byte> key, std::span<const std::byte> slot);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/application/container_index_v1.h"
 
 #include <cstddef>
 #include <span>
@@ -48,6 +49,17 @@ enum class ContainerIndexWriteV1 {
   already_present,
   full,
 };
+
+// Partitions share the same root-derived key and fixed-size file. File-only
+// operations never expose them as paths and leave their slots byte-for-byte.
+[[nodiscard]] std::vector<ContainerIndexPartition> list_container_index_partitions(
+    std::span<const std::byte> key, std::span<const std::byte> file);
+[[nodiscard]] ContainerIndexWriteV1 add_container_index_partition(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    const ContainerIndexPartition& partition);
+[[nodiscard]] bool remove_container_index_partition(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    const ContainerIndexPartition& partition);
 
 // Seals one path into a free slot, chosen uniformly at random among the slots
 // this key cannot open. Position has to stay meaningless, so the choice

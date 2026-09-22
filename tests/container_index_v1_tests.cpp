@@ -538,9 +538,72 @@ void test_order_is_authenticated_and_legacy_entries_still_open() {
   }, "writer accepted an out of range order");
 }
 
+void test_partition_payload_roundtrip_and_rejection() {
+  using namespace usb_vault::application;
+  const Key key = test_key(0xED);
+  ContainerIndexPartition partition;
+  partition.device_id.fill(0x39);
+  partition.device_id_flags = 4;
+  partition.offset_bytes = 0x1234567800ULL;
+  partition.length_bytes = 0x9876543200ULL;
+  const auto sealed = seal_container_index_partition(key, partition, 23);
+  const auto opened = try_open_container_index_entry(key, sealed.bytes());
+  expect(opened && opened->partition == partition && opened->path.empty() && opened->order == 23U,
+         "partition identity or order did not round trip");
+  expect(!try_open_container_index_entry_v1(key, sealed.bytes()),
+         "partition was returned as a file path");
+  const auto plaintext = hand_opened_contents(key, sealed.bytes());
+  expect(take_u32(plaintext, 0) == 3 && take_u32(plaintext, 20) == 4 &&
+      take_u32(plaintext, 24) == 1 && take_u32(plaintext, 28) == 512 &&
+      take_u32(plaintext, 32) == 0x34567800 && take_u32(plaintext, 36) == 0x12 &&
+      take_u32(plaintext, 40) == 0x76543200 && take_u32(plaintext, 44) == 0x98,
+      "partition payload differs from its documented LE layout");
+  const auto other = seal_container_index_partition(key, partition);
+  expect(!std::ranges::equal(sealed.bytes(), other.bytes()), "partition seal reused bytes");
+  expect(!try_open_container_index_entry(key, other.bytes())->order,
+         "unordered partition received an order");
+  expect(!try_open_container_index_entry(test_key(0xEF), sealed.bytes()),
+         "another root opened partition metadata");
+  for (std::size_t i = 0; i < sealed.size(); ++i) {
+    auto damaged = copy_of(sealed);
+    damaged[i] ^= std::byte{1};
+    expect(!try_open_container_index_entry(key, damaged), "tampered partition opened");
+  }
+  for (int scenario = 0; scenario != 10; ++scenario) {
+    auto invalid = partition;
+    switch (scenario) {
+      case 0: invalid.device_id.fill(0); break;
+      case 1: invalid.device_id_flags = 1; break;
+      case 2: invalid.device_id_flags = 8; break;
+      case 3: invalid.layout = 2; break;
+      case 4: invalid.logical_sector_bytes = 4096; break;
+      case 5: invalid.offset_bytes = 0; break;
+      case 6: ++invalid.offset_bytes; break;
+      case 7: invalid.length_bytes = 512; break;
+      case 8: invalid.length_bytes = 1024ULL * 1024 * 1024 * 1024 + 512; break;
+      case 9: invalid.offset_bytes = 0x7ffffffffffffe00ULL; break;
+    }
+    expect_invalid_argument([&] { static_cast<void>(seal_container_index_partition(key, invalid)); },
+                            "invalid partition metadata was sealed");
+  }
+  // Independently authenticated malformed payloads must also be rejected.
+  for (const auto [offset, value] : std::array<std::pair<std::size_t, std::uint32_t>, 7>{
+      {{0, 4}, {20, 1}, {24, 2}, {28, 4096}, {32, 1}, {44, 0xffffffff}, {524, 1024}}}) {
+    auto invalid = plaintext;
+    put_u32(invalid, offset, value);
+    expect(!try_open_container_index_entry(key, hand_sealed_slot(key, invalid)),
+           "authenticated malformed partition payload was accepted");
+  }
+  auto invalid_id = plaintext;
+  std::fill(invalid_id.begin() + 4, invalid_id.begin() + 20, std::byte{});
+  expect(!try_open_container_index_entry(key, hand_sealed_slot(key, invalid_id)),
+         "zero authenticated device ID was accepted");
+}
+
 } // namespace
 
 int main() {
+  test_partition_payload_roundtrip_and_rejection();
   test_order_is_authenticated_and_legacy_entries_still_open();
   test_round_trip_returns_the_same_path();
   test_non_ascii_paths_survive_as_code_units();

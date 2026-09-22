@@ -212,7 +212,7 @@ list_container_index_paths_v1(const std::span<const std::byte> key,
                               const std::span<const std::byte> file) {
   std::vector<std::wstring> paths;
   for (auto& located : ordered_entries(key, file))
-    paths.push_back(std::move(located.entry.path));
+    if (!located.entry.partition) paths.push_back(std::move(located.entry.path));
   return paths;
 }
 
@@ -221,7 +221,8 @@ void reorder_container_index_paths_v1(
     const std::span<const std::wstring> paths) {
   if (paths.size() > kContainerIndexV1SlotCount)
     throw std::invalid_argument("too many container paths");
-  const auto entries = ordered_entries(key, file);
+  auto entries = ordered_entries(key, file);
+  std::erase_if(entries, [](const auto& item) { return item.entry.partition.has_value(); });
   std::vector<std::size_t> order;
   std::vector<bool> selected(entries.size(), false);
   for (const auto& path : paths) {
@@ -257,12 +258,11 @@ add_container_index_path_v1(const std::span<const std::byte> key,
   const std::span<const std::byte> readable(file);
   std::vector<std::size_t> free_slots;
   for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
-    const std::optional<std::wstring> opened =
-        try_open_container_index_entry_v1(
-            key, container_index_v1_slot(readable, index));
+    const auto opened = try_open_container_index_entry(
+        key, container_index_v1_slot(readable, index));
     if (!opened.has_value()) {
       free_slots.push_back(index);
-    } else if (same_path(*opened, path)) {
+    } else if (!opened->partition && same_path(opened->path, path)) {
       return ContainerIndexWriteV1::already_present;
     }
   }
@@ -289,6 +289,49 @@ ContainerIndexWriteV1 prepend_container_index_path_v1(
                                    std::span<const std::wstring>(&first, 1));
   std::ranges::copy(updated, file.begin());
   return ContainerIndexWriteV1::added;
+}
+
+std::vector<ContainerIndexPartition> list_container_index_partitions(
+    const std::span<const std::byte> key, const std::span<const std::byte> file) {
+  std::vector<ContainerIndexPartition> result;
+  for (const auto& located : ordered_entries(key, file))
+    if (located.entry.partition) result.push_back(*located.entry.partition);
+  return result;
+}
+
+ContainerIndexWriteV1 add_container_index_partition(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const ContainerIndexPartition& partition) {
+  // Validate even if the file is full; do not mutate until all crypto succeeds.
+  const auto sealed = seal_container_index_partition(key, partition);
+  std::vector<std::size_t> free_slots;
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    const auto entry = try_open_container_index_entry(key, container_index_v1_slot(file, index));
+    if (!entry) free_slots.push_back(index);
+    else if (entry->partition == partition) return ContainerIndexWriteV1::already_present;
+  }
+  if (free_slots.empty()) return ContainerIndexWriteV1::full;
+  std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(
+      file, free_slots[random_below(free_slots.size())]).begin());
+  return ContainerIndexWriteV1::added;
+}
+
+bool remove_container_index_partition(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const ContainerIndexPartition& partition) {
+  if (!valid_container_index_partition(partition))
+    throw std::invalid_argument("invalid partition index identity");
+  std::vector<std::byte> updated(file.begin(), file.end());
+  bool removed = false;
+  for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
+    const auto entry = try_open_container_index_entry(key, container_index_v1_slot(file, index));
+    if (entry && entry->partition == partition) {
+      fill_container_index_slot_v1(container_index_v1_mutable_slot(updated, index));
+      removed = true;
+    }
+  }
+  if (removed) std::ranges::copy(updated, file.begin());
+  return removed;
 }
 
 bool remove_container_index_path_v1(const std::span<const std::byte> key,

@@ -39,6 +39,11 @@ constexpr std::size_t kPathLengthOffset = 4;
 constexpr std::size_t kPathOffset = 6;
 constexpr std::size_t kOrderOffset = 524;
 constexpr std::uint32_t kOrderedEntryVersion = 2;
+constexpr std::uint32_t kPartitionEntryVersion = 3;
+// v3: device ID [4,20), flags [20,24), layout [24,28), sector [28,32),
+// offset [32,40), length [40,48), order [524,528). Remaining bytes are random.
+// UINT32_MAX is an unordered partition; no field outside the GCM payload.
+
 constexpr std::size_t kPathCapacity =
     kContainerIndexV1PathMaximumLength * sizeof(wchar_t);
 
@@ -229,15 +234,28 @@ void require_slot_index(const std::size_t index) {
 
 } // namespace
 
-security::SecureBuffer
-seal_container_index_entry_v1(const std::span<const std::byte> key,
-                              const std::wstring_view path,
-                              const std::optional<std::uint32_t> order) {
+bool valid_container_index_partition(const ContainerIndexPartition& partition) noexcept {
+  return partition.device_id != std::array<std::uint8_t, 16>{} &&
+      (partition.device_id_flags & ~4U) == 0 && partition.layout == 1 &&
+      partition.logical_sector_bytes == 512 && partition.offset_bytes != 0 &&
+      partition.offset_bytes % 512 == 0 && partition.length_bytes % 512 == 0 &&
+      partition.length_bytes >= 20ULL * 1024 * 1024 &&
+      partition.length_bytes <= 1024ULL * 1024 * 1024 * 1024 &&
+      partition.offset_bytes <= static_cast<std::uint64_t>(
+          (std::numeric_limits<std::int64_t>::max)()) - partition.length_bytes;
+}
+
+static security::SecureBuffer seal_index_entry(
+    const std::span<const std::byte> key, const std::wstring_view path,
+    const std::optional<std::uint32_t> order,
+    const ContainerIndexPartition* const partition) {
   require_key(key);
   if (order && *order >= kContainerIndexV1SlotCount) {
     throw std::invalid_argument("container index order is out of range");
   }
-  if (path.empty()) {
+  if (partition && !valid_container_index_partition(*partition))
+    throw std::invalid_argument("invalid partition index identity");
+  if (!partition && path.empty()) {
     throw std::invalid_argument("container index path is empty");
   }
   if (path.size() > kContainerIndexV1PathMaximumLength) {
@@ -252,14 +270,28 @@ seal_container_index_entry_v1(const std::span<const std::byte> key,
   // even to somebody who has recovered the plaintext by other means.
   security::SecureBuffer plaintext(kPlaintextSize);
   fill_random(plaintext.bytes());
-  write_u32(plaintext.bytes(), kVersionOffset,
-            order ? kOrderedEntryVersion : kContainerIndexEntryV1Version);
-  if (order) write_u32(plaintext.bytes(), kOrderOffset, *order);
-  write_u16(plaintext.bytes(), kPathLengthOffset,
-            static_cast<std::uint16_t>(path.size()));
-  for (std::size_t index = 0; index < path.size(); ++index) {
-    write_u16(plaintext.bytes(), kPathOffset + (index * sizeof(wchar_t)),
-              static_cast<std::uint16_t>(path[index]));
+  if (partition) {
+    write_u32(plaintext.bytes(), kVersionOffset, kPartitionEntryVersion);
+    for (std::size_t i = 0; i < partition->device_id.size(); ++i)
+      plaintext.bytes()[4 + i] = static_cast<std::byte>(partition->device_id[i]);
+    write_u32(plaintext.bytes(), 20, partition->device_id_flags);
+    write_u32(plaintext.bytes(), 24, partition->layout);
+    write_u32(plaintext.bytes(), 28, partition->logical_sector_bytes);
+    write_u32(plaintext.bytes(), 32, static_cast<std::uint32_t>(partition->offset_bytes));
+    write_u32(plaintext.bytes(), 36, static_cast<std::uint32_t>(partition->offset_bytes >> 32));
+    write_u32(plaintext.bytes(), 40, static_cast<std::uint32_t>(partition->length_bytes));
+    write_u32(plaintext.bytes(), 44, static_cast<std::uint32_t>(partition->length_bytes >> 32));
+    write_u32(plaintext.bytes(), kOrderOffset, order.value_or(UINT32_MAX));
+  } else {
+    write_u32(plaintext.bytes(), kVersionOffset,
+              order ? kOrderedEntryVersion : kContainerIndexEntryV1Version);
+    if (order) write_u32(plaintext.bytes(), kOrderOffset, *order);
+    write_u16(plaintext.bytes(), kPathLengthOffset,
+              static_cast<std::uint16_t>(path.size()));
+    for (std::size_t index = 0; index < path.size(); ++index) {
+      write_u16(plaintext.bytes(), kPathOffset + (index * sizeof(wchar_t)),
+                static_cast<std::uint16_t>(path[index]));
+    }
   }
 
   security::SecureBuffer slot(kContainerIndexV1SlotSize);
@@ -296,6 +328,18 @@ seal_container_index_entry_v1(const std::span<const std::byte> key,
     throw std::runtime_error("AES-GCM produced an invalid ciphertext length");
   }
   return slot;
+}
+
+security::SecureBuffer seal_container_index_entry_v1(
+    const std::span<const std::byte> key, const std::wstring_view path,
+    const std::optional<std::uint32_t> order) {
+  return seal_index_entry(key, path, order, nullptr);
+}
+
+security::SecureBuffer seal_container_index_partition(
+    const std::span<const std::byte> key, const ContainerIndexPartition& partition,
+    const std::optional<std::uint32_t> order) {
+  return seal_index_entry(key, {}, order, &partition);
 }
 
 std::optional<ContainerIndexEntry>
@@ -340,6 +384,23 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   // which it was would hand out the distinction this format exists to deny.
   const auto contents = plaintext.bytes();
   const std::uint32_t version = read_u32(contents, kVersionOffset);
+  if (version == kPartitionEntryVersion) {
+    ContainerIndexPartition partition;
+    for (std::size_t i = 0; i < partition.device_id.size(); ++i)
+      partition.device_id[i] = std::to_integer<std::uint8_t>(contents[4 + i]);
+    partition.device_id_flags = read_u32(contents, 20);
+    partition.layout = read_u32(contents, 24);
+    partition.logical_sector_bytes = read_u32(contents, 28);
+    partition.offset_bytes = read_u32(contents, 32) |
+        (static_cast<std::uint64_t>(read_u32(contents, 36)) << 32);
+    partition.length_bytes = read_u32(contents, 40) |
+        (static_cast<std::uint64_t>(read_u32(contents, 44)) << 32);
+    const auto rank = read_u32(contents, kOrderOffset);
+    if (!valid_container_index_partition(partition) ||
+        (rank != UINT32_MAX && rank >= kContainerIndexV1SlotCount)) return std::nullopt;
+    return ContainerIndexEntry{{}, rank == UINT32_MAX ? std::nullopt :
+        std::optional<std::uint32_t>(rank), partition};
+  }
   const std::size_t length = read_u16(contents, kPathLengthOffset);
   if ((version != kContainerIndexEntryV1Version && version != kOrderedEntryVersion) || length == 0 ||
       length > kContainerIndexV1PathMaximumLength) {
@@ -361,14 +422,14 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   if (path.find(L'\0') != std::wstring::npos) {
     return std::nullopt;
   }
-  return ContainerIndexEntry{std::move(path), order};
+  return ContainerIndexEntry{std::move(path), order, std::nullopt};
 }
 
 std::optional<std::wstring>
 try_open_container_index_entry_v1(const std::span<const std::byte> key,
                                   const std::span<const std::byte> slot) {
   auto opened = try_open_container_index_entry(key, slot);
-  if (!opened) return std::nullopt;
+  if (!opened || opened->partition) return std::nullopt;
   return std::move(opened->path);
 }
 

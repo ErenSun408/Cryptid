@@ -324,9 +324,72 @@ void test_new_paths_go_first_without_changing_existing_relative_order() {
   expect(file == before, "reimporting a known path changed its order");
 }
 
+void test_mixed_partition_and_file_index_preserves_both_kinds() {
+  using namespace usb_vault::application;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x41));
+  const auto stranger = derive_shared_container_index_key_v1(test_root(0x42));
+  ContainerIndexPartition partition;
+  partition.device_id.fill(0x51);
+  partition.offset_bytes = 1024 * 1024;
+  partition.length_bytes = 64 * 1024 * 1024;
+  auto file = fresh_file();
+  expect(add_container_index_partition(key.bytes(), file, partition) == ContainerIndexWriteV1::added,
+         "partition was not added");
+  const auto first = file;
+  expect(add_container_index_partition(key.bytes(), file, partition) == ContainerIndexWriteV1::already_present && file == first,
+         "duplicate partition modified the index");
+  std::size_t slot = kContainerIndexV1SlotCount;
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i) {
+    if (try_open_container_index_entry(key.bytes(), container_index_v1_slot(file, i))) slot = i;
+  }
+  expect(slot < kContainerIndexV1SlotCount, "partition slot missing");
+  expect(list_container_index_paths_v1(key.bytes(), file).empty(), "partition leaked into file view");
+  expect(list_container_index_partitions(stranger.bytes(), file).empty(), "foreign key saw a partition");
+  static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, L"D:\\first.hc"));
+  static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, L"D:\\second.hc"));
+  const std::vector<std::wstring> reordered{L"D:\\first.hc"};
+  reorder_container_index_paths_v1(key.bytes(), file, reordered);
+  expect(remove_container_index_path_v1(key.bytes(), file, L"D:\\second.hc"), "file remove failed");
+  expect(std::ranges::equal(container_index_v1_slot(first, slot), container_index_v1_slot(file, slot)),
+         "file insertion, sorting or removal rewrote the partition slot");
+  const auto reloaded = file;
+  expect(list_container_index_partitions(key.bytes(), reloaded) == std::vector{partition},
+         "partition reload lost stable identity");
+  auto other = partition;
+  other.offset_bytes += other.length_bytes;
+  expect(add_container_index_partition(key.bytes(), file, other) == ContainerIndexWriteV1::added,
+         "second partition on same device was not distinct");
+  const auto before_remove = file;
+  expect(remove_container_index_partition(key.bytes(), file, partition), "partition removal failed");
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i)
+    if (i != slot) expect(std::ranges::equal(container_index_v1_slot(file, i), container_index_v1_slot(before_remove, i)),
+                         "partition removal changed another slot");
+  expect(list_container_index_paths_v1(key.bytes(), file) == reordered,
+         "partition removal lost the file record");
+  expect(list_container_index_partitions(key.bytes(), file) == std::vector{other}, "partition removal lost its neighbour");
+  const auto unchanged = file;
+  expect(!remove_container_index_partition(key.bytes(), file, partition) && file == unchanged,
+         "missing partition removal modified the file");
+  auto invalid = partition;
+  invalid.length_bytes = 0;
+  expect_invalid_argument([&] { static_cast<void>(add_container_index_partition(key.bytes(), file, invalid)); },
+                          "invalid partition was inserted");
+  expect(file == unchanged, "failed partition insertion modified the file");
+  // A full partition index must not look empty to the legacy file writer.
+  const auto sealed = seal_container_index_partition(key.bytes(), partition);
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i)
+    std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(file, i).begin());
+  const auto full = file;
+  expect(add_container_index_path_v1(key.bytes(), file, L"D:\\new.hc") == ContainerIndexWriteV1::full && file == full,
+         "file writer overwrote a partition as filler");
+  expect(add_container_index_partition(key.bytes(), file, other) == ContainerIndexWriteV1::full && file == full,
+         "partition writer evicted an existing record");
+}
+
 } // namespace
 
 int main() {
+  test_mixed_partition_and_file_index_preserves_both_kinds();
   test_order_survives_reload_and_preserves_unselected_and_opaque_slots();
   test_new_paths_go_first_without_changing_existing_relative_order();
   test_the_shared_key_follows_the_root_and_nothing_else();
