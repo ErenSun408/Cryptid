@@ -1,5 +1,7 @@
 #pragma once
 
+#include "usb_vault/volume/partition_identity.h"
+#include <optional>
 #include <array>
 #include <span>
 #include <cstdint>
@@ -40,4 +42,20 @@ struct PartitionCandidate final {
 // comes from the storage driver and is not proof against forged hardware IDs.
 [[nodiscard]] bool matches_partition_snapshot(const PartitionCandidate& selected,
     std::span<const PartitionCandidate> current) noexcept;
+// Separate from format candidates: discovery does not inspect a filesystem and
+// is never an input to the destructive formatting API. Only current safe MBR
+// metadata is returned. A saved identity may locate an unencrypted/replaced
+// volume too; a later authenticated mount must verify contents independently.
+struct PartitionLocation final {
+  PartitionIdentity identity;
+  std::wstring volume_path; // Current native GUID path, never persisted/UI input.
+  std::uint32_t disk_number{};
+  std::uint32_t partition_number{};
+  bool operator==(const PartitionLocation&) const = default;
+};
+[[nodiscard]] std::vector<PartitionLocation> enumerate_partition_locations();
+// Pure lookup: accepts exactly one identity and one unambiguous current path.
+// Missing, unsupported, malformed or duplicate inventory entries fail closed.
+[[nodiscard]] std::optional<PartitionLocation> resolve_partition_location(
+    const PartitionIdentity& saved, std::span<const PartitionLocation> current);
 }  // namespace usb_vault::volume

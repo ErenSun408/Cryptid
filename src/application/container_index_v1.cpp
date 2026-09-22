@@ -235,14 +235,7 @@ void require_slot_index(const std::size_t index) {
 } // namespace
 
 bool valid_container_index_partition(const ContainerIndexPartition& partition) noexcept {
-  return partition.device_id != std::array<std::uint8_t, 16>{} &&
-      (partition.device_id_flags & ~4U) == 0 && partition.layout == 1 &&
-      partition.logical_sector_bytes == 512 && partition.offset_bytes != 0 &&
-      partition.offset_bytes % 512 == 0 && partition.length_bytes % 512 == 0 &&
-      partition.length_bytes >= 20ULL * 1024 * 1024 &&
-      partition.length_bytes <= 1024ULL * 1024 * 1024 * 1024 &&
-      partition.offset_bytes <= static_cast<std::uint64_t>(
-          (std::numeric_limits<std::int64_t>::max)()) - partition.length_bytes;
+  return volume::valid_partition_identity(partition);
 }
 
 static security::SecureBuffer seal_index_entry(

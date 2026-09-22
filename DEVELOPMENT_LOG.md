@@ -3323,3 +3323,48 @@
 - 安全与风险：旧程序不认识 v3，不能安全编辑含分区记录的索引；产品写入前需落实降级混用限制，不能承诺旧版向前兼容。
 - 后续与限制：本片不自动记录格式化结果，不做设备 I/O；重新发现、句柄复核、认证挂载及 UI 接线仍待完成，产品入口未开放。
 - 提交：按用户持续自主提交授权验证后提交，不推送；提交哈希见 Git 记录。
+
+
+### 2026-09-22 — P4 / 阶段归属纠正与 P4.4／P4.5 顺序互换
+- 范围与审计：用户明确要求先完成已有产品接入基础，交换原 P4.4／P4.5；复核 18 笔功能提交、需求与阶段表，纠正此前把实现全部标为 P4.1 的偏差。
+- 当前顺序：P4.1 验证与范围锁定 → P4.2 安全选择 → P4.3 空分区加密 → P4.4 产品会话与盘符管理 → P4.5 原地加密与正常暂停续作 → P4.6 专项验收。
+- 检查与实现：18 笔提交按主要内容改前缀，原始发生顺序不变；P4.1 两片、P4.2 九片、P4.3 五片、P4.4 两片。已有 P4.4 为统一入口与混合加密索引，不代表记录接线／重新识别／挂载已完成。
+- 检查与实现：需求真源、里程碑及设计文档的当前口径已同步；后续完成 P4.4 才开展 P4.5，原地转换与暂停续作未实现，不能漏做或以格式化代替。
+- 验证：重写前工作区干净；逐笔确认不在本地 origin/main 祖先历史内，仅修改前缀和必要父提交引用；18 笔文件树逐一一致，作者／日期／正文保留，重写前后最终文件树无差异。
+- 验证：本片只改提交元数据和文档，执行差异／阶段映射一致性检查，不重跑产品测试，不新增设备或实卡验收结论。
+- 安全与风险：P4.1 原地转换只有源码审计；P4.2 特殊目标实测、P4.3 首写前取消及产品闭环、P4.4 索引降级兼容等历史缺口继续保留，不因改号转为完成。
+- 提交：按明确授权重写并提交文档，不推送；旧链备份在 refs/codex/backups/p4-phase-order-20260922。此前日志中的旧哈希和阶段名保留历史含义，下表为当前映射。
+
+| 原提交 | 当前提交 | 正确归属 | 切片 |
+|---|---|---|---|
+| `3d3585f` | `3d3585f` | P4.1 | Audit partition encryption boundaries and narrow resume scope |
+| `67e26a2` | `1e4e7a5` | P4.2 | Add read-only partition candidate discovery |
+| `f9c2834` | `555cd7c` | P4.2 | Connect partition selection and refresh UI |
+| `c4f94a1` | `253bdff` | P4.1 | Verify partition encryption on an owned virtual disk |
+| `f9883d6` | `7355bc7` | P4.3 | Add same-handle partition format backend candidate |
+| `08e98c9` | `4af2d0f` | P4.4 | Unify disk and file container creation entry |
+| `58c5522` | `2c7625e` | P4.2 | Revalidate partition snapshots before selection |
+| `68c2d3f` | `ac1a9f5` | P4.2 | Bind partition candidates to native device identities |
+| `1d2930a` | `bbeb755` | P4.2 | Verify partition identity on caller-owned handles |
+| `3820975` | `db18a58` | P4.2 | Add a dedicated partition identity check protocol |
+| `f341a13` | `8c2afa1` | P4.2 | Route read-only partition checks through the elevated helper |
+| `d5d1c80` | `865f54a` | P4.2 | Connect partition identity checks to the creation wizard |
+| `c5edfd9` | `8b0231b` | P4.2 | Reject protected and uncertain partition targets |
+| `ed32bac` | `165d1b7` | P4.3 | Add a confirmed partition formatting helper boundary |
+| `4bd218e` | `3418109` | P4.3 | Separate NTFS helper refusal and format results |
+| `3593d80` | `048860c` | P4.3 | Verify locked NTFS targets through the retained handle |
+| `5abb270` | `8b6b81f` | P4.3 | Bind partition formatting to authenticated card sessions |
+| `3cafcaa` | `8103033` | P4.4 | Store partition identities in the encrypted container index |
+
+
+### 2026-09-22 — P4.4 / 密文分区重新识别
+- 范围与审计：复核交换后的阶段定义、分区需求、原 NTFS 候选模块、索引身份与隔离夹具；本片实现加密后定位能力，不扩大布局支持或开始 P4.5。
+- 检查与实现：独立 PartitionLocation 结构枚举跳过文件系统查询，以稳定设备身份和分区范围定位；原 PartitionCandidate／格式化检查继续要求 NTFS，类型不混用。
+- 检查与实现：提取共享 PartitionIdentity，索引 v3 编码及有效范围不变；允许当前盘号／分区号／卷路径变化，拒绝身份／范围变化、重复匹配、路径歧义、非法 GUID 路径及超限列表。
+- 检查与实现：新增借用句柄的结构身份复核，不重开、关闭或移动游标；匹配只是候选定位，不证明内容或授予写权限。
+- 验证：新增结构筛选、无文件系统／NTFS 区分、编号变化、替换、缺失、重复／大小写歧义及句柄所有权测试；最终分区、索引 codec／view、协议、卡会话五组 CTest 全通过。
+- 验证：主程序／helper／夹具构建通过；静态分析发现夹具原有 64 KiB 栈缓冲区告警，改堆缓冲区后分区模块与夹具 /W4 /WX /sdl /analyze 均通过。
+- 验证：两次管理员自建 VHD 闭环退出 0，最终 out/p44-location-final-20260922-155505 验证同身份找到格式化后的密文分区、同句柄成功／替换拒绝、创建候选仍拒绝密文，以及挂载写读／卸载重挂。
+- 验证：最终夹具镜像已移除，无残留测试／helper 进程；结果检查 shell 因查询不存在进程返回 1，与实际夹具 exit.txt=0 区分，不记为设备失败。未操作生产分区。
+- 安全与风险：仍需正式挂载边界、会话记录／UI 接线；身份不防伪造或同址重格式化，不消除枚举后竞态，后续必须复核并认证挂载。未验硬件热插拔／跨重启、实卡或完整 P4.4。
+- 提交：用户要求撤回的 docs 98fbcc8 已保留，作为本片唯一特例合并；后续独立 docs 改动恢复单独提交。本片按持续授权验证后提交，不推送；产品依赖及禁用的磁盘创建入口不变。

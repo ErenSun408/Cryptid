@@ -61,7 +61,8 @@ bool query(HANDLE handle, DWORD code, T& value, DWORD& first_error) noexcept {
   }
   return true;
 }
-PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_path = nullptr) {
+PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_path = nullptr,
+    const bool location_only = false) {
   PartitionCandidate result{};
   detail::PartitionObservation observed;
   DWORD error{};
@@ -73,12 +74,14 @@ PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_
   DWORD filesystem_serial{};
   // Unprivileged discovery retains the path query. The helper prerequisite
   // never supplies this argument and reads only its already-open handle.
-  observed.filesystem_known = (discovery_path
-      ? ::GetVolumeInformationW(discovery_path, nullptr, 0, &filesystem_serial, nullptr, nullptr,
-          filesystem.data(), static_cast<DWORD>(filesystem.size()))
-      : ::GetVolumeInformationByHandleW(handle, nullptr, 0, &filesystem_serial, nullptr, nullptr,
-          filesystem.data(), static_cast<DWORD>(filesystem.size()))) != FALSE;
-  if (!observed.filesystem_known && !error) error = ::GetLastError();
+  if (!location_only) {
+    observed.filesystem_known = (discovery_path
+        ? ::GetVolumeInformationW(discovery_path, nullptr, 0, &filesystem_serial, nullptr, nullptr,
+            filesystem.data(), static_cast<DWORD>(filesystem.size()))
+        : ::GetVolumeInformationByHandleW(handle, nullptr, 0, &filesystem_serial, nullptr, nullptr,
+            filesystem.data(), static_cast<DWORD>(filesystem.size()))) != FALSE;
+    if (!observed.filesystem_known && !error) error = ::GetLastError();
+  }
   result.filesystem_serial = filesystem_serial;
   observed.filesystem = filesystem.data();
   if (observed.partition_known) {
@@ -95,7 +98,8 @@ PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_
     std::memcpy(result.device_id.data(), &observed.device.DeviceGuid, 16);
     result.device_id_flags = observed.device.Flags;
   }
-  result.availability = detail::assess_partition(observed);
+  result.availability = location_only ? detail::assess_partition_location(observed)
+                                      : detail::assess_partition(observed);
   result.query_error = error;
   if (observed.partition_known && observed.partition.StartingOffset.QuadPart >= 0 &&
       observed.partition.PartitionLength.QuadPart > 0) {
@@ -108,7 +112,8 @@ PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_
   if (observed.geometry_known) result.logical_sector_bytes = observed.geometry.BytesPerSector;
   return result;
 }
-PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volume) {
+PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volume,
+    const bool location_only) {
   PartitionCandidate result{.volume_path = path};
   const int comparison = ::CompareStringOrdinal(path, -1, system_volume.c_str(), -1, TRUE);
   if (!comparison) fail(::GetLastError(), "compare Windows volume identity");
@@ -128,14 +133,15 @@ PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volum
     result.query_error = ::GetLastError();
     return result;
   }
-  auto current = inspect_handle(handle.get(), path);
+  auto current = inspect_handle(handle.get(), path, location_only);
   current.volume_path = std::move(result.volume_path);
   return current;
 }
 
 }  // namespace
 
-PartitionAvailability detail::assess_partition(const PartitionObservation& value) noexcept {
+static PartitionAvailability assess_observation(const detail::PartitionObservation& value,
+    const bool require_filesystem) noexcept {
   using A = PartitionAvailability;
   if (value.windows_volume) return A::windows_volume;
   if (!value.partition_known || !value.extent_known || !value.geometry_known)
@@ -164,8 +170,10 @@ PartitionAvailability detail::assess_partition(const PartitionObservation& value
   if (value.geometry.BytesPerSector != 512) return A::unsupported_sector_size;
   if (part.StartingOffset.QuadPart % 512 || part.PartitionLength.QuadPart % 512)
     return A::inconsistent_extent;
-  if (!value.filesystem_known) return A::metadata_unavailable;
-  if (value.filesystem != L"NTFS") return A::unsupported_filesystem;
+  if (require_filesystem) {
+    if (!value.filesystem_known) return A::metadata_unavailable;
+    if (value.filesystem != L"NTFS") return A::unsupported_filesystem;
+  }
   // Random GUIDs (missing hardware identity or collisions) are not stable.
   // Reject future/unknown flags and versions instead of guessing their meaning.
   const auto& device = value.device;
@@ -176,6 +184,21 @@ PartitionAvailability detail::assess_partition(const PartitionObservation& value
       device.DeviceNumber != extent.DiskNumber || device.PartitionNumber != part.PartitionNumber)
     return A::device_identity_unavailable;
   return A::candidate;
+}
+
+PartitionAvailability detail::assess_partition(const PartitionObservation& value) noexcept {
+  return assess_observation(value, true);
+}
+
+PartitionAvailability detail::assess_partition_location(const PartitionObservation& value) noexcept {
+  const auto result = assess_observation(value, false);
+  if (result != PartitionAvailability::candidate) return result;
+  if (value.partition.PartitionStyle != PARTITION_STYLE_MBR)
+    return PartitionAvailability::unsupported_layout;
+  const auto length = value.partition.PartitionLength.QuadPart;
+  if (length < 20LL * 1024 * 1024 || length > (1LL << 40))
+    return PartitionAvailability::inconsistent_extent;
+  return PartitionAvailability::candidate;
 }
 
 bool detail::matches_partition_handle_identity(const HANDLE handle,
@@ -214,7 +237,7 @@ bool matches_partition_snapshot(const PartitionCandidate& selected,
   return matching_paths == 1 && unchanged;
 }
 
-std::vector<PartitionCandidate> enumerate_partition_candidates() {
+static std::vector<PartitionCandidate> enumerate_partitions(const bool location_only) {
   const std::wstring system_volume = windows_volume();
   std::array<wchar_t, 64> name{};
   const VolumeSearch search(::FindFirstVolumeW(name.data(), static_cast<DWORD>(name.size())));
@@ -222,12 +245,84 @@ std::vector<PartitionCandidate> enumerate_partition_candidates() {
   std::vector<PartitionCandidate> result;
   do {
     if (result.size() >= 4096) fail(ERROR_INVALID_DATA, "volume inventory exceeds bound");
-    result.push_back(inspect(name.data(), system_volume));
+    result.push_back(inspect(name.data(), system_volume, location_only));
     if (::FindNextVolumeW(search.get(), name.data(), static_cast<DWORD>(name.size()))) continue;
     const DWORD error = ::GetLastError();
     if (error != ERROR_NO_MORE_FILES) fail(error, "continue volume enumeration");
     break;
   } while (true);
   return result;
+}
+std::vector<PartitionCandidate> enumerate_partition_candidates() {
+  return enumerate_partitions(false);
+}
+
+namespace {
+bool valid_location_path(const std::wstring_view path) noexcept {
+  if (path.size() != 49 || !path.starts_with(L"\\\\?\\Volume{") ||
+      !path.ends_with(L"}\\")) return false;
+  for (std::size_t i = 11; i < 47; ++i) {
+    const auto c = path[i];
+    if (i == 19 || i == 24 || i == 29 || i == 34) {
+      if (c != L'-') return false;
+    } else if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') ||
+                 (c >= L'A' && c <= L'F'))) return false;
+  }
+  return true;
+}
+PartitionLocation location_from(const PartitionCandidate& candidate) {
+  return {{candidate.device_id, candidate.device_id_flags,
+      candidate.layout == PartitionLayout::mbr ? 1U : 0U,
+      candidate.logical_sector_bytes, candidate.offset_bytes, candidate.length_bytes},
+      candidate.volume_path, candidate.disk_number, candidate.partition_number};
+}
+bool valid_location(const PartitionLocation& location) noexcept {
+  return valid_partition_identity(location.identity) &&
+      valid_location_path(location.volume_path) && location.disk_number != MAXDWORD &&
+      location.partition_number != 0;
+}
+}
+
+std::vector<PartitionLocation> enumerate_partition_locations() {
+  std::vector<PartitionLocation> result;
+  for (const auto& candidate : enumerate_partitions(true)) {
+    if (candidate.availability != PartitionAvailability::candidate || candidate.query_error) continue;
+    auto location = location_from(candidate);
+    if (valid_location(location)) result.push_back(std::move(location));
+  }
+  return result;
+}
+
+std::optional<PartitionLocation> resolve_partition_location(
+    const PartitionIdentity& saved, const std::span<const PartitionLocation> current) {
+  if (!valid_partition_identity(saved) || current.size() > 4096) return std::nullopt;
+  const PartitionLocation* match = nullptr;
+  for (const auto& location : current) {
+    if (!valid_location(location)) return std::nullopt;
+    if (location.identity != saved) continue;
+    if (match) return std::nullopt;
+    match = &location;
+  }
+  if (!match) return std::nullopt;
+  for (const auto& location : current) {
+    if (&location == match) continue;
+    const int comparison = ::CompareStringOrdinal(location.volume_path.c_str(), -1,
+        match->volume_path.c_str(), -1, TRUE);
+    if (!comparison || comparison == CSTR_EQUAL) return std::nullopt;
+  }
+  return *match;
+}
+
+bool detail::matches_partition_location_handle(const HANDLE handle,
+    const PartitionLocation& expected) noexcept {
+  if (!handle || handle == INVALID_HANDLE_VALUE || !valid_location(expected)) return false;
+  try {
+    const auto current = inspect_handle(handle, nullptr, true);
+    if (current.availability != PartitionAvailability::candidate || current.query_error) return false;
+    auto actual = location_from(current);
+    // The path is a discovery label, never evidence supplied by this handle.
+    actual.volume_path = expected.volume_path;
+    return actual == expected;
+  } catch (...) { return false; }
 }
 }  // namespace usb_vault::volume

@@ -1,6 +1,7 @@
 // Opt-in feasibility evidence. Never accepts an existing disk or partition.
 #include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/volume/partition_catalog.h"
+#include "volume/partition_catalog_detail.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/unmount_retry.h"
@@ -354,13 +355,17 @@ class Backend {
 void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
   using namespace usb_vault::volume_creation;
   const auto candidate = disk.prepare_ntfs();
+  const usb_vault::volume::PartitionIdentity saved{candidate.device_id, candidate.device_id_flags,
+      1, candidate.logical_sector_bytes, candidate.offset_bytes, candidate.length_bytes};
+  require(usb_vault::volume::resolve_partition_location(saved,
+      usb_vault::volume::enumerate_partition_locations()).has_value(), "NTFS location not found");
   VolumeCreator creator(executable_directory() / L"usb_vault_volume_creator.exe");
   const auto read_header = [&] {
     auto path = candidate.volume_path; path.pop_back();
     Handle handle(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING, 0, nullptr));
     require(handle.get() != INVALID_HANDLE_VALUE, "open NTFS header probe");
-    std::array<std::byte, 65536> bytes{}; DWORD count{};
+    std::vector<std::byte> bytes(65536); DWORD count{};
     require(::ReadFile(handle.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) &&
         count == bytes.size(), "read NTFS header probe");
     return bytes;
@@ -389,6 +394,21 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
     throw std::runtime_error(std::string("confirmed NTFS helper format: ") + error.what());
   }
   require(confirmations == 1 && reports > 1, "partition confirmation/progress missing");
+  const auto located = usb_vault::volume::resolve_partition_location(saved,
+      usb_vault::volume::enumerate_partition_locations());
+  require(located.has_value(), "ciphertext location lost after formatting");
+  auto path = located->volume_path; path.pop_back();
+  Handle retained(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, 0, nullptr));
+  require(retained.get() != INVALID_HANDLE_VALUE, "open discovered ciphertext location");
+  require(usb_vault::volume::detail::matches_partition_location_handle(retained.get(), *located),
+      "ciphertext retained-handle identity mismatch");
+  auto replaced = *located; replaced.identity.device_id[0] ^= 1;
+  require(!usb_vault::volume::detail::matches_partition_location_handle(retained.get(), replaced),
+      "ciphertext handle accepted replaced identity");
+  require(!usb_vault::volume::matches_partition_snapshot(candidate,
+      usb_vault::volume::enumerate_partition_candidates()), "ciphertext remained a format candidate");
+  std::cout << "PASS: saved identity rediscovers ciphertext; retained handle verifies; format selection stays strict" << std::endl;
   std::cout << "PASS: elevated NTFS partition format, declined/throwing consent and single-use confirmation\n";
 }
 

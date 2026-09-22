@@ -128,6 +128,83 @@ void unit_tests() {
   check(value, A::device_identity_unavailable, "page83 masked conflict flag");
   std::cout << "PASS: " << cases << " partition assessment cases\n";
 }
+void location_tests() {
+  auto raw = valid();
+  raw.partition.PartitionStyle = PARTITION_STYLE_MBR;
+  raw.partition.Mbr = {}; raw.partition.Mbr.PartitionType = PARTITION_IFS;
+  raw.partition.Mbr.RecognizedPartition = TRUE;
+  raw.filesystem_known = false; raw.filesystem = L"";
+  require(detail::assess_partition_location(raw) == A::candidate, "ciphertext requires filesystem metadata");
+  require(detail::assess_partition(raw) == A::metadata_unavailable, "format policy was weakened");
+  auto ntfs = raw; ntfs.filesystem_known = true; ntfs.filesystem = L"NTFS";
+  require(detail::assess_partition_location(ntfs) == A::candidate, "structural identity depends on format");
+  for (int change = 0; change != 14; ++change) {
+    auto bad = raw;
+    if (change == 0) bad.windows_volume = true;
+    if (change == 1) bad.partition_known = false;
+    if (change == 2) bad.extent_known = false;
+    if (change == 3) bad.geometry_known = false;
+    if (change == 4) bad.device_known = false;
+    if (change == 5) bad.partition.Mbr.BootIndicator = TRUE;
+    if (change == 6) bad.partition.Mbr.PartitionType = PARTITION_LDM;
+    if (change == 7) bad.extents.NumberOfDiskExtents = 2;
+    if (change == 8) ++bad.extents.Extents[0].StartingOffset.QuadPart;
+    if (change == 9) bad.geometry.BytesPerSector = 4096;
+    if (change == 10) bad.device.Flags = 1;
+    if (change == 11) bad.device.DeviceGuid = {};
+    if (change == 12) ++bad.device.DeviceNumber;
+    if (change == 13) { bad.partition.PartitionLength.QuadPart = 512;
+      bad.extents.Extents[0].ExtentLength = bad.partition.PartitionLength; }
+    require(detail::assess_partition_location(bad) != A::candidate, "unsafe location accepted");
+  }
+  require(detail::assess_partition_location(valid()) == A::unsupported_layout, "GPT mount scope expanded");
+  PartitionLocation location;
+  location.identity.device_id[0] = 9;
+  location.identity.offset_bytes = 1048576;
+  location.identity.length_bytes = 64ULL * 1024 * 1024;
+  location.volume_path = LR"(\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\)";
+  location.disk_number = 2; location.partition_number = 3;
+  const auto saved = location.identity;
+  require(resolve_partition_location(saved, {&location, 1}) == location, "valid location not found");
+  auto moved = location;
+  moved.disk_number = 6; moved.partition_number = 4;
+  moved.volume_path[11] = L'f';
+  require(resolve_partition_location(saved, {&moved, 1}) == moved, "renumbered device or new GUID path lost identity");
+  require(!resolve_partition_location(saved, {}), "absent location matched");
+  for (int change = 0; change != 12; ++change) {
+    auto altered = location;
+    if (change == 0) ++altered.identity.device_id[0];
+    if (change == 1) altered.identity.device_id_flags = 4;
+    if (change == 2) altered.identity.offset_bytes += 512;
+    if (change == 3) altered.identity.length_bytes -= 512;
+    if (change == 4) altered.identity.layout = 2;
+    if (change == 5) altered.identity.logical_sector_bytes = 4096;
+    if (change == 6) altered.volume_path = L"C:\\ordinary.hc";
+    if (change == 7) altered.volume_path[11] = L'\0';
+    if (change == 8) altered.volume_path[19] = L'x';
+    if (change == 9) altered.volume_path += L"suffix";
+    if (change == 10) altered.partition_number = 0;
+    if (change == 11) altered.disk_number = MAXDWORD;
+    require(!resolve_partition_location(saved, {&altered, 1}), "changed or malformed location matched");
+  }
+  std::vector<PartitionLocation> duplicates{location, moved};
+  require(!resolve_partition_location(saved, duplicates), "duplicate stable identity matched");
+  duplicates = {location, location}; duplicates[1].identity.offset_bytes += 512;
+  require(!resolve_partition_location(saved, duplicates), "ambiguous path matched");
+  duplicates[1].volume_path[22] = L'A';
+  require(!resolve_partition_location(saved, duplicates), "case-only ambiguous path matched");
+  duplicates.assign(4097, location);
+  require(!resolve_partition_location(saved, duplicates), "oversized location inventory matched");
+  require(!detail::matches_partition_location_handle(nullptr, location), "null location handle accepted");
+  require(!detail::matches_partition_location_handle(INVALID_HANDLE_VALUE, location), "invalid location handle accepted");
+  const auto event = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  require(event != nullptr, "create location handle fixture");
+  const bool refused = !detail::matches_partition_location_handle(event, location);
+  const bool retained = ::SetEvent(event) != FALSE; ::CloseHandle(event);
+  require(refused && retained, "non-device location handle accepted or closed");
+  std::cout << "PASS: filesystem-independent locations, scope, replacement, renumbering, ambiguity and handle ownership\n";
+}
+
 void snapshot_tests() {
   PartitionCandidate selected{};
   selected.volume_path = L"native-test-identity";
@@ -292,7 +369,7 @@ int main(int argc, char** argv) {
       std::cout << "SKIP: no supported MBR candidate for read-only helper integration\n";
       return 77;
     }
-    if (argc == 1) { unit_tests(); snapshot_tests(); rejected_handles(); write_policy_tests(); }
+    if (argc == 1) { unit_tests(); location_tests(); snapshot_tests(); rejected_handles(); write_policy_tests(); }
     else if (argc == 2 && std::string_view(argv[1]) == "--scan") scan();
     else if (argc == 2 && std::string_view(argv[1]) == "--scan-handles") scan(true);
     else throw std::runtime_error("expected no arguments, --scan or --scan-handles");

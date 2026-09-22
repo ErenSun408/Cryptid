@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/security/secure_buffer.h"
+#include "usb_vault/volume/partition_identity.h"
 
 #include <array>
 #include <cstddef>
@@ -51,15 +52,7 @@ inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
 // Stable identity of one supported MBR/512 partition. No drive letter, disk
 // number, discovery path, preformat filesystem serial, password or role is
 // persisted. A match locates a candidate; only authenticated mounting proves it.
-struct ContainerIndexPartition {
-  std::array<std::uint8_t, 16> device_id{};
-  std::uint32_t device_id_flags{};
-  std::uint32_t layout{1}; // MBR only in the initial support matrix.
-  std::uint32_t logical_sector_bytes{512};
-  std::uint64_t offset_bytes{};
-  std::uint64_t length_bytes{};
-  bool operator==(const ContainerIndexPartition&) const = default;
-};
+using ContainerIndexPartition = volume::PartitionIdentity;
 [[nodiscard]] bool valid_container_index_partition(
     const ContainerIndexPartition& partition) noexcept;
 
