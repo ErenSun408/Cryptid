@@ -209,3 +209,15 @@ API 依据：[卷锁定／卸载](https://learn.microsoft.com/en-us/windows/win3
 后续重新运行 --run-owned-vhd-helper，Windows 提权成功。原审阅候选 94D37A2D…0225309 在自己新建的 MBR／512 VHD 上完成 NTFS 准备、拒绝与抛错确认的首 64 KiB／文件系统身份不变检查；确认后的 helper 格式化返回 I/O 错误，退出 1，未进入挂载读回。失败可能发生在锁卷／控制码／核心写入／收尾路径，具体 API 尚未定位，不能宣称没有开始写入。镜像已确认脱离，作为失败证据保留。
 
 夹具现在即时输出拒绝阶段结果，并为确认后的失败标明阶段。临时诊断候选只在 out 构建；再次提权被系统以“用户取消”结束，诊断未运行。恢复原候选 DLL 和 include 后停止重试。本结果替代此前“未运行”的当前状态，但不改变历史记录；NTFS/helper 设备验收仍未通过，产品 DLL 与创建入口维持原状。
+
+## NTFS 锁卷检查修复与 helper 闭环通过（2026-09-22）
+
+管理员诊断定位到候选 DLL 在 FSCTL_LOCK_VOLUME 成功后调用 GetVolumeInformationByHandleW 返回 ERROR_NOT_READY（21）；尝试同句柄 FSCTL_GET_NTFS_VOLUME_DATA 在锁卷后同样失败，均停止且未进入核心格式化，失败结果未当作通过。
+
+最终改为锁卷前取得 NTFS 元数据及首扇区，检查 512 字节扇区、扇区数范围、NTFS OEM／引导签名和卷序号，并在此时取得 extended-DASD 权限；锁卷后通过同一 DASD 句柄读取首扇区，要求全部 512 字节一致，再卸载并复核设备范围。没有按路径重新打开、忽略查询失败或取消独占要求。RAW 保持原路径。引导字段按 NTFS 既有布局独立读取，无引入第三方实现代码。
+
+最终无诊断候选 SHA-256 为 `878425F46FDEAD0ADE7E3E664F2BA6A445D9CA6DBAE260C93AA22A46FA70F3AA`。真实 --run-owned-vhd-helper 返回 0，验证拒绝／抛错确认首 64 KiB 和 NTFS 身份不变、单次确认、格式化、挂载写入、卸载重挂读取；--run-owned-vhd-handle 也返回 0，覆盖 RAW 参数／占用／取消和普通／隐藏文件容器回归。成功夹具自动移除，4 个历史失败镜像只作证据保留且逐一确认 Attached=false。
+
+这完成 MBR／512 NTFS 输入的底层 helper 实验，不等同产品清空提示／卡派生／会话撤销／分区记录／产品挂载验收。正式依赖仍为 416C9D…3F184，允许列表和页面创建开关未改。
+
+依据：[FSCTL_GET_NTFS_VOLUME_DATA](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_get_ntfs_volume_data)、[NTFS 引导扇区字段交叉核对](https://github.com/torvalds/linux/blob/master/fs/ntfs3/ntfs.h)。

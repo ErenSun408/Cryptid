@@ -119,8 +119,9 @@ Future distribution must include the third patch and the new include as well
 as the existing source/notice obligations. Do not promote the candidate by
 copying it into local dependency storage without a separate review.
 
-Candidate SHA-256 from this run:
-`94D37A2D8C70707190076680587833CFA3C26ABD3426629EFAE9F31DA0225309`.
+Candidate SHA-256 after the NTFS lock fix:
+`878425F46FDEAD0ADE7E3E664F2BA6A445D9CA6DBAE260C93AA22A46FA70F3AA`.
+The earlier RAW-only candidate was `94D37A2D8C70707190076680587833CFA3C26ABD3426629EFAE9F31DA0225309`.
 The candidate exports `VeraCryptFormatPartitionBinary(HANDLE, uint64_t offset,
 uint64_t length, const unsigned char* password, uint32_t passwordBytes,
 VeraCrypt_Progress_Callback, void*)`. Initialization is required. The caller
@@ -136,7 +137,12 @@ partition offset/length, device partition number, actual length and geometry on
 the same object before and after acquiring a filesystem lock. It only accepts
 an explicitly identified RAW or NTFS filesystem. RAW has no filesystem bounds
 to extend and rejects extended-DASD control on the tested system; only positively
-identified RAW skips that control. NTFS must grant it. Dismount follows a
+identified RAW skips that control. NTFS must grant it before locking. NTFS
+metadata is queried before locking, its boot signature/sector size/serial are
+checked, and its complete first sector must be unchanged when read through the
+same locked DASD handle. Filesystem information calls on locked NTFS returned
+ERROR_NOT_READY in integration testing, including the NTFS metadata FSCTL.
+Dismount follows a
 successful lock; every error stops the operation. No path reopen, temporary
 drive, pseudo-format or forced shared-open fallback is used by this export.
 
@@ -168,3 +174,17 @@ normal/hidden file-container format and mount regressions. Final run returned
 0 with no retained mounts. MBR/512 RAW VHD was exercised; NTFS input, real disks,
 GPT, 4Kn, helper IPC, card authentication, full fault injection and in-place
 pause/resume are not validated by this candidate run.
+
+### NTFS/helper validation after the lock fix
+
+The final candidate above passed `--run-owned-vhd-helper` on a fresh MBR/512
+NTFS VHD: refusal and throwing confirmation preserved the first 64 KiB and
+filesystem identity, while accepted confirmation completed helper format,
+mount/write/unmount/remount/readback. The separate `--run-owned-vhd-handle`
+regression also passed RAW guards, contention, cancellation, and normal/hidden
+file-container formats and mounts. Both returned zero and removed their own
+successful fixtures. Earlier failed fixtures are retained detached as evidence.
+No diagnostic logging is present in this candidate. This supersedes the earlier
+NTFS/helper validation gap, but does not validate product card authentication,
+physical disks, GPT/4Kn, in-place encryption or pause/resume. Production storage
+and the allowlist still use the previously reviewed DLL.

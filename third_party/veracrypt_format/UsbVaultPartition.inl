@@ -50,6 +50,12 @@ template<class T> bool UsbVaultPartitionQuery(HANDLE handle, DWORD code, T& outp
     DWORD returned = 0;
     return DeviceIoControl(handle, code, NULL, 0, &output, sizeof(output), &returned, NULL) && returned >= sizeof(output);
 }
+bool UsbVaultReadPartitionBoot(HANDLE handle, unsigned char* sector) {
+    LARGE_INTEGER beginning = {};
+    DWORD read = 0;
+    return SetFilePointerEx(handle, beginning, NULL, FILE_BEGIN)
+        && ReadFile(handle, sector, 512, &read, NULL) && read == 512;
+}
 bool UsbVaultPartitionMatches(HANDLE handle, uint64_t offset, uint64_t length) {
     PARTITION_INFORMATION_EX partition = {};
     GET_LENGTH_INFORMATION size = {};
@@ -96,18 +102,43 @@ extern "C" VCF_API int __cdecl VeraCryptFormatPartitionBinary(
             return VCF_ERROR_OS_ERROR;
         const bool raw = wcscmp(filesystem, L"RAW") == 0;
         if (!raw && wcscmp(filesystem, L"NTFS") != 0) return VCF_ERROR_INVALID_PARAMETER;
+        alignas(4096) unsigned char bootBefore[512] = {};
+        NTFS_VOLUME_DATA_BUFFER ntfsBefore = {};
         DWORD returned = 0;
+        if (!raw) {
+            if (!UsbVaultPartitionQuery(disk.value, FSCTL_GET_NTFS_VOLUME_DATA, ntfsBefore)
+                || ntfsBefore.BytesPerSector != 512 || ntfsBefore.NumberSectors.QuadPart <= 0
+                || static_cast<uint64_t>(ntfsBefore.NumberSectors.QuadPart) > expectedLength / 512
+                || !UsbVaultReadPartitionBoot(disk.value, bootBefore)) return VCF_ERROR_OS_ERROR;
+            uint64_t bootSerial = 0;
+            memcpy(&bootSerial, bootBefore + 72, sizeof(bootSerial));
+            if (memcmp(bootBefore + 3, "NTFS    ", 8) != 0
+                || bootBefore[11] != 0 || bootBefore[12] != 2
+                || bootBefore[510] != 0x55 || bootBefore[511] != 0xaa
+                || bootSerial != static_cast<uint64_t>(ntfsBefore.VolumeSerialNumber.QuadPart))
+                return VCF_ERROR_INVALID_PARAMETER;
+            // Set the handle's extended-I/O flag while NTFS still serves FSCTLs.
+            if (!DeviceIoControl(disk.value, FSCTL_ALLOW_EXTENDED_DASD_IO, NULL, 0, NULL, 0, &returned, NULL))
+                return VCF_ERROR_OS_ERROR;
+        }
         // Never dismount without first proving exclusive filesystem ownership.
         if (!DeviceIoControl(disk.value, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &returned, NULL))
             return VCF_ERROR_ACCESS_DENIED;
         disk.locked = true;
-        wchar_t lockedFilesystem[32] = {};
-        if (!GetVolumeInformationByHandleW(disk.value, NULL, 0, NULL, NULL, NULL, lockedFilesystem, ARRAYSIZE(lockedFilesystem))
-            || wcscmp(filesystem, lockedFilesystem) != 0) return VCF_ERROR_OS_ERROR;
-        // RAW has no filesystem boundary to extend and rejects this FSCTL (87).
-        // Only an explicitly identified RAW filesystem skips it; NTFS must grant it.
-        if ((!raw && !DeviceIoControl(disk.value, FSCTL_ALLOW_EXTENDED_DASD_IO, NULL, 0, NULL, 0, &returned, NULL))
-            || !DeviceIoControl(disk.value, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &returned, NULL)
+        if (!raw) {
+            // Locked NTFS rejects filesystem metadata queries with NOT_READY.
+            // Read the unchanged boot sector through the retained DASD handle.
+            alignas(4096) unsigned char bootLocked[512] = {};
+            if (!UsbVaultReadPartitionBoot(disk.value, bootLocked)
+                || memcmp(bootBefore, bootLocked, sizeof(bootBefore)) != 0)
+                return VCF_ERROR_OS_ERROR;
+        } else {
+            wchar_t lockedFilesystem[32] = {};
+            if (!GetVolumeInformationByHandleW(disk.value, NULL, 0, NULL, NULL, NULL, lockedFilesystem, ARRAYSIZE(lockedFilesystem))
+                || wcscmp(filesystem, lockedFilesystem) != 0) return VCF_ERROR_OS_ERROR;
+        }
+        // Positively identified RAW has no filesystem boundary to extend.
+        if (!DeviceIoControl(disk.value, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &returned, NULL)
             || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength))
             return VCF_ERROR_OS_ERROR;
         UsbVaultPartitionPassword secret;
