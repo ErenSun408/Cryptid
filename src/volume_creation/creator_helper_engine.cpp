@@ -264,6 +264,19 @@ class FormatBackend final {
     if (gpt) partition_gpt_binary_ = symbol<format_abi::FormatPartitionGptBinary>("VeraCryptFormatPartitionGptBinary");
     partition_binary_ = symbol<format_abi::FormatPartitionBinary>("VeraCryptFormatPartitionBinary");
   }
+  void require_pair_export() {
+    partition_pair_binary_ = symbol<format_abi::FormatPartitionPairBinary>("VeraCryptFormatPartitionPairBinary");
+  }
+  void format_partition_pair(HANDLE handle, const PartitionTarget& target, std::uint64_t hidden,
+      const security::SecureBuffer& outer, const security::SecureBuffer& inner) {
+    if (!partition_pair_binary_) fail(CreationError::format_backend_unavailable, "partition pair export unavailable");
+    stage_ = CreationStage::formatting; allocated_ = true; pair_ = true;
+    const int code = partition_pair_binary_(handle, target.offset_bytes, target.length_bytes,
+        reinterpret_cast<const unsigned char*>(outer.data()), 64,
+        reinterpret_cast<const unsigned char*>(inner.data()), 64, hidden, &FormatBackend::progress, this,
+        target.layout == 2 ? target.partition_id.data() : nullptr, target.layout == 2 ? 16u : 0u);
+    if (code != format_abi::kSuccess) fail(format_abi::map_error(code), "partition pair format failed");
+  }
   void format_partition(HANDLE handle, const PartitionTarget& target, const security::SecureBuffer& password) {
     if (!partition_binary_ || (target.layout == 2 && !partition_gpt_binary_)) fail(CreationError::format_backend_unavailable, "partition export unavailable");
     stage_ = CreationStage::formatting;
@@ -310,11 +323,17 @@ class FormatBackend final {
           }
         }
       }
+      int shown = std::clamp(percent, 0, 100);
+      if (self.pair_) {
+        if (self.pair_outer_done_ && percent == 0) self.pair_inner_ = true;
+        shown = self.pair_inner_ ? 80 + shown / 5 : shown * 4 / 5;
+        if (percent == 100) self.pair_outer_done_ = true;
+      }
       write_response(self.pipe_, Response{
                                      .type = MessageType::progress,
                                      .stage = self.stage_,
                                      .percent = static_cast<std::uint32_t>(
-                                         std::clamp(percent, 0, 100)),
+                                         shown),
                                  });
       return TRUE;
     } catch (...) {
@@ -328,6 +347,8 @@ class FormatBackend final {
   format_abi::Initialize initialize_{};
   format_abi::Shutdown shutdown_{};
   format_abi::FormatBinary format_binary_{};
+  format_abi::FormatPartitionPairBinary partition_pair_binary_{};
+  bool pair_{}, pair_outer_done_{}, pair_inner_{};
   format_abi::FormatPartitionBinary partition_binary_{};
   format_abi::FormatPartitionGptBinary partition_gpt_binary_{};
   CreationStage stage_{CreationStage::formatting};
@@ -339,10 +360,12 @@ class FormatBackend final {
 
 void validate_request(const Request& request) {
   if (partition_operation(request.operation)) {
+    const bool pair = request.operation == Operation::format_partition_pair;
     if (!request.partition_target || !valid_partition_target(*request.partition_target) ||
-        !valid_partition_path(request.target_path) || request.outer_size_bytes || request.hidden_size_bytes ||
+        !valid_partition_path(request.target_path) || request.outer_size_bytes ||
+        (pair ? !valid_partition_hidden_size(request.partition_target->length_bytes, request.hidden_size_bytes) : request.hidden_size_bytes != 0) ||
         request.mounted_drive || request.mount_id ||
-        request.first_password.size() != (request.operation != Operation::check_partition && request.operation != Operation::inspect_partition_bitlocker && request.operation != Operation::decrypt_partition_bitlocker ? 64u : 0u) || !request.second_password.empty() ||
+        request.first_password.size() != (request.operation != Operation::check_partition && request.operation != Operation::inspect_partition_bitlocker && request.operation != Operation::decrypt_partition_bitlocker ? 64u : 0u) || request.second_password.size() != (pair ? 64u : 0u) ||
         !request.source_path.empty() || !request.destination_relative.empty())
       fail(CreationError::invalid_request, "invalid partition identity request");
     return;
@@ -1073,7 +1096,9 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
       fail(CreationError::target_access_denied, "partition write policy rejected");
     if (formatting) {
       FormatBackend backend(pipe, request.nonce);
-      if (converting) backend.require_inplace_exports(target.layout == 2); else backend.require_partition_export(target.layout == 2);
+      if (converting) backend.require_inplace_exports(target.layout == 2);
+      else if (request.operation == Operation::format_partition_pair) backend.require_pair_export();
+      else backend.require_partition_export(target.layout == 2);
       write_response(pipe, Response{.type = MessageType::progress, .stage = CreationStage::partition_ready});
       if (!read_partition_confirmation(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition erase not confirmed");
@@ -1087,7 +1112,9 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
       if (!converting && cancel_requested(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition cancelled after access removal");
       if (converting) return backend.convert_partition(handle.get(),target,request.first_password, !resume) ? 1u : 0u;
-      backend.format_partition(handle.get(), target, request.first_password);
+      if (request.operation == Operation::format_partition_pair)
+        backend.format_partition_pair(handle.get(), target, request.hidden_size_bytes, request.first_password, request.second_password);
+      else backend.format_partition(handle.get(), target, request.first_password);
     }
     return 0; // No target deletion, implicit retry or retained consent.
   }

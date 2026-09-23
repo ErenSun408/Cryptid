@@ -88,6 +88,12 @@ class VolumeCreator final {
                         const ProgressCallback& progress = {},
                         const CancellationQuery& cancelled = {}) const;
 
+  // Fresh outer+hidden partition pair, never an in-place conversion.
+  void format_partition_pair(const volume::PartitionCandidate& target,
+      std::uint64_t hidden_bytes, const security::SecureBuffer& outer_password,
+      const security::SecureBuffer& hidden_password, const std::function<bool()>& confirm_erase,
+      const ProgressCallback& progress = {}, const CancellationQuery& cancelled = {}) const;
+
   // Returns true only after a normal pause checkpoint was flushed; false means complete.
   // Resume requires the caller's authenticated paused record and a freshly resolved target.
   [[nodiscard]] bool convert_partition(const volume::PartitionCandidate& target, bool begin,

@@ -23,7 +23,7 @@ namespace {
 }
 
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
-  return operation == Operation::decrypt_partition_bitlocker || operation == Operation::inspect_partition_bitlocker || inplace_operation(operation) || operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
+  return operation == Operation::format_partition_pair || operation == Operation::decrypt_partition_bitlocker || operation == Operation::inspect_partition_bitlocker || inplace_operation(operation) || operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
          operation == Operation::scan_protected_space || operation == Operation::scan_maintenance_space || operation == Operation::import_protected_file;
@@ -68,9 +68,10 @@ bool valid_request_header(const RequestHeader& header) noexcept {
   }
 
   if (partition_operation(header.operation)) {
+    const bool pair = header.operation == Operation::format_partition_pair;
     return header.partition_target_bytes == sizeof(PartitionTarget) && header.path_characters == 49 &&
-        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == (header.operation != Operation::check_partition && header.operation != Operation::inspect_partition_bitlocker && header.operation != Operation::decrypt_partition_bitlocker ? 64u : 0u) &&
-        header.second_password_bytes == 0 && header.mounted_drive == 0 && header.mount_id == 0 &&
+        header.outer_size_bytes == 0 && (pair ? valid_partition_hidden_size(1ULL << 40, header.hidden_size_bytes) : header.hidden_size_bytes == 0) && header.first_password_bytes == (header.operation != Operation::check_partition && header.operation != Operation::inspect_partition_bitlocker && header.operation != Operation::decrypt_partition_bitlocker ? 64u : 0u) &&
+        header.second_password_bytes == (pair ? 64u : 0u) && header.mounted_drive == 0 && header.mount_id == 0 &&
         header.source_characters == 0 && header.destination_characters == 0;
   }
   if (header.partition_target_bytes != 0) return false;

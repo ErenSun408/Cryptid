@@ -614,7 +614,7 @@ void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& pas
 }
 
 // Experiment-only driver request: the product mount_file path policy stays intact.
-void mount_owned(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, wchar_t drive) {
+void mount_owned(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, wchar_t drive, const usb_vault::security::SecureBuffer* protection = nullptr) {
   disk.verify();
   const auto locations = usb_vault::volume::enumerate_partition_locations();
   std::optional<usb_vault::volume::PartitionIdentity> identity;
@@ -628,8 +628,9 @@ void mount_owned(const OwnedDisk& disk, const usb_vault::security::SecureBuffer&
   }
   require(identity.has_value(), "owned partition not discovered");
   usb_vault::volume::VolumeProvider provider;
-  static_cast<void>(provider.mount_partition(*identity, password,
-      {.drive_letter = drive, .notify_shell = false}));
+  usb_vault::volume::MountOptions options{.drive_letter=drive,.notify_shell=false};
+  if (protection) options.hidden_volume_protection=usb_vault::volume::HiddenVolumeProtection{.password=protection};
+  static_cast<void>(provider.mount_partition(*identity, password, options));
 }
 wchar_t free_letter() {
   const DWORD used = ::GetLogicalDrives(); require(used != 0, "drive list unavailable");
@@ -889,6 +890,57 @@ void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer&
   std::cout << "PASS: authenticated resume, real AES conversion, NTFS mount and original file bytes preserved" << std::endl;
 }
 
+void pair_helper(OwnedDisk& disk, const usb_vault::security::SecureBuffer& outer, const usb_vault::security::SecureBuffer& inner) {
+  const auto candidate=disk.prepare_ntfs();
+  usb_vault::volume_creation::VolumeCreator creator(executable_directory()/L"usb_vault_volume_creator.exe");
+  bool refused=false;
+  try {creator.format_partition_pair(candidate,64ULL*1024*1024,outer,inner,[]{return false;});}
+  catch(const std::system_error& e){refused=e.code()==usb_vault::volume_creation::make_error_code(usb_vault::volume_creation::CreationError::operation_cancelled);}
+  require(refused && usb_vault::volume::matches_partition_snapshot(candidate,usb_vault::volume::enumerate_partition_candidates()),"pair refusal changed filesystem");
+  unsigned calls=0,last=0;
+  creator.format_partition_pair(candidate,64ULL*1024*1024,outer,inner,[]{return true;},[&](const auto& p){
+    if(p.stage==usb_vault::volume_creation::CreationStage::formatting){require(p.percent>=last && p.percent<=100,"pair progress regressed");last=p.percent;++calls;}
+  });
+  require(calls>0 && last==100,"pair progress incomplete");
+  std::cout<<"PASS: paired helper consent, identity and bounded progress\n";
+}
+void pair_protection(OwnedDisk& disk, const usb_vault::security::SecureBuffer& outer, const usb_vault::security::SecureBuffer& inner) {
+  usb_vault::volume::VolumeProvider provider;const auto drive=free_letter();
+  mount_owned(disk,outer,drive,&inner);
+  const auto identity=provider.mount_identity(drive);
+  try {
+    bool rejected=false;
+    {
+      const auto file=std::wstring(1,drive)+L":\\fill.bin";
+      Handle output(::CreateFileW(file.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));
+      require(output.get()!=INVALID_HANDLE_VALUE,"protected fixture file");
+      std::vector<unsigned char> block(1024*1024,0x5a);
+      for(unsigned i=0;i<254;++i) {DWORD done{};if(!::WriteFile(output.get(),block.data(),static_cast<DWORD>(block.size()),&done,nullptr)||done!=block.size()){rejected=true;break;}}
+    }
+    require(rejected,"protected write unexpectedly filled whole host");
+    require(provider.mount_identity(drive)==identity,"protected mount changed");
+    const auto result=provider.unmount(drive,{.force=true,.notify_shell=false});
+    require(result.hidden_volume_protection_triggered,"write failure was not hidden protection");
+  } catch (...) {
+    try {if(provider.mount_identity(drive)==identity)static_cast<void>(provider.unmount(drive,{.force=true,.notify_shell=false}));}catch(...){}
+    throw;
+  }
+  mount_owned(disk,inner,drive);
+  const auto hidden=provider.mount_identity(drive);
+  try {
+    {
+      const auto file=std::wstring(1,drive)+L":\\probe.bin";
+      Handle input(::CreateFileW(file.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+      std::array<unsigned char,8> bytes{};DWORD done{};
+      const std::array<unsigned char,8> expected{0,1,17,33,0,127,254,255};
+      require(input.get()!=INVALID_HANDLE_VALUE && ::ReadFile(input.get(),bytes.data(),8,&done,nullptr) && done==8 && bytes==expected,"protected write corrupted hidden file");
+    }
+    require(provider.mount_identity(drive)==hidden,"hidden verification mount changed");
+    static_cast<void>(provider.unmount(drive,{.force=true,.notify_shell=false}));
+  } catch (...) {try {if(provider.mount_identity(drive)==hidden)static_cast<void>(provider.unmount(drive,{.force=true,.notify_shell=false}));}catch(...){} throw;}
+  std::cout<<"PASS: outer protection blocks boundary writes and hidden file survives\n";
+}
+
 void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool allow_owned_force = false) {
   usb_vault::volume::VolumeProvider provider;
   const wchar_t drive = free_letter(); bool mounted = false;
@@ -946,7 +998,7 @@ int wmain(int argc, wchar_t** argv) {
   std::wstring mode = argc == 2 ? argv[1] : L"";
   const bool gpt = mode.ends_with(L"-gpt");
   if (gpt) mode.resize(mode.size()-4);
-  if (argc != 2 || (mode != L"--run-owned-vhd-pair" && mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
+  if (argc != 2 || (mode != L"--run-owned-vhd-pair-helper" && mode != L"--run-owned-vhd-pair" && mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -961,13 +1013,14 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(gpt); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create(gpt);
-    if (mode == L"--run-owned-vhd-pair") {
-      static_cast<void>(disk.prepare_ntfs());
+    if (mode == L"--run-owned-vhd-pair" || mode == L"--run-owned-vhd-pair-helper") {
       usb_vault::security::SecureBuffer inner(64);
       std::copy(password.bytes().begin(), password.bytes().end(), inner.bytes().begin());
       inner.bytes().back() ^= std::byte{0x80};
-      backend.format_pair(disk, password, inner);
+      if(mode==L"--run-owned-vhd-pair-helper")pair_helper(disk,password,inner);
+      else {static_cast<void>(disk.prepare_ntfs());backend.format_pair(disk, password, inner);}
       roundtrip(disk, password, true); roundtrip(disk, inner, true);
+      if(mode==L"--run-owned-vhd-pair-helper")pair_protection(disk,password,inner);
       backend.file_regression(disk, password);
       disk.cleanup();
       std::cout << "PASS: independent outer and hidden partition files survive remount; fixture removed\n";

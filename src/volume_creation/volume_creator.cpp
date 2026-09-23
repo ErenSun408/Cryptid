@@ -289,7 +289,8 @@ class Handle final {
   const bool inspecting_bitlocker = operation == detail::Operation::inspect_partition_bitlocker;
   const bool checking_partition = operation == detail::Operation::check_partition || inspecting_bitlocker || decrypting_bitlocker;
   const bool converting = detail::inplace_operation(operation);
-  const bool formatting_partition = operation == detail::Operation::format_partition || converting;
+  const bool pair = operation == detail::Operation::format_partition_pair;
+  const bool formatting_partition = pair || operation == detail::Operation::format_partition || converting;
   const bool confirming_partition = formatting_partition || decrypting_bitlocker;
   if (decrypting_bitlocker && !confirm_erase) throw std::invalid_argument("BitLocker consent required");
   const bool partition_operation = checking_partition || formatting_partition;
@@ -302,7 +303,7 @@ class Handle final {
       (partition_operation && (!detail::valid_partition_path(path) || !detail::valid_partition_target(*partition_target))))
     throw std::invalid_argument("invalid partition identity request");
   if (formatting_partition) {
-    if (outer_size || hidden_size || first_password.size() != 64 || !second_password.empty() || !confirm_erase)
+    if (outer_size || (pair ? !detail::valid_partition_hidden_size(partition_target->length_bytes, hidden_size) : hidden_size != 0) || first_password.size() != 64 || second_password.size() != (pair ? 64u : 0u) || !confirm_erase)
       throw std::invalid_argument("invalid destructive partition request");
     if (cancelled && cancelled()) throw_creation(CreationError::operation_cancelled, "partition creation cancelled");
   } else if (measuring || checking_partition) {
@@ -735,6 +736,21 @@ void VolumeCreator::format_partition(const volume::PartitionCandidate& candidate
       .length_bytes = candidate.length_bytes, .partition_id = candidate.partition_id};
   static_cast<void>(invoke(helper_path_, detail::Operation::format_partition, candidate.volume_path,
       0, 0, password, security::SecureBuffer{}, progress, cancelled, &target, confirm_erase));
+}
+
+void VolumeCreator::format_partition_pair(const volume::PartitionCandidate& candidate,
+    std::uint64_t hidden_bytes, const security::SecureBuffer& password, const security::SecureBuffer& hidden_password, const std::function<bool()>& confirm_erase,
+    const ProgressCallback& progress, const CancellationQuery& cancelled) const {
+  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}))
+    throw std::invalid_argument("invalid partition format candidate");
+  const detail::PartitionTarget target{
+      .device_id = candidate.device_id, .device_flags = candidate.device_id_flags,
+      .disk_number = candidate.disk_number, .partition_number = candidate.partition_number,
+      .sector_bytes = candidate.logical_sector_bytes, .layout = static_cast<std::uint32_t>(candidate.layout),
+      .filesystem_serial = candidate.filesystem_serial, .offset_bytes = candidate.offset_bytes,
+      .length_bytes = candidate.length_bytes, .partition_id = candidate.partition_id};
+  static_cast<void>(invoke(helper_path_, detail::Operation::format_partition_pair, candidate.volume_path,
+      0, hidden_bytes, password, hidden_password, progress, cancelled, &target, confirm_erase));
 }
 
 bool VolumeCreator::convert_partition(const volume::PartitionCandidate& candidate, bool begin,

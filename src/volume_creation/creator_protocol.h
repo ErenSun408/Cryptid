@@ -14,7 +14,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 10;
+constexpr std::uint16_t kProtocolVersion = 11;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -34,13 +34,17 @@ enum class Operation : std::uint32_t {
   resume_partition_inplace = 10,
   inspect_partition_bitlocker = 11,
   decrypt_partition_bitlocker = 12,
+  format_partition_pair = 13,
 };
 
 [[nodiscard]] constexpr bool inplace_operation(Operation op) noexcept {
   return op == Operation::begin_partition_inplace || op == Operation::resume_partition_inplace;
 }
 [[nodiscard]] constexpr bool partition_operation(Operation op) noexcept {
-  return op == Operation::decrypt_partition_bitlocker || op == Operation::inspect_partition_bitlocker || op == Operation::check_partition || op == Operation::format_partition || inplace_operation(op);
+  return op == Operation::format_partition_pair || op == Operation::decrypt_partition_bitlocker || op == Operation::inspect_partition_bitlocker || op == Operation::check_partition || op == Operation::format_partition || inplace_operation(op);
+}
+[[nodiscard]] constexpr bool valid_partition_hidden_size(std::uint64_t host, std::uint64_t hidden) noexcept {
+  return hidden >= 1024 * 1024 && hidden % 65536 == 0 && hidden <= host / 4 * 3;
 }
 // 0: continue, 1: normal pause, 2: authentication revoked/cancelled.
 void write_pause_request(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce);

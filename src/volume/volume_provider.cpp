@@ -272,7 +272,8 @@ MountResult VolumeProvider::mount_partition(
     const security::SecureBuffer& volume_password,
     const MountOptions& options) const {
   require_active(impl_);
-  if (!valid_partition_identity(identity) || volume_password.size() != 64 || options.hidden_volume_protection)
+  if (!valid_partition_identity(identity) || volume_password.size() != 64 || (options.hidden_volume_protection &&
+      (!options.hidden_volume_protection->password || options.hidden_volume_protection->password->size() != 64)))
     throw std::invalid_argument("invalid partition mount request");
   const auto located = resolve_partition_location(identity, enumerate_partition_locations());
   if (!located) throw std::runtime_error("partition is absent or ambiguous");

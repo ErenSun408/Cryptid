@@ -125,6 +125,34 @@ void test_partition_format_protocol(Operation operation = Operation::format_part
   expect(!valid_cancel_request(CancelRequest{.nonce = header.nonce}, {}), "nonce binding missing");
 }
 
+void test_partition_pair_protocol() {
+  RequestHeader header{.operation=Operation::format_partition_pair, .hidden_size_bytes=64ULL*1024*1024,
+      .path_characters=49, .first_password_bytes=64, .second_password_bytes=64,
+      .partition_target_bytes=sizeof(PartitionTarget)};
+  expect(valid_request_header(header), "partition pair header rejected");
+  for (int i=0;i<8;++i) {
+    auto bad=header;
+    if(i==0)bad.hidden_size_bytes=0;
+    if(i==1)bad.hidden_size_bytes++;
+    if(i==2)bad.first_password_bytes=63;
+    if(i==3)bad.second_password_bytes=0;
+    if(i==4)bad.outer_size_bytes=1024;
+    if(i==5)bad.version=10;
+    if(i==6)bad.operation=Operation::format_partition;
+    if(i==7)bad.hidden_size_bytes=UINT64_MAX;
+    expect(!valid_request_header(bad), "malformed partition pair accepted");
+  }
+  expect(!valid_partition_hidden_size(64ULL*1024*1024,64ULL*1024*1024), "oversized pair accepted");
+  const std::wstring path=LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+  PartitionTarget target{}; target.device_id[0]=1; target.partition_number=1;
+  target.offset_bytes=1048576; target.length_bytes=256ULL*1024*1024;
+  SecureBuffer first(64), second(64);first.bytes()[0]=std::byte{9};second.bytes()[1]=std::byte{7};
+  const auto pipe=make_pipe();write_request(pipe.write.get(),header,path,first,second,{},{},&target);
+  const auto read=read_request(pipe.read.get(),header.nonce);
+  expect(read.hidden_size_bytes==header.hidden_size_bytes && read.first_password.size()==64 && read.second_password.size()==64 &&
+      read.first_password.bytes()[0]==std::byte{9} && read.second_password.bytes()[1]==std::byte{7}, "pair IPC lost binary secrets");
+}
+
 void test_bitlocker_inspection_protocol() {
   RequestHeader header{.operation = Operation::inspect_partition_bitlocker, .path_characters = 49,
       .partition_target_bytes = sizeof(PartitionTarget)};
@@ -224,10 +252,11 @@ void test_partition_check_protocol() {
 }
 
 void test_partition_helper_rejects_invalid_requests() {
-  for (auto operation : {Operation::check_partition, Operation::format_partition, Operation::begin_partition_inplace, Operation::resume_partition_inplace}) {
+  for (auto operation : {Operation::format_partition_pair, Operation::check_partition, Operation::format_partition, Operation::begin_partition_inplace, Operation::resume_partition_inplace}) {
     for (int field = 0; field < 8; ++field) {
       Request request{}; request.operation = operation;
       if (operation != Operation::check_partition) request.first_password = SecureBuffer(64);
+      if (operation == Operation::format_partition_pair) {request.second_password=SecureBuffer(64);request.hidden_size_bytes=64ULL*1024*1024;}
       request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
       request.partition_target.emplace();
       request.partition_target->device_id[0] = 1;
@@ -748,6 +777,7 @@ int main() {
     test_partition_format_protocol(Operation::begin_partition_inplace);
     test_partition_format_protocol(Operation::resume_partition_inplace);
     test_inplace_controls();
+    test_partition_pair_protocol();
     test_bitlocker_inspection_protocol();
     test_partition_check_protocol();
     test_partition_helper_rejects_invalid_requests();
