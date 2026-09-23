@@ -1,6 +1,9 @@
 // Included only by the separately distributed FormatDLL. No path-based opens.
 // Caller authorizes the target and owns the supplied synchronous RW handle.
 // This boundary supplies locking and same-handle geometry checks, not card auth.
+extern "C" {
+#include "Fat.h"
+}
 namespace {
 struct UsbVaultPartitionProgress {
     VeraCrypt_Progress_Callback function;
@@ -89,12 +92,18 @@ bool UsbVaultPartitionMatches(HANDLE handle, uint64_t offset, uint64_t length, c
 static int UsbVaultFormatPartition(
     HANDLE target, uint64_t expectedOffset, uint64_t expectedLength,
     const unsigned char* password, uint32_t passwordBytes,
-    VeraCrypt_Progress_Callback progress, void* context, const unsigned char* gptId)
+    VeraCrypt_Progress_Callback progress, void* context, const unsigned char* gptId,
+    const unsigned char* hiddenPassword = NULL, uint32_t hiddenPasswordBytes = 0, uint64_t hiddenSize = 0)
 {
     if (!target || target == INVALID_HANDLE_VALUE || !password || passwordBytes != 64
         || expectedOffset == 0 || expectedOffset % 512 || expectedLength % 512
         || expectedLength <= TC_TOTAL_VOLUME_HEADERS_SIZE || expectedLength > INT64_MAX
         || expectedOffset > static_cast<uint64_t>(INT64_MAX) - expectedLength)
+        return VCF_ERROR_INVALID_PARAMETER;
+    const bool pair = hiddenPassword != NULL;
+    if (pair ? (hiddenPasswordBytes != 64 || hiddenSize < 1024 * 1024 || hiddenSize % 65536
+        || hiddenSize > expectedLength / 4 * 3 || expectedLength < 20 * 1024 * 1024
+        || expectedLength > (uint64_t(1) << 40)) : (hiddenPasswordBytes != 0 || hiddenSize != 0))
         return VCF_ERROR_INVALID_PARAMETER;
     try {
         std::lock_guard<std::mutex> guard(g_sdkMutex);
@@ -106,6 +115,22 @@ static int UsbVaultFormatPartition(
         if (dataSize < TC_MIN_FAT_FS_SIZE || dataSize > TC_MAX_FAT_SECTOR_COUNT * uint64_t(512)
             || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength, gptId))
             return VCF_ERROR_INVALID_PARAMETER;
+        // Both filesystems are freshly generated while the partition stays locked.
+        // Bound the hidden area against the exact outer FAT metadata layout,
+        // with a spare tail reserve. No mounted filesystem can allocate into it.
+        if (pair) {
+            fatparams fat = {};
+            fat.num_sectors = static_cast<unsigned int>(dataSize / 512);
+            fat.sector_size = 512;
+            GetFatParams(&fat);
+            if (fat.reserved <= 0 || fat.fat_length <= 0 || fat.fats != 2 || fat.size_root_dir <= 0 || !fat.cluster_size)
+                return VCF_ERROR_INVALID_PARAMETER;
+            const uint64_t used = uint64_t(fat.reserved) * 512 + uint64_t(fat.fat_length) * fat.fats * 512 + fat.size_root_dir;
+            const uint64_t reserve = (std::min)(expectedLength / 200, uint64_t(10 * 1024 * 1024));
+            if (used >= dataSize || dataSize - used <= reserve + 4096
+                || hiddenSize > dataSize - used - reserve - 4096 || hiddenSize % (uint64_t(fat.cluster_size) * 512))
+                return VCF_ERROR_INVALID_PARAMETER;
+        }
         wchar_t filesystem[32] = {};
         if (!GetVolumeInformationByHandleW(disk.value, NULL, 0, NULL, NULL, NULL, filesystem, ARRAYSIZE(filesystem)))
             return VCF_ERROR_OS_ERROR;
@@ -158,7 +183,10 @@ static int UsbVaultFormatPartition(
         parameters.bDevice = TRUE; parameters.volumePath = noPath;
         parameters.usbVaultDeviceHandle = disk.value; parameters.size = expectedLength;
         parameters.ea = MapEncryptionAlgorithm(L"AES"); parameters.pkcs5 = SHA512;
-        parameters.fileSystem = FILESYS_FAT; parameters.quickFormat = TRUE;
+        parameters.fileSystem = FILESYS_FAT;
+        // A hidden area must not stand out from leftover plaintext in the host.
+        // Initialize the entire fresh outer volume; the later hidden pass is quick.
+        parameters.quickFormat = pair ? FALSE : TRUE;
         parameters.sectorSize = 512; parameters.password = secret.value;
         UsbVaultPartitionProgress callback = {progress, context, dataSize, false};
         if (progress) { parameters.progress_callback = UsbVaultPartitionProgress::update; parameters.progress_callback_user_data = &callback; }
@@ -166,6 +194,20 @@ static int UsbVaultFormatPartition(
         const int result = TCFormatVolume(&parameters);
         if (callback.cancelled || result == ERR_USER_ABORT) return VCF_ERROR_USER_ABORT;
         if (result != ERR_SUCCESS) return VCF_ERROR_OS_ERROR;
+        if (pair) {
+            if (!FlushFileBuffers(disk.value) || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength, gptId))
+                return VCF_ERROR_OS_ERROR;
+            if (progress && !progress(0, context)) return VCF_ERROR_USER_ABORT;
+            UsbVaultPartitionPassword inner;
+            if (!inner.value) return VCF_ERROR_OUT_OF_MEMORY;
+            memcpy(inner.value->Text, hiddenPassword, hiddenPasswordBytes); inner.value->Length = hiddenPasswordBytes;
+            parameters.hiddenVol = TRUE; parameters.hiddenVolHostSize = expectedLength;
+            parameters.size = hiddenSize; parameters.password = inner.value; parameters.quickFormat = TRUE;
+            callback.total = GetVolumeDataAreaSize(TRUE, hiddenSize);
+            const int innerResult = TCFormatVolume(&parameters);
+            if (callback.cancelled || innerResult == ERR_USER_ABORT) return VCF_ERROR_USER_ABORT;
+            if (innerResult != ERR_SUCCESS) return VCF_ERROR_OS_ERROR;
+        }
         if (!FlushFileBuffers(disk.value)) return VCF_ERROR_OS_ERROR;
         if (!DeviceIoControl(disk.value, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &returned, NULL))
             return VCF_ERROR_OS_ERROR;
@@ -184,4 +226,20 @@ extern "C" VCF_API int __cdecl VeraCryptFormatPartitionGptBinary(HANDLE target, 
     if (!partitionId || idBytes != 16) return VCF_ERROR_INVALID_PARAMETER;
     unsigned char id[16]; memcpy(id, partitionId, sizeof(id));
     return UsbVaultFormatPartition(target, offset, size, password, bytes, progress, context, id);
+}
+
+// One destructive operation, one lock: this never adds a hidden volume to an
+// existing filesystem. Zero idBytes selects MBR; otherwise require a GPT GUID.
+extern "C" VCF_API int __cdecl VeraCryptFormatPartitionPairBinary(
+    HANDLE target, uint64_t offset, uint64_t size,
+    const unsigned char* outerPassword, uint32_t outerBytes,
+    const unsigned char* hiddenPassword, uint32_t hiddenBytes, uint64_t hiddenSize,
+    VeraCrypt_Progress_Callback progress, void* context,
+    const unsigned char* partitionId, uint32_t idBytes) {
+    if (!hiddenPassword || hiddenBytes != 64 || (idBytes != 0 && idBytes != 16)
+        || (idBytes == 0 && partitionId) || (idBytes == 16 && !partitionId)) return VCF_ERROR_INVALID_PARAMETER;
+    unsigned char id[16] = {};
+    if (idBytes) memcpy(id, partitionId, sizeof(id));
+    return UsbVaultFormatPartition(target, offset, size, outerPassword, outerBytes,
+        progress, context, idBytes ? id : NULL, hiddenPassword, hiddenBytes, hiddenSize);
 }

@@ -324,6 +324,45 @@ class Backend {
     require(::DeleteFileW(file.c_str()) != FALSE, "regression file cleanup failed");
     std::cout << "PASS: existing normal and hidden file-container formats and mounts\n";
   }
+  void format_pair(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& outer,
+                   const usb_vault::security::SecureBuffer& inner) {
+    disk.verify();
+    const auto pair = reinterpret_cast<fmt::FormatPartitionPairBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionPairBinary"));
+    require(pair != nullptr, "partition pair export missing");
+    const std::wstring path = LR"(\\?\GLOBALROOT)" + disk.target();
+    Handle handle(::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, 0, nullptr));
+    require(handle.get() != INVALID_HANDLE_VALUE, "pair handle");
+    const auto* first = reinterpret_cast<const unsigned char*>(outer.data());
+    const auto* second = reinterpret_cast<const unsigned char*>(inner.data());
+    const auto* id = disk.gpt() ? reinterpret_cast<const unsigned char*>(&disk.partition_id()) : nullptr;
+    const auto invoke = [&](std::uint64_t bytes, std::uint32_t passwordBytes, const unsigned char* guid) {
+      return pair(handle.get(), kOffset, kPartitionBytes, first, 64, second, passwordBytes,
+          bytes, nullptr, nullptr, guid, disk.gpt() ? 16u : 0u);
+    };
+    const auto sample = [&] {
+      alignas(4096) std::array<unsigned char, 512> bytes{}; DWORD read{}; LARGE_INTEGER zero{};
+      require(::SetFilePointerEx(handle.get(), zero, nullptr, FILE_BEGIN) &&
+          ::ReadFile(handle.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) && read == bytes.size(), "pair sample");
+      return bytes;
+    };
+    const auto before = sample();
+    require(invoke(0, 64, id) == fmt::kInvalidParameter, "empty hidden accepted");
+    require(invoke(kPartitionBytes, 64, id) == fmt::kInvalidParameter, "oversized hidden accepted");
+    require(invoke(64 * 1024 * 1024 + 512, 64, id) == fmt::kInvalidParameter, "unaligned hidden accepted");
+    require(invoke(64 * 1024 * 1024, 63, id) == fmt::kInvalidParameter, "short hidden key accepted");
+    if (disk.gpt()) {
+      auto wrong = disk.partition_id(); ++wrong.Data1;
+      require(invoke(64 * 1024 * 1024, 64, reinterpret_cast<const unsigned char*>(&wrong)) == fmt::kInvalidParameter, "wrong pair GUID accepted");
+    }
+    require(sample() == before, "pair validation wrote to volume");
+    const auto code = invoke(64 * 1024 * 1024, 64, id);
+    if (code != fmt::kSuccess) std::cerr << "pair format code " << code << '\n';
+    require(code == fmt::kSuccess, "partition pair format failed");
+    DWORD flags{}; require(::GetHandleInformation(handle.get(), &flags), "pair consumed caller handle");
+    disk.verify();
+    std::cout << "PASS: paired partition guards, retained handle and unchanged partition table\n";
+  }
   void format_handle(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool cancel_only) {
     const auto mbr_format = reinterpret_cast<fmt::FormatPartitionBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionBinary"));
     const auto gpt_format = reinterpret_cast<fmt::FormatPartitionGptBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionGptBinary"));
@@ -850,14 +889,22 @@ void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer&
   std::cout << "PASS: authenticated resume, real AES conversion, NTFS mount and original file bytes preserved" << std::endl;
 }
 
-void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
+void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool allow_owned_force = false) {
   usb_vault::volume::VolumeProvider provider;
   const wchar_t drive = free_letter(); bool mounted = false;
   std::optional<usb_vault::volume::MountIdentity> identity;
   const auto unmount = [&] {
     require(identity && identity->volume_path == disk.target() && provider.mount_identity(drive) == *identity,
         "fixture mount identity changed before cleanup");
-    static_cast<void>(usb_vault::volume::unmount_with_retry(provider, drive, {.notify_shell = false}));
+    try { static_cast<void>(usb_vault::volume::unmount_with_retry(provider, drive, {.notify_shell = false})); }
+    catch (const std::system_error& error) {
+      if (!allow_owned_force || error.code() != usb_vault::volume::make_error_code(usb_vault::volume::DriverError::volume_busy)) throw;
+      require(provider.mount_identity(drive) == *identity, "owned force identity changed");
+      // Every fixture file handle is closed and writes were flushed. Shell /
+      // indexing handles can still observe a newly assigned letter.
+      static_cast<void>(provider.unmount(drive, {.force = true, .notify_shell = false}));
+      std::cout << "NOTE: owned fixture required force after normal busy timeout\n";
+    }
     mounted = false; identity.reset();
   };
   try {
@@ -899,7 +946,7 @@ int wmain(int argc, wchar_t** argv) {
   std::wstring mode = argc == 2 ? argv[1] : L"";
   const bool gpt = mode.ends_with(L"-gpt");
   if (gpt) mode.resize(mode.size()-4);
-  if (argc != 2 || (mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
+  if (argc != 2 || (mode != L"--run-owned-vhd-pair" && mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -914,6 +961,18 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(gpt); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create(gpt);
+    if (mode == L"--run-owned-vhd-pair") {
+      static_cast<void>(disk.prepare_ntfs());
+      usb_vault::security::SecureBuffer inner(64);
+      std::copy(password.bytes().begin(), password.bytes().end(), inner.bytes().begin());
+      inner.bytes().back() ^= std::byte{0x80};
+      backend.format_pair(disk, password, inner);
+      roundtrip(disk, password, true); roundtrip(disk, inner, true);
+      backend.file_regression(disk, password);
+      disk.cleanup();
+      std::cout << "PASS: independent outer and hidden partition files survive remount; fixture removed\n";
+      return 0;
+    }
     if(mode==L"--run-owned-vhd-bitlocker"){bitlocker_roundtrip(disk);disk.cleanup();return 0;}
     if (mode == L"--run-owned-vhd-inplace-session") { inplace_session_roundtrip(disk); disk.cleanup(); return 0; }
     if (mode == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }

@@ -41,6 +41,11 @@ using FormatPartitionBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t
 
 using FormatPartitionGptBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
     const unsigned char*, std::uint32_t, ProgressCallback, void*, const unsigned char*, std::uint32_t);
+// Fresh outer+hidden FAT pair under one retained partition lock. Both secrets
+// are exactly 64 bytes. idBytes is zero for MBR or sixteen for GPT.
+using FormatPartitionPairBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
+    const unsigned char*, std::uint32_t, const unsigned char*, std::uint32_t, std::uint64_t,
+    ProgressCallback, void*, const unsigned char*, std::uint32_t);
 using InplaceOpenGpt = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
     const unsigned char*, std::uint32_t, BOOL, std::uint64_t*, std::uint32_t, BOOL(CALLBACK*)(void*), void*,
     const unsigned char*, std::uint32_t);

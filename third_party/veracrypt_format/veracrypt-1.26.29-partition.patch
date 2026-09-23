@@ -35,7 +35,7 @@
 +        LARGE_INTEGER beginning;
 +        beginning.QuadPart = 0;
 +        // No pathname reopen, shared-open fallback, temporary drive or pseudo-format.
-+        if (!volParams->bDevice || volParams->hiddenVol || volParams->fileSystem != FILESYS_FAT
++        if (!volParams->bDevice || volParams->fileSystem != FILESYS_FAT
 +            || !DuplicateHandle(GetCurrentProcess(), volParams->usbVaultDeviceHandle,
 +                GetCurrentProcess(), &dev, 0, FALSE, DUPLICATE_SAME_ACCESS)
 +            || !SetFilePointerEx(dev, beginning, NULL, FILE_BEGIN))
