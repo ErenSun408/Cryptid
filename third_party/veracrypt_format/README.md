@@ -1,6 +1,6 @@
 # Patched VeraCrypt FormatDLL boundary
 
-Current P4.4 product SHA-256: `878425F46FDEAD0ADE7E3E664F2BA6A445D9CA6DBAE260C93AA22A46FA70F3AA`. Apply the USB Vault, geometry and partition patches in that order to the pinned upstream source, and copy both `UsbVaultGeometry.inl` and `UsbVaultPartition.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
+Current P4.5 product SHA-256: `242EAB54B82ED682150AE5E7A171A45C4A227753D3F266D9E95791622F0F5382`. Apply the USB Vault, geometry, partition and inplace patches in that order to the pinned upstream source, and copy `UsbVaultGeometry.inl`, `UsbVaultPartition.inl` and `UsbVaultInplace.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
 
 P1.4 uses VeraCrypt 1.26.29 source pinned at commit `b48e31f5`. The source is
 not copied into this repository. Apply `veracrypt-1.26.29-usb-vault.patch` to
@@ -58,7 +58,7 @@ then build FormatDLL. Keep the reviewed DLL in local dependency storage,
 separate from disposable build outputs.
 
 Previous geometry-only SHA-256: `416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184`.
-The current distribution includes all three patches, both includes, this README,
+The current distribution includes all four patches, all three includes, this README,
 and upstream License/NOTICE. A rebuilt binary must be reviewed before changing
 the allowlist; compiler/build metadata may change its digest.
 
@@ -195,3 +195,16 @@ physical disks, GPT/4Kn, in-place encryption or pause/resume. At the end of that
 The reviewed partition include matches the pinned build input. The product now binds explicit erase consent to the authenticated card session and retained target, removes verified original volume access paths before formatting, stores encrypted partition identities and mounts through the dedicated provider API. The same reviewed binary passed the owned NTFS helper/provider round trip including original drive removal. File-container regression evidence from the earlier reviewed-binary run remains applicable.
 
 The final combined acceptance executable now also offers `--run-owned-vhd-session`: synthetic authenticated roots, real KDF and encrypted index storage inside a fresh fixture directory, real helper/driver, cross-session readback and removal cleanup. This is not physical-card authentication. After an earlier UAC cancellation, the user explicitly requested a new elevation. All three final owned-VHD modes (session, helper and handle) exited zero with empty stderr and removed their fixtures. The combined session and quiet-prewrite cancellation assertions passed, as did original-access removal and normal/hidden file-container regression. This closes the P4.4 single-partition MVP gate, not physical-card or physical-disk qualification. Build, focused regression, WebView integration and strict analysis passed; see DEVELOPMENT_LOG.md for exact evidence and limits. No new installer was produced.
+
+
+## NTFS in-place conversion boundary (P4.5)
+
+The fourth patch includes `UsbVaultInplace.inl` in the separately distributed DLL. Its five synchronous exports are mirrored in `src/volume_creation/veracrypt_format_abi.h`: open an authorized retained handle in begin/resume mode, encrypt a block, save an authenticated range, finalize, and close. One operation lives in each helper process. The application never loads the DLL. Reproduction review applied all four patches to the pinned source and compared all modified files and includes with the reviewed build input, allowing only UTF-8 BOM and newline differences.
+
+Begin requires a clean ordinary NTFS MBR/512 partition, exactly 64 binary password bytes, the existing system/boot/paging/BitLocker exclusions and same-handle identity revalidation. The DLL asks Windows to shrink the NTFS filesystem by the 256 KiB header reserve without changing the partition table. An unshrinkable filesystem fails explicitly; there is no destructive-format fallback or tail-cluster relocation implementation. AES-XTS, SHA-512 and PIM 0 remain fixed. Data moves backwards by 128 KiB using complete 64 KiB locked buffers. Preparation conceals the original NTFS start until finalization; this is not a secure erase guarantee.
+
+Normal pause finishes the current block, flushes data, writes a freshly salted authenticated backup header with its continuous encrypted suffix, then flushes the header. Only that successful result may create a paused permit inside the encrypted fixed-size container index. Resume requires fresh card authentication, the exact saved partition identity, the persisted paused permit, a RAW structural gate, an exclusive handle, the concealed NTFS boot signature and authenticated in-place backup header. RAW filesystem metadata can be unknown after preparation; this separate resume chain does not loosen initial NTFS/BitLocker checks. Wrong passwords, unsupported layouts and ordinary RAW volumes are rejected. Progress supplied by a page is never accepted.
+
+The product consumes the paused permit into an uncertain record before another write and rejects mounting or forgetting incomplete entries. Errors, revocation, a failed state save, power loss or forced process termination do not promise safe resume. Successful completion writes the primary header, flushes, restores a normal record and permits ordinary mounting. Header reserve areas and unused hidden-header slots are randomized; no password-role or hidden-existence marker is added. The v4 encrypted pending record must not be edited by older clients that do not support it; completed records return to the existing normal representation. Helper protocol v8 requires matching application/helper versions.
+
+Owned-VHD tests exercise real KDF, encrypted index persistence, a new authenticated session, independent elevated helper processes, wrong-key refusal, pause, resume, original-file byte comparison, and driver cleanup. Synthetic authenticated roots stand in for physical-card authentication. Physical cards, real disks, GPT/4Kn and broader compatibility remain P4.6 work; arbitrary interruption recovery is outside this MVP. Source/license distribution obligations above still apply. No installer delivery is implied by promotion of the local dependency.
