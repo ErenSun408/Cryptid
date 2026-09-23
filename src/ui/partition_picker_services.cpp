@@ -17,6 +17,20 @@ class NativePartitionServices final : public IUiPartitionServices {
     if (!creator_) throw std::runtime_error("partition helper is not configured");
     creator_->check_partition(candidate);
   }
+  volume::PartitionBitLockerStatus inspect_bitlocker(const volume::PartitionCandidate& candidate) override {
+    if (!creator_) throw std::runtime_error("partition helper is not configured");
+    return creator_->inspect_partition_bitlocker(candidate);
+  }
+  void decrypt_bitlocker(const volume::PartitionCandidate& candidate, const std::function<bool()>& confirm,
+                          const std::function<bool()>& cancelled) override {
+    if (!creator_) throw std::runtime_error("partition helper is not configured");
+    creator_->decrypt_partition_bitlocker(candidate, confirm, cancelled);
+  }
+  bool open_bitlocker_help() noexcept override {
+    return reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open",
+        L"https://support.microsoft.com/en-us/windows/security/encryption/bitlocker-overview",
+        nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+  }
   std::vector<volume::PartitionCandidate> enumerate() override {
     return volume::enumerate_partition_candidates();
   }

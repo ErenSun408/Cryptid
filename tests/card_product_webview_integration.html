@@ -303,6 +303,17 @@
       <input id="create-container-b-second" type="password">
       <input id="create-container-b-second-confirmation" type="password">
     </div>
+        <div id="creation-bitlocker" hidden>
+          <p id="bitlocker-description"></p>
+          <button id="bitlocker-help" class="modal-button" type="button">了解 Windows BitLocker</button>
+          <label id="bitlocker-consent-label" style="display:block;margin-top:1.2rem"><input id="bitlocker-consent" type="checkbox"> 我已知晓并同意关闭作用在此分区的BitLocker。</label>
+          <div id="bitlocker-decryption" hidden>
+            <p id="bitlocker-progress-text" aria-live="polite"></p>
+            <div id="bitlocker-progress-bar" class="creation-progress-bar" role="progressbar" aria-label="BitLocker 解密进度" aria-valuemin="0" aria-valuemax="100"></div>
+            <p class="creation-hint">关闭或取消等待后，Windows 会继续解密，USB Vault 不会继续创建。</p>
+          </div>
+        </div>
+<button id="bitlocker-cancel" hidden></button><button id="bitlocker-continue" hidden></button>
     <div id="creation-progress" hidden>
       <div id="creation-progress-authorize"><span class="step-tail"></span></div>
       <div id="creation-progress-allocate"><span class="step-mark"></span><span></span><span class="step-tail"></span></div>

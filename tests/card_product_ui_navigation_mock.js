@@ -218,6 +218,7 @@ window.navigationFixture = {
       fixture.containers.push({id: 101, name: "转换中的分区", mounted: false, size: 0, drive: "", partition: true, conversion: 1});
       fixture.creationProgress = "1,3,23,0,1";
       fixture.pendingCreation = {
+        resolve: () => { fixture.containers.find(c=>c.id===101).conversion=0; fixture.creationProgress="2,5,100,0,1"; },
         pause: () => { fixture.containers.find(c=>c.id===101).conversion=2; fixture.creationProgress="6,3,23,0,1"; },
         reject: () => { fixture.creationProgress="3,3,23,0,1"; },
       };
@@ -256,6 +257,9 @@ window.navigationFixture = {
         reject: () => { fixture.creationProgress = "3,3,41,0,3"; },
       };
     },
+    getPartitionBitLockerProgress: () => fixture.bitlockerProgress || "0,0,0",
+    confirmPartitionBitLocker: () => { fixture.bitlockerConfirmed = true; fixture.bitlockerProgress = "2,3,80"; return true; },
+    openBitLockerHelp: async () => { fixture.bitlockerHelpOpened = true; return true; },
     getCreationProgress: () => fixture.creationProgress,
     getCreationError: () => fixture.creationProgress.startsWith("4,") ? 16 : 17,
     cancelContainerCreation: () => {

@@ -4,6 +4,8 @@
 
 #include "usb_vault/volume/partition_catalog.h"
 
+#include "usb_vault/volume/partition_bitlocker.h"
+#include <functional>
 #include <oaidl.h>
 #include <atomic>
 #include <cstdint>
@@ -48,7 +50,7 @@ struct CreationWorkState final {
   std::atomic<Phase> phase_{Phase::idle};
 };
 
-// Injectable read-only discovery and explicit system-tool launch boundary.
+// Injectable discovery, confirmed BitLocker preparation and fixed system-help boundary.
 // The source outlives its bridge, including the bridge's background worker.
 class IUiPartitionServices {
  public:
@@ -57,6 +59,10 @@ class IUiPartitionServices {
   virtual std::wstring display_name(const volume::PartitionCandidate& candidate) { return volume::partition_display_name(candidate); }
   virtual bool open_disk_management() noexcept = 0;
   virtual void check(const volume::PartitionCandidate& candidate) = 0;
+  virtual volume::PartitionBitLockerStatus inspect_bitlocker(const volume::PartitionCandidate&) = 0;
+  virtual void decrypt_bitlocker(const volume::PartitionCandidate&, const std::function<bool()>& confirm,
+                                 const std::function<bool()>& cancelled) = 0;
+  virtual bool open_bitlocker_help() noexcept = 0;
 };
 [[nodiscard]] IUiPartitionServices& native_partition_services() noexcept;
 [[nodiscard]] std::unique_ptr<IUiPartitionServices> make_partition_services(const std::filesystem::path& helper);

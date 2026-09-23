@@ -299,6 +299,80 @@
   const kCreationCancelled = "creation-cancelled";
   const kCreationCleanupFailed = "creation-cleanup-failed";
   const kCreationCleanupMessage = "创建未完成，未能确认临时文件已清理。请检查保存位置中的残留文件后再重试。";
+  const requestCreationCancellation = () => bridge.cancelContainerCreation();
+  const bitlockerPage = document.getElementById("creation-bitlocker");
+  const bitlockerDescription = document.getElementById("bitlocker-description");
+  const bitlockerConsent = document.getElementById("bitlocker-consent");
+  const bitlockerConsentLabel = document.getElementById("bitlocker-consent-label");
+  const bitlockerHelp = document.getElementById("bitlocker-help");
+  const bitlockerDecryption = document.getElementById("bitlocker-decryption");
+  const bitlockerProgressText = document.getElementById("bitlocker-progress-text");
+  const bitlockerProgressBar = document.getElementById("bitlocker-progress-bar");
+  const bitlockerCancel = document.getElementById("bitlocker-cancel");
+  const bitlockerContinue = document.getElementById("bitlocker-continue");
+  let bitlockerPhase = 0;
+  let bitlockerSubmitted = false;
+  let bitlockerCancelled = false;
+  const resetBitlocker = () => {
+    bitlockerPhase = 0; bitlockerSubmitted = false; bitlockerCancelled = false;
+    bitlockerConsent.checked = false; bitlockerPage.hidden = true;
+    bitlockerCancel.hidden = true; bitlockerContinue.hidden = true;
+    creationDialog.dataset.bitlocker = "false";
+  };
+  const showBitlocker = (packed) => {
+    if (typeof packed !== "string" || !/^[0-2],[0-5],\d{1,3}$/.test(packed)) throw new Error("invalid BitLocker progress");
+    const [phase, state, encrypted] = packed.split(",").map(Number);
+    if (encrypted > 100 || (state === 0 && encrypted !== 0)) throw new Error("invalid BitLocker percentage");
+    if (!phase) {
+      if (bitlockerPhase) {
+        resetBitlocker(); creationProgress.hidden = false;
+        creationTitle.textContent = creationInplace ? "正在加密分区" : "正在创建容器";
+        creationStatus.textContent = "";
+      }
+      return;
+    }
+    if (phase !== bitlockerPhase) creationStatus.textContent = "";
+    bitlockerPhase = phase;
+    setCreationDescription("");
+    bitlockerPage.hidden = false; creationProgress.hidden = true;
+    creationDialog.dataset.bitlocker = "true";
+    creationTitle.textContent = phase === 1 ? "关闭 BitLocker" : "正在解密 BitLocker";
+    const selected = partitionRows.find(row => row.id === partitionSelected);
+    const name = selected?.display || (selected ? partitionLocation(selected) : "所选分区");
+    const stateText = ["已完成解密", "完全加密", "正在加密", "正在解密", "加密已暂停", "解密已暂停"][state];
+    bitlockerDescription.textContent = `${name} ${state === 1 ? "已被 Windows BitLocker 完全加密" : `的 Windows BitLocker 状态为：${stateText}`}，要继续使用这个分区，需要`;
+    const emphasis = document.createElement("strong");
+    emphasis.textContent = "关闭 BitLocker 并等待解密完成。";
+    bitlockerDescription.append(emphasis);
+    bitlockerConsentLabel.hidden = phase !== 1;
+    bitlockerHelp.hidden = phase !== 1;
+    bitlockerDecryption.hidden = phase !== 2;
+    bitlockerCancel.hidden = false;
+    bitlockerCancel.disabled = bitlockerCancelled;
+    bitlockerCancel.textContent = bitlockerCancelled ? "正在取消…" : phase === 1 ? "取消" : "取消等待";
+    bitlockerContinue.hidden = phase !== 1;
+    bitlockerContinue.disabled = !bitlockerConsent.checked || bitlockerSubmitted || bitlockerCancelled;
+    bitlockerConsent.disabled = bitlockerSubmitted || bitlockerCancelled;
+    bitlockerProgressText.textContent = `${state === 5 ? "Windows 解密已暂停" : "正在关闭 BitLocker"}，已解密 ${100 - encrypted}%`;
+    bitlockerProgressBar.setAttribute("aria-valuenow", String(100 - encrypted));
+    bitlockerProgressBar.style.setProperty("--creation-percent", `${100 - encrypted}%`);
+  };
+  bitlockerConsent.addEventListener("change", () => {
+    bitlockerContinue.disabled = !bitlockerConsent.checked || bitlockerPhase !== 1 || bitlockerSubmitted || bitlockerCancelled;
+  });
+  bitlockerHelp.addEventListener("click", () => { if (bitlockerPhase === 1) void bridge.openBitLockerHelp().catch(() => {}); });
+  bitlockerContinue.addEventListener("click", async () => {
+    if (!creationRunning || bitlockerPhase !== 1 || !bitlockerConsent.checked || bitlockerSubmitted || bitlockerCancelled) return;
+    bitlockerSubmitted = true; bitlockerContinue.disabled = true; bitlockerConsent.disabled = true;
+    try { if (await bridge.confirmPartitionBitLocker() !== true) throw new Error("consent rejected"); }
+    catch (_) { creationStatus.textContent = "未能确认关闭 BitLocker，请取消后重试。"; }
+  });
+  bitlockerCancel.addEventListener("click", async () => {
+    if (!creationRunning || !bitlockerPhase || bitlockerCancelled) return;
+    bitlockerCancelled = true; bitlockerCancel.disabled = true; bitlockerContinue.disabled = true;
+    try { if (await requestCreationCancellation() !== true) throw new Error("cancel rejected"); }
+    catch (_) { bitlockerCancelled = false; bitlockerCancel.disabled = false; }
+  });
   let creationInplace = false;
   let creationDrive = "";
   let creationRunning = false;
@@ -310,6 +384,7 @@
     creationProgressTimer = null;
     creationRunning = false;
     creationResult = "";
+    resetBitlocker();
     creationProgress.hidden = true;
     creationProgress.removeAttribute("data-result");
     creationProgress.querySelector("[role=progressbar]")?.removeAttribute("aria-valuenow");
@@ -372,6 +447,8 @@
       setCreationDescription("可以退出应用；下次用原安全卡登录，在容器列表选择继续加密。");
       return;
     }
+    resetBitlocker();
+    creationProgress.hidden = false;
     const succeeded = creationStatus.dataset.tone === "success";
     const cancelled = creationStatus.dataset.tone === "cancelled";
     creationResult = succeeded ? "success" : cancelled ? "cancelled" : "error";
@@ -411,6 +488,7 @@
       const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
       if (status < 1 || status > 6 || stage > 5 || percent > 100 || flags > 3 ||
           (drive !== 0 && (drive < 65 || drive > 90))) throw new Error("invalid creation progress range");
+      if (status === 1) showBitlocker(await bridge.getPartitionBitLockerProgress());
       if (status === 6) { if (!creationInplace) throw new Error("unexpected pause result"); return 6; }
       if (stage >= 4) {
         creationFinalizing = true;
@@ -5820,7 +5898,7 @@
     // The reply only acknowledges the request. The actual outcome still
     // arrives through progress polling, including cleanup failures.
     try {
-      const accepted = await bridge.cancelContainerCreation();
+      const accepted = await requestCreationCancellation();
       if (creationRunning && accepted === false) {
         creationFinalizing = true;
         creationCancelWork.textContent = "正在完成创建，已无法取消";

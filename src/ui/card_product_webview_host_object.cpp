@@ -38,6 +38,9 @@ constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
 constexpr DISPID kCreationErrorId = 115;
+constexpr DISPID kBitLockerProgressId = 116;
+constexpr DISPID kBitLockerConfirmId = 117;
+constexpr DISPID kBitLockerHelpId = 118;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -462,6 +465,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"setForceUnmountEnabled")) { ids[0] = kSetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerBMib")) { ids[0] = kBeginCreateBId; return S_OK; }
+    if (matches(names[0], L"getPartitionBitLockerProgress")) { ids[0] = kBitLockerProgressId; return S_OK; }
+    if (matches(names[0], L"confirmPartitionBitLocker")) { ids[0] = kBitLockerConfirmId; return S_OK; }
+    if (matches(names[0], L"openBitLockerHelp")) { ids[0] = kBitLockerHelpId; return S_OK; }
     if (matches(names[0], L"getCreationError")) { ids[0] = kCreationErrorId; return S_OK; }
     if (matches(names[0], L"getCreationProgress")) { ids[0] = kCreationProgressId; return S_OK; }
     if (matches(names[0], L"cancelContainerCreation")) { ids[0] = kCancelCreationId; return S_OK; }
@@ -703,7 +709,8 @@ class CardProductWebViewHostObject final : public IDispatch {
                 : survey_mode_ ? !is_survey_query(member)
                                : member != kVolumeOperationStatusId)
              : member != kCreationProgressId &&
-                   member != kCancelCreationId)) {
+                   member != kCancelCreationId && member != kBitLockerProgressId &&
+                   member != kBitLockerConfirmId && member != kBitLockerHelpId)) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
@@ -843,6 +850,27 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCancelCreationId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
         return complete_selection(creation_work_->request_cancel(), result);
+      }
+      case kBitLockerProgressId:
+      case kBitLockerConfirmId:
+      case kBitLockerHelpId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!creation_work_->running.load()) {
+          if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+          if (member != kBitLockerProgressId) return E_ACCESSDENIED;
+          return complete_string(L"0,0,0", 5, result);
+        }
+        if (creation_work_->interrupted.load() || bitlocker_epoch_.load() != creation_work_->card_epoch.load()) return E_ACCESSDENIED;
+        const auto phase = bitlocker_phase_.load();
+        if (member == kBitLockerHelpId) return complete_selection(phase == 1 && partition_services_.open_bitlocker_help(), result);
+        if (member == kBitLockerConfirmId) {
+          bool expected = false;
+          return complete_selection(phase == 1 && !creation_work_->cancellation_requested() &&
+              bitlocker_consent_.compare_exchange_strong(expected, true), result);
+        }
+        const auto status = bitlocker_status_.load();
+        const auto packed = std::to_wstring(phase) + L"," + std::to_wstring(status >> 8) + L"," + std::to_wstring(status & 255);
+        return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
       }
       case kCreationErrorId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
@@ -1233,6 +1261,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         return begin_creation([this,id]{creation_paused_.store(controller_.resume_partition_conversion(id));},result,true);
       }
       if (member == kPartitionCreateId || member==kPartitionConvertId) {
+        if (!controller_.remembering_container_paths()) return E_ACCESSDENIED;
         std::uint32_t id{};
         if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
         volume::PartitionCandidate target;
@@ -1253,6 +1282,7 @@ class CardProductWebViewHostObject final : public IDispatch {
             return target == confirmed && !creation_work_->interrupted.load() && creation_work_->card_epoch.load() == epoch &&
                    !creation_work_->cancellation_requested();
           };
+          prepare_bitlocker(target, epoch);
           if(member==kPartitionConvertId)creation_paused_.store(controller_.begin_partition_conversion(target,confirm));
           else controller_.create_partition(target,confirm);
         }, result,member==kPartitionConvertId);
@@ -1661,6 +1691,36 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  void prepare_bitlocker(const volume::PartitionCandidate& target, std::uint64_t epoch) {
+    const auto cancelled = [this, epoch] {
+      return creation_work_->cancellation_requested() || creation_work_->interrupted.load() ||
+             creation_work_->card_epoch.load() != epoch;
+    };
+    const auto guard = [&] {
+      if (cancelled()) throw std::system_error(volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled));
+    };
+    const auto inspect = [&] {
+      guard();
+      const auto status = partition_services_.inspect_bitlocker(target);
+      guard();
+      if (!volume::valid_bitlocker_status(status)) throw std::runtime_error("invalid BitLocker status");
+      bitlocker_status_.store((status.state << 8) | status.encrypted_percent);
+      return status;
+    };
+    if (inspect().state == 0) return;
+    bitlocker_phase_.store(1);
+    while (!bitlocker_consent_.load()) { guard(); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    guard();
+    bitlocker_phase_.store(2);
+    partition_services_.decrypt_bitlocker(target, [&] { return bitlocker_consent_.load() && !cancelled(); }, cancelled);
+    while (inspect().state != 0) {
+      for (unsigned int i = 0; i < 20; ++i) { guard(); std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    }
+    guard();
+    bitlocker_consent_.store(false);
+    bitlocker_phase_.store(0);
+  }
+
   template <typename Operation>
   HRESULT begin_creation(Operation operation, VARIANT* result, bool inplace = false) {
     if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated) return E_FAIL;
@@ -1668,6 +1728,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     creation_progress_.store(0);
     creation_flags_.store(0);
     creation_error_.store(0);
+    bitlocker_phase_.store(0);
+    bitlocker_status_.store(0);
+    bitlocker_consent_.store(false);
+    bitlocker_epoch_.store(creation_work_->card_epoch.load());
     creation_status_.store(1);
     creation_paused_.store(false);
     creation_work_->inplace_operation.store(inplace);
@@ -2740,6 +2804,10 @@ class CardProductWebViewHostObject final : public IDispatch {
   DISPID last_volume_member_{0};
   std::uint32_t last_volume_id_{0};
   std::uint64_t last_volume_epoch_{0};
+  std::atomic<unsigned int> bitlocker_phase_{0};
+  std::atomic<unsigned int> bitlocker_status_{0};
+  std::atomic<bool> bitlocker_consent_{false};
+  std::atomic<std::uint64_t> bitlocker_epoch_{0};
   std::atomic<unsigned int> creation_error_{0};
   std::atomic<unsigned int> creation_status_{0};
   std::atomic<bool> creation_paused_{false};

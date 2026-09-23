@@ -3336,6 +3336,16 @@ void test_protection_query_is_boolean_scoped_and_serialized() {
 
 class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
  public:
+  std::atomic<unsigned int> bitlocker_state{0};
+  std::atomic<unsigned int> decrypt_calls{0};
+  usb_vault::volume::PartitionBitLockerStatus inspect_bitlocker(const usb_vault::volume::PartitionCandidate&) override {
+    const auto state = bitlocker_state.load(); return {state, state == 1 ? 100u : state == 3 ? 60u : 0u};
+  }
+  void decrypt_bitlocker(const usb_vault::volume::PartitionCandidate& target, const std::function<bool()>& confirm, const std::function<bool()>& cancelled) override {
+    require(target.device_id[0] == 9 && confirm() && !cancelled(), "invalid decrypt consent or identity");
+    bitlocker_state.store(3); decrypt_calls.fetch_add(1);
+  }
+  bool open_bitlocker_help() noexcept override { return true; }
   std::atomic<bool> delay{false};
   bool fail{};
   bool tool_success{true};
@@ -3513,6 +3523,50 @@ void test_partition_creation_snapshot_and_epoch(const wchar_t* method = L"beginP
   }
 }
 
+void test_bitlocker_creation_gate() {
+  for (const auto method : {L"beginPartitionCreate", L"beginPartitionConversion"}) {
+    for (int scenario = 0; scenario < 5; ++scenario) {
+      Fixture fixture; fixture.authentication.establish(root_secret());
+      usb_vault::ui::CreationWorkState work; FakePartitionServices services;
+      services.bitlocker_state.store(1);
+      ComPtr<IDispatch> host;
+      require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work, nullptr, &services)), "BitLocker host");
+      VARIANT result{};
+      const auto call = [&](const wchar_t* name) { ::VariantClear(&result); return invoke_no_arguments(*host.Get(), name, &result); };
+      const auto wait = [&](auto predicate) {
+        for (int i = 0; !predicate() && i < 3000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        require(predicate(), "BitLocker wait timeout");
+      };
+      require(FAILED(call(L"confirmPartitionBitLocker")), "idle consent accepted");
+      require(SUCCEEDED(call(L"beginPartitionRefresh")), "BitLocker scan"); wait([&] { return !work.running.load(); });
+      require(SUCCEEDED(invoke_with_number(*host.Get(), L"selectPartition", 1, &result, nullptr)), "BitLocker select");
+      fixture.volume.remember_paths = false;
+      require(FAILED(invoke_with_number(*host.Get(), method, 1, &result, nullptr)) && services.decrypt_calls.load() == 0, "decrypted without persistent records");
+      fixture.volume.remember_paths = true;
+      require(SUCCEEDED(invoke_with_number(*host.Get(), method, 1, &result, nullptr)), "BitLocker begin");
+      wait([&] { return SUCCEEDED(call(L"getPartitionBitLockerProgress")) && std::wstring_view(result.bstrVal) == L"1,1,100"; });
+      require(services.decrypt_calls.load() == 0 && !fixture.volume.creation_entered.load(), "work ran before consent");
+      require(call(L"beginPartitionRefresh") == E_PENDING, "busy refresh accepted");
+      if (scenario == 1) require(SUCCEEDED(call(L"cancelContainerCreation")), "cancel consent");
+      else if (scenario == 2) { work.card_epoch.fetch_add(1); require(FAILED(call(L"confirmPartitionBitLocker")), "expired consent accepted"); }
+      else {
+        require(SUCCEEDED(call(L"confirmPartitionBitLocker")) && result.boolVal == VARIANT_TRUE, "confirm failed");
+        wait([&] { return services.decrypt_calls.load() == 1; });
+        require(!fixture.volume.creation_entered.load(), "creation ran during decryption");
+        require(SUCCEEDED(call(L"confirmPartitionBitLocker")) && result.boolVal == VARIANT_FALSE, "consent replay accepted");
+        if (scenario == 3) require(SUCCEEDED(call(L"cancelContainerCreation")), "cancel waiting");
+        else if (scenario == 4) work.card_epoch.fetch_add(1);
+        else services.bitlocker_state.store(0);
+      }
+      wait([&] { return !work.running.load(); });
+      require(fixture.volume.partition_creations == (scenario == 0 ? 1 : 0), "wrong BitLocker continuation");
+      require(services.decrypt_calls.load() == (scenario == 1 || scenario == 2 ? 0u : 1u), "unexpected decryption");
+      if (scenario == 3 || scenario == 4) require(services.bitlocker_state.load() == 3, "cancel pretended to stop Windows decryption");
+      ::VariantClear(&result);
+    }
+  }
+}
+
 void test_partition_resume_pause_and_revocation() {
   for(int scenario=0;scenario<3;++scenario) {
     Fixture fixture;fixture.authentication.establish(root_secret());
@@ -3665,6 +3719,7 @@ void test_login_reset_bridge_lifecycle() {
 
 int main() {
   try {
+    test_bitlocker_creation_gate();
     test_partition_selection_lifecycle();
     test_partition_resume_pause_and_revocation();
     test_partition_creation_snapshot_and_epoch();
