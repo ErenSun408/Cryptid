@@ -2089,6 +2089,13 @@ void test_background_volume_operations() {
     wait_done();
     fixture.volume.volume_failure.clear();
     require(status() == 4, "busy cleanup result lost");
+    // The page refreshes both new partition fields before offering force.
+    for (const auto query : {L"getContainerPartition", L"getContainerConversion"}) {
+      VARIANT observed{};
+      const auto hr = invoke_with_number(*host.Get(), query, 0, &observed, nullptr);
+      ::VariantClear(&observed);
+      require(SUCCEEDED(hr), "partition observation failed after busy unmount");
+    }
   };
   busy_cleanup(false);
   require(invoke_with_number(*host.Get(), L"beginForceUnmountLast", id + 1, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,

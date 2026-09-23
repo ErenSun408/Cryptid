@@ -744,6 +744,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kHasActiveSessionId: case kGetSessionStateId:
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
+      case kGetContainerPartitionId: case kGetContainerConversionId:
       case kGetOperationCountId: case kGetOperationCompletedAtId: case kGetOperationKindId:
       case kGetOperationOutcomeId: case kGetOperationContainerNameId: case kGetOperationDriveLetterId:
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
