@@ -37,6 +37,8 @@ struct PartitionCandidate final {
 // mounting, privilege escalation, password handling or persisted inventory.
 // Throws if Windows-volume identification or the enumeration itself fails.
 [[nodiscard]] std::vector<PartitionCandidate> enumerate_partition_candidates();
+// Display-only drive letters and volume label. Never an identity or write permit.
+[[nodiscard]] std::wstring partition_display_name(const PartitionCandidate& candidate);
 // Requires exactly one unchanged, eligible native snapshot. This is selection
 // freshness only, never a retained handle or a write permit. Device identity
 // comes from the storage driver and is not proof against forged hardware IDs.

@@ -3345,8 +3345,9 @@
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
   const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区布局",
     "受保护的分区", "分区信息不一致", "暂不支持的扇区大小", "暂不支持的文件系统", "无法确认磁盘身份"];
-  const partitionName = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
+  const partitionLocation = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
+  const partitionName = row => `${row.display || "盘符未知 · 卷标不可读"}（${partitionLocation(row)}）`;
   const renderPartitions = () => {
     const disabled = !partitionPickerVisible() || busy || currentState !== nativeState.authenticated;
     partitionPreserve.disabled = disabled;
@@ -3362,7 +3363,12 @@
     }
     for (const item of partitionRows) {
       const row = document.createElement("tr");
-      for (const text of [partitionName(item), item.bytes ? `${(item.bytes / (1024 ** 3)).toFixed(2)} GiB` : "—",
+      const identity = document.createElement("td");
+      const volume = document.createElement("div"), location = document.createElement("div");
+      volume.textContent = item.display || "盘符未知 · 卷标不可读";
+      location.textContent = partitionLocation(item); location.className = "partition-location";
+      identity.append(volume, location); row.append(identity);
+      for (const text of [item.bytes ? `${(item.bytes / (1024 ** 3)).toFixed(2)} GiB` : "—",
         partitionReasons[item.state]]) {
         const cell = document.createElement("td"); cell.textContent = text; row.append(cell);
       }
@@ -3410,6 +3416,11 @@
       } while (status === 1);
       if (status !== 2) throw new Error("scan did not complete");
       const rows = parsePartitionRows(await bridge.getPartitionList());
+      for (const row of rows) {
+        const display = await bridge.getPartitionDisplay(row.id);
+        if (typeof display !== "string" || display.length > 512) throw new Error("invalid partition display");
+        row.display = display;
+      }
       if (revision !== partitionRevision || !partitionPickerVisible()) return;
       partitionRows = rows;
       partitionStatus.textContent = rows.length ? `已读取 ${rows.length} 个分区卷，${rows.filter(row => row.state === 0).length} 个可选择。` : "未发现可显示的分区卷。";

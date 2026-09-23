@@ -3367,6 +3367,7 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
     while (check_delay.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (check_fails) throw std::runtime_error("helper rejected");
   }
+  std::wstring display_name(const usb_vault::volume::PartitionCandidate&) override { return L"T: · Test volume"; }
   bool open_disk_management() noexcept override { ++tool_calls; return tool_success; }
 };
 
@@ -3387,6 +3388,12 @@ void test_partition_selection_lifecycle() {
   fixture.authentication.establish(root_secret());
   require(SUCCEEDED(call(L"beginPartitionRefresh")), "scan start"); wait();
   require(SUCCEEDED(call(L"getPartitionList")) && result.vt == VT_BSTR && std::wstring(result.bstrVal) == L"1,0,3,1073741824,0\n2,0,3,1073741824,1", "partition projection leaked identity or incorrect facts");
+  ::VariantClear(&result);
+  require(SUCCEEDED(invoke_with_number(*host.Get(), L"getPartitionDisplay", 1, &result, nullptr)) &&
+      result.vt == VT_BSTR && std::wstring(result.bstrVal) == L"T: · Test volume", "partition display missing");
+  ::VariantClear(&result);
+  require(invoke_with_number(*host.Get(), L"getPartitionDisplay", 999, &result, nullptr) == E_ACCESSDENIED,
+      "unknown display ID accepted");
   require(select(2) == E_ACCESSDENIED && select(0) == DISP_E_TYPEMISMATCH && select(999) == E_ACCESSDENIED, "invalid partition selected");
   require(SUCCEEDED(select(1)) && SUCCEEDED(call(L"getSelectedPartition")) && result.ulVal == 1, "selection missing");
   require(SUCCEEDED(call(L"beginPartitionCheck")), "check start"); wait();

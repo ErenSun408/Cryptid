@@ -140,6 +140,41 @@ PartitionCandidate inspect(const wchar_t* path, const std::wstring& system_volum
 
 }  // namespace
 
+std::wstring partition_display_name(const PartitionCandidate& candidate) {
+  const auto& path = candidate.volume_path;
+  if (!path.starts_with(L"\\\\?\\Volume{") || path.size() > 64 || path.back() != L'\\')
+    return L"盘符未知 · 卷标不可读";
+  std::vector<wchar_t> paths(32768);
+  DWORD required{};
+  std::wstring letters;
+  const bool paths_known = ::GetVolumePathNamesForVolumeNameW(path.c_str(), paths.data(),
+      static_cast<DWORD>(paths.size()), &required) != FALSE;
+  if (paths_known) {
+    for (std::size_t pos = 0; pos < paths.size() && paths[pos];) {
+      const auto count = wcsnlen_s(paths.data() + pos, paths.size() - pos);
+      if (count == paths.size() - pos) break;
+      // Do not disclose directory mount paths or volume GUIDs to the page.
+      if (count == 3 && paths[pos] >= L'A' && paths[pos] <= L'Z' &&
+          paths[pos + 1] == L':' && paths[pos + 2] == L'\\') {
+        if (!letters.empty()) letters += L" / ";
+        letters.append(paths.data() + pos, 2);
+      }
+      pos += count + 1;
+    }
+  }
+  if (letters.empty()) letters = paths_known ? L"无盘符" : L"盘符未知";
+  std::array<wchar_t, 261> label{};
+  std::wstring name = L"卷标不可读";
+  if (::GetVolumeInformationW(path.c_str(), label.data(), static_cast<DWORD>(label.size()),
+      nullptr, nullptr, nullptr, nullptr, 0)) {
+    name = label.data();
+    for (auto& ch : name) if (ch < 32 || ch == 127 || (ch >= 0x202a && ch <= 0x202e) ||
+        (ch >= 0x2066 && ch <= 0x2069)) ch = L' ';
+    if (name.empty()) name = L"未命名卷";
+  }
+  return letters + L" · " + name;
+}
+
 static PartitionAvailability assess_observation(const detail::PartitionObservation& value,
     const bool require_filesystem) noexcept {
   using A = PartitionAvailability;

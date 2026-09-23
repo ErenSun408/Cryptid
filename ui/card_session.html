@@ -1084,6 +1084,10 @@
       .type-picks { grid-template-columns: 1fr; }
       .content { padding: 1rem; }
     }
+    #create-disk-step .files-table th:first-child { width: 40%; }
+    #create-disk-step .files-table td:first-child { overflow-wrap: anywhere; }
+    #create-disk-step .files-table td:nth-child(2) { white-space: nowrap; }
+    #create-disk-step .partition-location { color: var(--text-muted, #89929c); font-size: 0.85em; margin-top: 4px; }
   </style>
 </head>
 <body data-view="session">
@@ -1801,7 +1805,7 @@
           <p class="section-note">没有合适的分区？可在磁盘管理中准备，完成后返回刷新。应用不调整分区表。未选择“保留现有文件”时，快速格式化会清空文件列表，原有文件无法保留，也不安全擦除历史数据残留。请先在设置中开启“记住容器”，以加密保存找回分区所需的记录。</p>
           <div class="files-card">
             <table class="files-table">
-              <thead><tr><th>分区</th><th>容量</th><th>状态</th><th>选择</th></tr></thead>
+              <thead><tr><th>盘符 / 卷标 / 分区</th><th>容量</th><th>状态</th><th>选择</th></tr></thead>
               <tbody id="partition-list-body"></tbody>
             </table>
           </div>

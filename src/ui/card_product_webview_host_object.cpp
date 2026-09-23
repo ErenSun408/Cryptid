@@ -36,6 +36,7 @@ constexpr DISPID kGetContainerPartitionId = 110;
 constexpr DISPID kGetContainerConversionId = 111;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
+constexpr DISPID kPartitionDisplayId = 114;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -436,6 +437,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getWindowSize")) { ids[0] = kGetWindowSizeId; return S_OK; }
     if (matches(names[0], L"beginPartitionRefresh")) { ids[0] = kPartitionBeginId; return S_OK; }
     if (matches(names[0], L"getPartitionRefreshStatus")) { ids[0] = kPartitionStatusId; return S_OK; }
+    if (matches(names[0], L"getPartitionDisplay")) { ids[0] = kPartitionDisplayId; return S_OK; }
     if (matches(names[0], L"getPartitionList")) { ids[0] = kPartitionListId; return S_OK; }
     if (matches(names[0], L"selectPartition")) { ids[0] = kPartitionSelectId; return S_OK; }
     if (matches(names[0], L"getSelectedPartition")) { ids[0] = kPartitionSelectedId; return S_OK; }
@@ -706,11 +708,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     if (!creation_work_->running.load() &&
-        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId)) partition_mode_ = false;
+        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId)) partition_mode_ = false;
     if (!creation_work_->running.load() &&
         (controller_.state() != CardProductUiState::authenticated ||
          partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
-    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId)
+    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId)
       return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
@@ -1201,7 +1203,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     return S_OK;
   }
   HRESULT invoke_partition(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
-    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId) {
+    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId) {
       if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg)
         return DISP_E_BADPARAMCOUNT;
     } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -1269,7 +1271,11 @@ class CardProductWebViewHostObject final : public IDispatch {
               partition_status_.store(3);
             } else {
               partition_items_.clear();
-              for (auto& item : discovered) partition_items_.push_back({++partition_next_id_, std::move(item)});
+              for (auto& item : discovered) {
+                auto display = partition_services_.display_name(item);
+                if (display.size() > 512) display.resize(512);
+                partition_items_.push_back({++partition_next_id_, std::move(item), std::move(display)});
+              }
               partition_status_.store(2);
             }
           } catch (...) {
@@ -1322,6 +1328,13 @@ class CardProductWebViewHostObject final : public IDispatch {
       if (member == kPartitionStatusId) return partition_number(partition_status_.load(), result);
       if (member == kPartitionCheckStatusId) return partition_number(partition_check_status_.load(), result);
       if (partition_status_.load() != 2) return E_UNEXPECTED;
+      if (member == kPartitionDisplayId) {
+        std::uint32_t id{};
+        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
+        if (found == partition_items_.end()) return E_ACCESSDENIED;
+        return complete_string(found->display.c_str(), static_cast<UINT>(found->display.size()), result);
+      }
       if (member == kPartitionSelectedId) return partition_number(partition_selected_, result);
       if (member == kPartitionSelectId) {
         partition_selected_ = 0;
@@ -2658,7 +2671,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
-  struct PartitionItem { std::uint32_t id; volume::PartitionCandidate target; };
+  struct PartitionItem { std::uint32_t id; volume::PartitionCandidate target; std::wstring display; };
   IUiPartitionServices& partition_services_;
   std::mutex partition_mutex_;
   std::vector<PartitionItem> partition_items_;

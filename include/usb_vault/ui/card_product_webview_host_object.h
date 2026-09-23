@@ -54,6 +54,7 @@ class IUiPartitionServices {
  public:
   virtual ~IUiPartitionServices() noexcept = default;
   virtual std::vector<volume::PartitionCandidate> enumerate() = 0;
+  virtual std::wstring display_name(const volume::PartitionCandidate& candidate) { return volume::partition_display_name(candidate); }
   virtual bool open_disk_management() noexcept = 0;
   virtual void check(const volume::PartitionCandidate& candidate) = 0;
 };
@@ -150,6 +151,7 @@ class IUiCloseRequestSink {
 // starts the exclusive worker; getPartitionRefreshStatus is its only progress
 // query (1 running, 2 ready, 3 failed, 4 expired; 0 no snapshot).
 // getPartitionList: newline-separated "id,disk,partition,bytes,availability".
+// getPartitionDisplay takes a snapshot ID and returns display-only drive letters/label.
 // selectPartition re-enumerates and compares the snapshot before accepting its
 // local uint32 ID, never a page path. A changed target expires the list. Refresh,
 // clearPartitions, openDiskManagement and card changes retire old selections.

@@ -19,10 +19,13 @@ async function until(check) { for(let i=0;i<200;i++){if(check())return; await sl
  assert.equal($('#create-volume-continue').disabled,true);
  $('#partition-refresh').click();
  await until(()=>$('#partition-list-body').querySelectorAll('button').length===2);
+ assert.match($('#partition-list-body').textContent,/T: · 测试数据/);
+ assert.equal($('#partition-list-body img'),null);
  let buttons = $('#partition-list-body').querySelectorAll('button');
  assert.equal(buttons[0].disabled,false); assert.equal(buttons[1].disabled,true);
  buttons[0].click(); await until(()=>$('#partition-selection').textContent.includes('已选择：'));
  assert.equal(w.navigationFixture.partitionSelected,1);
+ assert.match($('#partition-selection').textContent,/T: · 测试数据/);
  assert.equal($('#partition-check').disabled,false);
  $('#partition-check').click(); await until(()=>!$('#partition-check').disabled);
  assert.equal(w.navigationFixture.partitionChecks,1);

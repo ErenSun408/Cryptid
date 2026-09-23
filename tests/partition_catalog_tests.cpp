@@ -307,8 +307,12 @@ void scan(bool handles = false) {
   const auto first = enumerate_partition_candidates();
   const auto second = enumerate_partition_candidates();
   require(!first.empty() && !second.empty(), "empty Windows volume inventory");
-  std::size_t candidates{}, blocked{}, windows{}, verified_handles{};
+  std::size_t candidates{}, blocked{}, windows{}, verified_handles{}, named_drives{};
   for (const auto& entry : second) {
+    const auto display = partition_display_name(entry);
+    require(!display.empty() && display.size() <= 512 && display.find(L"Volume{") == std::wstring::npos &&
+        display.find(L'\\') == std::wstring::npos, "display leaked a native path or exceeded bounds");
+    if (display.size() >= 2 && display[0] >= L'A' && display[0] <= L'Z' && display[1] == L':') ++named_drives;
     if (entry.availability == A::candidate) {
       ++candidates;
       if (handles) {
@@ -337,6 +341,7 @@ void scan(bool handles = false) {
     } else ++blocked;
     if (entry.availability == A::windows_volume) ++windows;
   }
+  require(named_drives > 0, "read-only discovery returned no recognizable drive letters");
   require(candidates > 0, "no eligible candidate exercised same-handle checks");
   require(windows == 1, "Windows volume not excluded exactly once");
   std::cout << "PASS: read-only refresh; volumes=" << second.size()
