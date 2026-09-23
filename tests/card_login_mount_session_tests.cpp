@@ -3780,6 +3780,8 @@ void test_partition_creation_persistence_and_mounting() {
     runtime.fail_index_write = scenario == 1;
     runtime.partition_mount_fail = scenario == 2;
     runtime.partition_fail = scenario == 3;
+    unsigned final_stage = 0; wchar_t final_drive{};
+    runtime.creation_feedback = [&](unsigned stage, unsigned, wchar_t drive) { final_stage = stage; final_drive = drive; };
     usb_vault::volume::PartitionCandidate target;
     target.layout = usb_vault::volume::PartitionLayout::mbr;
     target.device_id[0] = 7;
@@ -3798,6 +3800,7 @@ void test_partition_creation_persistence_and_mounting() {
             "partition identity was lost or recorded without consent");
     if (scenario != 0) continue;
     require(session.container_statuses().back().mounted, "new partition was not mounted");
+    require(final_stage == 5 && final_drive == session.container_statuses().back().drive_letter, "partition completion omitted mounted drive");
     require_throws<std::logic_error>([&] { session.export_container_file(id, L"D:\\exports"); },
         "partition ciphertext exported as a file");
     session.unmount_container(id);

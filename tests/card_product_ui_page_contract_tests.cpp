@@ -641,7 +641,8 @@ void test_container_collection_replaces_the_single_container_display() {
           "the page still tracks one fixed container");
   require(script.find("let containers = []") != std::string::npos &&
               script.find("nextContainers.push({ id, name, mounted, sizeMib,"
-                          " drive })") != std::string::npos &&
+                          " drive, partition })") != std::string::npos &&
+              script.find("typeof partition !== \"boolean\"") != std::string::npos &&
               script.find("throw new Error(\"invalid container status\")") !=
                   std::string::npos,
           "the container list is not validated before it is displayed");

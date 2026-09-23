@@ -1176,6 +1176,7 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
       unmount_container_impl(id, true);
       throw;
     }
+    if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, find_by_id(state_, id)->drive_letter);
     return id;
   } catch (...) {
     if (!recorded) std::erase_if(state_.containers, [id](const auto& entry) { return entry.id == id; });

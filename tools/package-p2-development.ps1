@@ -25,7 +25,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $ExpectedVendorSha256 = '735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E'
-$ExpectedFormatSha256 = '416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184'
+$ExpectedFormatSha256 = '878425F46FDEAD0ADE7E3E664F2BA6A445D9CA6DBAE260C93AA22A46FA70F3AA'
 $ExpectedVeraCryptSignerThumbprint = '86E1D426731E79117452F090188A828426B29B5F'
 $ExpectedVeraCryptRevision = 'b48e31f5b47da7d41025e3f0e02751675e15005a'
 
@@ -183,7 +183,7 @@ Copy-Item -LiteralPath $ResolvedVeraCryptInstaller -Destination (Join-Path $Prer
 Copy-Item -LiteralPath $ResolvedWebViewInstaller -Destination (Join-Path $PrerequisitesDirectory.FullName 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe')
 Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'packaging\p2-development\THIRD-PARTY-NOTICES.txt') -Destination (Join-Path $LicenseDirectory.FullName 'THIRD-PARTY-NOTICES.txt')
 Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'third_party\argon2\LICENSE') -Destination (Join-Path $Argon2LicenseDirectory.FullName 'LICENSE.txt')
-foreach ($sourceName in @('veracrypt-1.26.29-usb-vault.patch', 'veracrypt-1.26.29-geometry.patch', 'UsbVaultGeometry.inl', 'README.md')) {
+foreach ($sourceName in @('veracrypt-1.26.29-usb-vault.patch', 'veracrypt-1.26.29-geometry.patch', 'UsbVaultGeometry.inl', 'veracrypt-1.26.29-partition.patch', 'UsbVaultPartition.inl', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot "third_party\veracrypt_format\$sourceName") -Destination $VeraCryptLicenseDirectory.FullName
 }
 Copy-Item -LiteralPath $VeraCryptLicense -Destination (Join-Path $VeraCryptLicenseDirectory.FullName 'License.txt')

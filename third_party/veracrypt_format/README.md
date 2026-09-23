@@ -1,5 +1,7 @@
 # Patched VeraCrypt FormatDLL boundary
 
+Current P4.4 product SHA-256: `878425F46FDEAD0ADE7E3E664F2BA6A445D9CA6DBAE260C93AA22A46FA70F3AA`. Apply the USB Vault, geometry and partition patches in that order to the pinned upstream source, and copy both `UsbVaultGeometry.inl` and `UsbVaultPartition.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
+
 P1.4 uses VeraCrypt 1.26.29 source pinned at commit `b48e31f5`. The source is
 not copied into this repository. Apply `veracrypt-1.26.29-usb-vault.patch` to
 that exact upstream tree, build the x64 Release `FormatDLL` target, and provide
@@ -46,7 +48,7 @@ distribution still requires the planned legal review.
 
 ## Read-only geometry boundary (P3.25)
 
-The reviewed packaging binary now includes the read-only geometry export.
+The geometry-only packaging binary described in this historical section included the read-only geometry export.
 Apply the existing patch to the pinned source tree, then apply
 `veracrypt-1.26.29-geometry.patch` and copy `UsbVaultGeometry.inl` beside
 `src/FormatDLL/VeraCryptFormatSDK.cpp`. Build x64 Release Crypto and Zip,
@@ -55,8 +57,8 @@ generate `Format/FormatCom_h.h` from `FormatCom.idl` with MIDL
 then build FormatDLL. Keep the reviewed DLL in local dependency storage,
 separate from disposable build outputs.
 
-Reviewed SHA-256: `416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184`.
-The distribution includes both patches, the geometry include, this README,
+Previous geometry-only SHA-256: `416C9DABB1ABD83F4A0A36ACC1BAB233727B8E359A388507AD5E6DCF6363F184`.
+The current distribution includes all three patches, both includes, this README,
 and upstream License/NOTICE. A rebuilt binary must be reviewed before changing
 the allowlist; compiler/build metadata may change its digest.
 
@@ -110,14 +112,13 @@ hardware acceptance remains a separate requirement.
 
 ## Candidate partition-handle boundary (P4.1)
 
-This candidate is **not** the packaged/allowlisted DLL above. Apply
+This export was introduced as a separate candidate and promoted in P4.4 after source and isolated-device review. Apply
 `veracrypt-1.26.29-partition.patch` after the existing two patches and copy
 `UsbVaultPartition.inl` beside the SDK source. Build with the same pinned
 upstream, Crypto, Zip and generated MIDL header. The patch adds one export;
 it does not change the public options structure or replace existing file APIs.
 Future distribution must include the third patch and the new include as well
-as the existing source/notice obligations. Do not promote the candidate by
-copying it into local dependency storage without a separate review.
+as the existing source/notice obligations. Any future replacement requires a separate source and binary review before changing local dependency storage and the fixed allowlists.
 
 Candidate SHA-256 after the NTFS lock fix:
 `878425F46FDEAD0ADE7E3E664F2BA6A445D9CA6DBAE260C93AA22A46FA70F3AA`.
@@ -186,5 +187,11 @@ file-container formats and mounts. Both returned zero and removed their own
 successful fixtures. Earlier failed fixtures are retained detached as evidence.
 No diagnostic logging is present in this candidate. This supersedes the earlier
 NTFS/helper validation gap, but does not validate product card authentication,
-physical disks, GPT/4Kn, in-place encryption or pause/resume. Production storage
-and the allowlist still use the previously reviewed DLL.
+physical disks, GPT/4Kn, in-place encryption or pause/resume. At the end of that historical NTFS experiment, production storage and the allowlist still used the geometry-only DLL. The P4.4 promotion supersedes that deployment state.
+
+
+### P4.4 product integration and verification limits
+
+The reviewed partition include matches the pinned build input. The product now binds explicit erase consent to the authenticated card session and retained target, removes verified original volume access paths before formatting, stores encrypted partition identities and mounts through the dedicated provider API. The same reviewed binary passed the owned NTFS helper/provider round trip including original drive removal. File-container regression evidence from the earlier reviewed-binary run remains applicable.
+
+The final combined acceptance executable now also offers `--run-owned-vhd-session`: synthetic authenticated roots, real KDF and encrypted index storage inside a fresh fixture directory, real helper/driver, cross-session readback and removal cleanup. This is not physical-card authentication. After an earlier UAC cancellation, the user explicitly requested a new elevation. All three final owned-VHD modes (session, helper and handle) exited zero with empty stderr and removed their fixtures. The combined session and quiet-prewrite cancellation assertions passed, as did original-access removal and normal/hidden file-container regression. This closes the P4.4 single-partition MVP gate, not physical-card or physical-disk qualification. Build, focused regression, WebView integration and strict analysis passed; see DEVELOPMENT_LOG.md for exact evidence and limits. No new installer was produced.
