@@ -1781,6 +1781,8 @@ DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
       throw;
     }
   };
+  if (entry->partition)
+    throw std::logic_error("partition maintenance capacity measurement is not supported");
   verify_identity();
   const volume::VolumeSpace space = runtime_.volume_space(entry->drive_letter);
   const auto safe = runtime_.measure_protected_space(
@@ -1843,6 +1845,10 @@ void CardLoginMountSessionCore::import_external_entry(
     throw std::logic_error(
         "external import requires a volume open for maintenance");
   }
+  // The privileged import protocol authenticates regular backing files only.
+  // A partition must never be substituted as a file path or weaken that gate.
+  if (entry->partition)
+    throw std::logic_error("partition maintenance external import is not supported");
   // The only thing taken from the source path is the name it will have inside
   // the volume, and that name is then checked as any other page-supplied
   // component is. A root, a trailing separator or a `..` leaves nothing that

@@ -3936,6 +3936,8 @@ void test_partition_pair_session() {
     session.unmount_container(id);
     static_cast<void>(session.open_decoy_maintenance(id, decoy));
     require(session.container_statuses().back().mounted, "pair maintenance did not mount");
+    require_throws<std::logic_error>([&] { static_cast<void>(session.decoy_maintenance_space(id)); },
+        "partition reached file-only maintenance measurement");
     session.unmount_container(id);
     CardAuthenticationSession next_auth;
     CardLoginMountSessionCore next(next_auth, runtime, layout(), LoginMountPolicy::manual);

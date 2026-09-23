@@ -1,6 +1,6 @@
 # Patched VeraCrypt FormatDLL boundary
 
-Current P4.6 product SHA-256: `D099EA1D153320E00B16B3A6004231D74639FBB967EDDEFA16D75588DB38500D`. Apply the USB Vault, geometry, partition and inplace patches in that order to the pinned upstream source, and copy `UsbVaultGeometry.inl`, `UsbVaultPartition.inl` and `UsbVaultInplace.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
+Current P4.8 product SHA-256: `D911EEE4B02177E3BE82970EAC2B8EA6886DE07D23801D6316E5D9E89C2B4CB0`. Apply the USB Vault, geometry, partition and inplace patches in that order to the pinned upstream source, and copy `UsbVaultGeometry.inl`, `UsbVaultPartition.inl` and `UsbVaultInplace.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
 
 P1.4 uses VeraCrypt 1.26.29 source pinned at commit `b48e31f5`. The source is
 not copied into this repository. Apply `veracrypt-1.26.29-usb-vault.patch` to
@@ -217,3 +217,6 @@ Owned-VHD tests exercise real KDF, encrypted index persistence, a new authentica
 The application persists GPT GUIDs only in authenticated version-five index slots and carries them in version-nine helper IPC. Existing MBR index records and DLL exports retain their formats. Do not use older clients to rewrite an index containing GPT records. Production partition tables are never rewritten by these exports.
 
 Seven elevated owned-VHD scenarios passed in `out/p46-backend-20260922-200226`, including GPT format, direct/helper/session pause and authenticated resume, original-file byte comparison, MBR regression, and normal/hidden file containers. Source reproduction is recorded in `out/p46-source-proof`. Physical hardware, real card authentication, hotplug, and cross-reboot coverage remain outstanding. The previous P4.5 product digest was `242EAB54B82ED682150AE5E7A171A45C4A227753D3F266D9E95791622F0F5382`; it is historical, not the current allowlist.
+
+
+P4.8 adds `VeraCryptFormatPartitionPairBinary` to the reviewed partition patch. It initializes the complete fresh FAT outer volume and then formats its hidden volume while retaining one verified, locked partition handle. The binary accepts the existing MBR identity or GPT partition GUID and two explicit 64-byte binary secrets. It does not add hidden volumes to existing or in-place-encrypted filesystems. Product and installer hashes must change together; owned MBR/GPT helper and authenticated-session evidence is recorded in `DEVELOPMENT_LOG.md`.

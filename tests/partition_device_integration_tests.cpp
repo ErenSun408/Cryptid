@@ -674,6 +674,13 @@ class PartitionSessionRuntime final : public usb_vault::application::detail::Car
     require(L"\\Device\\Harddisk" + std::to_wstring(target.disk_number) + L"\\Partition" + std::to_wstring(target.partition_number) == disk_.target(), "session attempted foreign format");
     creator_.format_partition(target, password, confirm, {}, cancelled);
   }
+  void format_partition_pair(const usb_vault::volume::PartitionCandidate& target, std::uint64_t hidden,
+      const Secret& outer, const Secret& inner, const std::function<bool()>& confirm,
+      const usb_vault::application::CreationCancellation& cancelled) override {
+    disk_.verify();
+    require(L"\\Device\\Harddisk" + std::to_wstring(target.disk_number) + L"\\Partition" + std::to_wstring(target.partition_number) == disk_.target(), "session attempted foreign pair format");
+    creator_.format_partition_pair(target, hidden, outer, inner, confirm, {}, cancelled);
+  }
   bool convert_partition(const usb_vault::volume::PartitionCandidate& target, bool begin, const Secret& password,
       const std::function<bool()>& confirm, const usb_vault::application::CreationCancellation& revoked,
       const usb_vault::application::CreationCancellation& pause) override {
@@ -731,7 +738,7 @@ class PartitionSessionRuntime final : public usb_vault::application::detail::Car
   usb_vault::volume::VolumeProvider provider_;
   std::optional<usb_vault::volume::MountIdentity> mounted_;
 };
-void session_roundtrip(OwnedDisk& disk) {
+void session_roundtrip(OwnedDisk& disk, bool pair = false) {
   using namespace usb_vault;
   const auto candidate = disk.prepare_ntfs();
   security::SecureBuffer root(32);
@@ -741,15 +748,19 @@ void session_roundtrip(OwnedDisk& disk) {
   layout.container_a.salt = application::kContainerASalt;
   layout.container_b.salt = application::kContainerBSalt;
   const std::array<std::byte, 8> expected{std::byte{1}, std::byte{0}, std::byte{7}, std::byte{31}, std::byte{255}, std::byte{9}, std::byte{2}, std::byte{99}};
-  for (int login = 0; login < 2; ++login) {
+  for (int login = 0; login < (pair ? 3 : 2); ++login) {
     application::CardAuthenticationSession auth;
     PartitionSessionRuntime runtime(disk);
     application::detail::CardLoginMountSessionCore session(auth, runtime, layout, application::LoginMountPolicy::manual);
-    security::SecureBuffer input(16); std::fill(input.bytes().begin(), input.bytes().end(), login ? std::byte{'b'} : std::byte{'a'});
+    security::SecureBuffer input(16); std::fill(input.bytes().begin(), input.bytes().end(), (pair ? login == 2 : login != 0) ? std::byte{'b'} : std::byte{'a'});
     session.consume_authenticated_login(copy_root(), std::move(input));
     try {
       std::uint32_t id{};
-      if (!login) id = session.create_partition(candidate, [&](const auto& confirmed) { disk.verify(); return confirmed == candidate; });
+      if (!login) {
+        security::SecureBuffer decoy(16); std::fill(decoy.bytes().begin(), decoy.bytes().end(), std::byte{'b'});
+        id = session.create_partition(candidate, [&](const auto& confirmed) { disk.verify(); return confirmed == candidate; },
+            pair ? 64ULL * 1024 * 1024 : 0, pair ? &decoy : nullptr);
+      }
       else {
         const auto restored = session.container_statuses();
         require(restored.size() == 1 && restored[0].partition && !restored[0].mounted, "session index reload failed");
@@ -763,6 +774,11 @@ void session_roundtrip(OwnedDisk& disk) {
         Handle output(::CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
         DWORD count{};
         require(output.get() != INVALID_HANDLE_VALUE && ::WriteFile(output.get(), expected.data(), static_cast<DWORD>(expected.size()), &count, nullptr) && count == expected.size() && ::FlushFileBuffers(output.get()), "session write failed");
+      } else if (pair && login == 2) {
+        const auto listing = session.list_container_directory(id, L"");
+        require(std::ranges::none_of(listing.entries, [](const auto& entry) {return entry.name == L"session.bin" || entry.name == L"documents";}),
+            "decoy login exposed hidden files");
+        session.create_container_directory(id, L"", L"outer-documents");
       } else {
         const auto listing = session.list_container_directory(id, L"");
         require(std::ranges::any_of(listing.entries, [](const auto& entry) { return entry.name == L"documents" && entry.is_directory; }) &&
@@ -771,7 +787,17 @@ void session_roundtrip(OwnedDisk& disk) {
         std::array<std::byte, 8> actual{}; DWORD count{};
         require(input_file.get() != INVALID_HANDLE_VALUE && ::ReadFile(input_file.get(), actual.data(), static_cast<DWORD>(actual.size()), &count, nullptr) && count == actual.size() && actual == expected, "session alternate login readback failed");
       }
-      if (!login) session.unmount_container(id);
+      if (pair) {
+        static_cast<void>(session.force_unmount_container(id));
+        if (login == 1) {
+          security::SecureBuffer decoy(16); std::fill(decoy.bytes().begin(), decoy.bytes().end(), std::byte{'b'});
+          static_cast<void>(session.open_decoy_maintenance(id, decoy));
+          require(runtime.mount_identity(session.container_statuses().front().drive_letter).protected_outer_writable,
+              "session outer mount is not protected");
+          static_cast<void>(session.force_unmount_container(id));
+        }
+      }
+      else if (!login) session.unmount_container(id);
       else { auth.clear_authentication(); static_cast<void>(session.force_unmount_active()); }
       require(!session.mounted(), "session retained mount");
     } catch (...) {
@@ -779,9 +805,10 @@ void session_roundtrip(OwnedDisk& disk) {
       throw;
     }
   }
+  if (pair) std::cout << "PASS: paired real KDF, hidden relogin readback, decoy isolation and protected session maintenance" << std::endl;
   root.clear();
   require(::DeleteFileW(disk.container_path().replace_extension(L".index").c_str()), "session index cleanup failed");
-  std::cout << "PASS: synthetic authenticated session, real KDF/index/helper/driver, file manager, alternate login remount/readback and card-removal cleanup" << std::endl;
+  if (!pair) std::cout << "PASS: synthetic authenticated session, real KDF/index/helper/driver, file manager, alternate login remount/readback and card-removal cleanup" << std::endl;
 }
 
 void inplace_session_roundtrip(OwnedDisk& disk) {
@@ -998,7 +1025,7 @@ int wmain(int argc, wchar_t** argv) {
   std::wstring mode = argc == 2 ? argv[1] : L"";
   const bool gpt = mode.ends_with(L"-gpt");
   if (gpt) mode.resize(mode.size()-4);
-  if (argc != 2 || (mode != L"--run-owned-vhd-pair-helper" && mode != L"--run-owned-vhd-pair" && mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
+  if (argc != 2 || (mode != L"--run-owned-vhd-pair-session" && mode != L"--run-owned-vhd-pair-helper" && mode != L"--run-owned-vhd-pair" && mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -1026,6 +1053,7 @@ int wmain(int argc, wchar_t** argv) {
       std::cout << "PASS: independent outer and hidden partition files survive remount; fixture removed\n";
       return 0;
     }
+    if(mode==L"--run-owned-vhd-pair-session"){session_roundtrip(disk,true);disk.cleanup();return 0;}
     if(mode==L"--run-owned-vhd-bitlocker"){bitlocker_roundtrip(disk);disk.cleanup();return 0;}
     if (mode == L"--run-owned-vhd-inplace-session") { inplace_session_roundtrip(disk); disk.cleanup(); return 0; }
     if (mode == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }
