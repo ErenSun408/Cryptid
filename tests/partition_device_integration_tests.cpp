@@ -89,7 +89,8 @@ class OwnedDisk {
       ::CloseHandle(disk_);
     }
   }
-  void create() {
+  void create(bool gpt = false) {
+    gpt_ = gpt;
     GUID unique{}; require(SUCCEEDED(::CoCreateGuid(&unique)), "fixture GUID");
     std::array<wchar_t, 40> name{}; require(::StringFromGUID2(unique, name.data(), static_cast<int>(name.size())) != 0, "fixture name");
     directory_ = executable_directory() / (std::wstring(L"partition-fixture-") + name.data());
@@ -119,16 +120,32 @@ class OwnedDisk {
     require(query<DISK_GEOMETRY>(physical.get(), IOCTL_DISK_GET_DRIVE_GEOMETRY).BytesPerSector == 512, "fixture sector mismatch");
     require(physical_ == physical_path(), "owned disk changed before initialization");
     require(::BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&signature_), sizeof(signature_), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 && signature_, "disk signature");
-    CREATE_DISK initialize{}; initialize.PartitionStyle = PARTITION_STYLE_MBR; initialize.Mbr.Signature = signature_;
-    ioctl(physical.get(), IOCTL_DISK_CREATE_DISK, &initialize, sizeof(initialize), nullptr, 0);
-    Layout layout{}; layout.header.PartitionStyle = PARTITION_STYLE_MBR;
-    layout.header.PartitionCount = 4; layout.header.Mbr.Signature = signature_;
+    CREATE_DISK initialize{};
+    Layout layout{};
     auto& partition = layout.header.PartitionEntry[0];
-    partition.PartitionStyle = PARTITION_STYLE_MBR; partition.StartingOffset.QuadPart = kOffset;
+    partition.StartingOffset.QuadPart = kOffset;
     partition.PartitionLength.QuadPart = kPartitionBytes; partition.PartitionNumber = 1;
-    partition.RewritePartition = TRUE; partition.Mbr.PartitionType = PARTITION_IFS;
-    partition.Mbr.RecognizedPartition = TRUE; partition.Mbr.HiddenSectors = static_cast<DWORD>(kOffset / 512);
-    for (auto& unused : layout.extra) { unused.PartitionStyle = PARTITION_STYLE_MBR; unused.RewritePartition = TRUE; }
+    partition.RewritePartition = TRUE;
+    if (gpt_) {
+      initialize.PartitionStyle = PARTITION_STYLE_GPT;
+      disk_id_ = unique; initialize.Gpt.DiskId = unique; initialize.Gpt.MaxPartitionCount = 128;
+      require(SUCCEEDED(::CoCreateGuid(&partition_id_)), "GPT partition GUID");
+      layout.header.PartitionStyle = PARTITION_STYLE_GPT; layout.header.PartitionCount = 1;
+      layout.header.Gpt.DiskId = unique; layout.header.Gpt.MaxPartitionCount = 128;
+      layout.header.Gpt.StartingUsableOffset.QuadPart = kOffset;
+      layout.header.Gpt.UsableLength.QuadPart = kPartitionBytes;
+      partition.PartitionStyle = PARTITION_STYLE_GPT;
+      partition.Gpt.PartitionType = {0xebd0a0a2,0xb9e5,0x4433,{0x87,0xc0,0x68,0xb6,0xb7,0x26,0x99,0xc7}};
+      partition.Gpt.PartitionId = partition_id_;
+    } else {
+      initialize.PartitionStyle = PARTITION_STYLE_MBR; initialize.Mbr.Signature = signature_;
+      layout.header.PartitionStyle = PARTITION_STYLE_MBR; layout.header.PartitionCount = 4;
+      layout.header.Mbr.Signature = signature_;
+      partition.PartitionStyle = PARTITION_STYLE_MBR; partition.Mbr.PartitionType = PARTITION_IFS;
+      partition.Mbr.RecognizedPartition = TRUE; partition.Mbr.HiddenSectors = static_cast<DWORD>(kOffset / 512);
+      for (auto& unused : layout.extra) { unused.PartitionStyle = PARTITION_STYLE_MBR; unused.RewritePartition = TRUE; }
+    }
+    ioctl(physical.get(), IOCTL_DISK_CREATE_DISK, &initialize, sizeof(initialize), nullptr, 0);
     ioctl(physical.get(), IOCTL_DISK_SET_DRIVE_LAYOUT_EX, &layout, sizeof(layout), nullptr, 0);
     ioctl(physical.get(), IOCTL_DISK_UPDATE_PROPERTIES, nullptr, 0, nullptr, 0);
     target_ = L"\\Device\\Harddisk" + std::to_wstring(disk_number_) + L"\\Partition1";
@@ -144,17 +161,24 @@ class OwnedDisk {
     require(attached_ && physical_path() == physical_, "owned attachment changed");
     Handle disk(::CreateFileW(physical_.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
     require(disk.get() != INVALID_HANDLE_VALUE, "owned disk missing");
-    const auto layout = query<Layout>(disk.get(), IOCTL_DISK_GET_DRIVE_LAYOUT_EX);
-    require(layout.header.PartitionStyle == PARTITION_STYLE_MBR && layout.header.Mbr.Signature == signature_ && layout.header.PartitionCount == 4, "owned layout changed");
+    if (gpt_) {
+      const auto layout = query<DRIVE_LAYOUT_INFORMATION_EX>(disk.get(), IOCTL_DISK_GET_DRIVE_LAYOUT_EX);
+      require(layout.PartitionStyle == PARTITION_STYLE_GPT && ::IsEqualGUID(layout.Gpt.DiskId,disk_id_) &&
+          layout.PartitionCount == 1, "owned GPT layout changed");
+    } else {
+      const auto layout = query<Layout>(disk.get(), IOCTL_DISK_GET_DRIVE_LAYOUT_EX);
+      require(layout.header.PartitionStyle == PARTITION_STYLE_MBR && layout.header.Mbr.Signature == signature_ && layout.header.PartitionCount == 4, "owned layout changed");
+    }
     Handle part(::CreateFileW((L"\\\\?\\GLOBALROOT" + target_).c_str(), 0,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
     require(part.get() != INVALID_HANDLE_VALUE, "owned partition missing");
     const auto number = query<STORAGE_DEVICE_NUMBER>(part.get(), IOCTL_STORAGE_GET_DEVICE_NUMBER);
     const auto info = query<PARTITION_INFORMATION_EX>(part.get(), IOCTL_DISK_GET_PARTITION_INFO_EX);
     require(number.DeviceNumber == disk_number_ && number.PartitionNumber == 1 &&
-        info.PartitionStyle == PARTITION_STYLE_MBR && info.PartitionNumber == 1 &&
+        info.PartitionStyle == (gpt_ ? PARTITION_STYLE_GPT : PARTITION_STYLE_MBR) && info.PartitionNumber == 1 &&
         info.StartingOffset.QuadPart == kOffset && info.PartitionLength.QuadPart == kPartitionBytes &&
-        info.Mbr.PartitionType == PARTITION_IFS && !info.Mbr.BootIndicator, "owned target identity mismatch");
+        (gpt_ ? ::IsEqualGUID(info.Gpt.PartitionId, partition_id_) :
+        info.Mbr.PartitionType == PARTITION_IFS && !info.Mbr.BootIndicator), "owned target identity mismatch");
   }
   usb_vault::volume::PartitionCandidate prepare_ntfs() const {
     verify();
@@ -200,6 +224,8 @@ class OwnedDisk {
     }
     throw std::runtime_error("prepared NTFS fixture not eligible");
   }
+  bool gpt() const { return gpt_; }
+  const GUID& partition_id() const { return partition_id_; }
   const std::wstring& target() const { return target_; }
   std::filesystem::path container_path() const { return directory_ / L"regression.hc"; }
   void cleanup() {
@@ -214,6 +240,7 @@ class OwnedDisk {
     check(::GetVirtualDiskPhysicalPath(disk_, &size, value.data()), "resolve owned disk");
     require(value.back() == L'\0', "unterminated device path"); return value.data();
   }
+  bool gpt_{}; GUID partition_id_{}, disk_id_{};
   HANDLE disk_{INVALID_HANDLE_VALUE}; bool attached_{}; DWORD disk_number_{}; DWORD signature_{};
   std::filesystem::path directory_, image_; std::wstring physical_, target_;
 };
@@ -298,8 +325,15 @@ class Backend {
     std::cout << "PASS: existing normal and hidden file-container formats and mounts\n";
   }
   void format_handle(const OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool cancel_only) {
-    const auto format = reinterpret_cast<fmt::FormatPartitionBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionBinary"));
-    if (!format) throw std::runtime_error("candidate same-handle export missing");
+    const auto mbr_format = reinterpret_cast<fmt::FormatPartitionBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionBinary"));
+    const auto gpt_format = reinterpret_cast<fmt::FormatPartitionGptBinary>(::GetProcAddress(module_, "VeraCryptFormatPartitionGptBinary"));
+    if (!mbr_format || !gpt_format) throw std::runtime_error("candidate same-handle export missing");
+    const auto format = [&](HANDLE h, std::uint64_t offset, std::uint64_t length, const unsigned char* pw,
+        std::uint32_t bytes, fmt::ProgressCallback progress, void* context) {
+      return disk.gpt() ? gpt_format(h,offset,length,pw,bytes,progress,context,
+          reinterpret_cast<const unsigned char*>(&disk.partition_id()),16)
+          : mbr_format(h,offset,length,pw,bytes,progress,context);
+    };
     const auto* secret = reinterpret_cast<const unsigned char*>(password.data());
     const std::wstring path = LR"(\\?\GLOBALROOT)" + disk.target();
     Handle target(::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
@@ -332,6 +366,12 @@ class Backend {
     require(format(target.get(), kOffset, kPartitionBytes, secret, 63, nullptr, nullptr) == fmt::kInvalidParameter, "password length accepted");
     require(format(target.get(), kOffset + 512, kPartitionBytes, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "wrong offset accepted");
     require(format(target.get(), kOffset, kPartitionBytes + 512, secret, 64, nullptr, nullptr) == fmt::kInvalidParameter, "wrong length accepted");
+    if (disk.gpt()) {
+      auto wrong = disk.partition_id(); ++wrong.Data1;
+      require(mbr_format(target.get(),kOffset,kPartitionBytes,secret,64,nullptr,nullptr) == fmt::kInvalidParameter, "legacy export accepted GPT");
+      require(gpt_format(target.get(),kOffset,kPartitionBytes,secret,64,nullptr,nullptr,
+          reinterpret_cast<const unsigned char*>(&wrong),16) == fmt::kInvalidParameter, "wrong GPT GUID accepted");
+    }
     require(sample() == before, "invalid request modified boundary sectors");
     {
       Handle busy(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
@@ -735,7 +775,7 @@ void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer&
     volume_creation::detail::PartitionInplaceBackend backend(::GetModuleHandleW(L"VeraCryptFormat.dll"),raw.get(),
         candidate.offset_bytes,candidate.length_bytes,secret,begin,
         [&]{return pause && percent>=2 ? volume::detail::InplaceControl::pause : volume::detail::InplaceControl::proceed;},
-        [&](const volume_creation::CreationProgress& p){percent=p.percent;});
+        [&](const volume_creation::CreationProgress& p){percent=p.percent;},candidate.partition_id);
     return volume::detail::run_partition_inplace(backend);
   };
   require(run(true,true,password)==volume::detail::InplaceResult::paused,"real conversion pause failed");
@@ -807,7 +847,10 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-session")) {
+  std::wstring mode = argc == 2 ? argv[1] : L"";
+  const bool gpt = mode.ends_with(L"-gpt");
+  if (gpt) mode.resize(mode.size()-4);
+  if (argc != 2 || (mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -818,19 +861,19 @@ int wmain(int argc, wchar_t** argv) {
     usb_vault::security::SecureBuffer password(64);
     require(::BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(password.data()), static_cast<ULONG>(password.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0, "fixture password generation");
     password.bytes()[0] = std::byte{0}; // Exercise explicit binary length.
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") {
-      OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
+    if (mode == L"--run-owned-vhd-handle") {
+      OwnedDisk cancelled; cancelled.create(gpt); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
-    OwnedDisk disk; disk.create();
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-session") { inplace_session_roundtrip(disk); disk.cleanup(); return 0; }
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace") { inplace_roundtrip(disk,password); disk.cleanup(); return 0; }
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-plan") { inplace_plan_probe(disk); disk.cleanup(); return 0; }
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-session") { session_roundtrip(disk); disk.cleanup(); return 0; }
-    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-helper") helper_format(disk, password);
-    else backend.format(disk, password, std::wstring_view(argv[1]) == L"--run-owned-vhd-handle");
-    roundtrip(disk, password); if (std::wstring_view(argv[1]) == L"--run-owned-vhd-handle") backend.file_regression(disk, password); disk.cleanup();
-    std::cout << "PASS: owned MBR/512 VHD partition format, mount, write, unmount, remount and read; fixture removed\n";
+    OwnedDisk disk; disk.create(gpt);
+    if (mode == L"--run-owned-vhd-inplace-session") { inplace_session_roundtrip(disk); disk.cleanup(); return 0; }
+    if (mode == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }
+    if (mode == L"--run-owned-vhd-inplace") { inplace_roundtrip(disk,password); disk.cleanup(); return 0; }
+    if (mode == L"--run-owned-vhd-inplace-plan") { inplace_plan_probe(disk); disk.cleanup(); return 0; }
+    if (mode == L"--run-owned-vhd-session") { session_roundtrip(disk); disk.cleanup(); return 0; }
+    if (mode == L"--run-owned-vhd-helper") helper_format(disk, password);
+    else backend.format(disk, password, mode == L"--run-owned-vhd-handle");
+    roundtrip(disk, password); if (mode == L"--run-owned-vhd-handle") backend.file_regression(disk, password); disk.cleanup();
+    std::cout << "PASS: owned 512-byte VHD partition format, mount, write, unmount, remount and read; fixture removed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
 }

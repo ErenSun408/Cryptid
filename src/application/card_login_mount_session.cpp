@@ -1174,7 +1174,7 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
     throw std::logic_error("conversion requires an idle authenticated session and lifecycle controls");
   const auto snapshot=target;
   const volume::PartitionIdentity identity{target.device_id,target.device_id_flags,
-      target.layout==volume::PartitionLayout::mbr ? 1u : 0u,target.logical_sector_bytes,target.offset_bytes,target.length_bytes};
+      static_cast<std::uint32_t>(target.layout),target.logical_sector_bytes,target.offset_bytes,target.length_bytes,target.partition_id};
   if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid conversion identity");
   if (resume_id) {
     const auto entry=find_by_id(state_,*resume_id);
@@ -1245,8 +1245,8 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
   if (!authentication_.authenticated()) throw std::logic_error("partition creation requires authentication");
   if (!runtime_.remember_container_paths()) throw std::logic_error("partition creation requires remembering containers");
   const volume::PartitionIdentity identity{target.device_id, target.device_id_flags,
-      target.layout == volume::PartitionLayout::mbr ? 1U : 0U,
-      target.logical_sector_bytes, target.offset_bytes, target.length_bytes};
+      static_cast<std::uint32_t>(target.layout),
+      target.logical_sector_bytes, target.offset_bytes, target.length_bytes, target.partition_id};
   if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
   for (const auto& entry : state_.containers)
     if (entry.partition == identity) throw std::logic_error("partition already recorded");

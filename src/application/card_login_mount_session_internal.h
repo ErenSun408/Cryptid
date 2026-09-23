@@ -81,7 +81,8 @@ class CardLoginMountSessionRuntime {
     if (!location) throw std::runtime_error("conversion target unavailable");
     volume::PartitionCandidate target;
     target.volume_path=location->volume_path; target.disk_number=location->disk_number; target.partition_number=location->partition_number;
-    target.device_id=identity.device_id; target.device_id_flags=identity.device_id_flags; target.layout=volume::PartitionLayout::mbr;
+    target.device_id=identity.device_id; target.device_id_flags=identity.device_id_flags; target.layout=static_cast<volume::PartitionLayout>(identity.layout);
+    target.partition_id=identity.partition_id;
     target.logical_sector_bytes=identity.logical_sector_bytes; target.offset_bytes=identity.offset_bytes; target.length_bytes=identity.length_bytes;
     return target;
   }

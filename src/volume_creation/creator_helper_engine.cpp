@@ -236,7 +236,8 @@ class FormatBackend final {
     }
   }
 
-  void require_inplace_exports() {
+  void require_inplace_exports(bool gpt) {
+    if (gpt) static_cast<void>(symbol<format_abi::InplaceOpenGpt>("VeraCryptInplaceOpenGptBinary"));
     static_cast<void>(symbol<format_abi::InplaceOpen>("VeraCryptInplaceOpenBinary"));
     static_cast<void>(symbol<format_abi::InplaceEncrypt>("VeraCryptInplaceEncrypt"));
     static_cast<void>(symbol<format_abi::InplaceSave>("VeraCryptInplaceSave"));
@@ -252,21 +253,24 @@ class FormatBackend final {
           return control==2 ? volume::detail::InplaceControl::revoked : control==1 ? volume::detail::InplaceControl::pause : volume::detail::InplaceControl::proceed;
         }, [&](const CreationProgress& p) {
           if (p.percent!=reported) { reported=p.percent; write_response(pipe_,Response{.type=MessageType::progress,.stage=CreationStage::formatting,.percent=p.percent}); }
-        });
+        }, target.partition_id);
     const auto result=volume::detail::run_partition_inplace(backend);
     if (result==volume::detail::InplaceResult::paused) return true;
     if (result==volume::detail::InplaceResult::completed) return false;
     fail(result==volume::detail::InplaceResult::revoked || control==2 ? CreationError::operation_cancelled : CreationError::io_error,"partition conversion incomplete");
   }
 
-  void require_partition_export() {
+  void require_partition_export(bool gpt) {
+    if (gpt) partition_gpt_binary_ = symbol<format_abi::FormatPartitionGptBinary>("VeraCryptFormatPartitionGptBinary");
     partition_binary_ = symbol<format_abi::FormatPartitionBinary>("VeraCryptFormatPartitionBinary");
   }
   void format_partition(HANDLE handle, const PartitionTarget& target, const security::SecureBuffer& password) {
-    if (!partition_binary_) fail(CreationError::format_backend_unavailable, "partition export unavailable");
+    if (!partition_binary_ || (target.layout == 2 && !partition_gpt_binary_)) fail(CreationError::format_backend_unavailable, "partition export unavailable");
     stage_ = CreationStage::formatting;
     allocated_ = true; // Device targets never use file allocation or deletion paths.
-    const int code = partition_binary_(handle, target.offset_bytes, target.length_bytes,
+    const int code = target.layout == 2 ? partition_gpt_binary_(handle, target.offset_bytes, target.length_bytes,
+        reinterpret_cast<const unsigned char*>(password.data()), static_cast<std::uint32_t>(password.size()),
+        &FormatBackend::progress, this, target.partition_id.data(), 16) : partition_binary_(handle, target.offset_bytes, target.length_bytes,
         reinterpret_cast<const unsigned char*>(password.data()), static_cast<std::uint32_t>(password.size()),
         &FormatBackend::progress, this);
     if (code == format_abi::kUserAbort) fail(CreationError::operation_cancelled, "partition format cancelled");
@@ -325,6 +329,7 @@ class FormatBackend final {
   format_abi::Shutdown shutdown_{};
   format_abi::FormatBinary format_binary_{};
   format_abi::FormatPartitionBinary partition_binary_{};
+  format_abi::FormatPartitionGptBinary partition_gpt_binary_{};
   CreationStage stage_{CreationStage::formatting};
   std::wstring target_path_;
   std::uint64_t expected_size_{};
@@ -1025,9 +1030,6 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     expected.offset_bytes = target.offset_bytes;
     expected.length_bytes = target.length_bytes;
     expected.logical_sector_bytes = target.sector_bytes;
-    // GPT write support remains closed until the reviewed backend is available.
-    if (target.layout == 2 && request.operation != Operation::check_partition)
-      fail(CreationError::target_access_denied, "GPT write backend not enabled");
     expected.layout = static_cast<volume::PartitionLayout>(target.layout);
     expected.partition_id = target.partition_id;
     expected.filesystem_serial = target.filesystem_serial;
@@ -1059,7 +1061,7 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
       fail(CreationError::target_access_denied, "partition write policy rejected");
     if (formatting) {
       FormatBackend backend(pipe, request.nonce);
-      if (converting) backend.require_inplace_exports(); else backend.require_partition_export();
+      if (converting) backend.require_inplace_exports(target.layout == 2); else backend.require_partition_export(target.layout == 2);
       write_response(pipe, Response{.type = MessageType::progress, .stage = CreationStage::partition_ready});
       if (!read_partition_confirmation(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition erase not confirmed");

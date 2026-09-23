@@ -39,6 +39,12 @@ struct Options final {
 using FormatPartitionBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
     const unsigned char*, std::uint32_t, ProgressCallback, void*);
 
+using FormatPartitionGptBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
+    const unsigned char*, std::uint32_t, ProgressCallback, void*, const unsigned char*, std::uint32_t);
+using InplaceOpenGpt = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
+    const unsigned char*, std::uint32_t, BOOL, std::uint64_t*, std::uint32_t, BOOL(CALLBACK*)(void*), void*,
+    const unsigned char*, std::uint32_t);
+
 using InplaceContinue = BOOL(CALLBACK*)(void*);
 using InplaceOpen = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
     const unsigned char*, std::uint32_t, BOOL, std::uint64_t*, std::uint32_t, InplaceContinue, void*);

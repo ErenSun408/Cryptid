@@ -47,8 +47,8 @@ bool UvIpHeaderWrite(UvIpState& s, uint64_t offset, uint64_t start, uint64_t len
     return true;
 }
 }
-extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_t offset, uint64_t size,
-    const unsigned char* password, uint32_t passwordBytes, BOOL begin, uint64_t* range, uint32_t rangeBytes, BOOL (CALLBACK *allowed)(void*), void* context) {
+static int UsbVaultInplaceOpen(HANDLE target, uint64_t offset, uint64_t size,
+    const unsigned char* password, uint32_t passwordBytes, BOOL begin, uint64_t* range, uint32_t rangeBytes, BOOL (CALLBACK *allowed)(void*), void* context, const unsigned char* gptId) {
     if (range && rangeBytes == 3*sizeof(uint64_t)) memset(range, 0, rangeBytes);
     if (!target || target == INVALID_HANDLE_VALUE || !password || passwordBytes != 64 || !range ||
         rangeBytes != 3*sizeof(uint64_t) || !allowed || (begin != TRUE && begin != FALSE) ||
@@ -62,7 +62,7 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_
         s->size=size;
         memcpy(s->secret.value->Text,password,64); s->secret.value->Length=64;
         if (!DuplicateHandle(GetCurrentProcess(),target,GetCurrentProcess(),&s->disk.value,0,FALSE,DUPLICATE_SAME_ACCESS) ||
-            !UsbVaultPartitionMatches(s->disk.value,offset,size)) return VCF_ERROR_INVALID_PARAMETER;
+            !UsbVaultPartitionMatches(s->disk.value,offset,size,gptId)) return VCF_ERROR_INVALID_PARAMETER;
         if (!allowed(context)) return VCF_ERROR_USER_ABORT;
         DWORD returned=0;
         unsigned char boot[512] = {};
@@ -100,7 +100,7 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_
             if (!UvIpIo(s->disk.value,0,locked,512,false) || memcmp(locked,boot,512)) return VCF_ERROR_OS_ERROR;
         }
         if (!DeviceIoControl(s->disk.value,FSCTL_DISMOUNT_VOLUME,NULL,0,NULL,0,&returned,NULL) ||
-            !UsbVaultPartitionMatches(s->disk.value,offset,size)) return VCF_ERROR_OS_ERROR;
+            !UsbVaultPartitionMatches(s->disk.value,offset,size,gptId)) return VCF_ERROR_OS_ERROR;
         if (!begin) {
             // A paused operation retains the concealed NTFS boot sector until
             // finalization. Reject BitLocker, ordinary RAW and finalized volumes
@@ -170,4 +170,18 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceFinalize() {
 }
 extern "C" VCF_API void __cdecl VeraCryptInplaceClose() {
     std::lock_guard<std::mutex> guard(g_sdkMutex); uvIp.reset();
+}
+
+extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_t offset, uint64_t size,
+    const unsigned char* password, uint32_t bytes, BOOL begin, uint64_t* range, uint32_t rangeBytes,
+    BOOL (CALLBACK *allowed)(void*), void* context) {
+    return UsbVaultInplaceOpen(target,offset,size,password,bytes,begin,range,rangeBytes,allowed,context,NULL);
+}
+extern "C" VCF_API int __cdecl VeraCryptInplaceOpenGptBinary(HANDLE target, uint64_t offset, uint64_t size,
+    const unsigned char* password, uint32_t bytes, BOOL begin, uint64_t* range, uint32_t rangeBytes,
+    BOOL (CALLBACK *allowed)(void*), void* context, const unsigned char* partitionId, uint32_t idBytes) {
+    if (range && rangeBytes == 3*sizeof(uint64_t)) memset(range, 0, rangeBytes);
+    if (!partitionId || idBytes != 16) return VCF_ERROR_INVALID_PARAMETER;
+    unsigned char id[16]; memcpy(id,partitionId,sizeof(id));
+    return UsbVaultInplaceOpen(target,offset,size,password,bytes,begin,range,rangeBytes,allowed,context,id);
 }

@@ -2,6 +2,7 @@
 #include "volume/partition_inplace_runner.h"
 #include "volume_creation/veracrypt_format_abi.h"
 #include <functional>
+#include <array>
 namespace usb_vault::volume_creation::detail {
 // Caller retains DLL, device handle and password throughout this synchronous run.
 // Must authorize/confirm/revalidate before constructing. No path reopen here.
@@ -9,7 +10,8 @@ class PartitionInplaceBackend final : public volume::detail::InplaceBackend {
  public:
   PartitionInplaceBackend(HMODULE module, HANDLE target, std::uint64_t offset,
       std::uint64_t size, const security::SecureBuffer& password, bool begin,
-      std::function<volume::detail::InplaceControl()> control, ProgressCallback progress = {});
+      std::function<volume::detail::InplaceControl()> control, ProgressCallback progress = {},
+      std::array<std::uint8_t, 16> partition_id = {});
   ~PartitionInplaceBackend() override { close(); }
   volume::detail::InplaceControl control() override;
   volume::detail::InplaceRange open_authenticated() override;
@@ -24,6 +26,8 @@ class PartitionInplaceBackend final : public volume::detail::InplaceBackend {
   HANDLE target_; std::uint64_t offset_, size_, converted_{};
   const security::SecureBuffer& password_; bool begin_, opened_{};
   std::function<volume::detail::InplaceControl()> control_; ProgressCallback progress_;
+  std::array<std::uint8_t, 16> partition_id_{};
+  format_abi::InplaceOpenGpt open_gpt_{};
   format_abi::InplaceOpen open_; format_abi::InplaceEncrypt encrypt_;
   format_abi::InplaceSave save_; format_abi::InplaceFinalize finalize_; format_abi::InplaceClose close_;
 };

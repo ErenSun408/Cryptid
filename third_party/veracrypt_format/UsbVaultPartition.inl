@@ -56,7 +56,7 @@ bool UsbVaultReadPartitionBoot(HANDLE handle, unsigned char* sector) {
     return SetFilePointerEx(handle, beginning, NULL, FILE_BEGIN)
         && ReadFile(handle, sector, 512, &read, NULL) && read == 512;
 }
-bool UsbVaultPartitionMatches(HANDLE handle, uint64_t offset, uint64_t length) {
+bool UsbVaultPartitionMatches(HANDLE handle, uint64_t offset, uint64_t length, const unsigned char* gptId = NULL) {
     PARTITION_INFORMATION_EX partition = {};
     GET_LENGTH_INFORMATION size = {};
     DISK_GEOMETRY geometry = {};
@@ -65,22 +65,31 @@ bool UsbVaultPartitionMatches(HANDLE handle, uint64_t offset, uint64_t length) {
         || !UsbVaultPartitionQuery(handle, IOCTL_DISK_GET_LENGTH_INFO, size)
         || !UsbVaultPartitionQuery(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY, geometry)
         || !UsbVaultPartitionQuery(handle, IOCTL_STORAGE_GET_DEVICE_NUMBER, number)) return false;
-    // First experimentally validated layout only. No whole disks or GPT yet.
-    return partition.PartitionStyle == PARTITION_STYLE_MBR
+    const GUID basicData = {0xebd0a0a2, 0xb9e5, 0x4433, {0x87,0xc0,0x68,0xb6,0xb7,0x26,0x99,0xc7}};
+    const GUID empty = {};
+    const bool layout = gptId
+        ? partition.PartitionStyle == PARTITION_STYLE_GPT
+            && memcmp(&partition.Gpt.PartitionType, &basicData, 16) == 0
+            && memcmp(gptId, &empty, 16) != 0
+            && memcmp(&partition.Gpt.PartitionId, gptId, 16) == 0
+            && (partition.Gpt.Attributes & ~GPT_BASIC_DATA_ATTRIBUTE_NO_DRIVE_LETTER) == 0
+        : partition.PartitionStyle == PARTITION_STYLE_MBR
+            && partition.Mbr.PartitionType == PARTITION_IFS && partition.Mbr.RecognizedPartition
+            && !partition.Mbr.BootIndicator;
+    return layout
         && partition.PartitionNumber > 0 && partition.PartitionNumber == number.PartitionNumber
         && number.DeviceType == FILE_DEVICE_DISK
-        && partition.Mbr.PartitionType == PARTITION_IFS && partition.Mbr.RecognizedPartition
-        && !partition.Mbr.BootIndicator && geometry.BytesPerSector == 512
+        && geometry.BytesPerSector == 512
         && partition.StartingOffset.QuadPart > 0 && static_cast<uint64_t>(partition.StartingOffset.QuadPart) == offset
         && partition.PartitionLength.QuadPart > 0 && static_cast<uint64_t>(partition.PartitionLength.QuadPart) == length
         && size.Length.QuadPart > 0 && static_cast<uint64_t>(size.Length.QuadPart) == length;
 }
 }
 
-extern "C" VCF_API int __cdecl VeraCryptFormatPartitionBinary(
+static int UsbVaultFormatPartition(
     HANDLE target, uint64_t expectedOffset, uint64_t expectedLength,
     const unsigned char* password, uint32_t passwordBytes,
-    VeraCrypt_Progress_Callback progress, void* context)
+    VeraCrypt_Progress_Callback progress, void* context, const unsigned char* gptId)
 {
     if (!target || target == INVALID_HANDLE_VALUE || !password || passwordBytes != 64
         || expectedOffset == 0 || expectedOffset % 512 || expectedLength % 512
@@ -95,7 +104,7 @@ extern "C" VCF_API int __cdecl VeraCryptFormatPartitionBinary(
             return VCF_ERROR_ACCESS_DENIED;
         const uint64_t dataSize = GetVolumeDataAreaSize(FALSE, expectedLength);
         if (dataSize < TC_MIN_FAT_FS_SIZE || dataSize > TC_MAX_FAT_SECTOR_COUNT * uint64_t(512)
-            || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength))
+            || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength, gptId))
             return VCF_ERROR_INVALID_PARAMETER;
         wchar_t filesystem[32] = {};
         if (!GetVolumeInformationByHandleW(disk.value, NULL, 0, NULL, NULL, NULL, filesystem, ARRAYSIZE(filesystem)))
@@ -139,7 +148,7 @@ extern "C" VCF_API int __cdecl VeraCryptFormatPartitionBinary(
         }
         // Positively identified RAW has no filesystem boundary to extend.
         if (!DeviceIoControl(disk.value, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &returned, NULL)
-            || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength))
+            || !UsbVaultPartitionMatches(disk.value, expectedOffset, expectedLength, gptId))
             return VCF_ERROR_OS_ERROR;
         UsbVaultPartitionPassword secret;
         if (!secret.value) return VCF_ERROR_OUT_OF_MEMORY;
@@ -163,4 +172,16 @@ extern "C" VCF_API int __cdecl VeraCryptFormatPartitionBinary(
         disk.locked = false;
         return VCF_SUCCESS;
     } catch (...) { return VCF_ERROR_OS_ERROR; }
+}
+
+extern "C" VCF_API int __cdecl VeraCryptFormatPartitionBinary(HANDLE target, uint64_t offset, uint64_t size,
+    const unsigned char* password, uint32_t bytes, VeraCrypt_Progress_Callback progress, void* context) {
+    return UsbVaultFormatPartition(target, offset, size, password, bytes, progress, context, NULL);
+}
+extern "C" VCF_API int __cdecl VeraCryptFormatPartitionGptBinary(HANDLE target, uint64_t offset, uint64_t size,
+    const unsigned char* password, uint32_t bytes, VeraCrypt_Progress_Callback progress, void* context,
+    const unsigned char* partitionId, uint32_t idBytes) {
+    if (!partitionId || idBytes != 16) return VCF_ERROR_INVALID_PARAMETER;
+    unsigned char id[16]; memcpy(id, partitionId, sizeof(id));
+    return UsbVaultFormatPartition(target, offset, size, password, bytes, progress, context, id);
 }

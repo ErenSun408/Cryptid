@@ -62,7 +62,7 @@ std::optional<PartitionInplaceChunk> next_partition_inplace_chunk(
 }
 PartitionInplacePlan detail::inspect_partition_inplace(HANDLE handle,
     const PartitionCandidate& expected) {
-  if (expected.layout != PartitionLayout::mbr || expected.logical_sector_bytes != kSector ||
+  if ((expected.layout != PartitionLayout::mbr && expected.layout != PartitionLayout::gpt) || expected.logical_sector_bytes != kSector ||
       !matches_partition_handle_identity(handle, expected))
     throw std::invalid_argument("in-place target identity rejected");
   DWORD returned{}, dirty{};

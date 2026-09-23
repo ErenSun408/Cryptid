@@ -691,14 +691,14 @@ void VolumeCreator::check_partition(const volume::PartitionCandidate& candidate)
 void VolumeCreator::format_partition(const volume::PartitionCandidate& candidate,
     const security::SecureBuffer& password, const std::function<bool()>& confirm_erase,
     const ProgressCallback& progress, const CancellationQuery& cancelled) const {
-  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}) || candidate.layout != volume::PartitionLayout::mbr)
+  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}))
     throw std::invalid_argument("invalid partition format candidate");
   const detail::PartitionTarget target{
       .device_id = candidate.device_id, .device_flags = candidate.device_id_flags,
       .disk_number = candidate.disk_number, .partition_number = candidate.partition_number,
-      .sector_bytes = candidate.logical_sector_bytes, .layout = 1,
+      .sector_bytes = candidate.logical_sector_bytes, .layout = static_cast<std::uint32_t>(candidate.layout),
       .filesystem_serial = candidate.filesystem_serial, .offset_bytes = candidate.offset_bytes,
-      .length_bytes = candidate.length_bytes};
+      .length_bytes = candidate.length_bytes, .partition_id = candidate.partition_id};
   static_cast<void>(invoke(helper_path_, detail::Operation::format_partition, candidate.volume_path,
       0, 0, password, security::SecureBuffer{}, progress, cancelled, &target, confirm_erase));
 }
@@ -706,13 +706,13 @@ void VolumeCreator::format_partition(const volume::PartitionCandidate& candidate
 bool VolumeCreator::convert_partition(const volume::PartitionCandidate& candidate, bool begin,
     const security::SecureBuffer& password, const std::function<bool()>& confirm,
     const ProgressCallback& progress, const CancellationQuery& revoked, const CancellationQuery& pause) const {
-  if (!revoked || !pause || candidate.layout != volume::PartitionLayout::mbr ||
+  if (!revoked || !pause ||
       (begin && !volume::matches_partition_snapshot(candidate, {&candidate,1})))
     throw std::invalid_argument("invalid in-place target or controls");
   const detail::PartitionTarget target{.device_id=candidate.device_id,.device_flags=candidate.device_id_flags,
       .disk_number=candidate.disk_number,.partition_number=candidate.partition_number,
-      .sector_bytes=candidate.logical_sector_bytes,.layout=1,.filesystem_serial=candidate.filesystem_serial,
-      .offset_bytes=candidate.offset_bytes,.length_bytes=candidate.length_bytes};
+      .sector_bytes=candidate.logical_sector_bytes,.layout=static_cast<std::uint32_t>(candidate.layout),.filesystem_serial=candidate.filesystem_serial,
+      .offset_bytes=candidate.offset_bytes,.length_bytes=candidate.length_bytes,.partition_id=candidate.partition_id};
   return invoke(helper_path_, begin ? detail::Operation::begin_partition_inplace : detail::Operation::resume_partition_inplace,
       candidate.volume_path,0,0,password,security::SecureBuffer{},progress,revoked,&target,confirm,pause)==1;
 }

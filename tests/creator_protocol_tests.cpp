@@ -229,26 +229,6 @@ void test_partition_helper_rejects_invalid_requests() {
   }
 }
 
-void test_gpt_write_gate() {
-  for (auto operation : {Operation::format_partition, Operation::begin_partition_inplace, Operation::resume_partition_inplace}) {
-    Request request{}; request.operation = operation;
-    request.first_password = SecureBuffer(64);
-    request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
-    request.partition_target.emplace();
-    auto& target = *request.partition_target;
-    target.device_id[0] = 1; target.partition_number = 1;
-    target.offset_bytes = 1048576; target.length_bytes = 256ULL * 1024 * 1024;
-    target.layout = 2; target.partition_id[0] = 42;
-    bool rejected{};
-    try { static_cast<void>(execute_request(INVALID_HANDLE_VALUE, request)); }
-    catch (const std::system_error& error) {
-      rejected = error.code() == make_error_code(CreationError::target_access_denied) &&
-          std::string(error.what()).find("GPT write backend not enabled") != std::string::npos;
-    }
-    expect(rejected, "GPT write crossed the unopened backend gate");
-  }
-}
-
 void test_binary_password_round_trip() {
   const Pipe pipe = make_pipe();
   const SecureBuffer first = password({0x41, 0x00, 0x42, 0xff});
@@ -747,7 +727,6 @@ int main() {
     test_partition_format_protocol(Operation::begin_partition_inplace);
     test_partition_format_protocol(Operation::resume_partition_inplace);
     test_inplace_controls();
-    test_gpt_write_gate();
     test_partition_check_protocol();
     test_partition_helper_rejects_invalid_requests();
     test_binary_password_round_trip();

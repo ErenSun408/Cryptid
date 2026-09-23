@@ -12,12 +12,16 @@ void seek(HANDLE target, std::uint64_t offset) {
 }
 PartitionInplaceBackend::PartitionInplaceBackend(HMODULE module, HANDLE target, std::uint64_t offset,
     std::uint64_t size, const security::SecureBuffer& password, bool begin,
-    std::function<volume::detail::InplaceControl()> control, ProgressCallback progress)
+    std::function<volume::detail::InplaceControl()> control, ProgressCallback progress, std::array<std::uint8_t, 16> partition_id)
     : target_(target), offset_(offset), size_(size), password_(password), begin_(begin),
-      control_(std::move(control)), progress_(std::move(progress)) {
+      control_(std::move(control)), progress_(std::move(progress)), partition_id_(partition_id) {
   if (!module || !target || target == INVALID_HANDLE_VALUE || password.size()!=64 || !control_)
     throw std::invalid_argument("invalid in-place backend arguments");
   open_=reinterpret_cast<format_abi::InplaceOpen>(::GetProcAddress(module,"VeraCryptInplaceOpenBinary"));
+  if (partition_id_ != std::array<std::uint8_t, 16>{}) {
+    open_gpt_=reinterpret_cast<format_abi::InplaceOpenGpt>(::GetProcAddress(module,"VeraCryptInplaceOpenGptBinary"));
+    if (!open_gpt_) throw std::runtime_error("GPT in-place backend unavailable");
+  }
   encrypt_=reinterpret_cast<format_abi::InplaceEncrypt>(::GetProcAddress(module,"VeraCryptInplaceEncrypt"));
   save_=reinterpret_cast<format_abi::InplaceSave>(::GetProcAddress(module,"VeraCryptInplaceSave"));
   finalize_=reinterpret_cast<format_abi::InplaceFinalize>(::GetProcAddress(module,"VeraCryptInplaceFinalize"));
@@ -30,12 +34,14 @@ volume::detail::InplaceControl PartitionInplaceBackend::control() {
 }
 volume::detail::InplaceRange PartitionInplaceBackend::open_authenticated() {
   std::array<std::uint64_t,3> range{};
-  checked(open_(target_,offset_,size_,reinterpret_cast<const unsigned char*>(password_.data()),64,
-      begin_ ? TRUE : FALSE,range.data(),sizeof(range),
-      [](void* context) -> BOOL {
-        try { return static_cast<PartitionInplaceBackend*>(context)->control_() != volume::detail::InplaceControl::revoked; }
-        catch (...) { return FALSE; }
-      },this));
+  const auto allowed = [](void* context) -> BOOL {
+    try { return static_cast<PartitionInplaceBackend*>(context)->control_() != volume::detail::InplaceControl::revoked; }
+    catch (...) { return FALSE; }
+  };
+  const auto* secret = reinterpret_cast<const unsigned char*>(password_.data());
+  checked(open_gpt_ ? open_gpt_(target_,offset_,size_,secret,64,begin_ ? TRUE : FALSE,
+      range.data(),sizeof(range),allowed,this,partition_id_.data(),16)
+      : open_(target_,offset_,size_,secret,64,begin_ ? TRUE : FALSE,range.data(),sizeof(range),allowed,this));
   opened_=true; converted_=range[2];
   if (range[0]!=size_) throw std::runtime_error("in-place backend size mismatch");
   return {range[0],range[1],range[2]};
