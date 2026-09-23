@@ -41,6 +41,7 @@ constexpr DISPID kCreationErrorId = 115;
 constexpr DISPID kBitLockerProgressId = 116;
 constexpr DISPID kBitLockerConfirmId = 117;
 constexpr DISPID kBitLockerHelpId = 118;
+constexpr DISPID kPartitionPairId = 119;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -452,6 +453,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginPartitionConversion")) { ids[0]=kPartitionConvertId; return S_OK; }
     if (matches(names[0], L"beginPartitionResume")) { ids[0]=kPartitionResumeId; return S_OK; }
     if (matches(names[0], L"getContainerPartition")) { ids[0] = kGetContainerPartitionId; return S_OK; }
+    if (matches(names[0], L"beginPartitionPair")) { ids[0] = kPartitionPairId; return S_OK; }
     if (matches(names[0], L"beginPartitionCreate")) { ids[0] = kPartitionCreateId; return S_OK; }
     if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
     if (matches(names[0], L"returnToLogin")) { ids[0] = kReturnToLoginId; return S_OK; }
@@ -717,11 +719,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     if (!creation_work_->running.load() &&
-        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId)) partition_mode_ = false;
+        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId)) partition_mode_ = false;
     if (!creation_work_->running.load() &&
         (controller_.state() != CardProductUiState::authenticated ||
          partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
-    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId)
+    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId)
       return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
@@ -1242,8 +1244,12 @@ class CardProductWebViewHostObject final : public IDispatch {
     return S_OK;
   }
   HRESULT invoke_partition(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
-    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId) {
-      if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg)
+    struct PairWiper {
+      DISPPARAMS* args;
+      ~PairWiper() { if (args) wipe_available_arguments(args, args->cArgs); }
+    } pair_wiper{member == kPartitionPairId ? parameters : nullptr};
+    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId) {
+      if (!parameters || parameters->cArgs != (member == kPartitionPairId ? 4u : 1u) || parameters->cNamedArgs || !parameters->rgvarg)
         return DISP_E_BADPARAMCOUNT;
     } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
     if (!result) return E_POINTER;
@@ -1261,10 +1267,10 @@ class CardProductWebViewHostObject final : public IDispatch {
         if(!exact_uint32(parameters->rgvarg[0],id) || !id)return DISP_E_TYPEMISMATCH;
         return begin_creation([this,id]{creation_paused_.store(controller_.resume_partition_conversion(id));},result,true);
       }
-      if (member == kPartitionCreateId || member==kPartitionConvertId) {
+      if (member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionPairId) {
         if (!controller_.remembering_container_paths()) return E_ACCESSDENIED;
         std::uint32_t id{};
-        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        if (!exact_uint32(parameters->rgvarg[member == kPartitionPairId ? 3 : 0], id) || !id) return DISP_E_TYPEMISMATCH;
         volume::PartitionCandidate target;
         const auto epoch = creation_work_->card_epoch.load();
         {
@@ -1276,15 +1282,26 @@ class CardProductWebViewHostObject final : public IDispatch {
             return E_ACCESSDENIED;
           target = found->target;
         }
+        std::uint32_t hidden_mib{};
+        security::SecureBuffer second, confirmation;
+        if (member == kPartitionPairId) {
+          if (!exact_uint32(parameters->rgvarg[2], hidden_mib) || !hidden_mib ||
+              static_cast<std::uint64_t>(hidden_mib) * 1048576 > target.length_bytes / 4 * 3)
+            return DISP_E_TYPEMISMATCH;
+          second = consume_webview_password_array(parameters->rgvarg[1]);
+          confirmation = consume_webview_password_array(parameters->rgvarg[0]);
+        }
         clear_partitions(); // Consume consent and snapshot; retries require a fresh selection.
         partition_mode_ = false;
-        return begin_creation([this, target, epoch, member] {
+        return begin_creation([this, target, epoch, member, hidden_mib, second=std::move(second), confirmation=std::move(confirmation)]() mutable {
           const auto confirm=[this, target, epoch](const volume::PartitionCandidate& confirmed) {
             return target == confirmed && !creation_work_->interrupted.load() && creation_work_->card_epoch.load() == epoch &&
                    !creation_work_->cancellation_requested();
           };
           prepare_bitlocker(target, epoch);
           if(member==kPartitionConvertId)creation_paused_.store(controller_.begin_partition_conversion(target,confirm));
+          else if (member == kPartitionPairId)
+            controller_.create_partition_pair(target, hidden_mib, second.bytes(), confirmation.bytes(), confirm);
           else controller_.create_partition(target,confirm);
         }, result,member==kPartitionConvertId);
       }

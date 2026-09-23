@@ -804,7 +804,7 @@
   let creationKind = null;
   // The dialog is one flow in two steps: "type" picks the container shape,
   // "params" collects what that shape needs.
-  let creationStep = "type";
+  let creationStep = "params";
   let creationCompleted = false;
   // Native capability gate for the destructive reset action. The entry layer
   // never keeps the one-shot login/initialization context for this; it performs
@@ -994,7 +994,7 @@
     containerDirectoryProblem(directoryInput, nameInput) === "";
 
   const containerBProblem = () => {
-    const outer = capacityMib(containerBCapacity, containerBUnit);
+    const outer = creationStorage === "disk" ? Math.floor((partitionRows.find(row => row.id === partitionSelected)?.bytes || 0) / 1048576) : capacityMib(containerBCapacity, containerBUnit);
     const hidden = capacityMib(containerBHiddenCapacity, containerBUnit);
     if (outer === null || hidden === null) return "请输入整数容量。";
     if (outer > kMaximumCapacityMib) return "容量超出最大值。";
@@ -1030,7 +1030,7 @@
   const containerBInputReady = () => {
     const second = normalizedLength(containerBSecond.value);
     return containerBSizes() !== null &&
-      containerLocationReady(containerBName, containerBDirectory) &&
+      (creationStorage === "disk" || containerLocationReady(containerBName, containerBDirectory)) &&
       second !== null &&
       second >= 12 && second <= 128 &&
       containerBSecond.value === containerBSecondConfirmation.value;
@@ -1038,10 +1038,10 @@
 
   const updateCreationAvailability = () => {
     const encrypted = creationStorage === "file" && creationKind === "encrypted";
-    const hiddenVolume = creationStorage === "file" && creationKind === "hidden";
-    const choosing = creationStep === "type";
+    const hiddenVolume = creationKind === "hidden";
+    const choosing = false;
     const authenticated = currentState === nativeState.authenticated;
-    const ready = creationStorage === "disk" ? partitionSelected !== 0 && partitionErase.checked : choosing
+    const ready = creationStorage === "disk" ? partitionSelected !== 0 && partitionErase.checked && (!hiddenVolume || containerBInputReady()) : choosing
       ? encrypted || hiddenVolume
       : encrypted
         ? containerCapacityMib() !== null &&
@@ -1055,7 +1055,7 @@
       button.setAttribute("aria-pressed", String(button.dataset.createStorage === creationStorage));
       button.disabled = busy || !authenticated || creationCompleted;
     }
-    creationTypeStep.hidden = !choosing || creationStorage !== "file";
+    creationTypeStep.hidden = creationRunning || creationResult !== "";
     containerForm.hidden = creationRunning || creationResult !== "" || choosing || !encrypted;
     containerBForm.hidden = creationRunning || creationResult !== "" || choosing || !hiddenVolume;
     // 8.7.2: both shapes are offered on every visit, in the same order and
@@ -1064,9 +1064,9 @@
       button.setAttribute(
           "aria-checked",
           button.dataset.createKind === creationKind ? "true" : "false");
-      button.disabled = busy || !authenticated || !choosing || creationStorage !== "file";
+      button.disabled = busy || !authenticated || creationCompleted;
     }
-    creationTypeNote.hidden = !choosing || creationStorage !== "file";
+    creationTypeNote.hidden = true;
     containerCapacity.disabled = busy || !authenticated || choosing ||
       !encrypted || creationCompleted;
     containerName.disabled = containerCapacity.disabled;
@@ -1084,6 +1084,10 @@
     }
     const standardQuiet = choosing || !encrypted || creationCompleted;
     const hiddenQuiet = choosing || !hiddenVolume || creationCompleted;
+    const hiddenLocationQuiet = hiddenQuiet || creationStorage === "disk";
+    partitionPreserve.closest("label").hidden = hiddenVolume;
+    if (hiddenVolume) partitionPreserve.checked = false;
+    updatePartitionMode();
     showFieldProblem(
       containerNameError,
       standardQuiet ? "" : containerNameProblem(containerName));
@@ -1096,10 +1100,10 @@
       containerError, standardQuiet ? "" : containerCapacityProblem());
     showFieldProblem(
       containerBNameError,
-      hiddenQuiet ? "" : containerNameProblem(containerBName));
+      hiddenLocationQuiet ? "" : containerNameProblem(containerBName));
     showFieldProblem(
       containerBDirectoryError,
-      hiddenQuiet
+      hiddenLocationQuiet
         ? ""
         : containerDirectoryProblem(containerBDirectory, containerBName));
     showFieldProblem(
@@ -1110,39 +1114,19 @@
       creationCompleted || !ready;
     creationContinueButton.textContent = creationStorage === "disk" ? (partitionPreserve.checked ? "保留文件并开始加密" : "清空并创建加密盘") : choosing ? "下一步" : "创建容器";
     creationContinueButton.hidden = creationResult !== "";
-    creationCancelLabel.textContent =
-      creationResult === "error" || creationResult === "cancelled" ? "关闭" : creationCompleted
-      ? "完成"
-      : choosing ? "取消" : "上一步";
-    creationBackIcon.hidden = choosing || creationCompleted || creationResult !== "";
+    creationCancelLabel.textContent = creationResult !== "" ? "关闭" : creationCompleted ? "完成" : "取消";
+    creationBackIcon.hidden = true;
   };
 
-  const kCreationTypeLead =
-    "容器是一个加密文件，挂载后显示为一个普通磁盘。" +
-    "请选择要创建的容器类型：";
-
-  // An empty description is hidden rather than left as a blank paragraph, so
-  // the fields sit directly under the title on the parameter step.
   const setCreationDescription = (text) => {
     creationDescription.textContent = text;
     creationDescription.hidden = text === "";
   };
-
   const applyCreationStepCopy = () => {
-    if (creationStorage === "disk") {
-      creationTitle.textContent = "新建容器";
-      setCreationDescription("磁盘容器使用物理硬盘上已有的独立数据分区。");
-      return;
-    }
-    if (creationStep === "type") {
-      creationTitle.textContent = "新建容器";
-      setCreationDescription(kCreationTypeLead);
-      return;
-    }
-    creationTitle.textContent = creationKind === "hidden"
-      ? "新建含隐藏卷的容器"
-      : "新建标准容器";
-    setCreationDescription("");
+    creationTitle.textContent = "新建容器";
+    setCreationDescription(creationStorage === "disk"
+      ? "容器为物理硬盘上已有的独立数据分区"
+      : "容器为一个加密文件，挂载后显示为普通磁盘");
   };
 
   // Leaving a parameter step discards what was typed on it: a decoy password
@@ -1227,7 +1211,7 @@
     clearCreationPartitions();
     creationDialog.hidden = true;
     creationKind = null;
-    creationStep = "type";
+    creationStep = "params";
     creationDialog.dataset.step = "type";
     creationCompleted = false;
     creationStatus.textContent = "";
@@ -3460,7 +3444,7 @@
       cell.append(button); row.append(cell); partitionBody.append(row);
     }
     const selected = partitionRows.find(row => row.id === partitionSelected);
-    partitionSelection.textContent = selected ? `已选择：${partitionName(selected)}。尚未执行加密。` : "尚未选择分区。";
+    partitionSelection.textContent = selected ? `已选择：${partitionName(selected)}` : "尚未选择分区。";
   };
   const discardPartitions = () => {
     ++partitionRevision; partitionRows = []; partitionSelected = 0; partitionErase.checked = false;
@@ -3518,7 +3502,7 @@
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) {
         partitionSelected = id;
-        partitionStatus.textContent = "已选择分区，可检查身份及系统、分页和 BitLocker 状态；检查复用本次管理员授权，不会修改分区。";
+        partitionStatus.textContent = "已选中分区。";
       }
     } catch (_) {
       if (revision === partitionRevision) {
@@ -3547,7 +3531,7 @@
     } catch (_) {
       if (revision === partitionRevision) {
         discardPartitions();
-        partitionStatus.textContent = "检查未完成、分区受保护或状态无法确认，请刷新重试。仅支持未启用 BitLocker 的 MBR 数据分区。";
+        partitionStatus.textContent = "分区检查未通过，请刷新重试。";
       }
     } finally {
       busy = false; render(messageForCurrentState());
@@ -3620,7 +3604,7 @@
     creationInplace = false; partitionPreserve.checked = false; updatePartitionMode();
     clearCreationPartitions();
     creationKind = "encrypted";
-    creationStep = "type";
+    creationStep = "params";
     creationCompleted = false;
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
@@ -3647,7 +3631,7 @@
 
   const returnToCreationTypes = () => {
     resetCreationInputs();
-    creationStep = "type";
+    creationStep = "params";
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
     applyCreationStepCopy();
@@ -5271,7 +5255,8 @@
     if (busy || hiddenReview.hidden || !containerBAcknowledge.checked) return;
     const sizes = containerBSizes();
     if (sizes === null || !containerBInputReady() ||
-        creationStorage !== "file" || creationKind !== "hidden" ||
+        creationKind !== "hidden" ||
+        (creationStorage === "disk" && (!partitionSelected || !partitionErase.checked)) ||
         currentState !== nativeState.authenticated) {
       creationStatus.textContent = "请检查容量、诱饵密码与下方的确认项。";
       creationStatus.dataset.tone = "error";
@@ -5279,6 +5264,9 @@
       return;
     }
 
+    const disk = creationStorage === "disk", partitionId = partitionSelected;
+    if (disk) partitionErase.checked = false;
+    let creationAccepted = false;
     closeHiddenReview();
     let encodedSecond = null;
     let encodedConfirmation = null;
@@ -5318,9 +5306,10 @@
         // stay word-for-word parallel (8.7.2).
         startCreationProgress();
         await paintCreationProgress();
-        await bridge.beginCreateContainerBMib(name, directory, sizes.outer,
-                                         sizes.hidden, secondBytes,
-                                         confirmationBytes);
+        const accepted = disk ? await bridge.beginPartitionPair(partitionId, sizes.hidden, secondBytes, confirmationBytes)
+          : await bridge.beginCreateContainerBMib(name, directory, sizes.outer, sizes.hidden, secondBytes, confirmationBytes);
+        if (disk && accepted !== true) throw new Error("creation rejected");
+        creationAccepted = true;
       } finally {
         wipe(secondBytes);
         wipe(confirmationBytes);
@@ -5351,7 +5340,7 @@
           error.message === kCreationCancelled;
         const cleanupFailed = error instanceof Error &&
           error.message === kCreationCleanupFailed;
-        creationStatus.textContent = cleanupFailed ? kCreationCleanupMessage : cancelled
+        creationStatus.textContent = disk ? `创建失败。错误码${await readCreationFailureCode(creationAccepted)}` : cleanupFailed ? kCreationCleanupMessage : cancelled
           ? "已取消创建，没有留下容器文件。重试前需要重新填写名称、路径与诱饵密码。"
           : "创建失败。重试前需要重新填写名称、路径与诱饵密码。";
         creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
@@ -5360,6 +5349,7 @@
     } finally {
       wipe(secondBytes);
       wipe(confirmationBytes);
+      if (disk) discardPartitions();
       finishCreationProgress();
       updateCreationAvailability();
       if (externalRefreshPending) {
@@ -5849,7 +5839,6 @@
       if (button.dataset.createStorage === creationStorage) return;
       clearCreationPartitions();
       creationStorage = button.dataset.createStorage === "file" ? "file" : "disk";
-      creationKind = "encrypted";
       returnToCreationTypes();
       renderPartitions();
       button.focus();
@@ -5857,9 +5846,10 @@
   }
   for (const button of creationTypeButtons) {
     button.addEventListener("click", () => {
-      if (busy || creationStorage !== "file" || creationStep !== "type") return;
-      creationKind =
-        button.dataset.createKind === "hidden" ? "hidden" : "encrypted";
+      if (busy || creationCompleted || currentState !== nativeState.authenticated) return;
+      containerBSecond.value = ""; containerBSecondConfirmation.value = "";
+      partitionErase.checked = false;
+      creationKind = button.dataset.createKind === "hidden" ? "hidden" : "encrypted";
       updateCreationAvailability();
     });
   }
@@ -5913,10 +5903,6 @@
   creationCloseButton.addEventListener("click", () => closeCreationFlow());
   creationCancelButton.addEventListener("click", () => {
     if (busy) return;
-    if (creationStep === "params" && !creationCompleted && creationResult === "") {
-      returnToCreationTypes();
-      return;
-    }
     closeCreationFlow();
   });
   const browseForDirectory = async (input) => {
@@ -5949,11 +5935,8 @@
     "click", () => void browseForDirectory(containerBDirectory));
   creationContinueButton.addEventListener("click", async () => {
     if (busy || creationDialog.hidden || currentState !== nativeState.authenticated) return;
-    if (creationStorage === "disk") { await createPartition(); return; }
-    if (creationStep === "type") {
-      enterCreationParameters();
-      return;
-    }
+    if (creationStorage === "disk" && creationKind === "encrypted") { await createPartition(); return; }
+    if (creationStorage === "disk" && (!partitionSelected || !partitionErase.checked)) return;
     if (creationKind === "encrypted") {
       await createContainer();
     } else if (creationKind === "hidden") {

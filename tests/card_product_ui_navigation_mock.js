@@ -235,6 +235,18 @@ window.navigationFixture = {
       };
       return true;
     },
+    beginPartitionPair: (id, hidden, password, confirmation) => {
+      if (!id || id !== fixture.partitionSelected || hidden < 1 || !password.length || !confirmation.length) throw new Error("pair inputs");
+      fixture.partitionPairCreated = id;
+      fixture.pairPasswords = [password, confirmation];
+      fixture.partitionSelected = 0;
+      fixture.creationProgress = "1,3,20,0,3";
+      fixture.pendingCreation = {
+        resolve: () => {fixture.creationProgress = "2,5,100,87,3";},
+        reject: () => {fixture.creationProgress = "3,3,41,0,3";},
+      };
+      return true;
+    },
     beginPartitionCreate: (id) => {
       if (!id || id !== fixture.partitionSelected) throw new Error("stale partition consent");
       fixture.partitionCreated = id;

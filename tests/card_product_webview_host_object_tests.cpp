@@ -156,6 +156,12 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
   int partition_creations{};
   usb_vault::volume::PartitionCandidate created_partition;
+  std::uint32_t create_partition_pair(const usb_vault::volume::PartitionCandidate& target,
+      std::uint64_t hidden, const SecureBuffer& decoy,
+      const std::function<bool(const usb_vault::volume::PartitionCandidate&)>& confirm) override {
+    require(hidden==16ULL*1024*1024 && !decoy.empty(), "pair inputs missing");
+    return create_partition(target, confirm);
+  }
   std::uint32_t create_partition(const usb_vault::volume::PartitionCandidate& target,
       const std::function<bool(const usb_vault::volume::PartitionCandidate&)>& confirm) override {
     await_creation();
@@ -3530,6 +3536,33 @@ void test_partition_creation_snapshot_and_epoch(const wchar_t* method = L"beginP
   }
 }
 
+void test_partition_pair_bridge() {
+  for (int scenario=0; scenario<4; ++scenario) {
+    Fixture fixture; fixture.authentication.establish(root_secret());
+    usb_vault::ui::CreationWorkState work;
+    FakePartitionServices services;
+    ComPtr<IDispatch> host;
+    require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller,nullptr,&host,nullptr,&work,nullptr,&services)),"pair host");
+    VARIANT result{};
+    require(SUCCEEDED(invoke_no_arguments(*host.Get(),L"beginPartitionRefresh",&result)),"pair scan");
+    for(int i=0;work.running.load()&&i<3000;++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(),"pair scan timeout");
+    require(SUCCEEDED(invoke_with_number(*host.Get(),L"selectPartition",1,&result,nullptr)),"pair select");
+    ByteArray secret(bytes("second-password-value")), confirmation(bytes("second-password-value"));
+    VARIANT args[4]{confirmation.value(),secret.value(),{}, {}};
+    args[2].vt=VT_UI4;args[2].ulVal=16;
+    args[3].vt=VT_UI4;args[3].ulVal=scenario==1 ? 999 : 1;
+    if(scenario==2)work.card_epoch.fetch_add(1);
+    DISPPARAMS parameters{args,nullptr,scenario==3 ? 3u : 4u,0};
+    const auto status=host->Invoke(member_id(*host.Get(),L"beginPartitionPair"),IID_NULL,LOCALE_INVARIANT,DISPATCH_METHOD,&parameters,&result,nullptr,nullptr);
+    secret.require_wiped("pair secret retained");confirmation.require_wiped("pair confirmation retained");
+    require(SUCCEEDED(status)==(scenario==0),"pair bridge accepted stale target or invalid arity");
+    for(int i=0;work.running.load()&&i<3000;++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load() && fixture.volume.partition_creations==(scenario==0 ? 1 : 0),"pair worker route failed");
+    ::VariantClear(&result);
+  }
+}
+
 void test_bitlocker_creation_gate() {
   for (const auto method : {L"beginPartitionCreate", L"beginPartitionConversion"}) {
     for (int scenario = 0; scenario < 5; ++scenario) {
@@ -3726,6 +3759,7 @@ void test_login_reset_bridge_lifecycle() {
 
 int main() {
   try {
+    test_partition_pair_bridge();
     test_bitlocker_creation_gate();
     test_partition_selection_lifecycle();
     test_partition_resume_pause_and_revocation();

@@ -947,9 +947,23 @@
     .modal-overlay[data-step="type"] .modal { width: min(40rem, 100%); }
     .storage-switch { display: flex; gap: .5rem; margin-bottom: 1rem; }
     .storage-switch [aria-pressed="true"] { background: var(--gold); color: var(--ink-900); }
-    #create-volume-dialog[data-storage="disk"] .modal { width: min(48rem, 100%); }
+    #create-volume-dialog .modal { width: min(40rem, 100%); height: min(48rem, calc(100vh - 4rem)); display: flex; flex-direction: column; }
+    #create-volume-dialog .modal-body { flex: 1; min-height: 0; }
+    #create-volume-dialog .modal-header, #create-volume-dialog .modal-footer { flex-shrink: 0; }
+    #create-storage-switch { align-items: center; flex-wrap: wrap; }
+    #create-volume-description { flex: 1; min-width: 12rem; margin: 0; color: var(--text-2); font-size: .72rem; line-height: 1.6; }
+    #create-type-step { margin-bottom: 1.2rem; }
+    #create-disk-step .section-header { align-items: center; gap: .5rem; flex-wrap: wrap; }
+    #create-disk-step .files-card { max-height: 15rem; overflow: auto; margin: .8rem 0; }
+    #create-disk-step .files-table { min-width: 0; font-size: .74rem; }
+    #create-disk-step .files-table th, #create-disk-step .files-table td { padding: .65rem .5rem; }
+    #create-disk-step .shell-button { padding: .35rem .5rem; font-size: .7rem; }
+    #create-disk-step label { display: flex; gap: .45rem; align-items: flex-start; margin-top: .65rem; font-size: .76rem; color: var(--text-2); }
+    #create-volume-dialog[data-storage="disk"] .file-container-field { display: none; }
+    #create-volume-dialog[data-storage="disk"] .creation-capacity-pair { grid-template-columns: 1fr; }
     #create-disk-step .files-card { overflow-x: auto; }
     #create-disk-step h4 { margin: 0; }
+    #create-disk-step .section-note { border: 0; padding: 0; background: none; margin: .5rem 0; font-size: .74rem; }
     .type-picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
     .type-pick {
       display: block; padding: 1rem; text-align: left; border-radius: .65rem;
@@ -1795,18 +1809,29 @@
         <div id="create-storage-switch" class="storage-switch" role="group" aria-label="容器存储方式">
           <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘容器</button>
           <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件容器</button>
+          <p id="create-volume-description">容器为物理硬盘上已有的独立数据分区</p>
         </div>
-        <p id="create-volume-description">容器是一个加密文件，挂载后显示为一个普通磁盘。请选择要创建的容器类型：</p>
+        <div id="create-type-step" class="type-picks" role="radiogroup" aria-label="容器类型">
+          <button class="type-pick" type="button" role="radio" aria-checked="true" data-create-kind="encrypted">
+            <span class="type-pick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg></span>
+            <span class="type-pick-title">标准容器</span>
+            <span class="type-pick-copy">单个加密卷</span>
+          </button>
+          <button class="type-pick" type="button" role="radio" aria-checked="false" data-create-kind="hidden">
+            <span class="type-pick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l8.5 4.6L12 12.7 3.5 8.1 12 3.5z"></path><path d="M3.5 15.9L12 20.5l8.5-4.6"></path><path d="M3.5 12L12 16.6 20.5 12"></path></svg></span>
+            <span class="type-pick-title">含隐藏卷的容器</span>
+            <span class="type-pick-copy">外层卷与隐藏卷</span>
+          </button>
+        </div>
         <section id="create-disk-step" aria-labelledby="partitions-title">
           <div class="section-header">
-            <div><h4 id="partitions-title">选择已有的数据分区</h4><p class="section-note">将已有 MBR 数据分区清空并创建加密盘。仅支持 512 字节扇区、未启用 BitLocker 的 NTFS 数据分区。</p></div>
+            <div><h4 id="partitions-title">选择分区</h4></div>
             <div class="overview-actions">
               <button id="partition-open-management" class="shell-button" type="button">打开磁盘管理</button>
               <button id="partition-check" class="shell-button" type="button" disabled>检查所选分区</button>
               <button id="partition-refresh" class="shell-button" type="button">刷新分区</button>
             </div>
           </div>
-          <p class="section-note">没有合适的分区？可在磁盘管理中准备，完成后返回刷新。应用不调整分区表。未选择“保留现有文件”时，快速格式化会清空文件列表，原有文件无法保留，也不安全擦除历史数据残留。请先在设置中开启“记住容器”，以加密保存找回分区所需的记录。</p>
           <div class="files-card">
             <table class="files-table">
               <thead><tr><th>盘符 / 卷标 / 分区</th><th>容量</th><th>状态</th><th>选择</th></tr></thead>
@@ -1819,22 +1844,7 @@
           <p id="partition-conversion-note" class="section-note" hidden>请先备份重要文件。转换可正常暂停，退出后须用原安全卡登录继续；异常中断可能导致数据损坏。转换完成前不能访问文件，不支持断电或强杀后的无损恢复。</p>
           <label><input id="partition-erase-consent" type="checkbox" disabled><span id="partition-consent-text">我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。</span></label>
         </section>
-        <div id="create-type-step" class="type-picks" role="radiogroup" aria-label="容器类型">
-          <button class="type-pick" type="button" role="radio" aria-checked="true" data-create-kind="encrypted">
-            <span class="type-pick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg></span>
-            <span class="type-pick-title">标准容器</span>
-            <span class="type-pick-copy">一个标准结构的容器，含一个加密卷，使用日常密码进行解密与挂载。</span>
-          </button>
-          <button class="type-pick" type="button" role="radio" aria-checked="false" data-create-kind="hidden">
-            <span class="type-pick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l8.5 4.6L12 12.7 3.5 8.1 12 3.5z"></path><path d="M3.5 15.9L12 20.5l8.5-4.6"></path><path d="M3.5 12L12 16.6 20.5 12"></path></svg></span>
-            <span class="type-pick-title">含隐藏卷的容器</span>
-            <span class="type-pick-copy">一个双层结构的容器，含一个外层卷与一个隐藏卷，使用诱饵密码或日常密码进行解密与挂载。</span>
-          </button>
-        </div>
-        <div id="create-type-note" class="creation-note">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
-          <span>创建过程使用启动时授予的管理员权限，本次运行无需重复确认。</span>
-        </div>
+        <div id="create-type-note" hidden></div>
         <div id="create-container-form" class="creation-form" hidden>
           <label for="create-container-name">名称</label>
           <input id="create-container-name" class="creation-text" type="text"
@@ -1869,6 +1879,7 @@
           <p id="create-container-error" class="creation-error" hidden></p>
         </div>
         <div id="create-container-b-form" class="creation-form" hidden>
+          <div class="file-container-field">
           <label for="create-container-b-name">名称</label>
           <input id="create-container-b-name" class="creation-text" type="text"
                  autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="96">
@@ -1882,7 +1893,8 @@
             </button>
           </div>
           <p id="create-container-b-directory-error" class="creation-error" hidden></p>
-          <div class="creation-capacity-pair"><div>
+          </div>
+          <div class="creation-capacity-pair"><div class="file-container-field">
           <label for="create-container-b-capacity">总容量</label>
           <div class="capacity-field">
             <input id="create-container-b-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="128">

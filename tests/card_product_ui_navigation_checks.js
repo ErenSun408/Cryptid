@@ -395,6 +395,36 @@
     check(order(home) === "1,3,2", "Row body does not start a reorder");
 
     $('[data-create-container]').click();
+    check(!$('#create-type-step').hidden && !$('#create-disk-step').hidden,
+      "Disk creation always offers both container shapes");
+    check($('#create-volume-description').parentElement === $('#create-storage-switch') &&
+      $('#create-volume-description').textContent === "容器为物理硬盘上已有的独立数据分区",
+      "Storage description shares the selector row");
+    $('[data-create-kind="hidden"]').click();
+    check(!$('#create-container-b-form').hidden && $('#partition-preserve-data').closest('label').hidden,
+      "Disk hidden selection exposes passwords and excludes in-place conversion");
+    $('#partition-refresh').click();
+    await wait(() => $('#partition-list-body button') && !$('#partition-refresh').disabled);
+    $('#partition-list-body button').click();
+    await wait(() => !$('#partition-erase-consent').disabled);
+    $('#partition-erase-consent').click();
+    for(const id of ['create-container-b-second','create-container-b-second-confirmation']) {
+      document.getElementById(id).value='test-decoy-password';
+      document.getElementById(id).dispatchEvent(new Event('input',{bubbles:true}));
+    }
+    check(!$('#create-volume-continue').disabled,"Disk pair needs no file name or directory");
+    $('#create-volume-continue').click();
+    check(!$('#hidden-create-review').hidden,"Disk pair reuses hidden password review");
+    $('#create-container-b-acknowledge').click();
+    $('#hidden-create-review-confirm').click();
+    await wait(() => window.navigationFixture.partitionPairCreated);
+    check(window.navigationFixture.pairPasswords.every(a=>a.every(b=>b===0)),"Disk pair page byte arrays are wiped");
+    window.navigationFixture.pendingCreation.resolve();
+    await wait(() => $('#create-volume-status').dataset.tone==='success');
+    $('#create-volume-close').click();
+    window.navigationFixture.pendingCreation = null;
+
+    $('[data-create-container]').click();
     $('[data-create-storage="file"]').click();
     $('[data-create-kind="hidden"]').click();
     $('#create-volume-continue').click();
