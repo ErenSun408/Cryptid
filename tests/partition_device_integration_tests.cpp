@@ -8,6 +8,7 @@
 
 #include "usb_vault/volume/partition_catalog.h"
 #include "volume/partition_catalog_detail.h"
+#include "volume/partition_inplace_plan_detail.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/unmount_retry.h"
@@ -358,6 +359,35 @@ class Backend {
  private: HMODULE module_{}; fmt::Shutdown shutdown_{}; fmt::FormatBinary format_{}; bool initialized_{};
 };
 
+void inplace_plan_probe(OwnedDisk& disk) {
+  const auto candidate = disk.prepare_ntfs();
+  auto path = candidate.volume_path; path.pop_back();
+  Handle handle(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, 0, nullptr));
+  require(handle.get() != INVALID_HANDLE_VALUE, "in-place readonly probe open");
+  const auto sample = [&] {
+    LARGE_INTEGER zero{}; DWORD read{};
+    std::vector<std::byte> data(65536);
+    require(::SetFilePointerEx(handle.get(), zero, nullptr, FILE_BEGIN) &&
+        ::ReadFile(handle.get(), data.data(), static_cast<DWORD>(data.size()), &read, nullptr) && read == data.size(), "in-place header sample failed");
+    return data;
+  };
+  const auto before = sample();
+  const auto plan = usb_vault::volume::detail::inspect_partition_inplace(handle.get(), candidate);
+  LARGE_INTEGER zero{}, position{};
+  require(::SetFilePointerEx(handle.get(), zero, &position, FILE_CURRENT) && position.QuadPart == 65536,
+      "read-only inspection changed caller position");
+  const auto again = usb_vault::volume::detail::inspect_partition_inplace(handle.get(), candidate);
+  require(plan == again && sample() == before && plan.partition_bytes == candidate.length_bytes &&
+      plan.ntfs_bytes - plan.shrink_to_sectors * 512 == 262144, "NTFS planning inconsistent or modified header");
+  auto wrong = candidate; wrong.device_id[0] ^= 1;
+  bool refused = false;
+  try { static_cast<void>(usb_vault::volume::detail::inspect_partition_inplace(handle.get(), wrong)); }
+  catch (const std::invalid_argument&) { refused = true; }
+  require(refused, "in-place inspection accepted different device");
+  std::cout << "PASS: owned NTFS retained-handle in-place plan; header/position preserved; changed identity rejected\n";
+}
+
 void helper_format(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
   using namespace usb_vault::volume_creation;
   const auto candidate = disk.prepare_ntfs();
@@ -661,7 +691,7 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session")) {
+  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -676,6 +706,7 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create();
+    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-plan") { inplace_plan_probe(disk); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-session") { session_roundtrip(disk); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-helper") helper_format(disk, password);
     else backend.format(disk, password, std::wstring_view(argv[1]) == L"--run-owned-vhd-handle");
