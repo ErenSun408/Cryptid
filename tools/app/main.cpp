@@ -1168,14 +1168,15 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         }
         if (!g_creation_work.can_cancel()) {
           ::MessageBoxW(window, g_creation_work.cancellation_requested()
-              ? L"正在取消创建，请等待处理结果后再关闭。"
+              ? (g_creation_work.inplace_operation.load() ? L"正在保存加密进度并暂停，请等待结果后再关闭。" : L"正在取消创建，请等待处理结果后再关闭。")
               : L"正在完成创建，已无法取消。请等待处理结果后再关闭。",
               kWindowTitle, MB_OK | MB_ICONINFORMATION);
           return 0;
         }
         if (::MessageBoxW(window,
-                          L"容器正在创建。要取消创建吗？"
-                          L"应用会等待处理结束，请查看处理结果后再关闭。",
+                          g_creation_work.inplace_operation.load()
+                            ? L"分区正在加密。要正常暂停吗？应用会等待进度保存，请确认已暂停后再关闭。"
+                            : L"容器正在创建。要取消创建吗？应用会等待处理结束，请查看处理结果后再关闭。",
                           kWindowTitle, MB_YESNO | MB_ICONQUESTION) == IDYES) {
           if (!g_creation_work.request_cancel()) {
             ::MessageBoxW(window, L"取消未生效，创建已进入完成阶段或已结束。请查看处理结果后再关闭。",

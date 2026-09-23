@@ -42,6 +42,7 @@ struct ContainerUiStatus final {
   std::uint32_t size_mib{};
   wchar_t drive_letter{};
   bool partition{};
+  std::uint32_t conversion_state{};
 };
 
 // One entry of a directory inside a mounted container, projected for the
@@ -137,6 +138,8 @@ class CardProductUiSessionController final {
   // that does not exist, an out-of-range size, or a wrong route all throw
   // `std::invalid_argument`. There is no cancel outcome any more: the user
   // settles every field before the create button commits.
+  bool begin_partition_conversion(const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm);
+  bool resume_partition_conversion(std::uint32_t id);
   void create_partition(const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm);
 
   void create_container(std::wstring_view name, std::wstring_view directory,
@@ -295,6 +298,7 @@ class CardProductUiSessionController final {
   void clear_operation_history();
   void set_creation_feedback(application::CreationFeedback feedback);
   void set_creation_cancellation(application::CreationCancellation cancelled);
+  void set_creation_revocation(application::CreationCancellation revoked);
   [[nodiscard]] bool operation_logging_enabled();
   bool force_unmount_enabled();
   bool auto_mount_enabled();

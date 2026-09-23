@@ -281,6 +281,19 @@ std::wstring CardProductUiSessionController::browse_for_container_directory() {
   return file_chooser_.choose_container_directory();
 }
 
+bool CardProductUiSessionController::begin_partition_conversion(const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  if (state()!=CardProductUiState::authenticated) throw std::logic_error("authentication required");
+  return volume_session_.begin_partition_conversion(target,confirm);
+}
+bool CardProductUiSessionController::resume_partition_conversion(std::uint32_t id) {
+  if (state()!=CardProductUiState::authenticated) throw std::logic_error("authentication required");
+  return volume_session_.resume_partition_conversion(id);
+}
+void CardProductUiSessionController::set_creation_revocation(application::CreationCancellation revoked) {
+  volume_session_.set_creation_revocation(std::move(revoked));
+}
+
 void CardProductUiSessionController::create_partition(
     const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("partition creation requires authentication");
@@ -635,7 +648,7 @@ CardProductUiSessionController::container_statuses() {
                       .mounted = status.mounted,
                       .size_mib = displayable_size_mib(status.size_bytes),
                       .drive_letter = status.drive_letter,
-                      .partition = status.partition});
+                      .partition = status.partition, .conversion_state=status.conversion_state});
   }
   return result;
 }

@@ -33,6 +33,9 @@ constexpr DISPID kPartitionCheckId = 107;
 constexpr DISPID kPartitionCheckStatusId = 108;
 constexpr DISPID kPartitionCreateId = 109;
 constexpr DISPID kGetContainerPartitionId = 110;
+constexpr DISPID kGetContainerConversionId = 111;
+constexpr DISPID kPartitionConvertId = 112;
+constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -439,6 +442,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"clearPartitions")) { ids[0] = kPartitionClearId; return S_OK; }
     if (matches(names[0], L"beginPartitionCheck")) { ids[0] = kPartitionCheckId; return S_OK; }
     if (matches(names[0], L"getPartitionCheckStatus")) { ids[0] = kPartitionCheckStatusId; return S_OK; }
+    if (matches(names[0], L"getContainerConversion")) { ids[0]=kGetContainerConversionId; return S_OK; }
+    if (matches(names[0], L"beginPartitionConversion")) { ids[0]=kPartitionConvertId; return S_OK; }
+    if (matches(names[0], L"beginPartitionResume")) { ids[0]=kPartitionResumeId; return S_OK; }
     if (matches(names[0], L"getContainerPartition")) { ids[0] = kGetContainerPartitionId; return S_OK; }
     if (matches(names[0], L"beginPartitionCreate")) { ids[0] = kPartitionCreateId; return S_OK; }
     if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
@@ -700,11 +706,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     if (!creation_work_->running.load() &&
-        !(member >= kPartitionBeginId && member <= kPartitionCreateId)) partition_mode_ = false;
+        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId)) partition_mode_ = false;
     if (!creation_work_->running.load() &&
         (controller_.state() != CardProductUiState::authenticated ||
          partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
-    if (member >= kPartitionBeginId && member <= kPartitionCreateId)
+    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId)
       return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
@@ -1037,6 +1043,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetContainerMountedId:
       case kGetContainerSizeMibId:
       case kGetContainerPartitionId:
+      case kGetContainerConversionId:
       case kGetContainerDriveLetterId:
         return invoke_container_fact(
             member, parameters, result, argument_error);
@@ -1194,7 +1201,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     return S_OK;
   }
   HRESULT invoke_partition(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
-    if (member == kPartitionSelectId || member == kPartitionCreateId) {
+    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId) {
       if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg)
         return DISP_E_BADPARAMCOUNT;
     } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -1208,7 +1215,12 @@ class CardProductWebViewHostObject final : public IDispatch {
       return E_ACCESSDENIED;
     }
     try {
-      if (member == kPartitionCreateId) {
+      if (member==kPartitionResumeId) {
+        std::uint32_t id{};
+        if(!exact_uint32(parameters->rgvarg[0],id) || !id)return DISP_E_TYPEMISMATCH;
+        return begin_creation([this,id]{creation_paused_.store(controller_.resume_partition_conversion(id));},result,true);
+      }
+      if (member == kPartitionCreateId || member==kPartitionConvertId) {
         std::uint32_t id{};
         if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
         volume::PartitionCandidate target;
@@ -1224,12 +1236,14 @@ class CardProductWebViewHostObject final : public IDispatch {
         }
         clear_partitions(); // Consume consent and snapshot; retries require a fresh selection.
         partition_mode_ = false;
-        return begin_creation([this, target, epoch] {
-          controller_.create_partition(target, [this, target, epoch](const volume::PartitionCandidate& confirmed) {
+        return begin_creation([this, target, epoch, member] {
+          const auto confirm=[this, target, epoch](const volume::PartitionCandidate& confirmed) {
             return target == confirmed && !creation_work_->interrupted.load() && creation_work_->card_epoch.load() == epoch &&
                    !creation_work_->cancellation_requested();
-          });
-        }, result);
+          };
+          if(member==kPartitionConvertId)creation_paused_.store(controller_.begin_partition_conversion(target,confirm));
+          else controller_.create_partition(target,confirm);
+        }, result,member==kPartitionConvertId);
       }
       if (member == kPartitionBeginId || member == kPartitionToolId) {
         last_volume_member_ = 0;
@@ -1623,12 +1637,14 @@ class CardProductWebViewHostObject final : public IDispatch {
   }
 
   template <typename Operation>
-  HRESULT begin_creation(Operation operation, VARIANT* result) {
+  HRESULT begin_creation(Operation operation, VARIANT* result, bool inplace = false) {
     if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated) return E_FAIL;
     if (creation_thread_.joinable()) creation_thread_.join();
     creation_progress_.store(0);
     creation_flags_.store(0);
     creation_status_.store(1);
+    creation_paused_.store(false);
+    creation_work_->inplace_operation.store(inplace);
     creation_work_->volume_operation.store(false);
     creation_work_->begin();
     creation_work_->running.store(true);
@@ -1638,6 +1654,9 @@ class CardProductWebViewHostObject final : public IDispatch {
         unsigned int status = 3;
         try {
           if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          controller_.set_creation_revocation([this,epoch=creation_work_->card_epoch.load()]{
+            return creation_work_->interrupted.load() || creation_work_->card_epoch.load()!=epoch;
+          });
           controller_.set_creation_cancellation(
               [this, epoch = creation_work_->card_epoch.load()]() {
                 return creation_work_->cancellation_requested() || creation_work_->interrupted.load() ||
@@ -1657,7 +1676,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                 (static_cast<std::uint64_t>(percent) << 16) | static_cast<unsigned int>(drive));
           });
           operation();
-          status = 2;
+          status = creation_paused_.load() ? 6u : 2u;
         } catch (const application::ContainerCreationCleanupError&) {
           status = 5;
         } catch (const std::system_error& error) {
@@ -1673,6 +1692,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         } catch (...) {}
         try { controller_.set_creation_feedback({}); } catch (...) {}
         try { controller_.set_creation_cancellation({}); } catch (...) {}
+        try { controller_.set_creation_revocation({}); } catch (...) {}
         if (SUCCEEDED(com)) ::CoUninitialize();
         creation_status_.store(status);
         creation_work_->finish();
@@ -2330,6 +2350,8 @@ class CardProductWebViewHostObject final : public IDispatch {
           return complete_string(status.name.c_str(),
                                  static_cast<UINT>(status.name.size()),
                                  result);
+        case kGetContainerConversionId:
+          result->vt=VT_UI4; result->ulVal=status.conversion_state; return S_OK;
         case kGetContainerPartitionId:
           result->vt = VT_BOOL;
           result->boolVal = status.partition ? VARIANT_TRUE : VARIANT_FALSE;
@@ -2690,6 +2712,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::uint32_t last_volume_id_{0};
   std::uint64_t last_volume_epoch_{0};
   std::atomic<unsigned int> creation_status_{0};
+  std::atomic<bool> creation_paused_{false};
   std::atomic<std::uint64_t> creation_progress_{0};
   std::atomic<unsigned int> creation_flags_{0};
 };

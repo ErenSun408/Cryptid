@@ -1231,7 +1231,7 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
       mount_adopted_container(id);
       if(revoked()) {unmount_container_impl(id,true); check();}
     }
-    if(runtime_.creation_feedback)runtime_.creation_feedback(5,paused ? 0u : 100u,find_by_id(state_,id)->drive_letter);
+    if(!paused && runtime_.creation_feedback)runtime_.creation_feedback(5,100,find_by_id(state_,id)->drive_letter);
     return paused;
   } catch (...) {
     if(!recorded)std::erase_if(state_.containers,[id](const auto& entry){return entry.id==id;});

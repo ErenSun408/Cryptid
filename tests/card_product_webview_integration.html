@@ -305,9 +305,9 @@
     </div>
     <div id="creation-progress" hidden>
       <div id="creation-progress-authorize"><span class="step-tail"></span></div>
-      <div id="creation-progress-allocate"><span class="step-tail"></span></div>
-      <div id="creation-progress-work"><span class="step-tail"></span></div>
-      <div id="creation-progress-check"><span class="step-tail"></span></div>
+      <div id="creation-progress-allocate"><span class="step-mark"></span><span></span><span class="step-tail"></span></div>
+      <div id="creation-progress-work"><span class="step-mark"></span><span></span><span class="step-tail"></span></div>
+      <div id="creation-progress-check"><span class="step-mark"></span><span></span><span class="step-tail"></span></div>
       <div id="creation-progress-time"></div>
       <button id="creation-cancel-work" type="button"></button>
     </div>
@@ -370,6 +370,7 @@
               <button id="partition-refresh" type="button">刷新分区</button>
 <table><tbody id="partition-list-body"></tbody></table>
 <output id="partition-status"></output><p id="partition-selection"></p>
+<input id="partition-preserve-data" type="checkbox"><p id="partition-conversion-note" hidden></p><span id="partition-consent-text"></span>
 <input id="partition-erase-consent" type="checkbox" disabled>
 </section>
           <div id="create-storage-switch" class="storage-switch" role="group" aria-label="容器存储方式">

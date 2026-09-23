@@ -198,6 +198,7 @@ window.navigationFixture = {
     getContainerId: (i) => displayContainers()[i].id,
     getContainerName: (i) => displayContainers()[i].name,
     getContainerPartition: (i) => Boolean(displayContainers()[i].partition),
+    getContainerConversion: (i) => displayContainers()[i].conversion || 0,
     getContainerMounted: (i) => displayContainers()[i].mounted,
     getContainerSizeMib: (i) => displayContainers()[i].size,
     getContainerDriveLetter: (i) => displayContainers()[i].drive,
@@ -209,6 +210,28 @@ window.navigationFixture = {
         resolve: () => { fixture.creationProgress = "2,5,100,90,3"; },
         reject: () => { fixture.creationProgress = "3,3,41,0,3"; },
       };
+    },
+    beginPartitionConversion: id => {
+      if (!id || id !== fixture.partitionSelected) throw new Error("stale conversion consent");
+      fixture.partitionConverted = id; fixture.partitionSelected = 0;
+      fixture.containers.push({id: 101, name: "转换中的分区", mounted: false, size: 0, drive: "", partition: true, conversion: 1});
+      fixture.creationProgress = "1,3,23,0,1";
+      fixture.pendingCreation = {
+        pause: () => { fixture.containers.find(c=>c.id===101).conversion=2; fixture.creationProgress="6,3,23,0,1"; },
+        reject: () => { fixture.creationProgress="3,3,23,0,1"; },
+      };
+      return true;
+    },
+    beginPartitionResume: id => {
+      const entry=fixture.containers.find(c=>c.id===id);
+      if (!entry || entry.conversion!==2) throw new Error("not paused");
+      fixture.partitionResumed=id; entry.conversion=1; fixture.creationProgress="1,3,24,0,1";
+      fixture.pendingCreation={
+        resolve:()=>{entry.conversion=0;entry.mounted=true;entry.size=1024;entry.drive="W:";fixture.creationProgress="2,5,100,87,1";},
+        pause:()=>{entry.conversion=2;fixture.creationProgress="6,3,48,0,1";},
+        reject:()=>{fixture.creationProgress="3,3,48,0,1";},
+      };
+      return true;
     },
     beginPartitionCreate: (id) => {
       if (!id || id !== fixture.partitionSelected) throw new Error("stale partition consent");

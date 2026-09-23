@@ -299,6 +299,7 @@
   const kCreationCancelled = "creation-cancelled";
   const kCreationCleanupFailed = "creation-cleanup-failed";
   const kCreationCleanupMessage = "创建未完成，未能确认临时文件已清理。请检查保存位置中的残留文件后再重试。";
+  let creationInplace = false;
   let creationDrive = "";
   let creationRunning = false;
   let creationFinalizing = false;
@@ -322,7 +323,10 @@
     creationFinalizing = false;
     creationProgress.hidden = false;
     creationDialog.dataset.running = "true";
-    creationTitle.textContent = "正在创建容器";
+    creationTitle.textContent = creationInplace ? "正在加密分区" : "正在创建容器";
+    creationProgressAllocate.children[1].textContent = creationInplace ? "准备文件系统" : "分配容器文件";
+    creationProgressWork.children[1].textContent = creationInplace ? "加密原有数据" : "格式化容器";
+    creationProgressCheck.children[1].textContent = creationInplace ? "保存进度与完成处理" : "挂载并分配盘符";
     for (const step of [creationProgressAuthorize, creationProgressAllocate, creationProgressWork]) {
       step.className = "";
       step.removeAttribute("aria-current");
@@ -336,7 +340,7 @@
     creationProgressCheck.removeAttribute("aria-current");
     creationProgressAuthorize.setAttribute("aria-current", "step");
     creationCancelWork.disabled = false;
-    creationCancelWork.textContent = "取消创建";
+    creationCancelWork.textContent = creationInplace ? "暂停加密" : "取消创建";
     const started = performance.now();
     const updateTime = () => {
       const seconds = Math.floor((performance.now() - started) / 1000);
@@ -359,13 +363,22 @@
     if (creationProgressTimer !== null) clearInterval(creationProgressTimer);
     creationProgressTimer = null;
     creationRunning = false;
+    if (creationStatus.dataset.tone === "paused") {
+      creationResult = "paused"; creationProgress.dataset.result = "paused";
+      creationDialog.dataset.running = "false"; creationTitle.textContent = "加密已暂停";
+      creationProgressWork.className = ""; creationProgressWork.querySelector(".step-tail").textContent = "已暂停";
+      creationProgressCheck.className = "done"; creationProgressCheck.querySelector(".step-tail").textContent = "进度已保存";
+      for (const step of [creationProgressAuthorize, creationProgressAllocate, creationProgressWork, creationProgressCheck]) step.removeAttribute("aria-current");
+      setCreationDescription("可以退出应用；下次用原安全卡登录，在容器列表选择继续加密。");
+      return;
+    }
     const succeeded = creationStatus.dataset.tone === "success";
     const cancelled = creationStatus.dataset.tone === "cancelled";
     creationResult = succeeded ? "success" : cancelled ? "cancelled" : "error";
     creationProgress.dataset.result = creationResult;
     creationDialog.dataset.running = "false";
     creationTitle.textContent = succeeded
-      ? "容器已创建并挂载"
+      ? (creationInplace ? "分区加密已完成" : "容器已创建并挂载")
       : cancelled ? "已取消创建" : "创建未完成";
     setCreationDescription("");
     creationProgressWork.removeAttribute("aria-current");
@@ -376,7 +389,7 @@
       succeeded || created ? "已完成" : cancelled ? "已取消" : "未完成";
     creationProgressCheck.className = succeeded ? "done" : "failed";
     creationProgressCheck.querySelector(".step-tail").textContent =
-      succeeded ? (creationDrive || "挂载成功") : cancelled ? "已取消" : "未确认";
+      succeeded ? (creationDrive || (creationInplace ? "可以挂载使用" : "挂载成功")) : cancelled ? "已取消" : "未确认";
     for (const step of [creationProgressAuthorize, creationProgressAllocate]) {
       if (step.classList.contains("current")) {
         step.className = succeeded ? "done" : "failed";
@@ -396,8 +409,9 @@
       const packed = await bridge.getCreationProgress();
       if (typeof packed !== "string" || !/^\d+,\d+,\d+,\d+,\d+$/.test(packed)) throw new Error("invalid creation progress");
       const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
-      if (status < 1 || status > 5 || stage > 5 || percent > 100 || flags > 3 ||
+      if (status < 1 || status > 6 || stage > 5 || percent > 100 || flags > 3 ||
           (drive !== 0 && (drive < 65 || drive > 90))) throw new Error("invalid creation progress range");
+      if (status === 6) { if (!creationInplace) throw new Error("unexpected pause result"); return 6; }
       if (stage >= 4) {
         creationFinalizing = true;
         creationCancelWork.disabled = true;
@@ -410,18 +424,19 @@
         if (state === "current") step.setAttribute("aria-current", "step");
       };
       setStep(creationProgressAuthorize, flags & 1 ? "done" : "current", flags & 1 ? "已授权" : "准备／等待授权");
-      setStep(creationProgressAllocate, flags & 2 ? "done" : stage >= 1 ? "current" : "", flags & 2 ? "已分配" : stage >= 1 ? "分配中" : "等待中");
+      setStep(creationProgressAllocate, creationInplace && stage >= 3 ? "done" : flags & 2 ? "done" : stage >= 1 ? "current" : "",
+        creationInplace ? (stage >= 3 ? "已准备" : "准备中") : flags & 2 ? "已分配" : stage >= 1 ? "分配中" : "等待中");
       setStep(creationProgressWork, stage >= 4 ? "done" : stage === 3 ? "current" : "", stage >= 4 ? "已完成" : stage === 3 ? `${percent}%` : "等待中");
-      setStep(creationProgressCheck, stage === 5 ? "done" : stage === 4 ? "current" : "", stage === 5 ? "挂载成功" : stage === 4 ? "挂载中" : "等待中");
+      setStep(creationProgressCheck, stage === 5 ? "done" : stage === 4 ? "current" : "", stage === 5 ? (creationInplace && !drive ? "加密完成" : "挂载成功") : stage === 4 ? "挂载中" : "等待中");
       if (drive) creationDrive = `${String.fromCharCode(drive)}:`;
       const bar = creationProgress.querySelector("[role=progressbar]");
       if (stage >= 3) {
         const progress = stage >= 4 ? 100 : percent;
         bar?.setAttribute("aria-valuenow", String(progress));
         bar?.style.setProperty("--creation-percent", `${progress}%`);
-        bar?.setAttribute("aria-label", "格式化进度");
+        bar?.setAttribute("aria-label", creationInplace ? "加密进度" : "格式化进度");
       }
-      if (status === 2) return;
+      if (status === 2) return 2;
       if (status === 4) throw new Error(kCreationCancelled);
       if (status === 5) throw new Error(kCreationCleanupFailed);
       if (status === 3) throw new Error("native creation failed");
@@ -550,7 +565,7 @@
     }
   };
   const updateBatchSelection = (control) => {
-    const eligible = containers.filter((item) => item.mounted !== control.mounting && !isMaintenanceContainer(item.id));
+    const eligible = containers.filter((item) => item.mounted !== control.mounting && !item.conversion && !isMaintenanceContainer(item.id));
     for (const id of control.selected) {
       if (!eligible.some((item) => item.id === id)) control.selected.delete(id);
     }
@@ -658,7 +673,7 @@
       if (busy || externalRefreshPending || currentState !== nativeState.authenticated) return;
       control.selected.clear();
       if (control.all.checked) for (const item of containers) {
-        if (item.mounted !== control.mounting && !isMaintenanceContainer(item.id)) control.selected.add(item.id);
+        if (item.mounted !== control.mounting && !item.conversion && !isMaintenanceContainer(item.id)) control.selected.add(item.id);
       }
       updateBatchSelection(control);
     });
@@ -1015,7 +1030,7 @@
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
-    creationContinueButton.textContent = creationStorage === "disk" ? "清空并创建加密盘" : choosing ? "下一步" : "创建容器";
+    creationContinueButton.textContent = creationStorage === "disk" ? (partitionPreserve.checked ? "保留文件并开始加密" : "清空并创建加密盘") : choosing ? "下一步" : "创建容器";
     creationContinueButton.hidden = creationResult !== "";
     creationCancelLabel.textContent =
       creationResult === "error" || creationResult === "cancelled" ? "关闭" : creationCompleted
@@ -1916,12 +1931,13 @@
     const mount = document.createElement("button");
     mount.className = container.mounted ? "shell-button danger" : "shell-button";
     mount.type = "button";
-    mount.disabled = busy;
+    mount.disabled = busy || container.conversion === 1;
     mount.dataset.rowMount = String(container.id);
-    mount.textContent = container.mounted ? "卸载" : "挂载";
+    mount.textContent = container.conversion === 2 ? "继续加密" : container.conversion === 1 ? "转换未完成" : container.mounted ? "卸载" : "挂载";
     mount.addEventListener("click", async () => {
       if (busy) return;
-      if (container.mounted) {
+      if (container.conversion === 2) { await runPartitionConversion(container.id, true); }
+      else if (container.mounted) {
         await unmountAdoptedContainer(container.id);
       } else {
         await mountAdoptedContainer(container.id);
@@ -3314,7 +3330,15 @@
   const partitionStatus = document.getElementById("partition-status");
   const partitionSelection = document.getElementById("partition-selection");
   const partitionCheck = document.getElementById("partition-check");
+  const partitionPreserve = document.getElementById("partition-preserve-data");
+  const updatePartitionMode = () => {
+    document.getElementById("partition-conversion-note").hidden = !partitionPreserve.checked;
+    document.getElementById("partition-consent-text").textContent = partitionPreserve.checked
+      ? "我确认已备份重要文件，允许对所选 NTFS 分区原地加密并移除原盘符。"
+      : "我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。";
+  };
   const partitionErase = document.getElementById("partition-erase-consent");
+  partitionPreserve.addEventListener("change", () => { partitionErase.checked = false; updatePartitionMode(); updateCreationAvailability(); });
   partitionErase.addEventListener("change", () => updateCreationAvailability());
   const partitionRefresh = document.getElementById("partition-refresh");
   const partitionManagement = document.getElementById("partition-open-management");
@@ -3325,6 +3349,7 @@
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
   const renderPartitions = () => {
     const disabled = !partitionPickerVisible() || busy || currentState !== nativeState.authenticated;
+    partitionPreserve.disabled = disabled;
     partitionErase.disabled = disabled || !partitionSelected;
     partitionRefresh.disabled = disabled;
     partitionCheck.disabled = disabled || !partitionSelected;
@@ -3503,6 +3528,7 @@
     // The flow always opens on the same step with the same preselection, so
     // opening it says nothing about which password is logged in.
     creationStorage = "disk";
+    creationInplace = false; partitionPreserve.checked = false; updatePartitionMode();
     clearCreationPartitions();
     creationKind = "encrypted";
     creationStep = "type";
@@ -3586,7 +3612,7 @@
     button.type = "button";
     button.className = action === "unmount" ? "shell-button danger" : "shell-button";
     button.textContent = label;
-    button.disabled = busy || disabled || isMaintenanceContainer(container.id);
+    button.disabled = busy || disabled || isMaintenanceContainer(container.id) || (Boolean(container.conversion) && ["mount", "forget", "browse", "export"].includes(action));
     button.dataset.containerId = String(container.id);
     button.dataset.containerName = container.name;
     button.dataset.containerAction = action;
@@ -3660,7 +3686,7 @@
     name.title = container.name;
     const state = document.createElement("div");
     state.className = "container-state";
-    state.textContent = maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.mounted ? "已挂载" : "未挂载";
+    state.textContent = container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成，请保留记录并检查磁盘" : maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.mounted ? "已挂载" : "未挂载";
     identity.append(name, state);
 
     const facts = document.createElement("div");
@@ -3680,7 +3706,7 @@
     const actions = document.createElement("div");
     actions.className = "container-actions";
     actions.appendChild(containerActionButton(container,
-      container.mounted ? "unmount" : "mount", container.mounted ? "卸载" : "挂载"));
+      container.conversion === 2 ? "resume" : container.mounted ? "unmount" : "mount", container.conversion === 2 ? "继续加密" : container.mounted ? "卸载" : "挂载"));
     if (!management) {
       const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
       if (container.mounted) remove.title = "请先卸载容器";
@@ -3703,7 +3729,7 @@
       grid.className = "container-details-grid";
       grid.append(
         containerFact("名称", container.name),
-        containerFact("状态", container.mounted ? "已挂载" : "未挂载"),
+        containerFact("状态", container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成" : container.mounted ? "已挂载" : "未挂载"),
         containerFact("盘符", container.mounted ? container.drive : "—"),
         containerFact("容量", container.mounted && container.sizeMib > 0 ? containerSizeText(container) : "—"),
         containerFact("加密", "AES-256-XTS"),
@@ -4100,6 +4126,7 @@
         const sizeMib = await bridge.getContainerSizeMib(index);
         const drive = await bridge.getContainerDriveLetter(index);
         const partition = await bridge.getContainerPartition(index);
+        const conversion = await bridge.getContainerConversion(index);
         const validId = Number.isInteger(id) && id > 0;
         const validName = typeof name === "string" && name.length !== 0;
         const validMounted = mounted === true || mounted === false;
@@ -4109,10 +4136,10 @@
           ((mounted === true && /^[A-Z]:$/.test(drive) && nextActiveVolumes) ||
            (mounted !== true && drive === ""));
         if (!validId || !validName || !validMounted || !validSize ||
-            !validDrive || typeof partition !== "boolean") {
+            !validDrive || typeof partition !== "boolean" || !Number.isInteger(conversion) || conversion < 0 || conversion > 2 || (conversion && (!partition || mounted))) {
           throw new Error("invalid container status");
         }
-        nextContainers.push({ id, name, mounted, sizeMib, drive, partition });
+        nextContainers.push({ id, name, mounted, sizeMib, drive, partition, conversion });
       }
 
       const operationCount = await bridge.getOperationCount();
@@ -4296,7 +4323,7 @@
       busy = false;
       render(messageForCurrentState());
       if (autoMount && loginRevision === batchSessionRevision && !externalRefreshPending) {
-        const targets = orderedContainers().filter((container) => !container.mounted).map((container) => container.id);
+        const targets = orderedContainers().filter((container) => !container.mounted && !container.conversion).map((container) => container.id);
         await runSelectedBatch(batchControls[0], null, targets);
       }
     } catch (_) {
@@ -4561,7 +4588,7 @@
   const batchItemFailed = (item) => item.outcome !== 2 && item.outcome !== 11;
   const retryableBatchItems = (context) => context.items.filter((item) =>
     batchItemFailed(item) && containers.some((container) =>
-      container.id === item.id && container.mounted !== context.mounting && !isMaintenanceContainer(container.id)));
+      container.id === item.id && container.mounted !== context.mounting && !container.conversion && !isMaintenanceContainer(container.id)));
   const clearBatchResults = () => {
     if (batchResultContext) {
       batchResultContext.items.length = 0;
@@ -5252,9 +5279,37 @@
     }
   };
 
+  const runPartitionConversion = async (id, resume) => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    if (resume) openCreationFlow();
+    creationInplace = true; partitionErase.checked = false; busy = true;
+    creationStatus.textContent = resume ? "正在认证并继续加密，请确认管理员权限。" : "正在准备原地加密，请确认管理员权限。";
+    creationStatus.dataset.tone = "";
+    try {
+      startCreationProgress(); await paintCreationProgress();
+      const accepted = resume ? await bridge.beginPartitionResume(id) : await bridge.beginPartitionConversion(id);
+      if (accepted !== true) throw new Error("conversion rejected");
+      const result = await waitForCreation();
+      if (result !== 6) confirmCreationResult();
+      await refreshNativeState(); busy = false; render(messageForCurrentState());
+      creationCompleted = true;
+      creationStatus.textContent = result === 6 ? "进度已保存，可以安全退出应用。下次用原安全卡登录后继续加密。" : "分区加密已完成，可以挂载使用。";
+      creationStatus.dataset.tone = result === 6 ? "paused" : "success";
+    } catch (_) {
+      try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; }
+      busy = false; render(messageForCurrentState());
+      creationStatus.textContent = "加密未完成，未确认正常暂停。请保留容器记录和磁盘，不要重新格式化或从头转换；异常中断不保证可续作。";
+      creationStatus.dataset.tone = "error";
+    } finally {
+      busy = false; if (!resume) discardPartitions(); finishCreationProgress(); updateCreationAvailability();
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  };
+
   const createPartition = async () => {
     if (!partitionSelected || !partitionErase.checked || busy || currentState !== nativeState.authenticated) return;
     const id = partitionSelected;
+    if (partitionPreserve.checked) { await runPartitionConversion(id, false); return; }
     const previousIds = new Set(containers.map(container => container.id));
     const revision = batchSessionRevision;
     partitionErase.checked = false;
@@ -5732,7 +5787,7 @@
   creationCancelWork.addEventListener("click", async () => {
     if (creationCancelWork.disabled) return;
     creationCancelWork.disabled = true;
-    creationCancelWork.textContent = "正在取消…";
+    creationCancelWork.textContent = creationInplace ? "正在保存进度并暂停…" : "正在取消…";
     // The reply only acknowledges the request. The actual outcome still
     // arrives through progress polling, including cleanup failures.
     try {
@@ -5744,7 +5799,7 @@
     } catch (_) {
       if (creationRunning && !creationFinalizing) {
         creationCancelWork.disabled = false;
-        creationCancelWork.textContent = "取消请求未确认，点击重试";
+        creationCancelWork.textContent = creationInplace ? "暂停请求未确认，点击重试" : "取消请求未确认，点击重试";
       }
     }
   });
@@ -5857,6 +5912,8 @@
         openForgetFlow(id, target.dataset.containerName ?? "");
       } else if (target.dataset.containerAction === "unmount") {
         await unmountAdoptedContainer(id);
+      } else if (target.dataset.containerAction === "resume") {
+        await runPartitionConversion(id, true);
       } else if (target.dataset.containerAction === "mount") {
         await mountAdoptedContainer(id);
       } else if (target.dataset.containerAction === "browse") {

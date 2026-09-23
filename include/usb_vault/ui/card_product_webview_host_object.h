@@ -21,6 +21,7 @@ struct CreationWorkState final {
   std::atomic<bool> interrupted{false};
   // Shares the session exclusion and deferred card-event gate with creation.
   std::atomic<bool> volume_operation{false};
+  std::atomic<bool> inplace_operation{false};
   std::atomic<std::uint64_t> card_epoch{0};
   void begin() noexcept { phase_.store(Phase::cancellable); }
   void finish() noexcept { phase_.store(Phase::idle); }

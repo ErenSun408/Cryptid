@@ -1798,7 +1798,7 @@
               <button id="partition-refresh" class="shell-button" type="button">刷新分区</button>
             </div>
           </div>
-          <p class="section-note">没有合适的分区？可在磁盘管理中准备，完成后返回刷新。应用不调整分区表；快速格式化会清空文件列表，原有文件无法保留，也不安全擦除历史数据残留。请先在设置中开启“记住容器”，以加密保存找回分区所需的记录。</p>
+          <p class="section-note">没有合适的分区？可在磁盘管理中准备，完成后返回刷新。应用不调整分区表。未选择“保留现有文件”时，快速格式化会清空文件列表，原有文件无法保留，也不安全擦除历史数据残留。请先在设置中开启“记住容器”，以加密保存找回分区所需的记录。</p>
           <div class="files-card">
             <table class="files-table">
               <thead><tr><th>分区</th><th>容量</th><th>状态</th><th>选择</th></tr></thead>
@@ -1807,7 +1807,9 @@
           </div>
           <output id="partition-status" class="section-note" aria-live="polite">尚未读取分区。</output>
           <p id="partition-selection" class="section-note" aria-live="polite">尚未选择分区。</p>
-          <label><input id="partition-erase-consent" type="checkbox" disabled>我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。</label>
+          <label><input id="partition-preserve-data" type="checkbox">保留现有文件并加密（NTFS 原地转换）</label>
+          <p id="partition-conversion-note" class="section-note" hidden>请先备份重要文件。转换可正常暂停，退出后须用原安全卡登录继续；异常中断可能导致数据损坏。转换完成前不能访问文件，不支持断电或强杀后的无损恢复。</p>
+          <label><input id="partition-erase-consent" type="checkbox" disabled><span id="partition-consent-text">我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。</span></label>
         </section>
         <div id="create-type-step" class="type-picks" role="radiogroup" aria-label="容器类型">
           <button class="type-pick" type="button" role="radio" aria-checked="true" data-create-kind="encrypted">
