@@ -3343,7 +3343,7 @@
   const partitionRefresh = document.getElementById("partition-refresh");
   const partitionManagement = document.getElementById("partition-open-management");
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
-  const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区布局（当前仅支持 MBR）",
+  const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区表格式(非GPT/MBR)",
     "受保护的分区", "分区信息不一致", "暂不支持的扇区大小", "暂不支持的文件系统", "无法确认磁盘身份"];
   const partitionLocation = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";

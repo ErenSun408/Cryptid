@@ -1,6 +1,6 @@
 # Patched VeraCrypt FormatDLL boundary
 
-Current P4.5 product SHA-256: `242EAB54B82ED682150AE5E7A171A45C4A227753D3F266D9E95791622F0F5382`. Apply the USB Vault, geometry, partition and inplace patches in that order to the pinned upstream source, and copy `UsbVaultGeometry.inl`, `UsbVaultPartition.inl` and `UsbVaultInplace.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
+Current P4.6 product SHA-256: `D099EA1D153320E00B16B3A6004231D74639FBB967EDDEFA16D75588DB38500D`. Apply the USB Vault, geometry, partition and inplace patches in that order to the pinned upstream source, and copy `UsbVaultGeometry.inl`, `UsbVaultPartition.inl` and `UsbVaultInplace.inl` beside the SDK source. The application and packaging allowlists use this reviewed binary; earlier hashes below are historical.
 
 P1.4 uses VeraCrypt 1.26.29 source pinned at commit `b48e31f5`. The source is
 not copied into this repository. Apply `veracrypt-1.26.29-usb-vault.patch` to
@@ -208,3 +208,12 @@ Normal pause finishes the current block, flushes data, writes a freshly salted a
 The product consumes the paused permit into an uncertain record before another write and rejects mounting or forgetting incomplete entries. Errors, revocation, a failed state save, power loss or forced process termination do not promise safe resume. Successful completion writes the primary header, flushes, restores a normal record and permits ordinary mounting. Header reserve areas and unused hidden-header slots are randomized; no password-role or hidden-existence marker is added. The v4 encrypted pending record must not be edited by older clients that do not support it; completed records return to the existing normal representation. Helper protocol v8 requires matching application/helper versions.
 
 Owned-VHD tests exercise real KDF, encrypted index persistence, a new authenticated session, independent elevated helper processes, wrong-key refusal, pause, resume, original-file byte comparison, and driver cleanup. Synthetic authenticated roots stand in for physical-card authentication. Physical cards, real disks, GPT/4Kn and broader compatibility remain P4.6 work; arbitrary interruption recovery is outside this MVP. Source/license distribution obligations above still apply. No installer delivery is implied by promotion of the local dependency.
+
+
+## P4.6 GPT boundary
+
+`VeraCryptFormatPartitionGptBinary` has the legacy partition-format arguments followed by `const unsigned char* partitionId, uint32_t idBytes`. `VeraCryptInplaceOpenGptBinary` similarly appends those arguments to the legacy in-place-open ABI. Exactly 16 nonzero GUID bytes are required and copied before use. GPT Basic Data type, allowed attributes (zero or NO_DRIVE_LETTER), GUID, offset, length, and 512-byte geometry are checked on the retained handle before and after locking. Legacy exports remain MBR-only. The helper requires the GPT export before confirmation or access-path removal; missing exports never trigger an MBR fallback.
+
+The application persists GPT GUIDs only in authenticated version-five index slots and carries them in version-nine helper IPC. Existing MBR index records and DLL exports retain their formats. Do not use older clients to rewrite an index containing GPT records. Production partition tables are never rewritten by these exports.
+
+Seven elevated owned-VHD scenarios passed in `out/p46-backend-20260922-200226`, including GPT format, direct/helper/session pause and authenticated resume, original-file byte comparison, MBR regression, and normal/hidden file containers. Source reproduction is recorded in `out/p46-source-proof`. Physical hardware, real card authentication, hotplug, and cross-reboot coverage remain outstanding. The previous P4.5 product digest was `242EAB54B82ED682150AE5E7A171A45C4A227753D3F266D9E95791622F0F5382`; it is historical, not the current allowlist.
