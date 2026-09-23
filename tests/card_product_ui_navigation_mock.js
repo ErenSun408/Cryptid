@@ -257,6 +257,7 @@ window.navigationFixture = {
       };
     },
     getCreationProgress: () => fixture.creationProgress,
+    getCreationError: () => fixture.creationProgress.startsWith("4,") ? 16 : 17,
     cancelContainerCreation: () => {
       if (fixture.failCancellation) throw new Error("simulated cancel request failure");
       return fixture.acceptCancellation;

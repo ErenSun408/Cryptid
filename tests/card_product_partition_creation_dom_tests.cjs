@@ -41,7 +41,7 @@ async function run(outcome) {
     assert.doesNotMatch($('#forget-container-description').textContent,/可通过「导入」/);
   }
   else {
-    assert.match($('#create-volume-status').textContent,/可能只有部分内容/);
+    assert.equal($('#create-volume-status').textContent, `创建失败。错误码${outcome === "cancel" ? 16 : 17}`);
     assert.doesNotMatch($('#create-volume-status').textContent,/没有留下|未修改/);
   }
   assert.equal($('#partition-erase-consent').checked,false);

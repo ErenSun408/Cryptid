@@ -1378,6 +1378,13 @@ void check_background_creation_outcome(const std::exception_ptr& failure,
           expected_outcome && !work.running.load(),
           "background creation misclassified cancellation or cleanup failure");
   require(fixture.volume.containers.empty(), "failed or cancelled creation was adopted");
+  VARIANT failure_code{};
+  require(SUCCEEDED(host->Invoke(member_id(*host.Get(), L"getCreationError"), IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &failure_code, nullptr, nullptr)) &&
+      failure_code.vt == VT_UI4 && failure_code.ulVal != 0, "creation failure code missing");
+  if (expected_status == L"4,") require(failure_code.ulVal == 16, "cancellation code lost");
+  if (expected_status == L"5,") require(failure_code.ulVal == 15 || failure_code.ulVal == static_cast<unsigned int>(E_FAIL), "cleanup code lost");
+  ::VariantClear(&failure_code);
+
   // Reuse the same host, name and authenticated session. No stale cancellation
   // or terminal status may prevent the next operation from completing.
   fixture.volume.creation_failure = {};

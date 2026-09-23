@@ -37,6 +37,7 @@ constexpr DISPID kGetContainerConversionId = 111;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
+constexpr DISPID kCreationErrorId = 115;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -461,6 +462,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"setForceUnmountEnabled")) { ids[0] = kSetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerBMib")) { ids[0] = kBeginCreateBId; return S_OK; }
+    if (matches(names[0], L"getCreationError")) { ids[0] = kCreationErrorId; return S_OK; }
     if (matches(names[0], L"getCreationProgress")) { ids[0] = kCreationProgressId; return S_OK; }
     if (matches(names[0], L"cancelContainerCreation")) { ids[0] = kCancelCreationId; return S_OK; }
     if (matches(names[0], L"getOperationLoggingEnabled")) {
@@ -841,6 +843,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCancelCreationId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
         return complete_selection(creation_work_->request_cancel(), result);
+      }
+      case kCreationErrorId: {
+        if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        ::VariantInit(result); result->vt = VT_UI4;
+        result->ulVal = creation_error_.load();
+        return S_OK;
       }
       case kCreationProgressId: {
         if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0) return DISP_E_BADPARAMCOUNT;
@@ -1657,6 +1667,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (creation_thread_.joinable()) creation_thread_.join();
     creation_progress_.store(0);
     creation_flags_.store(0);
+    creation_error_.store(0);
     creation_status_.store(1);
     creation_paused_.store(false);
     creation_work_->inplace_operation.store(inplace);
@@ -1695,6 +1706,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         } catch (const application::ContainerCreationCleanupError&) {
           status = 5;
         } catch (const std::system_error& error) {
+          creation_error_.store(static_cast<unsigned int>(error.code().value()));
           // A request alone proves neither cancellation nor successful cleanup.
           // Only the creator's confirmed outcome may claim cancellation.
           if (error.code() == volume_creation::make_error_code(
@@ -1709,11 +1721,13 @@ class CardProductWebViewHostObject final : public IDispatch {
         try { controller_.set_creation_cancellation({}); } catch (...) {}
         try { controller_.set_creation_revocation({}); } catch (...) {}
         if (SUCCEEDED(com)) ::CoUninitialize();
+        if (status >= 3 && status <= 5 && !creation_error_.load()) creation_error_.store(static_cast<unsigned int>(E_FAIL));
         creation_status_.store(status);
         creation_work_->finish();
         creation_work_->running.store(false);
       });
     } catch (...) {
+      creation_error_.store(static_cast<unsigned int>(E_FAIL));
       creation_status_.store(3);
       creation_work_->finish();
       creation_work_->running.store(false);
@@ -2726,6 +2740,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   DISPID last_volume_member_{0};
   std::uint32_t last_volume_id_{0};
   std::uint64_t last_volume_epoch_{0};
+  std::atomic<unsigned int> creation_error_{0};
   std::atomic<unsigned int> creation_status_{0};
   std::atomic<bool> creation_paused_{false};
   std::atomic<std::uint64_t> creation_progress_{0};

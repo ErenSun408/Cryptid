@@ -5332,10 +5332,12 @@
     creationStatus.textContent = "正在创建加密盘，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
+    let creationAccepted = false;
     try {
       startCreationProgress();
       await paintCreationProgress();
       if (await bridge.beginPartitionCreate(id) !== true) throw new Error("partition creation rejected");
+      creationAccepted = true;
       await waitForCreation();
       confirmCreationResult();
       await refreshNativeState();
@@ -5347,11 +5349,16 @@
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
     } catch (_) {
+      let failureCode = 2147500037; // E_FAIL when no native result is available.
+      try {
+        const code = creationAccepted ? await bridge.getCreationError() : 0;
+        if (Number.isInteger(code) && code > 0 && code <= 4294967295) failureCode = code;
+      } catch (_) {}
       try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
       busy = false;
       render(messageForCurrentState());
       if (!creationDialog.hidden && currentState === nativeState.authenticated) {
-        creationStatus.textContent = "创建未完成。若已开始写入，分区可能只有部分内容，原盘符也可能已移除。请保留已保存的容器记录，不要直接重复格式化。创建前须开启设置中的记住容器。";
+        creationStatus.textContent = `创建失败。错误码${failureCode}`;
         creationStatus.dataset.tone = "error";
       }
     } finally {
