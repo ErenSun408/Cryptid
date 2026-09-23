@@ -141,6 +141,10 @@ class CardProductUiSessionController final {
   bool begin_partition_conversion(const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm);
   bool resume_partition_conversion(std::uint32_t id);
   void create_partition(const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm);
+  void create_partition_pair(const volume::PartitionCandidate& target, std::uint32_t hidden_size_mib,
+      std::span<std::byte> password, std::span<std::byte> confirmation,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm);
+
 
   void create_container(std::wstring_view name, std::wstring_view directory,
                         std::uint32_t size_mib);

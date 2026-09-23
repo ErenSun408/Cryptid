@@ -370,6 +370,53 @@ void CardProductUiSessionController::create_container_b(
       static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second));
 }
 
+void CardProductUiSessionController::create_partition_pair(
+    const volume::PartitionCandidate& target, const std::uint32_t hidden_size_mib,
+    const std::span<std::byte> mutable_second_password_utf8,
+    const std::span<std::byte> mutable_second_confirmation_utf8,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  MutableInputWiper second_wiper(mutable_second_password_utf8,
+                                 mutable_second_confirmation_utf8);
+  if (inputs_overlap(mutable_second_password_utf8,
+                     mutable_second_confirmation_utf8)) {
+    throw std::invalid_argument(
+        "container B inputs must be independent buffers");
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "container creation is not available in the current UI state");
+  }
+  const auto hidden_bytes = static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib;
+  if (!confirm || !volume_session_.remembering_container_paths() || hidden_size_mib == 0 ||
+      hidden_bytes > target.length_bytes / 4 * 3 ||
+      target.availability != volume::PartitionAvailability::candidate ||
+      !volume::matches_partition_snapshot(target, {&target, 1}))
+    throw std::invalid_argument("invalid partition pair target or size");
+
+  // The page no longer asks for the password the session was opened under:
+  // the session still holds it, and which of the two it is stays unknown here
+  // exactly as it is there.
+  security::SecureBuffer login = volume_session_.copy_session_password();
+  SecureBufferGuard login_guard(login);
+  if (login.empty()) {
+    throw_wrong_route(
+        "container creation requires the session that captured the login");
+  }
+  security::SecureBuffer second =
+      std::move(security::confirm_password(
+                    password_policy_,
+                    consume_password_utf8(mutable_second_password_utf8),
+                    consume_password_utf8(mutable_second_confirmation_utf8)))
+          .take();
+  SecureBufferGuard second_guard(second);
+
+  // The card record is committed next. A volume that exists but cannot be
+  // opened with the second password would block every retry, while a second
+  // password that opens nothing yet is harmless and can be set again.
+  entry_.set_second_card_password(duplicate(login), duplicate(second));
+  static_cast<void>(volume_session_.create_partition_pair(target, hidden_bytes, second, confirm));
+}
+
 bool CardProductUiSessionController::mount_container() {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route(

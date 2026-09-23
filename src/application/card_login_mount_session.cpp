@@ -153,6 +153,13 @@ class ProductionCardLoginMountSessionRuntime final
         }, cancelled);
   }
 
+  void format_partition_pair(const volume::PartitionCandidate& target, std::uint64_t hidden,
+      const security::SecureBuffer& outer, const security::SecureBuffer& inner,
+      const std::function<bool()>& confirm, const CreationCancellation& cancelled) override {
+    creator_.format_partition_pair(target, hidden, outer, inner, confirm,
+        [this](const auto& progress) { report_creation(progress, 0, 0); }, cancelled);
+  }
+
   bool convert_partition(const volume::PartitionCandidate& target, bool begin, const security::SecureBuffer& password,
       const std::function<bool()>& confirm, const CreationCancellation& revoked, const CreationCancellation& pause) override {
     return creator_.convert_partition(target,begin,password,confirm,
@@ -421,6 +428,13 @@ void CardLoginMountSession::create_container_a(
 std::uint32_t CardLoginMountSession::create_partition(const volume::PartitionCandidate& target,
     const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
   return impl_->core.create_partition(target, confirm);
+}
+
+std::uint32_t CardLoginMountSession::create_partition_pair(const volume::PartitionCandidate& target,
+    std::uint64_t hidden, const security::SecureBuffer& decoy,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  if (!hidden || decoy.empty()) throw std::invalid_argument("partition pair inputs required");
+  return impl_->core.create_partition(target, confirm, hidden, &decoy);
 }
 
 void CardLoginMountSession::format_partition(
@@ -783,7 +797,7 @@ SessionContainer& adopt_partition(CardLoginMountSessionState& state,
   SessionContainer entry;
   entry.id = state.next_container_id++;
   entry.name = L"磁盘容器 " + std::to_wstring(entry.id);
-  entry.derivation_known = true;
+  entry.derivation_known = false;
   entry.partition = identity;
   state.containers.push_back(std::move(entry));
   return state.containers.back();
@@ -1241,7 +1255,12 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
 
 std::uint32_t CardLoginMountSessionCore::create_partition(
     const volume::PartitionCandidate& target,
-    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm,
+    std::uint64_t hidden_bytes, const security::SecureBuffer* decoy) {
+  if ((decoy == nullptr) != (hidden_bytes == 0) ||
+      (decoy && (decoy->empty() || state_.login_password.empty() || hidden_bytes < 1024 * 1024 ||
+       hidden_bytes % 65536 || hidden_bytes > target.length_bytes / 4 * 3)))
+    throw std::invalid_argument("invalid partition pair inputs");
   if (!authentication_.authenticated()) throw std::logic_error("partition creation requires authentication");
   if (!runtime_.remember_container_paths()) throw std::logic_error("partition creation requires remembering containers");
   const volume::PartitionIdentity identity{target.device_id, target.device_id_flags,
@@ -1266,7 +1285,12 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
       runtime_.write_container_index(index);
       recorded = true;
       return true;
-    });
+    }, hidden_bytes, decoy);
+    if (decoy) {
+      auto* entry = find_by_id(state_, id);
+      entry->release_first = true;
+      entry->derivation_known = true;
+    }
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     throw_if_creation_cancelled(runtime_);
     mount_adopted_container(id);
@@ -1287,7 +1311,8 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
 
 void CardLoginMountSessionCore::format_partition(
     const volume::PartitionCandidate& target,
-    const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) {
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase,
+    std::uint64_t hidden_bytes, const security::SecureBuffer* decoy) {
   if (!authentication_.authenticated() || partition_format_active_) {
     throw std::logic_error("partition format requires an idle authenticated session");
   }
@@ -1315,7 +1340,7 @@ void CardLoginMountSessionCore::format_partition(
         "partition format was cancelled");
   };
   check();
-  auto password = derive_standard_password();
+  auto password = decoy ? runtime_.derive_container_password(*decoy, authentication_.root_secret_, layout_.container_b.salt) : derive_standard_password();
   if (password.size() != security::kKdfV1OutputSize) {
     throw std::logic_error("partition password derivation returned an invalid size");
   }
@@ -1332,7 +1357,11 @@ void CardLoginMountSessionCore::format_partition(
     }
     return accepted;
   };
-  runtime_.format_partition(snapshot, password, confirm, cancelled);
+  if (decoy) {
+    const auto& inner = hidden_container_password();
+    if (inner.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition inner key");
+    runtime_.format_partition_pair(snapshot, hidden_bytes, password, inner, confirm, cancelled);
+  } else runtime_.format_partition(snapshot, password, confirm, cancelled);
   password.clear();
   check();
   if (!accepted) throw std::logic_error("partition format completed without consent");
@@ -1545,7 +1574,6 @@ SessionContainer& CardLoginMountSessionCore::maintenance_target(
     throw std::invalid_argument(
         "no container is adopted under that identifier");
   }
-  if (entry->partition) throw DecoyMaintenanceRefused();
   return *entry;
 }
 
@@ -1553,7 +1581,6 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
     SessionContainer& entry,
     const security::SecureBuffer& outer_password,
     const MaintenanceMount mode) {
-  if (entry.partition) throw DecoyMaintenanceRefused();
   // One file cannot serve two volumes, so whatever it serves now goes first.
   // Force is this flow's standing answer, agreed to before any of it starts.
   if (entry.mounted) unmount_container_impl(entry.id, true);
@@ -1572,16 +1599,15 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   };
 
   try {
-    static_cast<void>(runtime_.mount_created(
-        entry.path,
-        outer_password,
-        {.drive_letter = drive_letter,
+    const volume::MountOptions options{.drive_letter = drive_letter,
          .prf = volume::Pkcs5Prf::sha512,
          .pim = 0,
          .read_only = false,
          .notify_shell = false,
          .hidden_volume_protection =
-             volume::HiddenVolumeProtection{.password = &hidden_password}}));
+             volume::HiddenVolumeProtection{.password = &hidden_password}};
+    if (entry.partition) static_cast<void>(runtime_.mount_partition(*entry.partition, outer_password, options));
+    else static_cast<void>(runtime_.mount_created(entry.path, outer_password, options));
   } catch (...) {
     // Every driver rejection means the same thing to everyone above.
     throw refuse();
@@ -1955,14 +1981,28 @@ void CardLoginMountSessionCore::mount_adopted_container(
   if (entry->mounted) return;
   if (entry->conversion_state) throw std::logic_error("incomplete conversion cannot mount");
   if (entry->partition) {
-    auto password = derive_standard_password();
-    if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
     const wchar_t drive = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_partition(*entry->partition, password,
-        {.drive_letter = drive, .notify_shell = false}));
-    password.clear();
+    const volume::MountOptions options{.drive_letter = drive, .notify_shell = false};
+    bool login_derived = entry->derivation_known && entry->release_first;
+    if (!login_derived) {
+      auto password = derive_standard_password();
+      if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
+      try { static_cast<void>(runtime_.mount_partition(*entry->partition, password, options)); }
+      catch (const std::system_error& error) {
+        if (entry->derivation_known || state_.login_password.empty() ||
+            error.code() != volume::make_error_code(volume::DriverError::authentication_failed)) throw;
+        login_derived = true;
+      }
+    }
+    if (login_derived) {
+      const auto& password = hidden_container_password();
+      if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
+      static_cast<void>(runtime_.mount_partition(*entry->partition, password, options));
+    }
     entry->drive_letter = drive;
     entry->mounted = true;
+    entry->release_first = login_derived;
+    entry->derivation_known = true;
     record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, entry->name, drive);
     runtime_.notify_mounted(drive);
     return;

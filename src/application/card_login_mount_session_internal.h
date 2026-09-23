@@ -72,6 +72,11 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& volume_password,
       const std::function<bool()>& confirm_erase,
       const CreationCancellation& cancelled) = 0;
+  virtual void format_partition_pair(const volume::PartitionCandidate&, std::uint64_t,
+      const security::SecureBuffer&, const security::SecureBuffer&,
+      const std::function<bool()>&, const CreationCancellation&) {
+    throw std::logic_error("partition pair formatting unavailable");
+  }
   virtual bool convert_partition(const volume::PartitionCandidate&, bool, const security::SecureBuffer&,
       const std::function<bool()>&, const CreationCancellation&, const CreationCancellation&) {
     throw std::logic_error("conversion unavailable");
@@ -230,14 +235,16 @@ class CardLoginMountSessionCore final {
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8);
   void format_partition(const volume::PartitionCandidate& target,
-      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase,
+      std::uint64_t hidden_bytes = 0, const security::SecureBuffer* decoy = nullptr);
   bool begin_partition_conversion(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm);
   bool resume_partition_conversion(std::uint32_t id);
   bool convert_partition(const volume::PartitionCandidate& target, std::optional<std::uint32_t> resume_id,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm);
   std::uint32_t create_partition(const volume::PartitionCandidate& target,
-      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase,
+      std::uint64_t hidden_bytes = 0, const security::SecureBuffer* decoy = nullptr);
   void create_container_a(std::uint64_t size_bytes);
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes);

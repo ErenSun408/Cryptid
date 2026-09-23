@@ -106,6 +106,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, size_bytes);
   }
 
+  std::uint32_t create_partition_pair(const usb_vault::volume::PartitionCandidate& target,
+      std::uint64_t hidden, const SecureBuffer& decoy,
+      const std::function<bool(const usb_vault::volume::PartitionCandidate&)>& confirm) override {
+    require(confirm(target), "partition consent missing");
+    ++create_b_calls; created_hidden_bytes=hidden;
+    b_decoy_password.assign(decoy.bytes().begin(), decoy.bytes().end());
+    return 1;
+  }
+
   std::uint32_t create_container_b(
       const std::wstring_view path,
       const std::uint64_t outer_size_bytes,
@@ -1395,6 +1404,30 @@ void test_maintenance_capacity_is_projected_conservatively_and_can_end() {
           "ending maintenance did not name only its container");
 }
 
+void test_partition_pair_controller() {
+  for (int scenario=0; scenario<5; ++scenario) {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    auto second=bytes("second-password-value"), confirmation=bytes("second-password-value");
+    usb_vault::volume::PartitionCandidate target;
+    target.volume_path=LR"(\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+    target.device_id[0]=7; target.disk_number=1; target.partition_number=1;
+    target.layout=usb_vault::volume::PartitionLayout::mbr; target.logical_sector_bytes=512;
+    target.offset_bytes=1048576; target.length_bytes=64ULL*1024*1024;
+    target.availability=usb_vault::volume::PartitionAvailability::candidate;
+    if(scenario==1)fixture.volume.remember_paths=false;
+    if(scenario==2)confirmation[0]=std::byte{'x'};
+    if(scenario==3)fixture.entry.reject_second_password=true;
+    bool failed=false;
+    try {fixture.controller.create_partition_pair(target,scenario==4 ? 64 : 16,second,confirmation,[](const auto&){return true;});}
+    catch(...){failed=true;}
+    require(failed==(scenario!=0),"partition controller outcome");
+    require(fixture.volume.create_b_calls==(scenario==0 ? 1 : 0),"partition started without prerequisites");
+    require(std::ranges::all_of(second,[](auto b){return b==std::byte{};}) &&
+        std::ranges::all_of(confirmation,[](auto b){return b==std::byte{};}),"partition input not wiped");
+  }
+}
+
 void test_container_b_commits_the_card_before_the_volume() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2028,6 +2061,7 @@ int main() {
     test_container_creation_is_bounded_and_validated();
     test_browsing_for_a_directory_only_reports_the_choice();
     test_adopted_container_remounts_without_reselecting_its_file();
+    test_partition_pair_controller();
     test_container_b_commits_the_card_before_the_volume();
     test_a_survey_passes_the_password_through_and_wipes_it();
     test_a_survey_wipes_the_password_when_it_fails();

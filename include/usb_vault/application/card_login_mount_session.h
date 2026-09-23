@@ -186,6 +186,12 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("partition formatting is unavailable");
   }
 
+  virtual std::uint32_t create_partition_pair(const volume::PartitionCandidate&,
+      std::uint64_t, const security::SecureBuffer&,
+      const std::function<bool(const volume::PartitionCandidate&)>&) {
+    throw std::logic_error("partition pair creation unavailable");
+  }
+
   virtual bool begin_partition_conversion(const volume::PartitionCandidate&,
       const std::function<bool(const volume::PartitionCandidate&)>&) { throw std::logic_error("conversion unavailable"); }
   virtual bool resume_partition_conversion(std::uint32_t) { throw std::logic_error("conversion unavailable"); }
@@ -545,6 +551,9 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   bool resume_partition_conversion(std::uint32_t id) override;
   std::uint32_t create_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) override;
+  std::uint32_t create_partition_pair(const volume::PartitionCandidate& target,
+      std::uint64_t hidden_bytes, const security::SecureBuffer& decoy,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm) override;
   void create_container_a(std::uint64_t size_bytes) override;
   void format_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) override;

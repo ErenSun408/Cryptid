@@ -155,6 +155,7 @@ void require(const bool condition, const char* const message) {
 class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
   bool partition_mount_fail{};
+  bool partition_pair{};
   std::function<void()> after_partition_mount;
   usb_vault::volume::MountResult mount_partition(const usb_vault::volume::PartitionIdentity& identity,
       const SecureBuffer& password, const usb_vault::volume::MountOptions& options) override {
@@ -162,6 +163,14 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "partition mount identity or password invalid");
     events.emplace_back("mount:partition");
     if (partition_mount_fail) throw std::runtime_error("partition unavailable");
+    if (options.hidden_volume_protection) {
+      if (!partition_pair) throw usb_vault::application::DecoyMaintenanceRefused();
+      attached_volume_types[options.drive_letter] = usb_vault::volume::VolumeType::outer;
+      identities[options.drive_letter] = {.drive_letter=options.drive_letter,
+          .unique_id=next_mount_id++, .volume_path=L"partition",
+          .disk_length=identity.length_bytes-262144, .protected_outer_writable=true};
+    } else if (partition_pair && password.bytes()[0] == std::byte{'p'})
+      throw std::system_error(usb_vault::volume::make_error_code(usb_vault::volume::DriverError::authentication_failed));
     attached_volume_sizes[options.drive_letter] = identity.length_bytes - 262144;
     if (after_partition_mount) after_partition_mount();
     return {};
@@ -184,6 +193,14 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (after_partition_confirmation) after_partition_confirmation();
     if (cancelled() || partition_fail) throw std::runtime_error("partition stopped");
     partition_written = true;
+  }
+  void format_partition_pair(const usb_vault::volume::PartitionCandidate& target, std::uint64_t hidden,
+      const SecureBuffer& outer, const SecureBuffer& inner, const std::function<bool()>& confirm,
+      const usb_vault::application::CreationCancellation& cancelled) override {
+    require(hidden == 16ULL * 1024 * 1024 && outer.size() == 64 && inner.size() == 64 &&
+        outer.bytes()[0] == std::byte{'d'} && inner.bytes()[0] == std::byte{'d'}, "pair derivations invalid");
+    format_partition(target, outer, confirm, cancelled);
+    partition_pair = true;
   }
   bool conversion_pause{true}, conversion_fail{}, wrong_conversion_target{};
   std::function<void()> during_conversion;
@@ -437,7 +454,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       for (const std::byte value : password_input.bytes()) {
         material.push_back(static_cast<char>(value));
       }
-      material.resize(28, '.');
+      material.resize(partition_password_64 ? 64 : 28, '.');
       return bytes(material);
     }
     events.emplace_back("derive:A");
@@ -3891,6 +3908,46 @@ void test_partition_creation_persistence_and_mounting() {
   }
 }
 
+void test_partition_pair_session() {
+  for (int scenario = 0; scenario < 5; ++scenario) {
+    CardAuthenticationSession auth;
+    FakeRuntime runtime;
+    runtime.partition_password_64 = true;
+    runtime.remember_paths = true;
+    runtime.creation_cancelled = [] { return false; };
+    CardLoginMountSessionCore session(auth, runtime, layout(), LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    usb_vault::volume::PartitionCandidate target;
+    target.layout = usb_vault::volume::PartitionLayout::mbr;
+    target.device_id[0] = 7; target.offset_bytes = 1048576;
+    target.length_bytes = 64ULL * 1024 * 1024; target.logical_sector_bytes = 512;
+    const auto decoy = bytes("decoy");
+    runtime.fail_index_write = scenario == 2;
+    runtime.partition_fail = scenario == 3;
+    bool failed = false;
+    std::uint32_t id{};
+    try { id = session.create_partition(target, [&](const auto&) {return scenario != 1;},
+        scenario == 4 ? target.length_bytes : 16ULL * 1024 * 1024, &decoy); }
+    catch (...) { failed = true; }
+    require(failed == (scenario != 0), "pair session boundary failed");
+    require(runtime.partition_written == (scenario == 0), "pair wrote without valid consent and persistence");
+    if (scenario) continue;
+    require(session.container_statuses().back().mounted, "pair did not mount login volume");
+    session.unmount_container(id);
+    static_cast<void>(session.open_decoy_maintenance(id, decoy));
+    require(session.container_statuses().back().mounted, "pair maintenance did not mount");
+    session.unmount_container(id);
+    CardAuthenticationSession next_auth;
+    CardLoginMountSessionCore next(next_auth, runtime, layout(), LoginMountPolicy::manual);
+    next.consume_authenticated_login(root_secret(), bytes("login-password"));
+    const auto restored = next.container_statuses();
+    require(restored.size() == 1 && restored[0].partition, "pair identity not restored");
+    next.mount_adopted_container(restored[0].id);
+    require(next.container_statuses()[0].mounted, "restored pair did not probe login derivation");
+    next.unmount_container(restored[0].id);
+  }
+}
+
 void test_partition_card_removal_and_drive_conflicts() {
   for (int scenario = 0; scenario < 5; ++scenario) {
     CardAuthenticationSession auth;
@@ -4009,6 +4066,7 @@ int main() {
   try {
     test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
+    test_partition_pair_session();
     test_partition_card_removal_and_drive_conflicts();
     test_partition_format_card_session_boundary();
     test_all_container_shapes_establish_authentication();
