@@ -33,13 +33,14 @@ enum class Operation : std::uint32_t {
   begin_partition_inplace = 9,
   resume_partition_inplace = 10,
   inspect_partition_bitlocker = 11,
+  decrypt_partition_bitlocker = 12,
 };
 
 [[nodiscard]] constexpr bool inplace_operation(Operation op) noexcept {
   return op == Operation::begin_partition_inplace || op == Operation::resume_partition_inplace;
 }
 [[nodiscard]] constexpr bool partition_operation(Operation op) noexcept {
-  return op == Operation::inspect_partition_bitlocker || op == Operation::check_partition || op == Operation::format_partition || inplace_operation(op);
+  return op == Operation::decrypt_partition_bitlocker || op == Operation::inspect_partition_bitlocker || op == Operation::check_partition || op == Operation::format_partition || inplace_operation(op);
 }
 // 0: continue, 1: normal pause, 2: authentication revoked/cancelled.
 void write_pause_request(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce);

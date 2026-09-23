@@ -137,6 +137,10 @@ void test_bitlocker_inspection_protocol() {
     if(i==3)bad.partition_target_bytes=0;
     expect(!valid_request_header(bad), "malformed BitLocker inspection accepted");
   }
+  header.operation=Operation::decrypt_partition_bitlocker;
+  expect(valid_request_header(header),"password-free BitLocker decryption rejected");
+  header.first_password_bytes=64;
+  expect(!valid_request_header(header),"BitLocker decrypt accepted an unrelated secret");
   using usb_vault::volume::valid_bitlocker_status;
   expect(valid_bitlocker_status({0,0}) && valid_bitlocker_status({1,100}) && valid_bitlocker_status({3,48}), "valid BitLocker status rejected");
   expect(!valid_bitlocker_status({6,0}) && !valid_bitlocker_status({0,1}) && !valid_bitlocker_status({3,101}), "unknown BitLocker status accepted");

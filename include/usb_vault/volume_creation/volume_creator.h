@@ -74,6 +74,7 @@ class VolumeCreator final {
   // Separate read-only UAC operation. Checks the snapshot on a readable volume
   // handle; success is not formatting permission and retains no session.
   [[nodiscard]] volume::PartitionBitLockerStatus inspect_partition_bitlocker(const volume::PartitionCandidate& target) const;
+  void decrypt_partition_bitlocker(const volume::PartitionCandidate& target, const std::function<bool()>& confirm, const CancellationQuery& cancelled = {}) const;
   void check_partition(const volume::PartitionCandidate& target) const;
 
   // Destructively formats one NTFS MBR/512 data partition. Required callback is

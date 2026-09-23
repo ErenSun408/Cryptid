@@ -400,6 +400,55 @@ class Backend {
  private: HMODULE module_{}; fmt::Shutdown shutdown_{}; fmt::FormatBinary format_{}; bool initialized_{};
 };
 
+void bitlocker_roundtrip(OwnedDisk& disk) {
+  using namespace usb_vault;
+  const auto candidate = disk.prepare_ntfs();
+  const auto sample = candidate.volume_path + L"bitlocker-check.txt";
+  {
+    Handle file(::CreateFileW(sample.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,0,nullptr));
+    require(file.get()!=INVALID_HANDLE_VALUE,"BitLocker fixture file");
+    DWORD done{}; const char bytes[]="preserve this file";
+    require(::WriteFile(file.get(),bytes,sizeof(bytes),&done,nullptr) && done==sizeof(bytes),"write BitLocker fixture");
+  }
+  // Only the freshly created and verified VHD volume; no user target argument.
+  disk.verify();
+  const std::wstring script = L"$ErrorActionPreference='Stop'; $v=Get-CimInstance -Namespace root/CIMV2/Security/MicrosoftVolumeEncryption -ClassName Win32_EncryptableVolume | Where-Object DeviceID -eq '" + candidate.volume_path +
+      L"'; if(!$v){exit 2}; $r=Invoke-CimMethod -InputObject $v -MethodName ProtectKeyWithNumericalPassword -Arguments @{FriendlyName='UVFixture'}; if($r.ReturnValue){exit 3}; $r=Invoke-CimMethod -InputObject $v -MethodName Encrypt -Arguments @{EncryptionMethod=[uint32]7;EncryptionFlags=[uint32]1}; if($r.ReturnValue){exit 4}; for($i=0;$i -lt 240;$i++){ $r=Invoke-CimMethod -InputObject $v -MethodName GetConversionStatus; if($r.ReturnValue){exit 5}; if($r.ConversionStatus -eq 1){exit 0}; Start-Sleep -Seconds 1 };exit 6";
+  std::array<wchar_t,MAX_PATH> system{};
+  require(::GetSystemDirectoryW(system.data(),static_cast<UINT>(system.size()))>0,"system directory");
+  const auto exe=std::filesystem::path(system.data())/L"WindowsPowerShell/v1.0/powershell.exe";
+  std::wstring command=L"\""+exe.native()+L"\" -NoProfile -NonInteractive -Command \""+script+L"\"";
+  STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
+  require(::CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process),"prepare BitLocker fixture");
+  Handle child(process.hProcess),thread(process.hThread);
+  require(::WaitForSingleObject(child.get(),300000)==WAIT_OBJECT_0,"BitLocker setup timed out");
+  DWORD code{};require(::GetExitCodeProcess(child.get(),&code) && code==0,"BitLocker fixture encryption failed");
+  volume_creation::VolumeCreator creator(executable_directory()/L"usb_vault_volume_creator.exe");
+  require(creator.inspect_partition_bitlocker(candidate).state==1,"encrypted fixture not detected");
+  bool declined=false;
+  try { creator.decrypt_partition_bitlocker(candidate,[]{return false;}); }
+  catch(const std::system_error& e) { declined=e.code()==volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled); }
+  require(declined && creator.inspect_partition_bitlocker(candidate).state==1,"declined consent changed encryption");
+  creator.decrypt_partition_bitlocker(candidate,[]{return true;});
+  bool complete=false;
+  for(unsigned i=0;i<120;++i) {
+    const auto status=creator.inspect_partition_bitlocker(candidate);
+    require(volume::valid_bitlocker_status(status),"invalid decryption progress");
+    if(status.state==0){complete=true;break;}
+    ::Sleep(1000);
+  }
+  require(complete,"BitLocker decryption did not complete");
+  {
+    Handle file(::CreateFileW(sample.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+    require(file.get()!=INVALID_HANDLE_VALUE,"decrypted fixture file missing");
+    char bytes[19]{};DWORD done{};
+    require(::ReadFile(file.get(),bytes,sizeof(bytes),&done,nullptr) && done==sizeof(bytes) &&
+        std::string_view(bytes,18)=="preserve this file","BitLocker file readback mismatch");
+  }
+  disk.verify();
+  std::cout << "PASS: owned BitLocker encryption, declined consent, helper decryption, progress and file readback" << std::endl;
+}
+
 void inplace_plan_probe(OwnedDisk& disk) {
   const auto candidate = disk.prepare_ntfs();
   auto path = candidate.volume_path; path.pop_back();
@@ -850,7 +899,7 @@ int wmain(int argc, wchar_t** argv) {
   std::wstring mode = argc == 2 ? argv[1] : L"";
   const bool gpt = mode.ends_with(L"-gpt");
   if (gpt) mode.resize(mode.size()-4);
-  if (argc != 2 || (mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
+  if (argc != 2 || (mode != L"--run-owned-vhd-bitlocker" && mode != L"--run-owned-vhd" && mode != L"--run-owned-vhd-handle" && mode != L"--run-owned-vhd-helper" && mode != L"--run-owned-vhd-session" && mode != L"--run-owned-vhd-inplace-plan" && mode != L"--run-owned-vhd-inplace" && mode != L"--run-owned-vhd-inplace-helper" && mode != L"--run-owned-vhd-inplace-session")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -865,6 +914,7 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(gpt); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create(gpt);
+    if(mode==L"--run-owned-vhd-bitlocker"){bitlocker_roundtrip(disk);disk.cleanup();return 0;}
     if (mode == L"--run-owned-vhd-inplace-session") { inplace_session_roundtrip(disk); disk.cleanup(); return 0; }
     if (mode == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }
     if (mode == L"--run-owned-vhd-inplace") { inplace_roundtrip(disk,password); disk.cleanup(); return 0; }

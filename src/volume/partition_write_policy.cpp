@@ -104,7 +104,22 @@ ComPtr<IWbemClassObject> find_volume(IWbemServices* service, const wchar_t* quer
   require(false);
   return {};
 }
-PartitionWriteFacts read_facts(const std::wstring& volume, PartitionBitLockerStatus* bitlocker = nullptr) {
+ComPtr<IWbemClassObject> call_volume_method(IWbemServices* service, IWbemClassObject* row, const wchar_t* method_name) {
+  const auto relative = Property(row, L"__RELPATH").string();
+  require(relative.starts_with(L"Win32_EncryptableVolume.DeviceID="));
+  Text object(relative.c_str()), method(method_name);
+  ComPtr<IWbemCallResult> pending;
+  require(SUCCEEDED(service->ExecMethod(object.get(), method.get(), WBEM_FLAG_RETURN_IMMEDIATELY,
+      nullptr, nullptr, nullptr, &pending)) && pending);
+  secure_proxy(pending.Get());
+  LONG status{};
+  require(pending->GetCallStatus(kQueryTimeoutMs, &status) == WBEM_S_NO_ERROR && status == WBEM_S_NO_ERROR);
+  ComPtr<IWbemClassObject> result;
+  require(pending->GetResultObject(0, &result) == WBEM_S_NO_ERROR && result);
+  require(Property(result.Get(), L"ReturnValue").number() == 0);
+  return result;
+}
+PartitionWriteFacts read_facts(const std::wstring& volume, PartitionBitLockerStatus* bitlocker = nullptr, const std::function<bool()>& decrypt_allowed = {}) {
   Apartment apartment;
   ComPtr<IWbemLocator> locator;
   require(SUCCEEDED(::CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
@@ -119,24 +134,15 @@ PartitionWriteFacts read_facts(const std::wstring& volume, PartitionBitLockerSta
   if (*facts.boot_volume || *facts.system_volume || *facts.page_file_present) return facts;
   auto encryption = connect(locator.Get(), L"ROOT\\CIMV2\\Security\\MicrosoftVolumeEncryption");
   auto encrypted_row = find_volume(encryption.Get(), L"SELECT * FROM Win32_EncryptableVolume", volume);
-  // Use the local relative path supplied by the trusted provider, never __PATH
-  // (which can name a remote server). Only the read-only status method is called.
-  const auto relative = Property(encrypted_row.Get(), L"__RELPATH").string();
-  require(relative.starts_with(L"Win32_EncryptableVolume.DeviceID="));
-  Text object(relative.c_str()), method(L"GetConversionStatus");
-  ComPtr<IWbemCallResult> pending;
-  require(SUCCEEDED(encryption->ExecMethod(object.get(), method.get(), WBEM_FLAG_RETURN_IMMEDIATELY,
-      nullptr, nullptr, nullptr, &pending)) && pending);
-  secure_proxy(pending.Get());
-  LONG status{};
-  require(pending->GetCallStatus(kQueryTimeoutMs, &status) == WBEM_S_NO_ERROR && status == WBEM_S_NO_ERROR);
-  ComPtr<IWbemClassObject> result;
-  require(pending->GetResultObject(0, &result) == WBEM_S_NO_ERROR && result);
-  require(Property(result.Get(), L"ReturnValue").number() == 0);
+  auto result = call_volume_method(encryption.Get(), encrypted_row.Get(), L"GetConversionStatus");
   facts.conversion_status = Property(result.Get(), L"ConversionStatus").number();
   if (bitlocker) {
     *bitlocker = {*facts.conversion_status, Property(result.Get(), L"EncryptionPercentage").number()};
     require(valid_bitlocker_status(*bitlocker));
+  }
+  if (decrypt_allowed && facts.conversion_status && *facts.conversion_status != 0 && *facts.conversion_status != 3) {
+    require(decrypt_allowed());
+    static_cast<void>(call_volume_method(encryption.Get(), encrypted_row.Get(), L"Decrypt"));
   }
   return facts;
 }
@@ -158,6 +164,17 @@ PartitionBitLockerStatus inspect_partition_bitlocker(HANDLE handle, const Partit
   require(matches_partition_handle_identity(handle, expected) &&
       matches_partition_snapshot(expected, enumerate_partition_candidates()));
   return status;
+}
+void begin_partition_bitlocker_decryption(HANDLE handle, const PartitionCandidate& expected,
+    const std::function<bool()>& allowed) {
+  require(allowed && allowed());
+  static_cast<void>(inspect_partition_bitlocker(handle, expected));
+  PartitionBitLockerStatus status{6,0};
+  const auto facts=read_facts(expected.volume_path, &status, [&] {
+    return allowed() && matches_partition_handle_identity(handle, expected) &&
+        matches_partition_snapshot(expected, enumerate_partition_candidates()) && allowed();
+  });
+  require(facts.conversion_status && valid_bitlocker_status(status));
 }
 bool check_partition_write_policy(HANDLE handle, const PartitionCandidate& expected) noexcept {
   try {

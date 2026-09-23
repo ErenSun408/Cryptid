@@ -285,10 +285,13 @@ class Handle final {
     const detail::PartitionTarget* partition_target = nullptr,
     const std::function<bool()>& confirm_erase = {},
     const CancellationQuery& pause = {}) {
+  const bool decrypting_bitlocker = operation == detail::Operation::decrypt_partition_bitlocker;
   const bool inspecting_bitlocker = operation == detail::Operation::inspect_partition_bitlocker;
-  const bool checking_partition = operation == detail::Operation::check_partition || inspecting_bitlocker;
+  const bool checking_partition = operation == detail::Operation::check_partition || inspecting_bitlocker || decrypting_bitlocker;
   const bool converting = detail::inplace_operation(operation);
   const bool formatting_partition = operation == detail::Operation::format_partition || converting;
+  const bool confirming_partition = formatting_partition || decrypting_bitlocker;
+  if (decrypting_bitlocker && !confirm_erase) throw std::invalid_argument("BitLocker consent required");
   const bool partition_operation = checking_partition || formatting_partition;
   const bool measuring = operation == detail::Operation::scan_tail_space;
   // A measurement names a volume root, which is not a container path and does
@@ -346,7 +349,7 @@ class Handle final {
   bool partition_confirmed = false;
   bool partition_challenged = false;
   for (;;) {
-    if (formatting_partition && partition_confirmed) {
+    if (confirming_partition && partition_confirmed) {
       // The elevated policy query can be quiet for seconds. Cancellation must
       // reach it without waiting for the first destructive progress callback.
       for (;;) {
@@ -365,7 +368,7 @@ class Handle final {
       }
     }
     const detail::Response response = detail::read_response(pipe.get());
-    if (formatting_partition) {
+    if (confirming_partition) {
       if (response.value > (converting ? 1u : 0u)) throw_creation(CreationError::protocol_error, "unexpected partition result");
       if (response.type == detail::MessageType::progress && response.stage == CreationStage::partition_ready) {
         if (partition_challenged || response.percent != 0)
@@ -690,6 +693,20 @@ volume::PartitionBitLockerStatus VolumeCreator::inspect_partition_bitlocker(cons
   const volume::PartitionBitLockerStatus status{static_cast<std::uint32_t>(packed >> 8), static_cast<std::uint32_t>(packed & 255)};
   if (packed > 0x5ff || !volume::valid_bitlocker_status(status)) throw_creation(CreationError::protocol_error, "invalid BitLocker status");
   return status;
+}
+
+void VolumeCreator::decrypt_partition_bitlocker(const volume::PartitionCandidate& candidate,
+    const std::function<bool()>& confirm, const CancellationQuery& cancelled) const {
+  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}))
+    throw std::invalid_argument("invalid partition check candidate");
+  const detail::PartitionTarget target{
+      .device_id = candidate.device_id, .device_flags = candidate.device_id_flags,
+      .disk_number = candidate.disk_number, .partition_number = candidate.partition_number,
+      .sector_bytes = candidate.logical_sector_bytes, .layout = static_cast<std::uint32_t>(candidate.layout),
+      .filesystem_serial = candidate.filesystem_serial, .offset_bytes = candidate.offset_bytes,
+      .length_bytes = candidate.length_bytes, .partition_id = candidate.partition_id};
+  static_cast<void>(invoke(helper_path_, detail::Operation::decrypt_partition_bitlocker, candidate.volume_path,
+      0, 0, security::SecureBuffer{}, security::SecureBuffer{}, {}, cancelled, &target, confirm));
 }
 
 void VolumeCreator::check_partition(const volume::PartitionCandidate& candidate) const {
