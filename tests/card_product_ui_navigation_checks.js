@@ -395,6 +395,15 @@
     check(order(home) === "1,3,2", "Row body does not start a reorder");
 
     $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
+    check(window.navigationFixture.partitionScans === 1, "Opening disk creation automatically refreshes once");
+    const firstScan = window.navigationFixture.partitionScans;
+    $('[data-create-storage="file"]').click();
+    check(window.navigationFixture.partitionScans === firstScan, "Entering file creation does not scan disks");
+    $('[data-create-storage="disk"]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
+    check(window.navigationFixture.partitionScans === firstScan + 1 && $('#partition-erase-consent').disabled,
+      "Returning to disk creation refreshes without retaining consent");
     check(!$('#create-type-step').hidden && !$('#create-disk-step').hidden,
       "Disk creation always offers both container shapes");
     check($('#create-volume-description').parentElement === $('#create-storage-switch') &&
@@ -403,10 +412,30 @@
     $('[data-create-kind="hidden"]').click();
     check(!$('#create-container-b-form').hidden && $('#partition-preserve-data').closest('label').hidden,
       "Disk hidden selection exposes passwords and excludes in-place conversion");
+    check($('#create-container-b-error').hidden && $('#create-volume-continue').disabled,
+      "No partition selection is not reported as zero capacity");
+    window.navigationFixture.partitionList = "1,0,3,16777216,0";
     $('#partition-refresh').click();
     await wait(() => $('#partition-list-body button') && !$('#partition-refresh').disabled);
     $('#partition-list-body button').click();
     await wait(() => !$('#partition-erase-consent').disabled);
+    check($('#create-container-b-error').textContent === "容量低于最小值。" && $('#create-volume-continue').disabled,
+      "A genuinely undersized disk is still rejected");
+    delete window.navigationFixture.partitionList;
+    $('#partition-refresh').click();
+    await wait(() => $('#partition-list-body button') && !$('#partition-refresh').disabled);
+    check($('#create-container-b-error').hidden && $('#create-volume-continue').disabled,
+      "Refresh clears capacity feedback until a partition is selected again");
+    $('#partition-list-body button').click();
+    await wait(() => !$('#partition-erase-consent').disabled);
+    check($('#create-container-b-error').hidden, "Selected disk capacity overrides the hidden file capacity");
+    $('#create-container-b-hidden-capacity').value='800';
+    $('#create-container-b-hidden-capacity').dispatchEvent(new Event('input',{bubbles:true}));
+    check($('#create-container-b-error').textContent==='内层容量过载。' && $('#create-volume-continue').disabled,
+      "Disk hidden capacity still respects the three-quarter limit");
+    $('#create-container-b-hidden-capacity').value='512';
+    $('#create-container-b-hidden-capacity').dispatchEvent(new Event('input',{bubbles:true}));
+    check($('#create-container-b-error').hidden, "A valid disk hidden capacity may exceed the file default");
     $('#partition-erase-consent').click();
     for(const id of ['create-container-b-second','create-container-b-second-confirmation']) {
       document.getElementById(id).value='test-decoy-password';
@@ -425,6 +454,7 @@
     window.navigationFixture.pendingCreation = null;
 
     $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     $('[data-create-storage="file"]').click();
     $('[data-create-kind="hidden"]').click();
     $('#create-volume-continue').click();
@@ -495,6 +525,7 @@
     check($('#creation-progress').hidden && $('#creation-progress-time').textContent === "",
       "Failed creation stops and clears the running view");
     $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     $('[data-create-storage="file"]').click();
     $('[data-create-kind="encrypted"]').click();
     $('#create-volume-continue').click();
@@ -539,6 +570,7 @@
       // after cancellation must not inherit its terminal state or controls.
       for (const status of [3, 4, 2, 5]) {
         $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     $('[data-create-storage="file"]').click();
         $(`[data-create-kind="${kind}"]`).click();
         $('#create-volume-continue').click();
@@ -1213,6 +1245,7 @@
     check(!$(".container-new") && order(home).startsWith("99,"), "Session refresh restores order without replaying highlight");
     window.navigationFixture.pendingCreation = null;
     $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     $('[data-create-storage="file"]').click();
     $('[data-create-kind="encrypted"]').click();
     $('#create-volume-continue').click();

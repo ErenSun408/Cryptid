@@ -993,8 +993,15 @@
     containerNameProblem(nameInput) === "" &&
     containerDirectoryProblem(directoryInput, nameInput) === "";
 
+  const containerBOuterMib = () => {
+    if (creationStorage !== "disk") return capacityMib(containerBCapacity, containerBUnit);
+    const selected = partitionRows.find(row => row.id === partitionSelected);
+    return selected ? selected.bytes / 1048576 : null;
+  };
+
   const containerBProblem = () => {
-    const outer = creationStorage === "disk" ? Math.floor((partitionRows.find(row => row.id === partitionSelected)?.bytes || 0) / 1048576) : capacityMib(containerBCapacity, containerBUnit);
+    const outer = containerBOuterMib();
+    if (creationStorage === "disk" && outer === null) return "请先选择分区。";
     const hidden = capacityMib(containerBHiddenCapacity, containerBUnit);
     if (outer === null || hidden === null) return "请输入整数容量。";
     if (outer > kMaximumCapacityMib) return "容量超出最大值。";
@@ -1009,7 +1016,7 @@
   const containerBSizes = () => {
     if (containerBProblem() !== "") return null;
     return {
-      outer: capacityMib(containerBCapacity, containerBUnit),
+      outer: containerBOuterMib(),
       hidden: capacityMib(containerBHiddenCapacity, containerBUnit),
     };
   };
@@ -1107,7 +1114,7 @@
         ? ""
         : containerDirectoryProblem(containerBDirectory, containerBName));
     showFieldProblem(
-      containerBError, hiddenQuiet ? "" : containerBProblem());
+      containerBError, hiddenQuiet || (creationStorage === "disk" && containerBOuterMib() === null) ? "" : containerBProblem());
     creationCloseButton.disabled = busy;
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
@@ -3594,7 +3601,7 @@
     renderContainers();
   };
 
-  const openCreationFlow = () => {
+  const openCreationFlow = (refreshDisk = true) => {
     if (busy || currentState !== nativeState.authenticated) {
       return;
     }
@@ -3602,7 +3609,7 @@
     // opening it says nothing about which password is logged in.
     creationStorage = "disk";
     creationInplace = false; partitionPreserve.checked = false; updatePartitionMode();
-    clearCreationPartitions();
+    discardPartitions();
     creationKind = "encrypted";
     creationStep = "params";
     creationCompleted = false;
@@ -3614,6 +3621,7 @@
     updateCreationAvailability();
     renderPartitions();
     creationStorageButtons[0].focus();
+    if (refreshDisk) void refreshPartitions();
   };
 
   const enterCreationParameters = () => {
@@ -5372,7 +5380,7 @@
       creationStatus.textContent = "请先在系统设置开启“记住容器”，再开始分区加密。";
       creationStatus.dataset.tone = "error"; return;
     }
-    if (resume) openCreationFlow();
+    if (resume) openCreationFlow(false);
     creationInplace = true; partitionErase.checked = false; busy = true;
     creationStatus.textContent = resume ? "正在认证并继续加密，正在使用本次管理员授权。" : "正在准备原地加密，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
@@ -5837,11 +5845,14 @@
     button.addEventListener("click", () => {
       if (busy || creationCompleted || creationDialog.hidden || currentState !== nativeState.authenticated) return;
       if (button.dataset.createStorage === creationStorage) return;
-      clearCreationPartitions();
+      // Refresh itself invalidates the native snapshot before scanning.
+      if (button.dataset.createStorage === "disk") discardPartitions();
+      else clearCreationPartitions();
       creationStorage = button.dataset.createStorage === "file" ? "file" : "disk";
       returnToCreationTypes();
       renderPartitions();
       button.focus();
+      if (creationStorage === "disk") void refreshPartitions();
     });
   }
   for (const button of creationTypeButtons) {
