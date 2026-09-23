@@ -15,9 +15,9 @@ async function run(fail){
   assert.match($('#partition-consent-text').textContent,/原地加密/);assert.doesNotMatch($('#partition-consent-text').textContent,/清空/);
   $('#partition-erase-consent').click();$('#create-volume-continue').click();await until(()=>w.navigationFixture.partitionConverted);
   assert.equal(w.navigationFixture.partitionCreated,undefined);assert.match($('#creation-cancel-work').textContent,/暂停/);
-  if(fail){
+  if(fail === true){
    w.navigationFixture.pendingCreation.reject();await until(()=>!$('#create-volume-cancel').disabled);
-   assert.match($('#create-volume-status').textContent,/未确认正常暂停/);$('#create-volume-cancel').click();
+   assert.equal($('#create-volume-status').textContent,'创建失败。错误码17');$('#create-volume-cancel').click();
    assert.equal($('[data-container-id="101"][data-container-action="resume"]'),null);
    assert.equal($('[data-container-id="101"][data-container-action="mount"]').disabled,true);
    assert.equal($('[data-container-id="101"][data-container-action="forget"]').disabled,true);
@@ -31,6 +31,12 @@ async function run(fail){
    assert.match($('#create-volume-title').textContent,/暂停/);$('#create-volume-cancel').click();
    assert.equal($('[data-container-id="101"][data-container-action="forget"]').disabled,true);
    $('[data-container-id="101"][data-container-action="resume"]').click();await until(()=>w.navigationFixture.partitionResumed===101);
+   if(fail === 'resume') {
+    w.navigationFixture.pendingCreation.reject();await until(()=>!$('#create-volume-cancel').disabled);
+    assert.equal($('#create-volume-status').textContent,'创建失败。错误码17');
+    assert.equal(w.navigationFixture.containers.find(c=>c.id===101).conversion,1);
+    return;
+   }
    w.navigationFixture.pendingCreation.resolve();await until(()=>!$('#create-volume-cancel').disabled);
    assert.match($('#create-volume-status').textContent,/加密已完成/);
    assert.equal(w.navigationFixture.containers.find(c=>c.id===101).conversion,0);
@@ -38,4 +44,4 @@ async function run(fail){
   assert.equal(errors.length,0,errors.join('\n'));
  }finally{w.close();}
 }
-(async()=>{await run(false);await run(true);console.log('PASS: preserve-data consent, pause acknowledgement, resumed completion and uncertain-state guards');})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{await run(false);await run(true);await run('resume');console.log('PASS: preserve-data consent, pause acknowledgement, resumed completion and uncertain-state guards');})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -5290,6 +5290,14 @@
     }
   };
 
+  const readCreationFailureCode = async (accepted) => {
+    try {
+      const code = accepted ? await bridge.getCreationError() : 0;
+      if (Number.isInteger(code) && code > 0 && code <= 4294967295) return code;
+    } catch (_) {}
+    return 2147500037; // E_FAIL when no native result is available.
+  };
+
   const runPartitionConversion = async (id, resume) => {
     if (busy || currentState !== nativeState.authenticated) return;
     if (!resume && await bridge.getRememberContainerPaths() !== true) {
@@ -5300,10 +5308,12 @@
     creationInplace = true; partitionErase.checked = false; busy = true;
     creationStatus.textContent = resume ? "正在认证并继续加密，正在使用本次管理员授权。" : "正在准备原地加密，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
+    let creationAccepted = false;
     try {
       startCreationProgress(); await paintCreationProgress();
       const accepted = resume ? await bridge.beginPartitionResume(id) : await bridge.beginPartitionConversion(id);
       if (accepted !== true) throw new Error("conversion rejected");
+      creationAccepted = true;
       const result = await waitForCreation();
       if (result !== 6) confirmCreationResult();
       await refreshNativeState(); busy = false; render(messageForCurrentState());
@@ -5311,9 +5321,10 @@
       creationStatus.textContent = result === 6 ? "进度已保存，可以安全退出应用。下次用原安全卡登录后继续加密。" : "分区加密已完成，可以挂载使用。";
       creationStatus.dataset.tone = result === 6 ? "paused" : "success";
     } catch (_) {
+      const failureCode = await readCreationFailureCode(creationAccepted);
       try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; }
       busy = false; render(messageForCurrentState());
-      creationStatus.textContent = "加密未完成，未确认正常暂停。请保留容器记录和磁盘，不要重新格式化或从头转换；异常中断不保证可续作。";
+      creationStatus.textContent = `创建失败。错误码${failureCode}`;
       creationStatus.dataset.tone = "error";
     } finally {
       busy = false; if (!resume) discardPartitions(); finishCreationProgress(); updateCreationAvailability();
@@ -5349,11 +5360,7 @@
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
     } catch (_) {
-      let failureCode = 2147500037; // E_FAIL when no native result is available.
-      try {
-        const code = creationAccepted ? await bridge.getCreationError() : 0;
-        if (Number.isInteger(code) && code > 0 && code <= 4294967295) failureCode = code;
-      } catch (_) {}
+      const failureCode = await readCreationFailureCode(creationAccepted);
       try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
       busy = false;
       render(messageForCurrentState());
