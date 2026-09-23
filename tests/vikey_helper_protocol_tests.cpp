@@ -785,6 +785,35 @@ void test_diagnostic_round_trip() {
   expect(!valid_response(sent, Operation::probe), "unknown native code kind accepted");
 }
 
+void test_development_elevation_policy() {
+  const auto optional = property_bit(SecurityProperty::not_elevated);
+  const auto excluded = property_bit(SecurityProperty::app_container) |
+      property_bit(SecurityProperty::no_capabilities) | property_bit(SecurityProperty::low_integrity);
+  expect(kDevelopmentOptionalSecurityProperties == optional &&
+      kDevelopmentCompatibilitySecurityProperties == (kRequiredSecurityProperties & ~excluded & ~optional),
+      "compatibility policy relaxed more than elevation");
+  for (const bool parent : {false, true}) {
+    const auto required = kDevelopmentCompatibilitySecurityProperties &
+        ~(parent ? property_bit(SecurityProperty::sanitized_environment) : 0u);
+    for (const auto observed : {required, required | optional}) {
+      expect(security_properties_match(observed, required, optional),
+          "normal or elevated compatibility token rejected");
+      for (unsigned int index = 0; index < 32; ++index) {
+        const std::uint32_t bit = 1u << index;
+        if (required & bit) expect(!security_properties_match(observed & ~bit, required, optional),
+            "missing mandatory security property accepted");
+        if ((required & bit) == 0 && bit != optional)
+          expect(!security_properties_match(observed | bit, required, optional),
+              "unexpected security property accepted");
+      }
+    }
+  }
+  expect(security_properties_match(kRequiredSecurityProperties, kRequiredSecurityProperties),
+      "strict AppContainer boundary rejected");
+  expect(!security_properties_match(kRequiredSecurityProperties & ~optional, kRequiredSecurityProperties),
+      "strict AppContainer boundary accepted an elevated token");
+}
+
 void test_security_step_round_trip() {
   for (std::uint32_t step = 90; step <= 108; ++step) {
     const Pipe pipe = make_pipe();
@@ -858,6 +887,7 @@ int main() {
     test_nonce_mismatch_is_rejected();
     test_diagnostic_round_trip();
     test_security_step_round_trip();
+    test_development_elevation_policy();
     std::cout << "vikey_helper_protocol_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

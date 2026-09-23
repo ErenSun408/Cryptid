@@ -1213,6 +1213,9 @@ namespace {
       boundary == HelperBoundary::zero_network_app_container
           ? helper::kRequiredSecurityProperties
           : helper::kDevelopmentCompatibilitySecurityProperties;
+  const std::uint32_t optional_security_properties =
+      boundary == HelperBoundary::network_enabled_development
+          ? helper::kDevelopmentOptionalSecurityProperties : 0u;
   const std::uint32_t parent_required_security_properties =
       required_security_properties &
       ~helper::property_bit(
@@ -1261,8 +1264,8 @@ namespace {
         {helper::SecurityProperty::low_label_image_load_blocked, 70},
         {helper::SecurityProperty::sanitized_environment, 71},
     });
-    if (parent_security_properties !=
-        parent_required_security_properties) {
+    if (!helper::security_properties_match(parent_security_properties,
+            parent_required_security_properties, optional_security_properties)) {
       throw_process_security(72, "ViKey helper security boundary is incomplete");
     }
     if (::ResumeThread(thread.get()) == std::numeric_limits<DWORD>::max()) {
@@ -1377,7 +1380,8 @@ namespace {
         {helper::SecurityProperty::low_label_image_load_blocked, 86},
         {helper::SecurityProperty::sanitized_environment, 87},
     });
-    if (security_properties != required_security_properties) {
+    if (!helper::security_properties_match(security_properties,
+            required_security_properties, optional_security_properties)) {
       throw_process_security(88, "ViKey helper security boundary is incomplete");
     }
     if (blob_response != nullptr) {

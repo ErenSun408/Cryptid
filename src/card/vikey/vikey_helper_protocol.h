@@ -154,7 +154,7 @@ constexpr std::uint32_t kKnownSecurityProperties =
     property_bit(SecurityProperty::no_capabilities) |
     property_bit(SecurityProperty::low_integrity);
 
-// All properties are mandatory before a helper may be used for a card session.
+// The zero-network AppContainer boundary still requires every property.
 constexpr std::uint32_t kRequiredSecurityProperties =
     kKnownSecurityProperties;
 
@@ -165,7 +165,19 @@ constexpr std::uint32_t kDevelopmentCompatibilitySecurityProperties =
     kRequiredSecurityProperties &
     ~property_bit(SecurityProperty::app_container) &
     ~property_bit(SecurityProperty::no_capabilities) &
-    ~property_bit(SecurityProperty::low_integrity);
+    ~property_bit(SecurityProperty::low_integrity) &
+    ~property_bit(SecurityProperty::not_elevated);
+
+// Compatibility mode may inherit an elevated parent. Keep reporting the actual
+// elevation observation, but require every other property and reject extra bits.
+constexpr std::uint32_t kDevelopmentOptionalSecurityProperties =
+    property_bit(SecurityProperty::not_elevated);
+
+[[nodiscard]] constexpr bool security_properties_match(
+    const std::uint32_t actual, const std::uint32_t required,
+    const std::uint32_t optional = 0) noexcept {
+  return (actual & ~optional) == required;
+}
 
 struct Request final {
   std::uint32_t magic{kMagic};

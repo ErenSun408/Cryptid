@@ -258,6 +258,24 @@ struct TokenPrivilege final {
   return count;
 }
 
+[[nodiscard]] bool current_process_is_elevated() {
+  HANDLE token{};
+  expect(::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE,
+      "cannot query parent elevation");
+  TOKEN_ELEVATION elevation{};
+  DWORD bytes{};
+  const auto ok = ::GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &bytes);
+  ::CloseHandle(token);
+  expect(ok != FALSE && bytes == sizeof(elevation), "cannot read parent elevation");
+  return elevation.TokenIsElevated != 0;
+}
+
+[[nodiscard]] std::uint32_t expected_development_security_properties() {
+  using namespace usb_vault::card::vikey::helper;
+  return kDevelopmentCompatibilitySecurityProperties |
+      (current_process_is_elevated() ? 0u : property_bit(SecurityProperty::not_elevated));
+}
+
 void test_restricted_helper_probe(const std::filesystem::path& helper) {
   const std::size_t profiles_before = helper_profile_count();
   const auto result = probe_vikey_helper(helper, file_digest(helper), 5s);
@@ -297,20 +315,17 @@ void test_development_network_access(
   const auto helper_result =
       probe_vikey_development_helper_with_network_access(
           helper, file_digest(helper), 5s);
-  // Development omits only the three AppContainer-specific assertions.
+  // Verify both all remaining protections and the actual inherited elevation state.
   if (helper_result.security_properties !=
-      usb_vault::card::vikey::helper::
-          kDevelopmentCompatibilitySecurityProperties) {
+      expected_development_security_properties()) {
     std::cerr << "development helper security properties: actual=0x"
               << std::hex << helper_result.security_properties
               << " expected=0x"
-              << usb_vault::card::vikey::helper::
-                     kDevelopmentCompatibilitySecurityProperties
+              << expected_development_security_properties()
               << std::dec << '\n';
   }
   expect(helper_result.security_properties ==
-             usb_vault::card::vikey::helper::
-                 kDevelopmentCompatibilitySecurityProperties,
+             expected_development_security_properties(),
          "development helper did not retain its exact restricted boundary");
   expect(development_helper_directory_count() == directories_before,
          "development helper probe left a staging directory behind");
@@ -321,8 +336,7 @@ void test_development_network_access(
       probe_vikey_development_helper_with_network_access(
           network_enabled_fixture, file_digest(network_enabled_fixture), 5s);
   expect(network_result.security_properties ==
-             usb_vault::card::vikey::helper::
-                 kDevelopmentCompatibilitySecurityProperties,
+             expected_development_security_properties(),
          "network-enabled fixture did not retain the development boundary");
   expect(development_helper_directory_count() == directories_before,
          "network-enabled fixture left a staging directory behind");
@@ -351,8 +365,7 @@ void test_development_vendor_runtime_staging(
           helper, file_digest(helper), vendor.parent_path(),
           file_digest(vendor), 5s);
   expect(result.security_properties ==
-             usb_vault::card::vikey::helper::
-                 kDevelopmentCompatibilitySecurityProperties,
+             expected_development_security_properties(),
          "development vendor probe lost a restricted-process property");
   expect(development_helper_directory_count() == directories_before,
          "development vendor probe left a staging directory behind");
@@ -409,8 +422,7 @@ void test_development_session_staging(
       helper, file_digest(helper), vendor.parent_path(), file_digest(vendor),
       user_sn, api_key, user_pin, 5s);
   expect(result.security_properties ==
-             usb_vault::card::vikey::helper::
-                 kDevelopmentCompatibilitySecurityProperties,
+             expected_development_security_properties(),
          "development session lost a restricted-process property");
   expect(result.attempts_before == 200 && result.maximum_before == 200 &&
              result.attempts_after == 200 && result.maximum_after == 200,
@@ -486,8 +498,7 @@ void test_development_blob_round_trip_staging(
           helper, file_digest(helper), vendor.parent_path(),
           file_digest(vendor), user_sn, api_key, user_pin, test_blob, 5s);
   expect(result.security_properties ==
-             usb_vault::card::vikey::helper::
-                 kDevelopmentCompatibilitySecurityProperties,
+             expected_development_security_properties(),
          "development blob round trip lost a restricted-process property");
   expect_fixed_secret(test_blob, std::byte{0xa5},
                       "development blob round trip changed caller data");
@@ -568,8 +579,7 @@ void test_formal_card_record_backend_staging(
              usb_vault::card::CardRecordState::provisioned_uninitialized,
          "card media probe returned the wrong logical record state");
   expect(media.security_properties ==
-             usb_vault::card::vikey::helper::
-                 kDevelopmentCompatibilitySecurityProperties,
+             expected_development_security_properties(),
          "card media probe lost a restricted-process property");
   CountingCredentialProvider provider;
   VikeyHelperCardRecordBackend backend(config, provider,
@@ -1173,10 +1183,13 @@ void test_launch_failure_removes_profile(
 
 int wmain(const int argc, wchar_t** const argv) {
   try {
-    if (argc != 6) {
+    const bool elevated_development = argc == 7 && std::wstring_view(argv[6]) == L"--elevated-development";
+    if (argc != 6 && !elevated_development) {
       fail("expected helper, isolated-network, network-enabled, stalled, "
            "and vendor fixture paths");
     }
+    expect(current_process_is_elevated() == elevated_development,
+        "test mode does not match actual parent elevation");
     if (current_process_token_is_restricted()) {
       std::cout << "vikey_helper_process_tests skipped: parent token is "
                    "already restricted\n";
@@ -1192,14 +1205,16 @@ int wmain(const int argc, wchar_t** const argv) {
         std::filesystem::absolute(argv[4]).lexically_normal();
     const std::filesystem::path vendor =
         std::filesystem::absolute(argv[5]).lexically_normal();
-    run_test("restricted helper probe",
-             [&] { test_restricted_helper_probe(helper); });
-    run_test("vendor runtime staging",
-             [&] { test_vendor_runtime_staging(helper, vendor); });
-    run_test("vendor digest mismatch", [&] {
-      test_vendor_digest_mismatch_fails_before_launch(helper, vendor);
-    });
-    run_test("network isolation", [&] { test_network_isolation(network); });
+    if (!elevated_development) {
+      run_test("restricted helper probe",
+               [&] { test_restricted_helper_probe(helper); });
+      run_test("vendor runtime staging",
+               [&] { test_vendor_runtime_staging(helper, vendor); });
+      run_test("vendor digest mismatch", [&] {
+        test_vendor_digest_mismatch_fails_before_launch(helper, vendor);
+      });
+      run_test("network isolation", [&] { test_network_isolation(network); });
+    }
     run_test("development network access",
              [&] { test_development_network_access(helper, network_enabled); });
     run_test("development vendor runtime staging", [&] {
@@ -1243,12 +1258,14 @@ int wmain(const int argc, wchar_t** const argv) {
     run_test("relative path rejection", test_relative_path_fails_closed);
     run_test("helper digest mismatch",
              [&] { test_digest_mismatch_fails_before_launch(stalled); });
-    run_test("isolated launch cleanup", [&] {
-      test_launch_failure_removes_profile(helper.parent_path());
-    });
-    run_test("isolated timeout cleanup",
-             [&] { test_stalled_helper_times_out(stalled); });
-    std::cout << "vikey_helper_process_tests passed\n";
+    if (!elevated_development) {
+      run_test("isolated launch cleanup", [&] {
+        test_launch_failure_removes_profile(helper.parent_path());
+      });
+      run_test("isolated timeout cleanup",
+               [&] { test_stalled_helper_times_out(stalled); });
+    }
+    std::cout << "vikey_helper_process_tests passed; elevated_development=" << elevated_development << "\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "vikey_helper_process_tests failed: " << error.what()

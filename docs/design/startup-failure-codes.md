@@ -338,7 +338,7 @@ Win32 API 失败立即取得系统码，HRESULT 保留调用结果；逻辑校�
 | 55 | open ViKey helper process token | Win32 |
 | 56 | assign ViKey helper to job object | Win32 |
 | 57 | parent missing filtered_token | 无（逻辑校验） |
-| 58 | parent missing not_elevated | 无（逻辑校验） |
+| 58 | parent missing not_elevated（当前仅严格 AppContainer；历史兼容模式也要求） | 无（逻辑校验） |
 | 59 | parent missing app_container | 无（逻辑校验） |
 | 60 | parent missing no_capabilities | 无（逻辑校验） |
 | 61 | parent missing low_integrity | 无（逻辑校验） |
@@ -354,7 +354,7 @@ Win32 API 失败立即取得系统码，HRESULT 保留调用结果；逻辑校�
 | 71 | parent missing sanitized_environment | 无（逻辑校验） |
 | 72 | parent security properties contain unexpected bits | 无（逻辑校验） |
 | 73 | combined missing filtered_token | 无（逻辑校验） |
-| 74 | combined missing not_elevated | 无（逻辑校验） |
+| 74 | combined missing not_elevated（当前仅严格 AppContainer；历史兼容模式也要求） | 无（逻辑校验） |
 | 75 | combined missing app_container | 无（逻辑校验） |
 | 76 | combined missing no_capabilities | 无（逻辑校验） |
 | 77 | combined missing low_integrity | 无（逻辑校验） |
@@ -409,3 +409,10 @@ Win32 API 失败立即取得系统码，HRESULT 保留调用结果；逻辑校�
 ### 2026-09-22：当前诊断版的路径一致集成重测
 
 当前协议 v14／114 步构建由 Explorer 桌面对象启动后，沿用生产同样的 KnownFolder 查询，创建唯一空探针并核验请求路径与句柄最终路径一致；随后 helper_process 与 artifact 两组测试 2/2 通过（2.95 秒），无跳过。首次通用 Shell.Application 启动仍重定向，预检拒绝且没有执行测试。未修改产品路径或放宽安全规则；Codex 宿主直接启动的重定向边界仍存在，用户实机 2011 未因此视为复现或修复。证据目录：out/path-retest-20260922-005829。
+
+
+### 2026-09-23：兼容 helper 接受管理员启动
+
+当前联网兼容后端将 not_elevated 作为可选观察值，普通与提权 helper 均可通过；不伪造该属性，不忽略其余必需属性或接受未知位。旧版日志 2011／安全步骤 58／原因 1 表示父进程检查发现 helper 已提权，与本次兼容策略调整对应；严格 AppContainer 路径保留 58／74。查询提权状态本身失败仍报告 26／27，路径及其他限制失败继续保留原编号，不能把所有 2011 解释为管理员身份。
+
+普通桌面与真实管理员进程均通过请求路径／句柄最终路径一致的预检，再运行模拟厂商 DLL 回归。管理员模式只验证兼容后端，不宣称严格 AppContainer 在管理员父进程下通过；实卡、客户系统及关闭 UAC 的配置未实测。此项是明确降低兼容模式隔离强度，管理员组及完整性级别未降权；原权限过滤、进程限制与验证逻辑继续生效。
