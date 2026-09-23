@@ -1,3 +1,4 @@
+#include "volume_creation/partition_inplace_backend.h"
 // Opt-in feasibility evidence. Never accepts an existing disk or partition.
 #include "usb_vault/security/secure_buffer.h"
 #include "application/card_login_mount_session_internal.h"
@@ -645,6 +646,52 @@ void session_roundtrip(OwnedDisk& disk) {
   std::cout << "PASS: synthetic authenticated session, real KDF/index/helper/driver, file manager, alternate login remount/readback and card-removal cleanup" << std::endl;
 }
 
+void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
+  using namespace usb_vault;
+  const auto candidate=disk.prepare_ntfs();
+  const auto original=candidate.volume_path+L"preserved.bin";
+  std::vector<std::byte> expected(1024*1024+37);
+  for(std::size_t i=0;i<expected.size();++i) expected[i]=std::byte((i+i/997)%251);
+  {
+    Handle file(::CreateFileW(original.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,0,nullptr));
+    require(file.get()!=INVALID_HANDLE_VALUE,"create preconversion file"); DWORD done{};
+    require(::WriteFile(file.get(),expected.data(),static_cast<DWORD>(expected.size()),&done,nullptr) && done==expected.size() && ::FlushFileBuffers(file.get()),"write preconversion file");
+  }
+  const auto run=[&](bool begin,bool pause,const security::SecureBuffer& secret) {
+    disk.verify();
+    auto path=candidate.volume_path; path.pop_back();
+    Handle raw(::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,0,nullptr));
+    require(raw.get()!=INVALID_HANDLE_VALUE,"open conversion fixture");
+    unsigned percent=0;
+    volume_creation::detail::PartitionInplaceBackend backend(::GetModuleHandleW(L"VeraCryptFormat.dll"),raw.get(),
+        candidate.offset_bytes,candidate.length_bytes,secret,begin,
+        [&]{return pause && percent>=2 ? volume::detail::InplaceControl::pause : volume::detail::InplaceControl::proceed;},
+        [&](const volume_creation::CreationProgress& p){percent=p.percent;});
+    return volume::detail::run_partition_inplace(backend);
+  };
+  require(run(true,true,password)==volume::detail::InplaceResult::paused,"real conversion pause failed");
+  std::cout << "PASS: NTFS preparation and real encrypted checkpoint pause" << std::endl;
+  security::SecureBuffer wrong(64); std::fill(wrong.bytes().begin(),wrong.bytes().end(),std::byte{0x31});
+  require(run(false,false,wrong)==volume::detail::InplaceResult::failed,"wrong resume key accepted");
+  require(run(false,false,password)==volume::detail::InplaceResult::completed,"real conversion resume failed");
+  volume::VolumeProvider provider; const auto letter=free_letter();
+  mount_owned(disk,password,letter);
+  try {
+    const auto path=std::wstring(1,letter)+L":\\preserved.bin";
+    {
+      Handle file(::CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+      require(file.get()!=INVALID_HANDLE_VALUE,"preserved NTFS file missing");
+      std::vector<std::byte> actual(expected.size()); DWORD done{};
+      require(::ReadFile(file.get(),actual.data(),static_cast<DWORD>(actual.size()),&done,nullptr) && done==actual.size() && actual==expected,"preconversion file content mismatch");
+    }
+    static_cast<void>(volume::unmount_with_retry(provider,letter,{.notify_shell=false}));
+  } catch (...) {
+    if(provider.mount_identity(letter).volume_path==disk.target()) static_cast<void>(provider.unmount(letter,{.force=true,.notify_shell=false}));
+    throw;
+  }
+  std::cout << "PASS: authenticated resume, real AES conversion, NTFS mount and original file bytes preserved" << std::endl;
+}
+
 void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
   usb_vault::volume::VolumeProvider provider;
   const wchar_t drive = free_letter(); bool mounted = false;
@@ -691,7 +738,7 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan")) {
+  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -706,6 +753,7 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create();
+    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace") { inplace_roundtrip(disk,password); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-plan") { inplace_plan_probe(disk); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-session") { session_roundtrip(disk); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-helper") helper_format(disk, password);

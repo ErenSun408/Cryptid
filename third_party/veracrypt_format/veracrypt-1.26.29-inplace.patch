@@ -1,0 +1,6 @@
+--- a/src/FormatDLL/VeraCryptFormatSDK.cpp
++++ b/src/FormatDLL/VeraCryptFormatSDK.cpp
+@@ -497 +497,3 @@
+ #include "UsbVaultPartition.inl"
++
++#include "UsbVaultInplace.inl"
