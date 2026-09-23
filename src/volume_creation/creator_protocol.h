@@ -14,7 +14,7 @@
 namespace usb_vault::volume_creation::detail {
 
 constexpr std::uint32_t kProtocolMagic = 0x31564355U;  // "UCV1"
-constexpr std::uint16_t kProtocolVersion = 9;
+constexpr std::uint16_t kProtocolVersion = 10;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kMaxPathCharacters = 32767;
 constexpr std::uint32_t kMaxPasswordBytes = 128;
@@ -32,13 +32,14 @@ enum class Operation : std::uint32_t {
   format_partition = 8, // Destructive, separate confirmation required.
   begin_partition_inplace = 9,
   resume_partition_inplace = 10,
+  inspect_partition_bitlocker = 11,
 };
 
 [[nodiscard]] constexpr bool inplace_operation(Operation op) noexcept {
   return op == Operation::begin_partition_inplace || op == Operation::resume_partition_inplace;
 }
 [[nodiscard]] constexpr bool partition_operation(Operation op) noexcept {
-  return op == Operation::check_partition || op == Operation::format_partition || inplace_operation(op);
+  return op == Operation::inspect_partition_bitlocker || op == Operation::check_partition || op == Operation::format_partition || inplace_operation(op);
 }
 // 0: continue, 1: normal pause, 2: authentication revoked/cancelled.
 void write_pause_request(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce);

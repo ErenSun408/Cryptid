@@ -364,6 +364,22 @@ void scan(bool handles = false) {
 }
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--probe-bitlocker") {
+      std::array<wchar_t,32768> module{};
+      const auto n=::GetModuleFileNameW(nullptr,module.data(),static_cast<DWORD>(module.size()));
+      require(n && n<module.size(),"test executable unavailable");
+      const auto helper=std::filesystem::path(module.data()).parent_path().parent_path()/L"usb_vault_volume_creator.exe";
+      usb_vault::volume_creation::VolumeCreator creator(helper);
+      unsigned count{};
+      for(const auto& candidate:enumerate_partition_candidates()) {
+        if(candidate.availability!=A::candidate || !partition_display_name(candidate).starts_with(L"T:"))continue;
+        const auto status=creator.inspect_partition_bitlocker(candidate);
+        require(valid_bitlocker_status(status),"invalid BitLocker result");
+        std::cout << "PASS: read-only BitLocker state=" << status.state << " encrypted_percent=" << status.encrypted_percent << '\n';
+        ++count;
+      }
+      require(count>0,"no eligible read-only target"); return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--probe-helper") {
       const auto candidates = enumerate_partition_candidates();
       for (const auto& candidate : candidates) {

@@ -104,7 +104,7 @@ ComPtr<IWbemClassObject> find_volume(IWbemServices* service, const wchar_t* quer
   require(false);
   return {};
 }
-PartitionWriteFacts read_facts(const std::wstring& volume) {
+PartitionWriteFacts read_facts(const std::wstring& volume, PartitionBitLockerStatus* bitlocker = nullptr) {
   Apartment apartment;
   ComPtr<IWbemLocator> locator;
   require(SUCCEEDED(::CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
@@ -134,6 +134,10 @@ PartitionWriteFacts read_facts(const std::wstring& volume) {
   require(pending->GetResultObject(0, &result) == WBEM_S_NO_ERROR && result);
   require(Property(result.Get(), L"ReturnValue").number() == 0);
   facts.conversion_status = Property(result.Get(), L"ConversionStatus").number();
+  if (bitlocker) {
+    *bitlocker = {*facts.conversion_status, Property(result.Get(), L"EncryptionPercentage").number()};
+    require(valid_bitlocker_status(*bitlocker));
+  }
   return facts;
 }
 }  // namespace
@@ -143,6 +147,17 @@ bool permits_partition_write(const PartitionWriteFacts& facts) noexcept {
       facts.system_volume.has_value() && !*facts.system_volume &&
       facts.page_file_present.has_value() && !*facts.page_file_present &&
       facts.conversion_status.has_value() && *facts.conversion_status == 0;
+}
+PartitionBitLockerStatus inspect_partition_bitlocker(HANDLE handle, const PartitionCandidate& expected) {
+  require(matches_partition_handle_identity(handle, expected) &&
+      matches_partition_snapshot(expected, enumerate_partition_candidates()));
+  PartitionBitLockerStatus status{6, 0};
+  const auto facts = read_facts(expected.volume_path, &status);
+  require(facts.boot_volume && !*facts.boot_volume && facts.system_volume && !*facts.system_volume &&
+      facts.page_file_present && !*facts.page_file_present && valid_bitlocker_status(status));
+  require(matches_partition_handle_identity(handle, expected) &&
+      matches_partition_snapshot(expected, enumerate_partition_candidates()));
+  return status;
 }
 bool check_partition_write_policy(HANDLE handle, const PartitionCandidate& expected) noexcept {
   try {

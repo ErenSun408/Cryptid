@@ -125,6 +125,23 @@ void test_partition_format_protocol(Operation operation = Operation::format_part
   expect(!valid_cancel_request(CancelRequest{.nonce = header.nonce}, {}), "nonce binding missing");
 }
 
+void test_bitlocker_inspection_protocol() {
+  RequestHeader header{.operation = Operation::inspect_partition_bitlocker, .path_characters = 49,
+      .partition_target_bytes = sizeof(PartitionTarget)};
+  expect(valid_request_header(header), "BitLocker inspection rejected");
+  for (int i=0; i<4; ++i) {
+    auto bad=header;
+    if(i==0)bad.first_password_bytes=64;
+    if(i==1)bad.outer_size_bytes=512;
+    if(i==2)bad.version=9;
+    if(i==3)bad.partition_target_bytes=0;
+    expect(!valid_request_header(bad), "malformed BitLocker inspection accepted");
+  }
+  using usb_vault::volume::valid_bitlocker_status;
+  expect(valid_bitlocker_status({0,0}) && valid_bitlocker_status({1,100}) && valid_bitlocker_status({3,48}), "valid BitLocker status rejected");
+  expect(!valid_bitlocker_status({6,0}) && !valid_bitlocker_status({0,1}) && !valid_bitlocker_status({3,101}), "unknown BitLocker status accepted");
+}
+
 void test_partition_check_protocol() {
   const std::wstring path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
   PartitionTarget target{}; target.device_id[0] = 7; target.partition_number = 2;
@@ -727,6 +744,7 @@ int main() {
     test_partition_format_protocol(Operation::begin_partition_inplace);
     test_partition_format_protocol(Operation::resume_partition_inplace);
     test_inplace_controls();
+    test_bitlocker_inspection_protocol();
     test_partition_check_protocol();
     test_partition_helper_rejects_invalid_requests();
     test_binary_password_round_trip();

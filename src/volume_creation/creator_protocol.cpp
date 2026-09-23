@@ -23,7 +23,7 @@ namespace {
 }
 
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
-  return inplace_operation(operation) || operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
+  return operation == Operation::inspect_partition_bitlocker || inplace_operation(operation) || operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
          operation == Operation::scan_protected_space || operation == Operation::scan_maintenance_space || operation == Operation::import_protected_file;
@@ -69,7 +69,7 @@ bool valid_request_header(const RequestHeader& header) noexcept {
 
   if (partition_operation(header.operation)) {
     return header.partition_target_bytes == sizeof(PartitionTarget) && header.path_characters == 49 &&
-        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == (header.operation != Operation::check_partition ? 64u : 0u) &&
+        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == (header.operation != Operation::check_partition && header.operation != Operation::inspect_partition_bitlocker ? 64u : 0u) &&
         header.second_password_bytes == 0 && header.mounted_drive == 0 && header.mount_id == 0 &&
         header.source_characters == 0 && header.destination_characters == 0;
   }

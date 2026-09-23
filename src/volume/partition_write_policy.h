@@ -1,5 +1,6 @@
 #pragma once
 #include "usb_vault/volume/partition_catalog.h"
+#include "usb_vault/volume/partition_bitlocker.h"
 #include <Windows.h>
 #include <optional>
 
@@ -11,6 +12,7 @@ struct PartitionWriteFacts final {
   std::optional<bool> page_file_present;
   std::optional<std::uint32_t> conversion_status;
 };
+[[nodiscard]] PartitionBitLockerStatus inspect_partition_bitlocker(HANDLE handle, const PartitionCandidate& expected);
 [[nodiscard]] bool permits_partition_write(const PartitionWriteFacts& facts) noexcept;
 // Read-only preflight, not a reusable write permit. The writer must run this
 // against its retained target handle, then obtain an exclusive volume lock and

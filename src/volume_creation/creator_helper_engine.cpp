@@ -342,7 +342,7 @@ void validate_request(const Request& request) {
     if (!request.partition_target || !valid_partition_target(*request.partition_target) ||
         !valid_partition_path(request.target_path) || request.outer_size_bytes || request.hidden_size_bytes ||
         request.mounted_drive || request.mount_id ||
-        request.first_password.size() != (request.operation != Operation::check_partition ? 64u : 0u) || !request.second_password.empty() ||
+        request.first_password.size() != (request.operation != Operation::check_partition && request.operation != Operation::inspect_partition_bitlocker ? 64u : 0u) || !request.second_password.empty() ||
         !request.source_path.empty() || !request.destination_relative.empty())
       fail(CreationError::invalid_request, "invalid partition identity request");
     return;
@@ -1051,11 +1051,15 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
       fail(CreationError::target_access_denied, "partition snapshot no longer matches");
     std::wstring path = request.target_path;
     path.pop_back(); // Only the validated volume GUID name reaches CreateFile.
-    const bool formatting = request.operation != Operation::check_partition;
+    const bool formatting = request.operation != Operation::check_partition && request.operation != Operation::inspect_partition_bitlocker;
     const Handle handle(::CreateFileW(path.c_str(), GENERIC_READ | (formatting ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING, 0, nullptr));
     if (handle.get() == INVALID_HANDLE_VALUE || (resume ? !volume::detail::matches_partition_location_handle(handle.get(),location) : !volume::detail::matches_partition_handle_identity(handle.get(), expected)))
       fail(CreationError::target_access_denied, "partition handle identity mismatch");
+    if (request.operation == Operation::inspect_partition_bitlocker) {
+      const auto state = volume::detail::inspect_partition_bitlocker(handle.get(), expected);
+      return (static_cast<std::uint64_t>(state.state) << 8) | state.encrypted_percent;
+    }
     const auto policy = [&] { return resume ? volume::detail::check_partition_resume_policy(handle.get(),location) : volume::detail::check_partition_write_policy(handle.get(),expected); };
     if (!policy())
       fail(CreationError::target_access_denied, "partition write policy rejected");
