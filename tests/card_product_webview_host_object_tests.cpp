@@ -3334,6 +3334,7 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   bool tool_success{true};
   int tool_calls{};
   bool changed{};
+  bool gpt{};
   bool device_replaced{};
   bool check_fails{};
   std::atomic<bool> check_delay{false};
@@ -3348,7 +3349,7 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
     item.volume_path = L"private-native-identity";
     item.partition_number = 3; item.length_bytes = 1073741824;
     item.offset_bytes = 1048576; item.logical_sector_bytes = 512;
-    item.layout = usb_vault::volume::PartitionLayout::mbr;
+    item.layout = gpt ? usb_vault::volume::PartitionLayout::gpt : usb_vault::volume::PartitionLayout::mbr;
     item.device_id[0] = 9;
     if (changed) ++item.filesystem_serial;
     if (device_replaced) ++item.device_id[0];
@@ -3404,6 +3405,13 @@ void test_partition_selection_lifecycle() {
   require(call(L"openDiskManagement") == E_FAIL && FAILED(select(3)), "failed launcher retained selection");
   services.tool_success = true;
   require(SUCCEEDED(call(L"openDiskManagement")) && services.tool_calls == 2, "launcher routing");
+  services.gpt = true;
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "GPT scan start"); wait();
+  require(SUCCEEDED(call(L"getPartitionList")) && std::wstring(result.bstrVal).find(L",1073741824,3") != std::wstring::npos,
+      "unsupported GPT shown as selectable");
+  const auto unsupported_id = static_cast<unsigned int>(std::stoul(result.bstrVal));
+  require(select(unsupported_id) == E_ACCESSDENIED, "unsupported GPT selected");
+  services.gpt = false;
   services.fail = true;
   require(SUCCEEDED(call(L"beginPartitionRefresh")), "failed scan start"); wait();
   require(SUCCEEDED(call(L"getPartitionRefreshStatus")) && result.ulVal == 3 && FAILED(call(L"getPartitionList")), "scan failure invented candidates");

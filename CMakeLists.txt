@@ -181,6 +181,7 @@ add_library(usb_vault_core STATIC
   src/volume/fat32_file_transfer.cpp
   src/volume_creation/partition_inplace_backend.cpp
   src/volume_creation/creator_protocol.cpp
+  src/volume_creation/elevation_session.cpp
   src/volume_creation/creator_pipe_security.cpp
   src/volume_creation/volume_creator.cpp
 )

@@ -3343,7 +3343,7 @@
   const partitionRefresh = document.getElementById("partition-refresh");
   const partitionManagement = document.getElementById("partition-open-management");
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
-  const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区布局",
+  const partitionReasons = ["可选择", "Windows 系统卷", "无法确认分区信息", "暂不支持的分区布局（当前仅支持 MBR）",
     "受保护的分区", "分区信息不一致", "暂不支持的扇区大小", "暂不支持的文件系统", "无法确认磁盘身份"];
   const partitionLocation = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
@@ -3440,7 +3440,7 @@
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) {
         partitionSelected = id;
-        partitionStatus.textContent = "已选择分区，可检查身份及系统、分页和 BitLocker 状态；检查需要管理员确认，不会修改分区。";
+        partitionStatus.textContent = "已选择分区，可检查身份及系统、分页和 BitLocker 状态；检查复用本次管理员授权，不会修改分区。";
       }
     } catch (_) {
       if (revision === partitionRevision) {
@@ -3456,7 +3456,7 @@
     if (!partitionPickerVisible() || busy || !partitionSelected || bridge === null || currentState !== nativeState.authenticated) return;
     const revision = partitionRevision;
     busy = true; render(messageForCurrentState());
-    partitionStatus.textContent = "正在检查分区身份及使用状态，请完成管理员确认…";
+    partitionStatus.textContent = "正在检查分区身份及使用状态…";
     try {
       if (await bridge.beginPartitionCheck() !== true) throw new Error("partition check rejected");
       let state;
@@ -5208,7 +5208,7 @@
     let confirmationBytes = null;
     busy = true;
     creationStatus.textContent =
-      "正在创建，随后写入安全卡并确认管理员权限。";
+      "正在创建，随后写入安全卡并检查管理员会话。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     // Cleared with the passwords below for the same reason: nothing about a
@@ -5292,9 +5292,13 @@
 
   const runPartitionConversion = async (id, resume) => {
     if (busy || currentState !== nativeState.authenticated) return;
+    if (!resume && await bridge.getRememberContainerPaths() !== true) {
+      creationStatus.textContent = "请先在系统设置开启“记住容器”，再开始分区加密。";
+      creationStatus.dataset.tone = "error"; return;
+    }
     if (resume) openCreationFlow();
     creationInplace = true; partitionErase.checked = false; busy = true;
-    creationStatus.textContent = resume ? "正在认证并继续加密，请确认管理员权限。" : "正在准备原地加密，请确认管理员权限。";
+    creationStatus.textContent = resume ? "正在认证并继续加密，正在使用本次管理员授权。" : "正在准备原地加密，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
     try {
       startCreationProgress(); await paintCreationProgress();
@@ -5325,7 +5329,7 @@
     const revision = batchSessionRevision;
     partitionErase.checked = false;
     busy = true;
-    creationStatus.textContent = "正在创建加密盘，请确认管理员权限。";
+    creationStatus.textContent = "正在创建加密盘，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     try {
@@ -5371,7 +5375,7 @@
     }
 
     busy = true;
-    creationStatus.textContent = "正在创建，请确认管理员权限。";
+    creationStatus.textContent = "正在创建，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     try {
@@ -6269,6 +6273,13 @@
       // the bridge for one.
       failureCode = 1402;
       const startupView = String(await bridge.getStartupView());
+      if (startupView === "permission-required") {
+        bridge = null;
+        currentState = nativeState.unavailable; activeVolumes = false; busy = false;
+        render("需要管理员权限"); statusOutput.dataset.tone = "error";
+        window.usbVaultPageStartupStatus = 1;
+        return;
+      }
       if (!["configuration", "session"].includes(startupView)) throw new Error("invalid startup view");
       if (startupView === "configuration") {
         await startConfiguration();

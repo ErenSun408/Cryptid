@@ -16,6 +16,7 @@
 #include "platform/windows/shell_container_file_chooser.h"
 #include "card/diagnostic_error.h"
 #include "ui/webview_startup_state.h"
+#include "volume_creation/elevation_session.h"
 #include "platform/windows/vikey_configuration/diagnostics.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_device_lifecycle_controller.h"
@@ -64,6 +65,7 @@ usb_vault::platform::windows::StartupLog g_startup_log;
 using StartupStep = usb_vault::platform::windows::StartupStep;
 using StartupOutcome = usb_vault::platform::windows::StartupOutcome;
 bool g_log_warning_shown{};
+bool g_administrator_required{};
 // Which surface the one product window shows. Setup and the product session
 // swap inside it rather than each owning a window, but the swap is still a
 // full teardown: the card context, the bridge and the document are all gone
@@ -601,6 +603,7 @@ void notify_webview_session_changed() noexcept {
   if (!g_webview || !g_webview_startup.current(g_page_generation)) return;
   // Only the bounded numeric failure snapshot crosses this boundary. Never
   // insert an exception message, SDK payload, file path, or card identity.
+  if (g_administrator_required) return;
   const auto failure = g_card_entry ? g_card_entry->startup_failure()
                                     : usb_vault::card::FailureDiagnostic{};
   const auto& primary = failure.primary;
@@ -639,16 +642,46 @@ void notify_webview_session_changed() noexcept {
 // its own: the product surface is not merely hidden there, it is absent, so a
 // page shown before any credential exists cannot reach the card, a container
 // or a volume.
+// A denied launch gets no card, configuration or volume bridge at all.
+class PermissionRequiredHost final : public IDispatch {
+  ULONG references_{1};
+ public:
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out) override {
+    if(!out)return E_POINTER; *out=nullptr;
+    if(id!=IID_IUnknown && id!=IID_IDispatch)return E_NOINTERFACE;
+    *out=static_cast<IDispatch*>(this);AddRef();return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override {return ++references_;}
+  ULONG STDMETHODCALLTYPE Release() override {const auto n=--references_;if(!n)delete this;return n;}
+  HRESULT STDMETHODCALLTYPE GetTypeInfoCount(UINT* n) override {if(!n)return E_POINTER;*n=0;return S_OK;}
+  HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT,LCID,ITypeInfo**) override {return E_NOTIMPL;}
+  HRESULT STDMETHODCALLTYPE GetIDsOfNames(REFIID,LPOLESTR* names,UINT count,LCID,DISPID* ids) override {
+    if(!names||!ids)return E_POINTER;
+    if(count!=1||!names[0]||std::wstring_view(names[0])!=L"getStartupView")return DISP_E_UNKNOWNNAME;
+    ids[0]=1;return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE Invoke(DISPID id,REFIID,LCID,WORD,DISPPARAMS* args,VARIANT* result,EXCEPINFO*,UINT*) override {
+    if(id!=1)return DISP_E_MEMBERNOTFOUND;
+    if(!args||args->cArgs||args->cNamedArgs)return DISP_E_BADPARAMCOUNT;
+    if(!result)return E_POINTER;
+    ::VariantInit(result);result->vt=VT_BSTR;result->bstrVal=::SysAllocString(L"permission-required");
+    return result->bstrVal ? S_OK : E_OUTOFMEMORY;
+  }
+};
+
 [[nodiscard]] HRESULT attach_host_object() noexcept {
   if (!g_webview) return E_FAIL;
   ComPtr<IDispatch> host_object;
-  HRESULT result = g_view == StartupView::configuration
+  HRESULT result = S_OK;
+  if (g_administrator_required) host_object.Attach(new (std::nothrow) PermissionRequiredHost);
+  else result = g_view == StartupView::configuration
       ? usb_vault::ui::create_card_configuration_webview_host_object(
             g_configuration_host, &host_object)
       : usb_vault::ui::create_card_product_webview_host_object(
             *g_ui_session, &g_close_sink, &host_object, &g_window_size_sink,
             &g_creation_work, g_drop_target, g_partition_services.get());
   if (FAILED(result)) return result;
+  if (!host_object) return E_OUTOFMEMORY;
   VARIANT host_value{};
   ::VariantInit(&host_value);
   host_value.vt = VT_DISPATCH;
@@ -1289,6 +1322,19 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     }
   }
 
+  // Pin the broker before requesting UAC; its lifetime is exactly this process.
+  try {
+    const auto helper = child_path(executable_directory(), L"usb_vault_volume_creator.exe");
+    g_deployment_artifacts.push_back(usb_vault::card::verify_local_artifact(helper,
+        usb_vault::card::vikey::development::parse_deployment_digest(p2_deployment::creator), 128ULL*1024*1024));
+    g_administrator_required = !usb_vault::volume_creation::begin_elevation_session(helper);
+  } catch (...) { g_administrator_required = true; }
+  struct ElevationScope final { ~ElevationScope(){usb_vault::volume_creation::end_elevation_session();} } elevation_scope;
+  if (g_administrator_required) {
+    g_view = StartupView::session;
+    g_startup_log.record(StartupStep::failure, StartupOutcome::failed, {.primary={.code=1212}});
+  }
+
   WNDCLASSEXW window_class{sizeof(window_class)};
   window_class.lpfnWndProc = window_proc;
   window_class.hInstance = instance;
@@ -1347,14 +1393,14 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     // Setup builds no card context and registers no device notification, so
     // an inserted card is never probed with credentials the user is still
     // entering and no PIN attempt can be spent here.
-    if (g_view == StartupView::session) {
+    if (g_view == StartupView::session && !g_administrator_required) {
       g_startup_log.record(StartupStep::session, StartupOutcome::begin);
       initialize_application_session(window);
       const auto failure = g_card_entry ? g_card_entry->startup_failure() : usb_vault::card::FailureDiagnostic{};
       g_startup_log.record_card_state(failure, true);
     }
     initialize_webview(window);
-    if (g_view == StartupView::session &&
+    if (g_view == StartupView::session && !g_administrator_required &&
         ::SetTimer(window, 1, 100, nullptr) == 0)
       usb_vault::card::throw_startup_failure(1209, 1, ::GetLastError());
   } catch (...) {

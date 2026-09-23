@@ -904,7 +904,7 @@ void test_container_creation_form_is_bounded() {
   // Cancellation is no longer one of the outcomes: the form settles every
   // field before the create button commits, so the only ways out are success
   // and failure, and failure says which fields have to be filled in again.
-  require(script.find("正在创建，请确认管理员权限。") != std::string::npos &&
+  require(script.find("正在创建，正在使用本次管理员授权。") != std::string::npos &&
               script.find("创建成功，可以开始使用。") !=
                   std::string::npos &&
               script.find("重试前需要重新填写名称与路径") !=

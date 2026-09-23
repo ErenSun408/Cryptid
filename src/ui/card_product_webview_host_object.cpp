@@ -1272,6 +1272,8 @@ class CardProductWebViewHostObject final : public IDispatch {
             } else {
               partition_items_.clear();
               for (auto& item : discovered) {
+                if (item.availability == volume::PartitionAvailability::candidate && item.layout != volume::PartitionLayout::mbr)
+                  item.availability = volume::PartitionAvailability::unsupported_layout;
                 auto display = partition_services_.display_name(item);
                 if (display.size() > 512) display.resize(512);
                 partition_items_.push_back({++partition_next_id_, std::move(item), std::move(display)});

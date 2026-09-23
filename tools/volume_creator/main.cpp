@@ -1,6 +1,7 @@
 #include "volume_creation/creator_helper_engine.h"
 #include "volume_creation/creator_pipe_security.h"
 #include "volume_creation/creator_protocol.h"
+#include "volume_creation/elevation_session.h"
 
 #include <Windows.h>
 #include <sddl.h>
@@ -137,9 +138,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                                                      &count)));
   if (arguments_memory.get() == nullptr) return 2;
   auto** values = reinterpret_cast<wchar_t**>(arguments_memory.get());
+  DWORD owner_pid{};
+  if (count == 7 && (std::wstring_view(values[1]) == L"--session" || std::wstring_view(values[1]) == L"--owner")) {
+    DWORD parent{};
+    const std::wstring_view text(values[2]);
+    if (text.empty() || text.size() > 10) return 2;
+    for (auto c : text) {
+      if (c < L'0' || c > L'9' || parent > (MAXDWORD - static_cast<DWORD>(c-L'0')) / 10) return 2;
+      parent = parent * 10 + static_cast<DWORD>(c-L'0');
+    }
+    if (!parent) return 2;
+    Arguments session;
+    if (!parse_arguments(count-2, values+2, session)) return 2;
+    if (std::wstring_view(values[1]) == L"--session")
+      return usb_vault::volume_creation::detail::run_elevation_session(parent, session.pipe_suffix);
+    owner_pid=parent; count-=2; values+=2;
+  }
   Arguments arguments;
   if (!parse_arguments(count, values, arguments)) return 2;
 
+  const Handle owner(owner_pid ? ::OpenProcess(SYNCHRONIZE, FALSE, owner_pid) : nullptr);
+  if (owner_pid && !owner.get()) return 3;
   const std::wstring pipe_name =
       L"\\\\.\\pipe\\usb-vault-create-" + arguments.pipe_suffix;
   auto descriptor = usb_vault::volume_creation::detail::
@@ -152,11 +171,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
   };
   const Handle pipe(::CreateNamedPipeW(
       pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | (owner_pid ? PIPE_NOWAIT : PIPE_WAIT) |
           PIPE_REJECT_REMOTE_CLIENTS,
       1, 4096, 4096, 0, &security));
   if (pipe.get() == INVALID_HANDLE_VALUE) return 3;
-  if (::ConnectNamedPipe(pipe.get(), nullptr) == FALSE &&
+  if (owner_pid) {
+    const auto start=::GetTickCount64(); bool connected=false;
+    while (::WaitForSingleObject(owner.get(),0)==WAIT_TIMEOUT && ::GetTickCount64()-start<60000) {
+      if (::ConnectNamedPipe(pipe.get(),nullptr) || ::GetLastError()==ERROR_PIPE_CONNECTED) {connected=true;break;}
+      if (::GetLastError()!=ERROR_PIPE_LISTENING) return 3;
+      ::Sleep(20);
+    }
+    ULONG client{}; DWORD mode=PIPE_READMODE_BYTE|PIPE_WAIT;
+    if (!connected || !::GetNamedPipeClientProcessId(pipe.get(),&client) || client!=owner_pid ||
+        !::SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr)) return 3;
+  } else if (::ConnectNamedPipe(pipe.get(), nullptr) == FALSE &&
       ::GetLastError() != ERROR_PIPE_CONNECTED) {
     return 3;
   }

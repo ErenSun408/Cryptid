@@ -1829,7 +1829,7 @@
         </div>
         <div id="create-type-note" class="creation-note">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
-          <span>创建过程需要管理员权限，系统稍后会弹出确认窗口。</span>
+          <span>创建过程使用启动时授予的管理员权限，本次运行无需重复确认。</span>
         </div>
         <div id="create-container-form" class="creation-form" hidden>
           <label for="create-container-name">名称</label>
@@ -1916,14 +1916,14 @@
         </div>
         <div id="creation-progress" hidden>
           <ol class="creation-progress-steps">
-            <li id="creation-progress-authorize"><span class="step-mark">1</span><span>确认管理员权限</span><span class="step-tail">等待中</span></li>
+            <li id="creation-progress-authorize"><span class="step-mark">1</span><span>检查管理员会话</span><span class="step-tail">等待中</span></li>
             <li id="creation-progress-allocate"><span class="step-mark">2</span><span>分配容器文件</span><span class="step-tail">等待中</span></li>
             <li id="creation-progress-work"><span class="step-mark">3</span><span>格式化容器</span><span class="step-tail">等待中</span></li>
             <li id="creation-progress-check"><span class="step-mark">4</span><span>挂载并分配盘符</span><span class="step-tail">等待中</span></li>
           </ol>
           <div class="creation-progress-bar" role="progressbar" aria-label="容器创建处理中"></div>
           <div id="creation-progress-time" class="creation-progress-time">已用时 00:00</div>
-          <p class="creation-hint">请留意系统管理员授权提示。大容量容器需要较长时间，请保持安全卡连接并等待完成。</p>
+          <p class="creation-hint">本次运行复用已授予的管理员权限。大容量容器需要较长时间，请保持安全卡连接并等待完成。</p>
           <button id="creation-cancel-work" class="modal-button creation-cancel-work" type="button">取消创建</button>
         </div>
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>

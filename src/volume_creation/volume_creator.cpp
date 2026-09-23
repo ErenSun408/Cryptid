@@ -1,6 +1,7 @@
 #include "usb_vault/volume_creation/volume_creator.h"
 
 #include "volume_creation/creator_protocol.h"
+#include "volume_creation/elevation_session.h"
 #include "usb_vault/volume/volume_entry_path.h"
 
 #include <Windows.h>
@@ -212,6 +213,7 @@ class Handle final {
 [[nodiscard]] Handle launch_elevated_helper(
     const std::filesystem::path& helper_path, const std::wstring& pipe_suffix,
     const std::wstring& nonce_hex) {
+  if (const auto process = detail::launch_session_helper(helper_path, nonce_hex)) return Handle(process);
   const std::wstring parameters =
       std::format(L"--pipe {} --nonce {}", pipe_suffix, nonce_hex);
   SHELLEXECUTEINFOW info{};
@@ -247,6 +249,11 @@ class Handle final {
         pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
         OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION, nullptr);
     if (pipe != INVALID_HANDLE_VALUE) {
+      ULONG server{};
+      if (!::GetNamedPipeServerProcessId(pipe, &server) || server != ::GetProcessId(process)) {
+        ::CloseHandle(pipe);
+        throw_creation(CreationError::helper_connection_failed, "helper process identity mismatch");
+      }
       return Handle(pipe);
     }
     const DWORD error = ::GetLastError();
