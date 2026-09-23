@@ -735,6 +735,12 @@ void report_webview_failure(const std::uint32_t code,
   ::KillTimer(g_main_window, 2);
   disarm_external_drops();
   detach_host_object();
+  // The page already renders bounded startup diagnostics. Keep it visible and
+  // log communication failures instead of displaying a second modal error.
+  if (g_administrator_required || (code >= 1401 && code <= 1408)) {
+    finish_startup_log();
+    return;
+  }
   const wchar_t* reason = L"界面无法完成初始化。";
   switch (code) {
     case 1302: case 1303: reason = L"无法创建 WebView2 运行环境。"; break;
@@ -1018,6 +1024,20 @@ void initialize_webview(const HWND window) {
                       if (FAILED(current)) { report_webview_failure(1314, current); return current; }
                       resize_webview(window);
                       if (!g_webview_startup.current(g_page_generation)) return E_FAIL;
+                      if (g_administrator_required) {
+                        current = g_webview->AddScriptToExecuteOnDocumentCreated(
+                            L"window.usbVaultPermissionRequired=true;",
+                            Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
+                                [generation](HRESULT status, LPCWSTR) -> HRESULT {
+                                  if (generation != g_window_generation || !g_webview_startup.current(g_page_generation)) return S_OK;
+                                  if (FAILED(status)) { report_webview_failure(1309, status); return S_OK; }
+                                  const HRESULT navigation = g_webview->Navigate(g_page_uri.c_str());
+                                  if (FAILED(navigation)) report_webview_failure(1312, navigation);
+                                  return S_OK;
+                                }).Get());
+                        if (FAILED(current)) report_webview_failure(1309, current);
+                        return current;
+                      }
                       current = g_webview->Navigate(g_page_uri.c_str());
                       if (FAILED(current)) report_webview_failure(1312, current);
                       return current;

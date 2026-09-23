@@ -4027,12 +4027,12 @@
     returnToLogin.disabled = appExitToggle.disabled;
     exitApplication.disabled = appExitToggle.disabled;
     if (appExitToggle.disabled) closeAppExit();
-    sessionTools.hidden = currentState === nativeState.authenticated;
+    sessionTools.hidden = bridge === null || currentState === nativeState.authenticated;
     sessionToolsToggle.disabled = busy || currentState === null || bridge === null;
     if (busy || sessionTools.hidden) closeSessionTools();
     forgotOpen.hidden = !forgotAvailable;
     forgotOpen.disabled = busy || !forgotAvailable;
-    configurationButton.hidden = currentState === nativeState.authenticated;
+    configurationButton.hidden = bridge === null || currentState === nativeState.authenticated;
     configurationButton.disabled = busy || activeVolumes || currentState === null || bridge === null;
     surface.dataset.sessionState = currentState === null
       ? "initializing"
@@ -6422,7 +6422,19 @@
     }
   };
 
+  const showPermissionRequired = () => {
+    bridge = null;
+    currentState = nativeState.unavailable; activeVolumes = false; busy = false;
+    render("需要管理员身份"); statusOutput.dataset.tone = "error";
+    window.usbVaultPageStartupStatus = 1;
+  };
   (async () => {
+    // This native-injected flag only removes capabilities. Denied startup must
+    // not depend on a host-object handshake to display its inert error page.
+    if (window.usbVaultPermissionRequired === true) {
+      showPermissionRequired();
+      return;
+    }
     let failureCode = 1401;
     try {
       bridge = chrome.webview.hostObjects.nativeBridge;
@@ -6432,10 +6444,7 @@
       failureCode = 1402;
       const startupView = String(await bridge.getStartupView());
       if (startupView === "permission-required") {
-        bridge = null;
-        currentState = nativeState.unavailable; activeVolumes = false; busy = false;
-        render("需要管理员权限"); statusOutput.dataset.tone = "error";
-        window.usbVaultPageStartupStatus = 1;
+        showPermissionRequired();
         return;
       }
       if (!["configuration", "session"].includes(startupView)) throw new Error("invalid startup view");
@@ -6462,8 +6471,9 @@
     } catch (error) {
       if (error && error.startupCode === 1404) failureCode = 1404;
       window.usbVaultPageStartupStatus = failureCode;
+      bridge = null;
       currentState = nativeState.unavailable;
-      activeVolumes = true;
+      activeVolumes = false;
       busy = false;
       render(`错误码：${failureCode}`);
     }
