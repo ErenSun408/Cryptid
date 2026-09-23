@@ -49,7 +49,7 @@ inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
     std::span<const std::byte> key, std::wstring_view path,
     std::optional<std::uint32_t> order = std::nullopt);
 
-// Stable identity of one supported MBR/512 partition. No drive letter, disk
+// Stable identity of one supported MBR/GPT 512-byte partition. No drive letter, disk
 // number, discovery path, preformat filesystem serial, password or role is
 // persisted. A match locates a candidate; only authenticated mounting proves it.
 using ContainerIndexPartition = volume::PartitionIdentity;

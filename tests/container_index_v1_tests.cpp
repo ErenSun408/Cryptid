@@ -600,9 +600,45 @@ void test_partition_payload_roundtrip_and_rejection() {
          "zero authenticated device ID was accepted");
 }
 
+void test_gpt_partition_payload() {
+  using namespace usb_vault::application;
+  const Key key = test_key(0xA7);
+  ContainerIndexPartition p;
+  p.device_id.fill(0x39); p.layout = 2; p.partition_id.fill(0x51);
+  p.offset_bytes = 1048576; p.length_bytes = 64ULL * 1024 * 1024;
+  for (const auto state : {PartitionConversionState::normal, PartitionConversionState::uncertain,
+                          PartitionConversionState::paused}) {
+    const auto sealed = seal_container_index_partition(key, p, 7, state);
+    const auto opened = try_open_container_index_entry(key, sealed.bytes());
+    expect(opened && opened->partition == p && opened->conversion == state && opened->order == 7U,
+           "GPT conversion identity did not round trip");
+    const auto plain = hand_opened_contents(key, sealed.bytes());
+    expect(take_u32(plain, 0) == 5 && take_u32(plain, 48) == static_cast<std::uint32_t>(state) &&
+        plain[52] == std::byte{0x51} && plain[67] == std::byte{0x51}, "GPT payload layout changed");
+    for (int scenario = 0; scenario != 5; ++scenario) {
+      auto bad = plain;
+      if (scenario == 0) put_u32(bad, 0, 3);
+      if (scenario == 1) put_u32(bad, 0, 4);
+      if (scenario == 2) put_u32(bad, 24, 1);
+      if (scenario == 3) put_u32(bad, 48, 3);
+      if (scenario == 4) std::fill(bad.begin() + 52, bad.begin() + 68, std::byte{});
+      expect(!try_open_container_index_entry(key, hand_sealed_slot(key, bad)), "malformed GPT metadata accepted");
+    }
+    for (std::size_t i = 0; i < sealed.size(); ++i) {
+      auto bad = copy_of(sealed); bad[i] ^= std::byte{1};
+      expect(!try_open_container_index_entry(key, bad), "GPT metadata tampering accepted");
+    }
+  }
+  p.partition_id = {};
+  expect_invalid_argument([&] { static_cast<void>(seal_container_index_partition(key, p)); }, "GPT without GUID sealed");
+  p.layout = 1; p.partition_id[0] = 1;
+  expect_invalid_argument([&] { static_cast<void>(seal_container_index_partition(key, p)); }, "MBR with GUID sealed");
+}
+
 } // namespace
 
 int main() {
+  test_gpt_partition_payload();
   test_partition_payload_roundtrip_and_rejection();
   test_order_is_authenticated_and_legacy_entries_still_open();
   test_round_trip_returns_the_same_path();

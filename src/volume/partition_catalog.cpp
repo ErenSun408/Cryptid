@@ -228,8 +228,6 @@ PartitionAvailability detail::assess_partition(const PartitionObservation& value
 PartitionAvailability detail::assess_partition_location(const PartitionObservation& value) noexcept {
   const auto result = assess_observation(value, false);
   if (result != PartitionAvailability::candidate) return result;
-  if (value.partition.PartitionStyle != PARTITION_STYLE_MBR)
-    return PartitionAvailability::unsupported_layout;
   const auto length = value.partition.PartitionLength.QuadPart;
   if (length < 20LL * 1024 * 1024 || length > (1LL << 40))
     return PartitionAvailability::inconsistent_extent;
@@ -307,8 +305,8 @@ bool valid_location_path(const std::wstring_view path) noexcept {
 }
 PartitionLocation location_from(const PartitionCandidate& candidate) {
   return {{candidate.device_id, candidate.device_id_flags,
-      candidate.layout == PartitionLayout::mbr ? 1U : 0U,
-      candidate.logical_sector_bytes, candidate.offset_bytes, candidate.length_bytes},
+      static_cast<std::uint32_t>(candidate.layout),
+      candidate.logical_sector_bytes, candidate.offset_bytes, candidate.length_bytes, candidate.partition_id},
       candidate.volume_path, candidate.disk_number, candidate.partition_number};
 }
 bool valid_location(const PartitionLocation& location) noexcept {

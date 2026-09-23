@@ -676,14 +676,14 @@ VolumeCreator::VolumeCreator(std::filesystem::path helper_path)
     : helper_path_(validated_helper_path(helper_path)) {}
 
 void VolumeCreator::check_partition(const volume::PartitionCandidate& candidate) const {
-  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}) || candidate.layout != volume::PartitionLayout::mbr)
+  if (!volume::matches_partition_snapshot(candidate, {&candidate, 1}))
     throw std::invalid_argument("invalid partition check candidate");
   const detail::PartitionTarget target{
       .device_id = candidate.device_id, .device_flags = candidate.device_id_flags,
       .disk_number = candidate.disk_number, .partition_number = candidate.partition_number,
-      .sector_bytes = candidate.logical_sector_bytes, .layout = 1,
+      .sector_bytes = candidate.logical_sector_bytes, .layout = static_cast<std::uint32_t>(candidate.layout),
       .filesystem_serial = candidate.filesystem_serial, .offset_bytes = candidate.offset_bytes,
-      .length_bytes = candidate.length_bytes};
+      .length_bytes = candidate.length_bytes, .partition_id = candidate.partition_id};
   static_cast<void>(invoke(helper_path_, detail::Operation::check_partition, candidate.volume_path,
       0, 0, security::SecureBuffer{}, security::SecureBuffer{}, {}, {}, &target));
 }

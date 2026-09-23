@@ -1025,7 +1025,11 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     expected.offset_bytes = target.offset_bytes;
     expected.length_bytes = target.length_bytes;
     expected.logical_sector_bytes = target.sector_bytes;
-    expected.layout = volume::PartitionLayout::mbr;
+    // GPT write support remains closed until the reviewed backend is available.
+    if (target.layout == 2 && request.operation != Operation::check_partition)
+      fail(CreationError::target_access_denied, "GPT write backend not enabled");
+    expected.layout = static_cast<volume::PartitionLayout>(target.layout);
+    expected.partition_id = target.partition_id;
     expected.filesystem_serial = target.filesystem_serial;
     expected.device_id = target.device_id;
     expected.device_id_flags = target.device_flags;
@@ -1038,7 +1042,7 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
           fail(CreationError::target_access_denied,"resume target already mounted");
     }
     const bool converting = inplace_operation(request.operation);
-    const volume::PartitionLocation location{{target.device_id,target.device_flags,1,target.sector_bytes,target.offset_bytes,target.length_bytes},request.target_path,target.disk_number,target.partition_number};
+    const volume::PartitionLocation location{{target.device_id,target.device_flags,target.layout,target.sector_bytes,target.offset_bytes,target.length_bytes,target.partition_id},request.target_path,target.disk_number,target.partition_number};
     // Independent enumeration excludes the current Windows volume before any
     // target handle is opened. Passing enumeration alone grants no write authorization.
     if (resume ? volume::resolve_partition_location(location.identity,volume::enumerate_partition_locations()) != location : !volume::matches_partition_snapshot(expected, volume::enumerate_partition_candidates()))

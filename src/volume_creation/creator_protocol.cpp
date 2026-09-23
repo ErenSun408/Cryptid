@@ -1,5 +1,7 @@
 #include "volume_creation/creator_protocol.h"
 
+#include "usb_vault/volume/partition_identity.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -38,13 +40,10 @@ namespace {
 }  // namespace
 
 bool valid_partition_target(const PartitionTarget& target) noexcept {
-  constexpr std::uint64_t max_bytes = 1ULL << 40;
-  return target.reserved == 0 && target.layout == 1 && target.sector_bytes == 512 &&
-      target.device_id != std::array<std::uint8_t, 16>{} && (target.device_flags & ~4u) == 0 &&
-      target.disk_number != UINT32_MAX && target.partition_number > 0 && target.partition_number != UINT32_MAX &&
-      target.offset_bytes > 0 && target.offset_bytes % 512 == 0 &&
-      target.length_bytes >= 20ULL * 1024 * 1024 && target.length_bytes <= max_bytes &&
-      target.length_bytes % 512 == 0 && target.offset_bytes <= INT64_MAX - target.length_bytes;
+  const volume::PartitionIdentity identity{target.device_id, target.device_flags,
+      target.layout, target.sector_bytes, target.offset_bytes, target.length_bytes, target.partition_id};
+  return target.reserved == 0 && volume::valid_partition_identity(identity) &&
+      target.disk_number != UINT32_MAX && target.partition_number > 0 && target.partition_number != UINT32_MAX;
 }
 
 bool valid_partition_path(const std::wstring_view path) noexcept {

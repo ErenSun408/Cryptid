@@ -267,8 +267,13 @@ static security::SecureBuffer seal_index_entry(
   security::SecureBuffer plaintext(kPlaintextSize);
   fill_random(plaintext.bytes());
   if (partition) {
-    write_u32(plaintext.bytes(), kVersionOffset, conversion==PartitionConversionState::normal ? kPartitionEntryVersion : 4);
-    if (conversion!=PartitionConversionState::normal) write_u32(plaintext.bytes(),48,static_cast<std::uint32_t>(conversion));
+    const bool gpt = partition->layout == 2;
+    write_u32(plaintext.bytes(), kVersionOffset, gpt ? 5 :
+        (conversion == PartitionConversionState::normal ? kPartitionEntryVersion : 4));
+    if (gpt || conversion != PartitionConversionState::normal)
+      write_u32(plaintext.bytes(), 48, static_cast<std::uint32_t>(conversion));
+    if (gpt) for (std::size_t i = 0; i < partition->partition_id.size(); ++i)
+      plaintext.bytes()[52 + i] = static_cast<std::byte>(partition->partition_id[i]);
     for (std::size_t i = 0; i < partition->device_id.size(); ++i)
       plaintext.bytes()[4 + i] = static_cast<std::byte>(partition->device_id[i]);
     write_u32(plaintext.bytes(), 20, partition->device_id_flags);
@@ -381,14 +386,17 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   // which it was would hand out the distinction this format exists to deny.
   const auto contents = plaintext.bytes();
   const std::uint32_t version = read_u32(contents, kVersionOffset);
-  if (version == kPartitionEntryVersion || version == 4) {
-    const auto state=version==4 ? read_u32(contents,48) : 0u;
-    if (version==4 && (state<1 || state>2)) return std::nullopt;
+  if (version == kPartitionEntryVersion || version == 4 || version == 5) {
+    const auto state = version >= 4 ? read_u32(contents, 48) : 0u;
+    if (state > 2 || (version == 4 && state == 0)) return std::nullopt;
     ContainerIndexPartition partition;
     for (std::size_t i = 0; i < partition.device_id.size(); ++i)
       partition.device_id[i] = std::to_integer<std::uint8_t>(contents[4 + i]);
     partition.device_id_flags = read_u32(contents, 20);
     partition.layout = read_u32(contents, 24);
+    if (partition.layout != (version == 5 ? 2U : 1U)) return std::nullopt;
+    if (version == 5) for (std::size_t i = 0; i < partition.partition_id.size(); ++i)
+      partition.partition_id[i] = std::to_integer<std::uint8_t>(contents[52 + i]);
     partition.logical_sector_bytes = read_u32(contents, 28);
     partition.offset_bytes = read_u32(contents, 32) |
         (static_cast<std::uint64_t>(read_u32(contents, 36)) << 32);

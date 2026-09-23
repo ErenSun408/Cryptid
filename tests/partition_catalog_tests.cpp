@@ -157,13 +157,26 @@ void location_tests() {
       bad.extents.Extents[0].ExtentLength = bad.partition.PartitionLength; }
     require(detail::assess_partition_location(bad) != A::candidate, "unsafe location accepted");
   }
-  require(detail::assess_partition_location(valid()) == A::unsupported_layout, "GPT mount scope expanded");
+  require(detail::assess_partition_location(valid()) == A::candidate, "GPT location rejected");
+  auto gpt_raw = valid(); gpt_raw.filesystem_known = false;
+  require(detail::assess_partition_location(gpt_raw) == A::candidate, "GPT ciphertext requires filesystem");
+  gpt_raw.partition.Gpt.Attributes = GPT_BASIC_DATA_ATTRIBUTE_READ_ONLY;
+  require(detail::assess_partition_location(gpt_raw) == A::protected_partition, "protected GPT location accepted");
   PartitionLocation location;
   location.identity.device_id[0] = 9;
   location.identity.offset_bytes = 1048576;
   location.identity.length_bytes = 64ULL * 1024 * 1024;
   location.volume_path = LR"(\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\)";
   location.disk_number = 2; location.partition_number = 3;
+  auto gpt = location; gpt.identity.layout = 2; gpt.identity.partition_id[0] = 42;
+  const auto gpt_saved = gpt.identity;
+  require(resolve_partition_location(gpt_saved, {&gpt, 1}) == gpt, "GPT GUID identity rejected");
+  ++gpt.identity.partition_id[0];
+  require(!resolve_partition_location(gpt_saved, {&gpt, 1}), "replacement GPT GUID accepted");
+  gpt.identity.partition_id = {};
+  require(!resolve_partition_location(gpt_saved, {&gpt, 1}), "missing GPT GUID accepted");
+  gpt = location; gpt.identity.partition_id[0] = 42;
+  require(!valid_partition_identity(gpt.identity), "MBR accepted GPT GUID");
   const auto saved = location.identity;
   require(resolve_partition_location(saved, {&location, 1}) == location, "valid location not found");
   auto moved = location;

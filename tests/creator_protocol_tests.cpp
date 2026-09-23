@@ -141,6 +141,19 @@ void test_partition_check_protocol() {
       read.partition_target->device_id == target.device_id && read.partition_target->offset_bytes == target.offset_bytes &&
       read.partition_target->length_bytes == target.length_bytes && read.target_path == path &&
       read.first_password.empty() && read.second_password.empty(), "partition IPC round trip");
+  auto gpt = target; gpt.layout = 2; gpt.partition_id.fill(0x37);
+  expect(valid_partition_target(gpt), "GPT target rejected");
+  const auto gpt_pipe = make_pipe();
+  write_request(gpt_pipe.write.get(), header, path, empty, empty, {}, {}, &gpt);
+  const auto gpt_read = read_request(gpt_pipe.read.get(), header.nonce);
+  expect(gpt_read.partition_target && gpt_read.partition_target->layout == 2 &&
+      gpt_read.partition_target->partition_id == gpt.partition_id, "GPT GUID lost in IPC");
+  gpt.layout = 1;
+  expect(!valid_partition_target(gpt), "MBR accepted GPT GUID");
+  auto old_header = header; old_header.version = 8;
+  expect(!valid_request_header(old_header), "legacy protocol accepted");
+  old_header = header; old_header.partition_target_bytes = 60;
+  expect(!valid_request_header(old_header), "legacy target size accepted");
   for (int field = 0; field < 10; ++field) {
     auto bad = target;
     if (field == 0) bad.device_id = {};
@@ -213,6 +226,26 @@ void test_partition_helper_rejects_invalid_requests() {
       catch (const std::system_error& error) { rejected = error.code() == make_error_code(CreationError::invalid_request); }
       expect(rejected, "invalid partition action reached native target or formatter");
     }
+  }
+}
+
+void test_gpt_write_gate() {
+  for (auto operation : {Operation::format_partition, Operation::begin_partition_inplace, Operation::resume_partition_inplace}) {
+    Request request{}; request.operation = operation;
+    request.first_password = SecureBuffer(64);
+    request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
+    request.partition_target.emplace();
+    auto& target = *request.partition_target;
+    target.device_id[0] = 1; target.partition_number = 1;
+    target.offset_bytes = 1048576; target.length_bytes = 256ULL * 1024 * 1024;
+    target.layout = 2; target.partition_id[0] = 42;
+    bool rejected{};
+    try { static_cast<void>(execute_request(INVALID_HANDLE_VALUE, request)); }
+    catch (const std::system_error& error) {
+      rejected = error.code() == make_error_code(CreationError::target_access_denied) &&
+          std::string(error.what()).find("GPT write backend not enabled") != std::string::npos;
+    }
+    expect(rejected, "GPT write crossed the unopened backend gate");
   }
 }
 
@@ -714,6 +747,7 @@ int main() {
     test_partition_format_protocol(Operation::begin_partition_inplace);
     test_partition_format_protocol(Operation::resume_partition_inplace);
     test_inplace_controls();
+    test_gpt_write_gate();
     test_partition_check_protocol();
     test_partition_helper_rejects_invalid_requests();
     test_binary_password_round_trip();
