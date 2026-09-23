@@ -397,9 +397,60 @@
     $('[data-create-container]').click();
     await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     check(window.navigationFixture.partitionScans === 1, "Opening disk creation automatically refreshes once");
+    check($('#partition-list-body').children.length === 1 && !$('#partition-list-body img'),
+      "Available rows exclude protected partitions and escape labels");
+    check(!$('#partition-unavailable').open && $('#partition-unavailable-summary').textContent === '1 个不可用分区' &&
+      $('#partition-unavailable-list').textContent.includes('Windows 系统卷'), "Unavailable partitions are collapsed with reasons");
+    $('#partition-preserve-data').click();
+    check($('#partition-method-erase').getAttribute('aria-pressed') === 'false', "Preserve method deselects erase");
+    $('#partition-method-erase').click();
+    check(!$('#partition-preserve-data').checked, "Erase method deselects preserve");
+    const createOverlay = $('#create-volume-dialog');
+    createOverlay.querySelector('.modal').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:0}));
+    createOverlay.dispatchEvent(new PointerEvent('pointerup', {bubbles:true,button:0}));
+    createOverlay.dispatchEvent(new MouseEvent('click', {bubbles:true,button:0}));
+    check(!createOverlay.hidden, "Releasing outside after pressing inside does not cancel a dialog");
+    createOverlay.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:2}));
+    check(!createOverlay.hidden, "Right mouse button outside does not cancel");
+    createOverlay.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:0}));
+    check(createOverlay.hidden, "Pressing outside cancels immediately without waiting for release");
+    $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
+    const stableDashboardRow = $(home + ' .container-row');
+    const stablePartitionRow = $('#partition-list-body button');
+    const stableTypeCard = $('[data-create-kind="encrypted"]');
+    stablePartitionRow.click();
+    await wait(() => !$('#partition-refresh').disabled && !$('#partition-erase-consent').disabled);
+    check($(home + ' .container-row') === stableDashboardRow && $('#partition-list-body button') === stablePartitionRow &&
+      !stableTypeCard.disabled, "Selecting a partition preserves rows and does not repaint or disable the whole page");
+    $('#partition-refresh').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
+    check($(home + ' .container-row') === stableDashboardRow && !$('#partition-erase-consent').checked,
+      "Manual refresh is local and invalidates prior consent");
+    check($('#partition-unavailable').parentElement === $('#partition-scroll-frame') &&
+      $('#partition-list-body').parentElement === $('#partition-scroll-frame') && !$('#partition-check'),
+      "Available and unavailable partitions share one scroll component without a redundant check action");
+    const beforeToolScan = window.navigationFixture.partitionScans;
+    const beforeToolRow = $('#partition-list-body button');
+    $('#partition-open-management').click();
+    check($('#partition-list-body button') === beforeToolRow && beforeToolRow.disabled,
+      "Opening Disk Management retains display rows while invalidating selection");
+    await wait(() => !$('#partition-refresh').disabled && window.navigationFixture.partitionScans > beforeToolScan);
+    check($('#partition-list-body button') && $('#create-volume-continue').disabled && !$('#partition-erase-consent').checked,
+      "Disk Management is followed by a fresh native snapshot without old consent");
+    window.navigationFixture.partitionList = 'invalid snapshot';
+    $('#partition-open-management').click();
+    await wait(() => !$('#partition-refresh').disabled);
+    check(!$('#partition-list-body button') && $('#create-volume-continue').disabled &&
+      $('#partition-status').textContent.includes('无法读取'), "A failed tool-triggered scan cannot reactivate retained stale rows");
+    delete window.navigationFixture.partitionList;
+    $('#partition-refresh').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     const firstScan = window.navigationFixture.partitionScans;
     $('[data-create-storage="file"]').click();
     check(window.navigationFixture.partitionScans === firstScan, "Entering file creation does not scan disks");
+    check($('#create-container-name-error').hidden && $('#create-container-directory-error').hidden && $('#create-volume-continue').disabled,
+      "Empty file location fields remain required without initial fill-in error messages");
     $('[data-create-storage="disk"]').click();
     await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
     check(window.navigationFixture.partitionScans === firstScan + 1 && $('#partition-erase-consent').disabled,
@@ -429,6 +480,8 @@
     $('#partition-list-body button').click();
     await wait(() => !$('#partition-erase-consent').disabled);
     check($('#create-container-b-error').hidden, "Selected disk capacity overrides the hidden file capacity");
+    check($('#create-partition-outer-capacity').value === '1024' && $('#create-partition-outer-capacity').readOnly,
+      "Disk pair displays the selected partition capacity read-only");
     $('#create-container-b-hidden-capacity').value='800';
     $('#create-container-b-hidden-capacity').dispatchEvent(new Event('input',{bubbles:true}));
     check($('#create-container-b-error').textContent==='内层容量过载。' && $('#create-volume-continue').disabled,
@@ -436,12 +489,23 @@
     $('#create-container-b-hidden-capacity').value='512';
     $('#create-container-b-hidden-capacity').dispatchEvent(new Event('input',{bubbles:true}));
     check($('#create-container-b-error').hidden, "A valid disk hidden capacity may exceed the file default");
-    $('#partition-erase-consent').click();
     for(const id of ['create-container-b-second','create-container-b-second-confirmation']) {
       document.getElementById(id).value='test-decoy-password';
       document.getElementById(id).dispatchEvent(new Event('input',{bubbles:true}));
     }
     check(!$('#create-volume-continue').disabled,"Disk pair needs no file name or directory");
+    $('#create-volume-continue').click();
+    check(!$('#partition-review').hidden && $('#create-volume-continue').disabled &&
+      !window.navigationFixture.partitionPairCreated, "Disk review precedes consent and native writes");
+    check($('#partition-review-facts').textContent.includes('测试数据 <img src=x>') &&
+      !$('#partition-review-facts img'), "Review renders untrusted volume labels as text");
+    $('#partition-erase-consent').click();
+    $('#partition-review-back').click();
+    check($('#partition-review').hidden && !$('#partition-erase-consent').checked,
+      "Returning to selection clears destructive consent");
+    $('#create-volume-continue').click();
+    check($('#create-volume-continue').disabled, "Reopening disk review requires fresh consent");
+    $('#partition-erase-consent').click();
     $('#create-volume-continue').click();
     check(!$('#hidden-create-review').hidden,"Disk pair reuses hidden password review");
     $('#create-container-b-acknowledge').click();
@@ -451,6 +515,39 @@
     window.navigationFixture.pendingCreation.resolve();
     await wait(() => $('#create-volume-status').dataset.tone==='success');
     $('#create-volume-close').click();
+    window.navigationFixture.pendingCreation = null;
+
+    $('[data-create-container]').click();
+    await wait(() => !$('#partition-refresh').disabled && $('#partition-list-body button'));
+    $('#partition-list-body button').click();
+    await wait(() => !$('#partition-erase-consent').disabled);
+    $('#partition-preserve-data').click();
+    $('#create-volume-continue').click();
+    check(!$('#partition-review').hidden && $('#create-disk-step').hidden &&
+      $('#partition-review-facts').textContent.includes('保留文件并加密') && !$('#partition-conversion-note').hidden,
+      "Preserve review identifies the method and its interruption boundary");
+    $('#partition-erase-consent').click();
+    $('#partition-review-back').click();
+    $('#partition-method-erase').click();
+    $('#create-volume-continue').click();
+    check($('#partition-conversion-note').hidden && !$('#partition-erase-consent').checked &&
+      $('#partition-review-facts').textContent.includes('清空并创建'), "Changing methods requires a fresh erase review");
+    $('#partition-erase-consent').click();
+    window.navigationFixture.bitlockerProgress = '1,1,100';
+    $('#create-volume-continue').click();
+    await wait(() => !$('#creation-bitlocker').hidden);
+    check($('#partition-review').hidden && $('#bitlocker-continue').disabled &&
+      !window.navigationFixture.bitlockerConfirmed, "BitLocker still requires its own consent after erase review");
+    $('#bitlocker-consent').click();
+    $('#bitlocker-continue').click();
+    await wait(() => window.navigationFixture.bitlockerConfirmed && !$('#bitlocker-decryption').hidden);
+    check(!$('#bitlocker-decryption').hidden, "BitLocker confirmation proceeds to actual reported decryption");
+    window.navigationFixture.bitlockerProgress = '0,0,0';
+    window.navigationFixture.pendingCreation.reject();
+    await wait(() => $('#create-volume-status').dataset.tone === 'error');
+    $('#create-volume-close').click();
+    check(!$('#partition-review-facts').children.length && !$('#partition-selection'),
+      "Closing creation clears review and footer identity");
     window.navigationFixture.pendingCreation = null;
 
     $('[data-create-container]').click();
@@ -734,7 +831,7 @@
     const starts = window.navigationFixture.volumeStarts;
     $("#file-mount-toggle").click();
     $("#volume-operation-dialog").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    $("#volume-operation-dialog").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    $("#volume-operation-dialog").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
     check(window.navigationFixture.volumeStarts === starts && !$("#volume-operation-dialog").hidden,
       "Pending operation prevents duplicate dispatch, Escape, and outside-click dismissal");
     window.navigationFixture.completeVolume();
@@ -758,7 +855,7 @@
       $("#volume-operation-note").textContent.includes("占用"), "Failed unmount displays its native reason");
     await new Promise((resolve) => setTimeout(resolve, 3100));
     check(!$("#volume-operation-dialog").hidden, "Failure persists and an old success timer cannot dismiss it");
-    $("#volume-operation-dialog").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    $("#volume-operation-dialog").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
     check($("#volume-operation-dialog").hidden, "Clicking outside dismisses a failed result");
     for (const [code, reason] of [[5, "找不到"], [6, "访问被拒绝"], [7, "无法打开"], [8, "读取或写入"], [9, "驱动"], [3, "无法确定"]]) {
       window.navigationFixture.volumeFailureStatus = code;

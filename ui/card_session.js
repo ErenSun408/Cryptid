@@ -1043,28 +1043,33 @@
       containerBSecond.value === containerBSecondConfirmation.value;
   };
 
+  let partitionReviewOpen = false;
   const updateCreationAvailability = () => {
     const encrypted = creationStorage === "file" && creationKind === "encrypted";
     const hiddenVolume = creationKind === "hidden";
     const choosing = false;
     const authenticated = currentState === nativeState.authenticated;
-    const ready = creationStorage === "disk" ? partitionSelected !== 0 && partitionErase.checked && (!hiddenVolume || containerBInputReady()) : choosing
+    const ready = creationStorage === "disk" ? partitionSelected !== 0 && (!partitionReviewOpen || partitionErase.checked) && (!hiddenVolume || containerBInputReady()) : choosing
       ? encrypted || hiddenVolume
       : encrypted
         ? containerCapacityMib() !== null &&
           containerLocationReady(containerName, containerDirectory)
         : hiddenVolume && containerBInputReady();
+    const reviewing = partitionReviewOpen && !creationRunning && creationResult === "";
+    document.getElementById("partition-review").hidden = !reviewing;
     creationDialog.dataset.step = creationStep;
     creationDialog.dataset.storage = creationStorage;
-    creationDiskStep.hidden = creationStorage !== "disk" || creationRunning || creationResult !== "";
-    creationStorageSwitch.hidden = creationRunning || creationResult !== "";
+    const diskCapacity = creationStorage === "disk" ? containerBOuterMib() : null;
+    document.getElementById("create-partition-outer-capacity").value = diskCapacity === null ? "" : String(Number(diskCapacity.toFixed(2)));
+    creationDiskStep.hidden = creationStorage !== "disk" || reviewing || creationRunning || creationResult !== "";
+    creationStorageSwitch.hidden = reviewing || creationRunning || creationResult !== "";
     for (const button of creationStorageButtons) {
       button.setAttribute("aria-pressed", String(button.dataset.createStorage === creationStorage));
       button.disabled = busy || !authenticated || creationCompleted;
     }
-    creationTypeStep.hidden = creationRunning || creationResult !== "";
-    containerForm.hidden = creationRunning || creationResult !== "" || choosing || !encrypted;
-    containerBForm.hidden = creationRunning || creationResult !== "" || choosing || !hiddenVolume;
+    creationTypeStep.hidden = reviewing || creationRunning || creationResult !== "";
+    containerForm.hidden = reviewing || creationRunning || creationResult !== "" || choosing || !encrypted;
+    containerBForm.hidden = reviewing || creationRunning || creationResult !== "" || choosing || !hiddenVolume;
     // 8.7.2: both shapes are offered on every visit, in the same order and
     // with the same weight. Neither entry is ever withheld.
     for (const button of creationTypeButtons) {
@@ -1097,20 +1102,20 @@
     updatePartitionMode();
     showFieldProblem(
       containerNameError,
-      standardQuiet ? "" : containerNameProblem(containerName));
+      standardQuiet || !containerName.value.trim() ? "" : containerNameProblem(containerName));
     showFieldProblem(
       containerDirectoryError,
-      standardQuiet
+      standardQuiet || !containerDirectory.value.trim()
         ? ""
         : containerDirectoryProblem(containerDirectory, containerName));
     showFieldProblem(
       containerError, standardQuiet ? "" : containerCapacityProblem());
     showFieldProblem(
       containerBNameError,
-      hiddenLocationQuiet ? "" : containerNameProblem(containerBName));
+      hiddenLocationQuiet || !containerBName.value.trim() ? "" : containerNameProblem(containerBName));
     showFieldProblem(
       containerBDirectoryError,
-      hiddenLocationQuiet
+      hiddenLocationQuiet || !containerBDirectory.value.trim()
         ? ""
         : containerDirectoryProblem(containerBDirectory, containerBName));
     showFieldProblem(
@@ -1119,7 +1124,7 @@
     creationCancelButton.disabled = busy;
     creationContinueButton.disabled = busy || !authenticated ||
       creationCompleted || !ready;
-    creationContinueButton.textContent = creationStorage === "disk" ? (partitionPreserve.checked ? "保留文件并开始加密" : "清空并创建加密盘") : choosing ? "下一步" : "创建容器";
+    creationContinueButton.textContent = creationStorage === "disk" ? (reviewing ? (partitionPreserve.checked ? "开始加密" : "清空并创建") : "下一步") : "下一步";
     creationContinueButton.hidden = creationResult !== "";
     creationCancelLabel.textContent = creationResult !== "" ? "关闭" : creationCompleted ? "完成" : "取消";
     creationBackIcon.hidden = true;
@@ -1139,6 +1144,8 @@
   // Leaving a parameter step discards what was typed on it: a decoy password
   // must not outlive the step that asked for it.
   const resetCreationInputs = () => {
+    document.getElementById("create-partition-outer-capacity").value = "";
+    partitionReviewOpen = false;
     stopCreationProgress();
     closeHiddenReview();
     applyCapacityUnit(containerUnit, "mib");
@@ -3334,8 +3341,8 @@
     decoyPassword.focus();
   };
   decoyEmptyClose.addEventListener("click", closeDecoyEmpty);
-  decoyEmptyDialog.addEventListener("click", (event) => {
-    if (event.target === decoyEmptyDialog) closeDecoyEmpty();
+  decoyEmptyDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === decoyEmptyDialog) closeDecoyEmpty();
   });
   decoyEmptyDialog.addEventListener("keydown", (event) => {
     if (event.key === "Escape" || event.key === "Tab") {
@@ -3397,10 +3404,11 @@
   };
   const partitionBody = document.getElementById("partition-list-body");
   const partitionStatus = document.getElementById("partition-status");
-  const partitionSelection = document.getElementById("partition-selection");
-  const partitionCheck = document.getElementById("partition-check");
   const partitionPreserve = document.getElementById("partition-preserve-data");
   const updatePartitionMode = () => {
+    const eraseButton = document.getElementById("partition-method-erase");
+    eraseButton.setAttribute("aria-pressed", String(!partitionPreserve.checked));
+    eraseButton.disabled = busy || currentState !== nativeState.authenticated;
     document.getElementById("partition-conversion-note").hidden = !partitionPreserve.checked;
     document.getElementById("partition-consent-text").textContent = partitionPreserve.checked
       ? "我确认已备份重要文件，允许对所选 NTFS 分区原地加密并移除原盘符。"
@@ -3409,6 +3417,18 @@
   const partitionErase = document.getElementById("partition-erase-consent");
   partitionPreserve.addEventListener("change", () => { partitionErase.checked = false; updatePartitionMode(); updateCreationAvailability(); });
   partitionErase.addEventListener("change", () => updateCreationAvailability());
+  document.getElementById("partition-method-erase").addEventListener("click", () => {
+    if (busy || currentState !== nativeState.authenticated) return;
+    partitionPreserve.checked = false;
+    partitionPreserve.dispatchEvent(new Event("change"));
+  });
+  document.getElementById("partition-review-back").addEventListener("click", () => {
+    if (busy) return;
+    partitionReviewOpen = false;
+    partitionErase.checked = false;
+    updateCreationAvailability();
+    creationContinueButton.focus();
+  });
   const partitionRefresh = document.getElementById("partition-refresh");
   const partitionManagement = document.getElementById("partition-open-management");
   let partitionRows = [], partitionSelected = 0, partitionRevision = 0;
@@ -3417,45 +3437,75 @@
   const partitionLocation = row => row.part ? `磁盘 ${row.disk} · 分区 ${row.part}` :
     row.state === 1 ? "Windows 系统卷" : "分区信息不可用";
   const partitionName = row => `${row.display || "盘符未知 · 卷标不可读"}（${partitionLocation(row)}）`;
+  let renderedPartitionRows = null;
   const renderPartitions = () => {
     const disabled = !partitionPickerVisible() || busy || currentState !== nativeState.authenticated;
     partitionPreserve.disabled = disabled;
     partitionErase.disabled = disabled || !partitionSelected;
     partitionRefresh.disabled = disabled;
-    partitionCheck.disabled = disabled || !partitionSelected;
     partitionManagement.disabled = disabled;
-    partitionBody.replaceChildren();
-    if (!partitionRows.length) {
-      const cell = document.createElement("td"); cell.colSpan = 4;
-      cell.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无分区列表，请刷新。";
-      const row = document.createElement("tr"); row.append(cell); partitionBody.append(row);
-    }
-    for (const item of partitionRows) {
-      const row = document.createElement("tr");
-      const identity = document.createElement("td");
-      const volume = document.createElement("div"), location = document.createElement("div");
-      volume.textContent = item.display || "盘符未知 · 卷标不可读";
-      location.textContent = partitionLocation(item); location.className = "partition-location";
-      identity.append(volume, location); row.append(identity);
-      for (const text of [item.bytes ? `${(item.bytes / (1024 ** 3)).toFixed(2)} GiB` : "—",
-        partitionReasons[item.state]]) {
-        const cell = document.createElement("td"); cell.textContent = text; row.append(cell);
+    if (renderedPartitionRows !== partitionRows) {
+      renderedPartitionRows = partitionRows;
+      partitionBody.replaceChildren();
+      const unavailable = document.getElementById("partition-unavailable-list");
+      unavailable.replaceChildren();
+      const rejected = partitionRows.filter(row => row.state !== 0);
+      document.getElementById("partition-unavailable").hidden = !rejected.length;
+      document.getElementById("partition-unavailable-summary").textContent = `${rejected.length} 个不可用分区`;
+      for (const item of rejected) {
+        const note = document.createElement("div"); note.className = "partition-row";
+        const drive = document.createElement("span"); drive.className = "partition-drive";
+        drive.textContent = item.display?.match(/^[A-Za-z]:/)?.[0] || "—";
+        const identity = document.createElement("span"); identity.className = "partition-identity";
+        const name = document.createElement("span"), reason = document.createElement("span");
+        name.textContent = item.display || partitionLocation(item);
+        reason.className = "partition-location"; reason.textContent = `${partitionLocation(item)} · ${partitionReasons[item.state]}`;
+        identity.append(name, reason);
+        const size = document.createElement("span"); size.className = "partition-size"; size.textContent = item.bytes ? partitionSize(item) : "—";
+        note.append(drive, identity, size); unavailable.append(note);
       }
-      const cell = document.createElement("td"), button = document.createElement("button");
-      button.type = "button"; button.className = "shell-button";
-      button.textContent = partitionSelected === item.id ? "已选择" : "选择";
-      button.setAttribute("aria-pressed", String(partitionSelected === item.id));
-      button.setAttribute("aria-label", `选择${partitionName(item)}`);
-      button.disabled = disabled || item.state !== 0;
-      button.addEventListener("click", () => { void selectPartitionRow(item.id); });
-      cell.append(button); row.append(cell); partitionBody.append(row);
+      const available = partitionRows.filter(row => row.state === 0);
+      if (!available.length) {
+        const note = document.createElement("p"); note.className = "partition-empty";
+        note.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无可用分区";
+        partitionBody.append(note);
+      }
+      for (const item of available) {
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "partition-row"; button.dataset.partitionId = String(item.id);
+        button.setAttribute("aria-pressed", String(partitionSelected === item.id));
+        button.setAttribute("aria-label", `选择${partitionName(item)}`);
+        button.disabled = disabled;
+        const drive = document.createElement("span"); drive.className = "partition-drive";
+        drive.textContent = item.display?.match(/^[A-Za-z]:/)?.[0] || "—";
+        const identity = document.createElement("span"); identity.className = "partition-identity";
+        const volume = document.createElement("span"), location = document.createElement("span");
+        volume.textContent = item.display?.replace(/^[A-Za-z]:\s*[·•]?\s*/, "") || "卷标不可读";
+        location.textContent = partitionLocation(item); location.className = "partition-location";
+        identity.append(volume, location);
+        const size = document.createElement("span"); size.className = "partition-size"; size.textContent = partitionSize(item);
+        const radio = document.createElement("span"); radio.className = "partition-radio"; radio.setAttribute("aria-hidden", "true");
+        button.append(drive, identity, size, radio);
+        button.addEventListener("click", () => { void selectPartitionRow(item.id); });
+        partitionBody.append(button);
+      }
     }
-    const selected = partitionRows.find(row => row.id === partitionSelected);
-    partitionSelection.textContent = selected ? `已选择：${partitionName(selected)}` : "尚未选择分区。";
+    const empty = partitionBody.querySelector(".partition-empty");
+    if (empty) empty.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无可用分区";
+    for (const button of partitionBody.querySelectorAll("button[data-partition-id]")) {
+      button.disabled = disabled;
+      button.setAttribute("aria-pressed", String(Number(button.dataset.partitionId) === partitionSelected));
+    }
+
   };
+  const partitionSize = row => row.bytes < 1024 ** 3 ? `${(row.bytes / 1048576).toFixed(0)} MiB` : `${(row.bytes / (1024 ** 3)).toFixed(2)} GiB`;
   const discardPartitions = () => {
+    document.getElementById("create-partition-outer-capacity").value = "";
+    partitionReviewOpen = false;
+    document.getElementById("partition-review-facts").replaceChildren();
+    document.getElementById("partition-unavailable").open = false;
     ++partitionRevision; partitionRows = []; partitionSelected = 0; partitionErase.checked = false;
-    partitionStatus.textContent = "请刷新分区列表。";
+    partitionStatus.textContent = "";
     renderPartitions();
   };
   const parsePartitionRows = packed => {
@@ -3472,10 +3522,14 @@
       ids.add(id); return {id, disk, part, bytes, state};
     });
   };
-  const refreshPartitions = async () => {
+  const refreshPartitions = async (retainRows = false) => {
     if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
-    discardPartitions(); const revision = partitionRevision;
-    busy = true; render(messageForCurrentState()); partitionStatus.textContent = "正在读取分区…";
+    if (retainRows) {
+      ++partitionRevision; partitionSelected = 0; partitionErase.checked = false; partitionReviewOpen = false;
+      document.getElementById("partition-review-facts").replaceChildren();
+    } else discardPartitions();
+    const revision = partitionRevision;
+    busy = true; renderPartitions(); creationContinueButton.disabled = true; partitionStatus.textContent = "正在读取分区…";
     try {
       if (await bridge.beginPartitionRefresh() !== true) throw new Error("scan rejected");
       let status;
@@ -3492,11 +3546,14 @@
       }
       if (revision !== partitionRevision || !partitionPickerVisible()) return;
       partitionRows = rows;
-      partitionStatus.textContent = rows.length ? `已读取 ${rows.length} 个分区卷，${rows.filter(row => row.state === 0).length} 个可选择。` : "未发现可显示的分区卷。";
+      partitionStatus.textContent = "";
     } catch (_) {
-      if (revision === partitionRevision) partitionStatus.textContent = "无法读取分区，请稍后刷新重试。";
+      if (revision === partitionRevision) {
+        discardPartitions();
+        partitionStatus.textContent = "无法读取分区，请稍后刷新重试。";
+      }
     } finally {
-      busy = false; render(messageForCurrentState());
+      busy = false; renderPartitions(); updateCreationAvailability();
       if (externalRefreshPending) void refreshAfterExternalChange();
     }
   };
@@ -3504,12 +3561,12 @@
     if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
     const revision = partitionRevision;
     partitionErase.checked = false;
-    busy = true; render(messageForCurrentState());
+    busy = true; renderPartitions(); creationContinueButton.disabled = true;
     try {
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) {
         partitionSelected = id;
-        partitionStatus.textContent = "已选中分区。";
+        partitionStatus.textContent = "";
       }
     } catch (_) {
       if (revision === partitionRevision) {
@@ -3517,43 +3574,30 @@
         partitionStatus.textContent = "分区选择已失效，请刷新后重新选择。";
       }
     } finally {
-      busy = false; render(messageForCurrentState());
+      busy = false; renderPartitions(); updateCreationAvailability();
       if (externalRefreshPending) void refreshAfterExternalChange();
     }
   };
-  partitionCheck.addEventListener("click", async () => {
-    if (!partitionPickerVisible() || busy || !partitionSelected || bridge === null || currentState !== nativeState.authenticated) return;
-    const revision = partitionRevision;
-    busy = true; render(messageForCurrentState());
-    partitionStatus.textContent = "正在检查分区身份及使用状态…";
-    try {
-      if (await bridge.beginPartitionCheck() !== true) throw new Error("partition check rejected");
-      let state;
-      do {
-        state = await bridge.getPartitionCheckStatus();
-        if (state === 1) await new Promise(resolve => window.setTimeout(resolve, 100));
-      } while (state === 1);
-      if (state !== 2) throw new Error("partition check failed");
-      if (revision === partitionRevision) partitionStatus.textContent = "分区身份及使用状态检查通过；创建前仍会重新检查。";
-    } catch (_) {
-      if (revision === partitionRevision) {
-        discardPartitions();
-        partitionStatus.textContent = "分区检查未通过，请刷新重试。";
-      }
-    } finally {
-      busy = false; render(messageForCurrentState());
-      if (externalRefreshPending) void refreshAfterExternalChange();
-    }
-  });
   partitionRefresh.addEventListener("click", () => { void refreshPartitions(); });
   partitionManagement.addEventListener("click", async () => {
     if (!partitionPickerVisible() || busy || bridge === null || currentState !== nativeState.authenticated) return;
-    discardPartitions(); const revision = partitionRevision; busy = true; render(messageForCurrentState());
-    try {
-      if (await bridge.openDiskManagement() !== true) throw new Error("tool launch failed");
-      if (revision === partitionRevision) partitionStatus.textContent = "磁盘管理已打开，操作完成后请返回刷新。";
-    } catch (_) { if (revision === partitionRevision) partitionStatus.textContent = "无法打开磁盘管理，可从 Windows 开始菜单打开。"; }
-    finally { busy = false; render(messageForCurrentState()); if (externalRefreshPending) void refreshAfterExternalChange(); }
+    const revision = partitionRevision;
+    partitionSelected = 0; partitionErase.checked = false;
+    busy = true; renderPartitions(); creationContinueButton.disabled = true;
+    let opened = false;
+    try { opened = await bridge.openDiskManagement() === true; }
+    catch (_) { /* The native call may already have invalidated its snapshot. */ }
+    finally {
+      busy = false;
+      if (revision === partitionRevision && partitionPickerVisible() && currentState === nativeState.authenticated && !externalRefreshPending) {
+        // Launching Disk Management invalidates the native snapshot. Re-enumerate
+        // before enabling selection, retaining disabled display rows while waiting.
+        await refreshPartitions(true);
+        if (!opened) partitionStatus.textContent = "无法打开磁盘管理，可从 Windows 开始菜单打开。";
+      }
+      renderPartitions(); updateCreationAvailability();
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
   });
 
   const showDashboardSection = (sectionName) => {
@@ -4630,8 +4674,8 @@
       "无法挂载该容器，请稍后重试。", context);
   });
   // A finished result is safe to dismiss by clicking away; a running operation is not.
-  volumeOperationDialog.addEventListener("click", (event) => {
-    if (event.target === volumeOperationDialog && volumeOperationDialog.dataset.result !== "running") hideVolumeOperation();
+  volumeOperationDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === volumeOperationDialog && volumeOperationDialog.dataset.result !== "running") hideVolumeOperation();
   });
   volumeOperationDialog.addEventListener("keydown", (event) => {
     if (event.key === "Tab" || event.key === "Escape") {
@@ -4884,7 +4928,10 @@
       return;
     }
     unpinBatchReasons();
-    if (event.target === batchResultDialog) dismissBatchResults();
+
+  });
+  batchResultDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === batchResultDialog) dismissBatchResults();
   });
   batchResultDialog.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -5632,8 +5679,8 @@
   exportConfirmRun.addEventListener("click", async () => { await runExport(); });
   exportConfirmClose.addEventListener("click", closeExportConfirm);
   exportConfirmCancel.addEventListener("click", closeExportConfirm);
-  exportConfirmDialog.addEventListener("click", (event) => {
-    if (event.target === exportConfirmDialog) closeExportConfirm();
+  exportConfirmDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === exportConfirmDialog) closeExportConfirm();
   });
   const chooseExportMode = (mode) => {
     if (busy || exportMode === mode) return;
@@ -5789,8 +5836,8 @@
   });
   fileNameCloseButton.addEventListener("click", () => closeFileNameFlow());
   fileNameCancelButton.addEventListener("click", () => closeFileNameFlow());
-  fileNameDialog.addEventListener("click", (event) => {
-    if (event.target === fileNameDialog) closeFileNameFlow();
+  fileNameDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === fileNameDialog) closeFileNameFlow();
   });
   fileNameInput.addEventListener("keydown", async (event) => {
     if (event.key === "Enter") {
@@ -5878,13 +5925,13 @@
   resetConfirmButton.addEventListener("click", async () => {
     await resetCardRecord();
   });
-  resetDialog.addEventListener("click", (event) => {
-    if (event.target === resetDialog) closeResetFlow();
+  resetDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === resetDialog) closeResetFlow();
   });
   forgetCloseButton.addEventListener("click", () => closeForgetFlow());
   forgetCancelButton.addEventListener("click", () => closeForgetFlow());
-  forgetDialog.addEventListener("click", (event) => {
-    if (event.target === forgetDialog) closeForgetFlow();
+  forgetDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === forgetDialog) closeForgetFlow();
   });
   forgetConfirmButton.addEventListener("click", async () => {
     const id = pendingForgetId;
@@ -5946,6 +5993,22 @@
     "click", () => void browseForDirectory(containerBDirectory));
   creationContinueButton.addEventListener("click", async () => {
     if (busy || creationDialog.hidden || currentState !== nativeState.authenticated) return;
+    if (creationStorage === "disk" && !partitionReviewOpen) {
+      const selected = partitionRows.find(row => row.id === partitionSelected && row.state === 0);
+      if (!selected || (creationKind === "hidden" && !containerBInputReady())) return;
+      const facts = document.getElementById("partition-review-facts");
+      facts.replaceChildren();
+      for (const [label, value] of [["分区", partitionName(selected)], ["容量", partitionSize(selected)],
+        ["创建方式", partitionPreserve.checked ? "保留文件并加密" : "清空并创建"]]) {
+        const row = document.createElement("div"), term = document.createElement("dt"), detail = document.createElement("dd");
+        term.textContent = label; detail.textContent = value; row.append(term, detail); facts.append(row);
+      }
+      partitionErase.checked = false;
+      partitionReviewOpen = true;
+      updateCreationAvailability();
+      document.getElementById("partition-review-back").focus();
+      return;
+    }
     if (creationStorage === "disk" && creationKind === "encrypted") { await createPartition(); return; }
     if (creationStorage === "disk" && (!partitionSelected || !partitionErase.checked)) return;
     if (creationKind === "encrypted") {
@@ -5958,6 +6021,15 @@
       creationDialog.inert = true;
       hiddenReviewCancel.focus();
     }
+  });
+  hiddenReview.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === hiddenReview && !busy) hiddenReviewCancel.click();
+  });
+  forgotDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === forgotDialog) void closeForgotPassword();
+  });
+  decoyConfirmDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === decoyConfirmDialog && !busy) closeDecoyConfirm();
   });
   hiddenReviewCancel.addEventListener("click", () => {
     closeHiddenReview();
@@ -6060,8 +6132,8 @@
     }
   }
   document.addEventListener("click", () => closeUnitLists());
-  creationDialog.addEventListener("click", (event) => {
-    if (event.target === creationDialog) {
+  creationDialog.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && event.target === creationDialog) {
       closeCreationFlow();
     }
   });

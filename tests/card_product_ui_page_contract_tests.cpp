@@ -724,7 +724,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   require(script.find("接着会让你选择保存位置") == std::string::npos &&
               script.find("容器为物理硬盘上已有的独立数据分区") != std::string::npos &&
               script.find("容器为一个加密文件，挂载后显示为普通磁盘") != std::string::npos &&
-              script.find("creationTypeStep.hidden = creationRunning || creationResult") != std::string::npos &&
+              script.find("creationTypeStep.hidden = reviewing || creationRunning || creationResult") != std::string::npos &&
               script.find("bridge.beginPartitionPair(") != std::string::npos,
           "the shared creation selectors or partition pair route are missing");
   // Nothing about a location survives the call that carried it, on either

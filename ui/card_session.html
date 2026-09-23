@@ -960,10 +960,75 @@
     #create-disk-step .shell-button { padding: .35rem .5rem; font-size: .7rem; }
     #create-disk-step label { display: flex; gap: .45rem; align-items: flex-start; margin-top: .65rem; font-size: .76rem; color: var(--text-2); }
     #create-volume-dialog[data-storage="disk"] .file-container-field { display: none; }
-    #create-volume-dialog[data-storage="disk"] .creation-capacity-pair { grid-template-columns: 1fr; }
+    .disk-container-field { display: none; }
+    #create-volume-dialog[data-storage="disk"] .disk-container-field { display: block; }
+    #create-partition-outer-capacity { color: var(--text-3); background: var(--ink-850); cursor: default; }
+    .disk-container-field .capacity-unit { cursor: default; }
+    #create-storage-switch .modal-button, #create-disk-step .partition-method, .partition-method input, .partition-method .partition-radio { transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, box-shadow 140ms ease; }
+    @media (prefers-reduced-motion: reduce) { #create-storage-switch .modal-button, #create-disk-step .partition-method, .partition-method input, .partition-method .partition-radio { transition: none; } }
     #create-disk-step .files-card { overflow-x: auto; }
     #create-disk-step h4 { margin: 0; }
     #create-disk-step .section-note { border: 0; padding: 0; background: none; margin: .5rem 0; font-size: .74rem; }
+
+    #create-disk-step .section-header { margin-bottom: .7rem; }
+    #create-disk-step .overview-actions { gap: .8rem; }
+    #create-disk-step .shell-button, .partition-text-button { border: 0; background: none; padding: 0; color: var(--text-3); font-size: .72rem; cursor: pointer; }
+    #create-disk-step .shell-button:hover, .partition-text-button:hover { color: var(--gold); }
+    .partition-scroll-frame { height: 10rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--line-2); border-radius: .7rem; background: var(--ink-850); }
+    .partition-list { border: 0; }
+    .partition-row { display: flex; width: 100%; align-items: center; gap: .8rem; padding: .5rem .9rem; text-align: left; color: var(--text); background: var(--ink-850); border: 0; border-bottom: 1px solid var(--line-2); cursor: pointer; }
+    .partition-row:last-child { border-bottom: 1px solid var(--line-2); }
+    .partition-row:hover { background: rgba(255,255,255,.035); }
+    .partition-row[aria-pressed="true"] { background: rgba(200,169,106,.07); box-shadow: inset 3px 0 var(--gold); }
+    .partition-drive { display: grid; place-items: center; flex: 0 0 2.4rem; height: 2.4rem; border-radius: .55rem; background: rgba(255,255,255,.05); border: 1px solid var(--line-2); font-family: var(--mono); }
+    .partition-row[aria-pressed="true"] .partition-drive { color: var(--gold); }
+    .partition-identity { flex: 1; min-width: 0; font-size: .82rem; overflow-wrap: anywhere; }
+    .partition-identity > span { display: block; }
+    .partition-location { color: var(--text-3); font-size: .68rem; margin-top: .2rem; }
+    .partition-size { flex-shrink: 0; font-size: .75rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
+    .partition-radio { width: 1rem; height: 1rem; flex-shrink: 0; border: 1px solid var(--text-3); border-radius: 50%; }
+    [aria-pressed="true"] > .partition-radio { background: var(--gold); border-color: var(--gold); box-shadow: inset 0 0 0 3px var(--ink-850); }
+    .partition-empty { padding: 1rem; margin: 0; color: var(--text-3); font-size: .75rem; }
+    .partition-unavailable { font-size: .75rem; color: var(--text-3); margin: 0; }
+    .partition-unavailable summary { cursor: pointer; padding: .45rem .9rem; background: var(--ink-850); border-bottom: 1px solid var(--line-2); }
+    .partition-unavailable summary:hover { background: rgba(255,255,255,.035); }
+    .partition-unavailable .partition-row { cursor: default; color: var(--text-3); }
+    .partition-unavailable p { margin: .6rem 0; overflow-wrap: anywhere; }
+    .partition-method-title { padding-top: .8rem; }
+    #partitions-title, .partition-method-title, #create-volume-dialog[data-storage="file"] .creation-form label:is([for="create-container-name"], [for="create-container-directory"], [for="create-container-capacity"], [for="create-container-b-name"], [for="create-container-b-directory"], [for="create-container-b-capacity"], [for="create-container-b-hidden-capacity"]) { font-size: .8rem; font-weight: 600; color: var(--text); }
+    #create-volume-continue, #create-volume-continue:disabled { cursor: default; }
+    #create-disk-step .overview-actions .shell-button { display: inline-flex; align-items: center; padding: .35rem .6rem; border: 1px solid var(--line-2); border-radius: .4rem; background: rgba(255,255,255,.025); color: var(--text-2); }
+    #create-disk-step .overview-actions .shell-button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); background: rgba(200,169,106,.06); }
+    #partition-scroll-frame #partition-status { display: block; margin: .6rem .9rem; }
+    #partition-scroll-frame #partition-status:empty { display: none; }
+    .partition-methods { display: flex; gap: .65rem; margin-top: .65rem; }
+    #create-disk-step .partition-method { flex: 1; display: flex; align-items: center; gap: .65rem; padding: .9rem; margin: 0; border: 1px solid var(--line-2); border-radius: .65rem; background: var(--ink-850); color: var(--text); text-align: left; cursor: pointer; }
+    #create-disk-step .partition-method:has(input:checked), #create-disk-step .partition-method[aria-pressed="true"] { border-color: rgba(200,169,106,.6); background: rgba(200,169,106,.05); }
+    .partition-method strong { font-size: .78rem; font-weight: 500; }
+    .partition-method small { display: block; font-size: .68rem; color: var(--text-3); margin-top: .25rem; }
+    .partition-method input { appearance: none; width: 1rem; height: 1rem; margin: 0; flex-shrink: 0; border: 1px solid var(--text-3); border-radius: 50%; }
+    .partition-method input:checked { background: var(--gold); border-color: var(--gold); box-shadow: inset 0 0 0 3px var(--ink-850); }
+    .partition-method input:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+    #partition-status:empty { display: none; }
+    .partition-review-facts { background: var(--ink-850); border: 1px solid var(--line-2); border-radius: .7rem; padding: 1rem; margin: 1.4rem 0; font-size: .8rem; }
+    .partition-review-facts div { display: flex; justify-content: space-between; gap: 1.5rem; padding: .5rem 0; }
+    .partition-review-facts dt { color: var(--text-3); flex-shrink: 0; }
+    .partition-review-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+    #partition-review { padding-top: .4rem; }
+    #partition-review h4 { margin-top: 1.5rem; }
+    #create-disk-step button:focus-visible, #partition-review button:focus-visible, .partition-unavailable summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    @media (max-width: 540px) { .partition-methods { flex-direction: column; } }
+    .creation-location-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; column-gap: .75rem; }
+    .creation-location-grid label:is([for="create-container-name"], [for="create-container-b-name"]) { grid-column: 1; grid-row: 1; }
+    .creation-location-grid label:is([for="create-container-directory"], [for="create-container-b-directory"]) { grid-column: 2 / 4; grid-row: 1; }
+    .creation-location-grid :is(#create-container-name, #create-container-b-name) { grid-column: 1; grid-row: 2; min-width: 0; }
+    .creation-location-grid .location-field { display: contents; }
+    .creation-location-grid :is(#create-container-directory, #create-container-b-directory) { grid-column: 2; grid-row: 2; min-width: 0; }
+    .creation-location-grid :is(#create-container-browse, #create-container-b-browse) { grid-column: 3; grid-row: 2; }
+    .creation-location-grid :is(#create-container-name-error, #create-container-b-name-error) { grid-column: 1; grid-row: 3; }
+    .creation-location-grid :is(#create-container-directory-error, #create-container-b-directory-error) { grid-column: 2 / 4; grid-row: 3; }
+    .creation-password-pair { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: .75rem; margin-top: .9rem; }
+    .creation-password-pair input { min-width: 0; width: 100%; }
     .type-picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
     .type-pick {
       display: block; padding: 1rem; text-align: left; border-radius: .65rem;
@@ -1828,29 +1893,38 @@
             <div><h4 id="partitions-title">选择分区</h4></div>
             <div class="overview-actions">
               <button id="partition-open-management" class="shell-button" type="button">打开磁盘管理</button>
-              <button id="partition-check" class="shell-button" type="button" disabled>检查所选分区</button>
-              <button id="partition-refresh" class="shell-button" type="button">刷新分区</button>
+              <button id="partition-refresh" class="shell-button" type="button">↻ 刷新</button>
             </div>
           </div>
-          <div class="files-card">
-            <table class="files-table">
-              <thead><tr><th>盘符 / 卷标 / 分区</th><th>容量</th><th>状态</th><th>选择</th></tr></thead>
-              <tbody id="partition-list-body"></tbody>
-            </table>
+          <div id="partition-scroll-frame" class="partition-scroll-frame" tabindex="0" aria-label="分区列表">
+          <div id="partition-list-body" class="partition-list" aria-label="可用分区"></div>
+          <details id="partition-unavailable" class="partition-unavailable" hidden>
+            <summary id="partition-unavailable-summary"></summary>
+            <div id="partition-unavailable-list"></div>
+          </details>
+          <output id="partition-status" class="section-note" aria-live="polite"></output>
           </div>
-          <output id="partition-status" class="section-note" aria-live="polite">尚未读取分区。</output>
-          <p id="partition-selection" class="section-note" aria-live="polite">尚未选择分区。</p>
-          <label><input id="partition-preserve-data" type="checkbox">保留现有文件并加密（NTFS 原地转换）</label>
-          <p id="partition-conversion-note" class="section-note" hidden>请先备份重要文件。转换可正常暂停，退出后须用原安全卡登录继续；异常中断可能导致数据损坏。转换完成前不能访问文件，不支持断电或强杀后的无损恢复。</p>
-          <label><input id="partition-erase-consent" type="checkbox" disabled><span id="partition-consent-text">我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。</span></label>
+          <h4 class="partition-method-title">创建方式</h4>
+          <div class="partition-methods">
+            <label class="partition-method"><input id="partition-preserve-data" type="checkbox"><span><strong>保留文件并加密</strong><small>适用于 NTFS 分区</small></span></label>
+            <button class="partition-method" id="partition-method-erase" type="button" aria-pressed="true"><span class="partition-radio" aria-hidden="true"></span><span><strong>清空并创建</strong><small>删除分区内的所有文件</small></span></button>
+          </div>
+        </section>
+        <section id="partition-review" hidden aria-labelledby="partition-review-title">
+          <button id="partition-review-back" class="partition-text-button" type="button">← 返回选择</button>
+          <h4 id="partition-review-title">检查创建信息</h4>
+          <dl id="partition-review-facts" class="partition-review-facts"></dl>
+          <p id="partition-conversion-note" class="creation-hint" hidden>请先备份重要文件。转换可正常暂停；异常断电或强制退出可能导致数据损坏。</p>
+          <label class="creation-check"><input id="partition-erase-consent" type="checkbox" disabled><span id="partition-consent-text">我确认已备份数据，允许清空所选分区的全部内容并移除原盘符。</span></label>
         </section>
         <div id="create-type-note" hidden></div>
         <div id="create-container-form" class="creation-form" hidden>
+          <div class="creation-location-grid">
           <label for="create-container-name">名称</label>
           <input id="create-container-name" class="creation-text" type="text"
                  autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="96">
           <p id="create-container-name-error" class="creation-error" hidden></p>
-          <label for="create-container-directory" style="margin-top:.9rem">路径</label>
+          <label for="create-container-directory">路径</label>
           <div class="location-field">
             <input id="create-container-directory" class="creation-text mono" type="text"
                    autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -1859,6 +1933,7 @@
             </button>
           </div>
           <p id="create-container-directory-error" class="creation-error" hidden></p>
+          </div>
           <label for="create-container-capacity" style="margin-top:.9rem">容量</label>
           <div class="capacity-field">
             <input id="create-container-capacity" type="number" inputmode="numeric" min="20" max="1048576" step="1" value="64">
@@ -1879,12 +1954,12 @@
           <p id="create-container-error" class="creation-error" hidden></p>
         </div>
         <div id="create-container-b-form" class="creation-form" hidden>
-          <div class="file-container-field">
+          <div class="file-container-field creation-location-grid">
           <label for="create-container-b-name">名称</label>
           <input id="create-container-b-name" class="creation-text" type="text"
                  autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="96">
           <p id="create-container-b-name-error" class="creation-error" hidden></p>
-          <label for="create-container-b-directory" style="margin-top:.9rem">路径</label>
+          <label for="create-container-b-directory">路径</label>
           <div class="location-field">
             <input id="create-container-b-directory" class="creation-text mono" type="text"
                    autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -1911,6 +1986,12 @@
         </div>
       </div>
           </div>
+          </div><div class="disk-container-field">
+          <label for="create-partition-outer-capacity">总容量</label>
+          <div class="capacity-field">
+            <input id="create-partition-outer-capacity" type="text" readonly placeholder="—" aria-label="所选分区总容量">
+            <span class="capacity-unit">MiB</span>
+          </div>
           </div><div>
           <label for="create-container-b-hidden-capacity">内层容量</label>
           <div class="capacity-field">
@@ -1920,10 +2001,13 @@
           </div></div>
           <p class="creation-hint">内层卷至多占总容量的 3/4。</p>
           <p id="create-container-b-error" class="creation-error" hidden></p>
-          <label for="create-container-b-second" style="margin-top:.9rem">为该容器设置诱饵密码</label>
+          <div class="creation-password-pair"><div>
+          <label for="create-container-b-second">为该容器设置诱饵密码</label>
           <input id="create-container-b-second" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
-          <label for="create-container-b-second-confirmation" style="margin-top:.9rem">再次输入诱饵密码</label>
+          </div><div>
+          <label for="create-container-b-second-confirmation">再次输入诱饵密码</label>
           <input id="create-container-b-second-confirmation" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+          </div></div>
           <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
           <div class="creation-note" style="margin-top:.9rem">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
