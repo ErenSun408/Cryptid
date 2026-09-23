@@ -185,6 +185,24 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (cancelled() || partition_fail) throw std::runtime_error("partition stopped");
     partition_written = true;
   }
+  bool conversion_pause{true}, conversion_fail{}, wrong_conversion_target{};
+  std::function<void()> during_conversion;
+  usb_vault::volume::PartitionCandidate conversion_target;
+  usb_vault::volume::PartitionCandidate resolve_conversion_target(const usb_vault::volume::PartitionIdentity&) override {
+    auto target=conversion_target; if(wrong_conversion_target)target.device_id[0]^=1; return target;
+  }
+  bool convert_partition(const usb_vault::volume::PartitionCandidate& target, bool,
+      const SecureBuffer& password,const std::function<bool()>& confirm,
+      const usb_vault::application::CreationCancellation& revoked,
+      const usb_vault::application::CreationCancellation&) override {
+    require(password.size()==64,"conversion secret invalid");
+    if(revoked() || !confirm())throw std::runtime_error("conversion refused");
+    require(!confirm(),"conversion reused consent");
+    conversion_target=target;
+    if(during_conversion)during_conversion();
+    if(conversion_fail || revoked())throw std::runtime_error("conversion failed");
+    return conversion_pause;
+  }
   bool saved_logging{true};
   bool saved_force{};
   bool saved_auto{};
@@ -3768,6 +3786,58 @@ void test_no_export_leaves_a_single_local_trace() {
           "nothing");
 }
 
+void test_partition_conversion_lifecycle() {
+  using namespace usb_vault::application;
+  using usb_vault::volume::PartitionCandidate;
+  for(int scenario=0;scenario<7;++scenario) {
+    CardAuthenticationSession auth; FakeRuntime runtime;
+    runtime.partition_password_64=true; runtime.remember_paths=true;
+    bool revoked=false;
+    runtime.creation_cancelled=[]{return false;}; runtime.creation_revoked=[&]{return revoked;};
+    CardLoginMountSessionCore session(auth,runtime,layout(),LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(),bytes("login"));
+    PartitionCandidate target; target.device_id[0]=7; target.layout=usb_vault::volume::PartitionLayout::mbr;
+    target.logical_sector_bytes=512; target.offset_bytes=1048576; target.length_bytes=64ULL*1024*1024;
+    auto key=derive_shared_container_index_key_v1(root_secret().bytes());
+    runtime.fail_index_write=scenario==3;
+    runtime.during_conversion=[&]{
+      const auto records=list_container_index_partition_entries(key.bytes(),runtime.container_index);
+      require(records.size()==1 && records[0].conversion==PartitionConversionState::uncertain,"disk write preceded durable uncertain state");
+      if(scenario==2)revoked=true;
+      if(scenario==4)runtime.fail_index_write=true;
+    };
+    runtime.conversion_fail=scenario==1;
+    if(scenario==5)runtime.partition_password_64=false;
+    bool failed=false;
+    try {require(session.begin_partition_conversion(target,[&](const auto& frozen){return frozen==target && scenario!=6;}),"conversion did not pause");}
+    catch(...){failed=true;}
+    require(failed==(scenario!=0),"conversion outcome mismatch");
+    const auto rows=session.container_statuses();
+    const auto records=list_container_index_partition_entries(key.bytes(),runtime.container_index);
+    if(scenario>=3 && scenario!=4) {require(rows.empty() && records.empty(),"unconfirmed operation left a record");continue;}
+    require(rows.size()==1 && !rows[0].mounted && rows[0].conversion_state==(scenario==0 ? 2u : 1u),"unsafe conversion state");
+    require_throws<std::logic_error>([&]{session.mount_adopted_container(rows[0].id);},"incomplete conversion mounted");
+    require_throws<std::logic_error>([&]{session.forget_container(rows[0].id);},"incomplete conversion record removed");
+    session.mount_adopted_all(); require(!session.container_statuses()[0].mounted,"mount all mounted partial data");
+    if(scenario!=0) {
+      require_throws<std::logic_error>([&]{session.resume_partition_conversion(rows[0].id);},"uncertain conversion resumed");continue;
+    }
+    auth.clear_authentication();
+    require_throws<std::logic_error>([&]{session.resume_partition_conversion(rows[0].id);},"resume bypassed authentication");
+    CardAuthenticationSession next_auth;
+    CardLoginMountSessionCore next(next_auth,runtime,layout(),LoginMountPolicy::manual);
+    next.consume_authenticated_login(root_secret(),bytes("other-valid-login"));
+    const auto restored=next.container_statuses(); require(restored.size()==1 && restored[0].conversion_state==2,"paused state lost on reopen");
+    runtime.wrong_conversion_target=true;
+    require_throws<std::logic_error>([&]{next.resume_partition_conversion(restored[0].id);},"changed resume identity accepted");
+    runtime.wrong_conversion_target=false; runtime.conversion_pause=false;
+    require(!next.resume_partition_conversion(restored[0].id),"completed conversion reported paused");
+    require(next.container_statuses()[0].mounted && next.container_statuses()[0].conversion_state==0,"completed conversion not released for mounting");
+    require(list_container_index_partition_entries(key.bytes(),runtime.container_index)[0].conversion==PartitionConversionState::normal,"completed record not persisted");
+    next.unmount_container(restored[0].id);
+  }
+}
+
 void test_partition_creation_persistence_and_mounting() {
   for (int scenario = 0; scenario != 5; ++scenario) {
     CardAuthenticationSession authentication;
@@ -3937,6 +4007,7 @@ void test_partition_format_card_session_boundary() {
 
 int main() {
   try {
+    test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
     test_partition_card_removal_and_drive_conflicts();
     test_partition_format_card_session_boundary();

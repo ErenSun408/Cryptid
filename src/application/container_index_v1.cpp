@@ -241,8 +241,11 @@ bool valid_container_index_partition(const ContainerIndexPartition& partition) n
 static security::SecureBuffer seal_index_entry(
     const std::span<const std::byte> key, const std::wstring_view path,
     const std::optional<std::uint32_t> order,
-    const ContainerIndexPartition* const partition) {
+    const ContainerIndexPartition* const partition,
+    PartitionConversionState conversion = PartitionConversionState::normal) {
   require_key(key);
+  if (static_cast<std::uint32_t>(conversion)>2 || (!partition && conversion!=PartitionConversionState::normal))
+    throw std::invalid_argument("invalid partition conversion state");
   if (order && *order >= kContainerIndexV1SlotCount) {
     throw std::invalid_argument("container index order is out of range");
   }
@@ -264,7 +267,8 @@ static security::SecureBuffer seal_index_entry(
   security::SecureBuffer plaintext(kPlaintextSize);
   fill_random(plaintext.bytes());
   if (partition) {
-    write_u32(plaintext.bytes(), kVersionOffset, kPartitionEntryVersion);
+    write_u32(plaintext.bytes(), kVersionOffset, conversion==PartitionConversionState::normal ? kPartitionEntryVersion : 4);
+    if (conversion!=PartitionConversionState::normal) write_u32(plaintext.bytes(),48,static_cast<std::uint32_t>(conversion));
     for (std::size_t i = 0; i < partition->device_id.size(); ++i)
       plaintext.bytes()[4 + i] = static_cast<std::byte>(partition->device_id[i]);
     write_u32(plaintext.bytes(), 20, partition->device_id_flags);
@@ -331,8 +335,8 @@ security::SecureBuffer seal_container_index_entry_v1(
 
 security::SecureBuffer seal_container_index_partition(
     const std::span<const std::byte> key, const ContainerIndexPartition& partition,
-    const std::optional<std::uint32_t> order) {
-  return seal_index_entry(key, {}, order, &partition);
+    const std::optional<std::uint32_t> order, const PartitionConversionState conversion) {
+  return seal_index_entry(key, {}, order, &partition, conversion);
 }
 
 std::optional<ContainerIndexEntry>
@@ -377,7 +381,9 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   // which it was would hand out the distinction this format exists to deny.
   const auto contents = plaintext.bytes();
   const std::uint32_t version = read_u32(contents, kVersionOffset);
-  if (version == kPartitionEntryVersion) {
+  if (version == kPartitionEntryVersion || version == 4) {
+    const auto state=version==4 ? read_u32(contents,48) : 0u;
+    if (version==4 && (state<1 || state>2)) return std::nullopt;
     ContainerIndexPartition partition;
     for (std::size_t i = 0; i < partition.device_id.size(); ++i)
       partition.device_id[i] = std::to_integer<std::uint8_t>(contents[4 + i]);
@@ -392,7 +398,7 @@ try_open_container_index_entry(const std::span<const std::byte> key,
     if (!valid_container_index_partition(partition) ||
         (rank != UINT32_MAX && rank >= kContainerIndexV1SlotCount)) return std::nullopt;
     return ContainerIndexEntry{{}, rank == UINT32_MAX ? std::nullopt :
-        std::optional<std::uint32_t>(rank), partition};
+        std::optional<std::uint32_t>(rank), partition, static_cast<PartitionConversionState>(state)};
   }
   const std::size_t length = read_u16(contents, kPathLengthOffset);
   if ((version != kContainerIndexEntryV1Version && version != kOrderedEntryVersion) || length == 0 ||

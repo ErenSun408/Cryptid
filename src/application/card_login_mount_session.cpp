@@ -153,6 +153,12 @@ class ProductionCardLoginMountSessionRuntime final
         }, cancelled);
   }
 
+  bool convert_partition(const volume::PartitionCandidate& target, bool begin, const security::SecureBuffer& password,
+      const std::function<bool()>& confirm, const CreationCancellation& revoked, const CreationCancellation& pause) override {
+    return creator_.convert_partition(target,begin,password,confirm,
+        [this](const auto& progress){report_creation(progress,0,0);},revoked,pause);
+  }
+
   volume::MountResult mount_partition(const volume::PartitionIdentity& identity,
       const security::SecureBuffer& password, const volume::MountOptions& options) override {
     return provider_.mount_partition(identity, password, options);
@@ -382,6 +388,17 @@ CardLoginMountSession::~CardLoginMountSession() noexcept = default;
 
 void CardLoginMountSession::set_creation_feedback(CreationFeedback feedback) {
   impl_->runtime.creation_feedback = std::move(feedback);
+}
+
+void CardLoginMountSession::set_creation_revocation(CreationCancellation revoked) {
+  impl_->runtime.creation_revoked=std::move(revoked);
+}
+bool CardLoginMountSession::begin_partition_conversion(const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  return impl_->core.begin_partition_conversion(target,confirm);
+}
+bool CardLoginMountSession::resume_partition_conversion(std::uint32_t id) {
+  return impl_->core.resume_partition_conversion(id);
 }
 
 void CardLoginMountSession::set_creation_cancellation(
@@ -1059,9 +1076,9 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     const std::vector<std::byte> file = runtime_.read_container_index();
     const std::vector<std::wstring> paths =
         list_container_index_paths_v1(key.bytes(), file);
-    const auto partitions = list_container_index_partitions(key.bytes(), file);
+    const auto partitions = list_container_index_partition_entries(key.bytes(), file);
     key.clear();
-    for (const auto& partition : partitions) static_cast<void>(adopt_partition(state_, partition));
+    for (const auto& partition : partitions) adopt_partition(state_, *partition.partition).conversion_state=static_cast<std::uint32_t>(partition.conversion);
     for (const std::wstring& path : paths) {
       // A remembered path whose file is not here is passed over and left in
       // the index. A container on a drive that is not plugged in is absent in
@@ -1136,6 +1153,90 @@ wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
     }
   }
   return letter;
+}
+
+bool CardLoginMountSessionCore::begin_partition_conversion(const volume::PartitionCandidate& target,
+    const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  return convert_partition(target,std::nullopt,confirm);
+}
+bool CardLoginMountSessionCore::resume_partition_conversion(std::uint32_t id) {
+  if (!authentication_.authenticated()) throw std::logic_error("resume requires authentication");
+  const auto entry=find_by_id(state_,id);
+  if (!entry || !entry->partition || entry->mounted || entry->conversion_state!=2)
+    throw std::logic_error("only a normally paused partition can resume");
+  const auto target=runtime_.resolve_conversion_target(*entry->partition);
+  return convert_partition(target,id,[](const auto&){return true;});
+}
+bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandidate& target,
+    std::optional<std::uint32_t> resume_id, const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
+  if (!authentication_.authenticated() || partition_format_active_ || !runtime_.remember_container_paths() ||
+      !confirm || !runtime_.creation_cancelled || !runtime_.creation_revoked)
+    throw std::logic_error("conversion requires an idle authenticated session and lifecycle controls");
+  const auto snapshot=target;
+  const volume::PartitionIdentity identity{target.device_id,target.device_id_flags,
+      target.layout==volume::PartitionLayout::mbr ? 1u : 0u,target.logical_sector_bytes,target.offset_bytes,target.length_bytes};
+  if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid conversion identity");
+  if (resume_id) {
+    const auto entry=find_by_id(state_,*resume_id);
+    if (!entry || entry->partition!=identity || entry->mounted || entry->conversion_state!=2)
+      throw std::logic_error("resume identity changed");
+  } else {
+    for (const auto& entry:state_.containers) if(entry.partition==identity) throw std::logic_error("partition already recorded");
+  }
+  const auto generation=authentication_.generation_;
+  const auto pause=runtime_.creation_cancelled;
+  const auto revoked_query=runtime_.creation_revoked;
+  const auto revoked=[&]{return !authentication_.authenticated() || authentication_.generation_!=generation || revoked_query();};
+  const auto check=[&]{if(revoked())throw std::system_error(volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled));};
+  check();
+  partition_format_active_=true;
+  struct Reset {bool& value; ~Reset(){value=false;}} reset{partition_format_active_};
+  auto password=derive_standard_password();
+  if(password.size()!=security::kKdfV1OutputSize)throw std::logic_error("invalid conversion password");
+  const auto id=resume_id ? *resume_id : adopt_partition(state_,identity).id;
+  bool recorded=resume_id.has_value(), accepted=false, requested=false;
+  auto persist=[&](PartitionConversionState status,bool insert){
+    auto key=container_index_key(); auto file=runtime_.read_container_index();
+    if(insert) {
+      if(add_container_index_partition(key.bytes(),file,identity,status)!=ContainerIndexWriteV1::added)
+        throw std::runtime_error("conversion record unavailable");
+    } else {
+      if(resume_id && status==PartitionConversionState::uncertain) {
+        const auto entries=list_container_index_partition_entries(key.bytes(),file);
+        const auto saved=std::ranges::find_if(entries,[&](const auto& entry){return entry.partition==identity;});
+        if(saved==entries.end() || saved->conversion!=PartitionConversionState::paused)
+          throw std::logic_error("durable resume permission changed");
+      }
+      if(!set_container_index_partition_state(key.bytes(),file,identity,status))
+        throw std::runtime_error("conversion record missing");
+    }
+    key.clear(); check(); runtime_.write_container_index(file);
+    auto entry=find_by_id(state_,id);
+    if(!entry)throw std::logic_error("conversion session changed");
+    entry->conversion_state=static_cast<std::uint32_t>(status);
+  };
+  try {
+    const bool paused=runtime_.convert_partition(snapshot,!resume_id,password,[&]{
+      if(requested || revoked())return false; requested=true;
+      if(!confirm(snapshot) || revoked())return false;
+      // Consume the paused permission durably BEFORE any new disk write.
+      persist(PartitionConversionState::uncertain,!resume_id); recorded=true; accepted=true;
+      return !revoked();
+    },revoked,pause);
+    password.clear(); check();
+    if(!accepted)throw std::logic_error("conversion returned without consent");
+    persist(paused ? PartitionConversionState::paused : PartitionConversionState::normal,false);
+    check();
+    if(!paused && !pause()) {
+      mount_adopted_container(id);
+      if(revoked()) {unmount_container_impl(id,true); check();}
+    }
+    if(runtime_.creation_feedback)runtime_.creation_feedback(5,paused ? 0u : 100u,find_by_id(state_,id)->drive_letter);
+    return paused;
+  } catch (...) {
+    if(!recorded)std::erase_if(state_.containers,[id](const auto& entry){return entry.id==id;});
+    throw;
+  }
 }
 
 std::uint32_t CardLoginMountSessionCore::create_partition(
@@ -1852,6 +1953,7 @@ void CardLoginMountSessionCore::mount_adopted_container(
         "no container is adopted under that identifier");
   }
   if (entry->mounted) return;
+  if (entry->conversion_state) throw std::logic_error("incomplete conversion cannot mount");
   if (entry->partition) {
     auto password = derive_standard_password();
     if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
@@ -1937,7 +2039,7 @@ void CardLoginMountSessionCore::mount_adopted_all() {
   std::vector<std::uint32_t> pending;
   for (const bool release_first : {true, false}) {
     for (const SessionContainer& container : state_.containers) {
-      if (container.mounted || container.release_first != release_first) {
+      if (container.mounted || container.conversion_state || container.release_first != release_first) {
         continue;
       }
       pending.push_back(container.id);
@@ -2077,6 +2179,7 @@ void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
   for (auto entry = state_.containers.begin();
        entry != state_.containers.end(); ++entry) {
     if (entry->id != id) continue;
+    if (entry->conversion_state) throw std::logic_error("incomplete conversion record cannot be forgotten");
     if (entry->mounted) {
       throw std::logic_error(
           "a mounted container cannot be dropped from the session");
@@ -2268,7 +2371,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                         .mounted = false,
                         .size_bytes = 0,
                         .drive_letter = wchar_t{},
-                        .partition = container.partition.has_value()});
+                        .partition = container.partition.has_value(), .conversion_state=container.conversion_state});
       continue;
     }
     // The driver is the only authority on an attached volume: it alone knows
@@ -2285,7 +2388,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                       .mounted = true,
                       .size_bytes = *size,
                       .drive_letter = container.drive_letter,
-                      .partition = container.partition.has_value()});
+                      .partition = container.partition.has_value(), .conversion_state=container.conversion_state});
   }
   return result;
 }

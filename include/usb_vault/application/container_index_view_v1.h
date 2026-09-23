@@ -52,11 +52,17 @@ enum class ContainerIndexWriteV1 {
 
 // Partitions share the same root-derived key and fixed-size file. File-only
 // operations never expose them as paths and leave their slots byte-for-byte.
+[[nodiscard]] std::vector<ContainerIndexEntry> list_container_index_partition_entries(
+    std::span<const std::byte> key, std::span<const std::byte> file);
+// Exact single-record update. No mutation if missing, duplicate or crypto failure.
+[[nodiscard]] bool set_container_index_partition_state(std::span<const std::byte> key,
+    std::span<std::byte> file, const ContainerIndexPartition& partition, PartitionConversionState state);
 [[nodiscard]] std::vector<ContainerIndexPartition> list_container_index_partitions(
     std::span<const std::byte> key, std::span<const std::byte> file);
 [[nodiscard]] ContainerIndexWriteV1 add_container_index_partition(
     std::span<const std::byte> key, std::span<std::byte> file,
-    const ContainerIndexPartition& partition);
+    const ContainerIndexPartition& partition,
+    PartitionConversionState state = PartitionConversionState::normal);
 [[nodiscard]] bool remove_container_index_partition(
     std::span<const std::byte> key, std::span<std::byte> file,
     const ContainerIndexPartition& partition);

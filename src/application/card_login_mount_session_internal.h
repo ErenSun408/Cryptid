@@ -24,6 +24,7 @@ class CardLoginMountSessionRuntime {
  public:
   CreationFeedback creation_feedback;
   CreationCancellation creation_cancelled;
+  CreationCancellation creation_revoked;
   virtual ~CardLoginMountSessionRuntime() noexcept = default;
 
   [[nodiscard]] virtual MountSessionResult mount_authenticated(
@@ -71,6 +72,19 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& volume_password,
       const std::function<bool()>& confirm_erase,
       const CreationCancellation& cancelled) = 0;
+  virtual bool convert_partition(const volume::PartitionCandidate&, bool, const security::SecureBuffer&,
+      const std::function<bool()>&, const CreationCancellation&, const CreationCancellation&) {
+    throw std::logic_error("conversion unavailable");
+  }
+  virtual volume::PartitionCandidate resolve_conversion_target(const volume::PartitionIdentity& identity) {
+    const auto location=volume::resolve_partition_location(identity,volume::enumerate_partition_locations());
+    if (!location) throw std::runtime_error("conversion target unavailable");
+    volume::PartitionCandidate target;
+    target.volume_path=location->volume_path; target.disk_number=location->disk_number; target.partition_number=location->partition_number;
+    target.device_id=identity.device_id; target.device_id_flags=identity.device_id_flags; target.layout=volume::PartitionLayout::mbr;
+    target.logical_sector_bytes=identity.logical_sector_bytes; target.offset_bytes=identity.offset_bytes; target.length_bytes=identity.length_bytes;
+    return target;
+  }
   virtual volume::MountResult mount_partition(const volume::PartitionIdentity&,
       const security::SecureBuffer&, const volume::MountOptions&) {
     throw std::logic_error("partition mounting unavailable");
@@ -165,6 +179,7 @@ struct SessionContainer final {
   std::optional<volume::MountIdentity> maintenance_identity;
   bool maintenance_recovery_required{};
   std::optional<volume::PartitionIdentity> partition;
+  std::uint32_t conversion_state{};
 };
 
 struct CardLoginMountSessionState final {
@@ -215,6 +230,11 @@ class CardLoginMountSessionCore final {
       security::SecureBuffer login_password_utf8);
   void format_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
+  bool begin_partition_conversion(const volume::PartitionCandidate& target,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm);
+  bool resume_partition_conversion(std::uint32_t id);
+  bool convert_partition(const volume::PartitionCandidate& target, std::optional<std::uint32_t> resume_id,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm);
   std::uint32_t create_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase);
   void create_container_a(std::uint64_t size_bytes);

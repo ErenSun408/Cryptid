@@ -69,6 +69,7 @@ struct ContainerStatus final {
   std::uint64_t size_bytes{};
   wchar_t drive_letter{};
   bool partition{};
+  std::uint32_t conversion_state{}; // 0 ready, 1 incomplete/uncertain, 2 durably paused.
 };
 
 // One best-effort, process-local fact from the current authenticated session.
@@ -185,6 +186,9 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("partition formatting is unavailable");
   }
 
+  virtual bool begin_partition_conversion(const volume::PartitionCandidate&,
+      const std::function<bool(const volume::PartitionCandidate&)>&) { throw std::logic_error("conversion unavailable"); }
+  virtual bool resume_partition_conversion(std::uint32_t) { throw std::logic_error("conversion unavailable"); }
   virtual std::uint32_t create_partition(const volume::PartitionCandidate&,
       const std::function<bool(const volume::PartitionCandidate&)>&) {
     throw std::logic_error("partition creation unavailable");
@@ -492,6 +496,7 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void clear_operation_history() noexcept = 0;
   virtual void set_creation_feedback(CreationFeedback) {}
   virtual void set_creation_cancellation(CreationCancellation) {}
+  virtual void set_creation_revocation(CreationCancellation) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
   virtual bool force_unmount_enabled() { return false; }
   virtual bool auto_mount_enabled() { return false; }
@@ -535,6 +540,9 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void consume_authenticated_login(
       security::SecureBuffer root_secret,
       security::SecureBuffer login_password_utf8) override;
+  bool begin_partition_conversion(const volume::PartitionCandidate& target,
+      const std::function<bool(const volume::PartitionCandidate&)>& confirm) override;
+  bool resume_partition_conversion(std::uint32_t id) override;
   std::uint32_t create_partition(const volume::PartitionCandidate& target,
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) override;
   void create_container_a(std::uint64_t size_bytes) override;
@@ -613,6 +621,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void clear_operation_history() noexcept override;
   void set_creation_feedback(CreationFeedback feedback) override;
   void set_creation_cancellation(CreationCancellation cancelled) override;
+  void set_creation_revocation(CreationCancellation revoked) override;
   [[nodiscard]] bool operation_logging_enabled() override;
   bool force_unmount_enabled() override;
   void set_force_unmount_enabled(bool enabled) override;

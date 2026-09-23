@@ -324,6 +324,38 @@ void test_new_paths_go_first_without_changing_existing_relative_order() {
   expect(file == before, "reimporting a known path changed its order");
 }
 
+void test_partition_conversion_states() {
+  using namespace usb_vault::application;
+  const auto key=derive_shared_container_index_key_v1(test_root(0x71));
+  ContainerIndexPartition partition; partition.device_id.fill(0x31); partition.offset_bytes=1048576; partition.length_bytes=64*1024*1024;
+  auto file=fresh_file();
+  expect(add_container_index_partition(key.bytes(),file,partition,PartitionConversionState::uncertain)==ContainerIndexWriteV1::added,"conversion insertion failed");
+  expect(add_container_index_path_v1(key.bytes(),file,L"D:\\other.hc")==ContainerIndexWriteV1::added,"mixed file insertion failed");
+  for(auto state:{PartitionConversionState::paused,PartitionConversionState::uncertain,PartitionConversionState::normal}) {
+    const auto before=file;
+    expect(set_container_index_partition_state(key.bytes(),file,partition,state),"state update failed");
+    const auto entries=list_container_index_partition_entries(key.bytes(),file);
+    expect(entries.size()==1 && entries[0].conversion==state,"state did not survive re-read");
+    for(std::size_t i=0;i<kContainerIndexV1SlotCount;++i) {
+      const auto old=try_open_container_index_entry(key.bytes(),container_index_v1_slot(before,i));
+      if(!old || !old->partition)expect(std::ranges::equal(container_index_v1_slot(before,i),container_index_v1_slot(file,i)),"unrelated slot changed");
+    }
+  }
+  const auto before=file;
+  expect_invalid_argument([&]{static_cast<void>(set_container_index_partition_state(key.bytes(),file,partition,static_cast<PartitionConversionState>(3)));},"unknown conversion state sealed");
+  expect(file==before,"invalid state changed index");
+  const auto sealed=seal_container_index_partition(key.bytes(),partition,{},PartitionConversionState::paused);
+  for(std::size_t i=0;i<sealed.size();++i) {
+    std::vector<std::byte> corrupt(sealed.bytes().begin(),sealed.bytes().end()); corrupt[i]^=std::byte{1};
+    expect(!try_open_container_index_entry(key.bytes(),corrupt),"conversion slot tampering accepted");
+  }
+  std::ranges::copy(sealed.bytes(),container_index_v1_mutable_slot(file,0).begin());
+  std::ranges::copy(sealed.bytes(),container_index_v1_mutable_slot(file,1).begin());
+  const auto duplicate=file;
+  expect_invalid_argument([&]{static_cast<void>(set_container_index_partition_state(key.bytes(),file,partition,PartitionConversionState::normal));},"duplicate conversion identity accepted");
+  expect(file==duplicate,"ambiguous update changed index");
+}
+
 void test_mixed_partition_and_file_index_preserves_both_kinds() {
   using namespace usb_vault::application;
   const auto key = derive_shared_container_index_key_v1(test_root(0x41));
@@ -389,6 +421,7 @@ void test_mixed_partition_and_file_index_preserves_both_kinds() {
 } // namespace
 
 int main() {
+  test_partition_conversion_states();
   test_mixed_partition_and_file_index_preserves_both_kinds();
   test_order_survives_reload_and_preserves_unselected_and_opaque_slots();
   test_new_paths_go_first_without_changing_existing_relative_order();

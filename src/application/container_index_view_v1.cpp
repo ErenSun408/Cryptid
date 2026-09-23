@@ -291,6 +291,29 @@ ContainerIndexWriteV1 prepend_container_index_path_v1(
   return ContainerIndexWriteV1::added;
 }
 
+std::vector<ContainerIndexEntry> list_container_index_partition_entries(
+    const std::span<const std::byte> key, const std::span<const std::byte> file) {
+  std::vector<ContainerIndexEntry> result;
+  for (const auto& located : ordered_entries(key,file)) if (located.entry.partition) result.push_back(located.entry);
+  return result;
+}
+bool set_container_index_partition_state(const std::span<const std::byte> key,
+    const std::span<std::byte> file, const ContainerIndexPartition& partition, PartitionConversionState state) {
+  std::optional<std::size_t> found;
+  std::optional<std::uint32_t> order;
+  for (std::size_t i=0;i<kContainerIndexV1SlotCount;++i) {
+    const auto entry=try_open_container_index_entry(key,container_index_v1_slot(file,i));
+    if (entry && entry->partition==partition) {
+      if (found) throw std::invalid_argument("ambiguous partition record");
+      found=i; order=entry->order;
+    }
+  }
+  if (!found) return false;
+  const auto sealed=seal_container_index_partition(key,partition,order,state);
+  std::ranges::copy(sealed.bytes(),container_index_v1_mutable_slot(file,*found).begin());
+  return true;
+}
+
 std::vector<ContainerIndexPartition> list_container_index_partitions(
     const std::span<const std::byte> key, const std::span<const std::byte> file) {
   std::vector<ContainerIndexPartition> result;
@@ -301,9 +324,9 @@ std::vector<ContainerIndexPartition> list_container_index_partitions(
 
 ContainerIndexWriteV1 add_container_index_partition(
     const std::span<const std::byte> key, const std::span<std::byte> file,
-    const ContainerIndexPartition& partition) {
+    const ContainerIndexPartition& partition, const PartitionConversionState state) {
   // Validate even if the file is full; do not mutate until all crypto succeeds.
-  const auto sealed = seal_container_index_partition(key, partition);
+  const auto sealed = seal_container_index_partition(key, partition, std::nullopt, state);
   std::vector<std::size_t> free_slots;
   for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
     const auto entry = try_open_container_index_entry(key, container_index_v1_slot(file, index));

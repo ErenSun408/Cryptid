@@ -545,6 +545,15 @@ class PartitionSessionRuntime final : public usb_vault::application::detail::Car
     require(L"\\Device\\Harddisk" + std::to_wstring(target.disk_number) + L"\\Partition" + std::to_wstring(target.partition_number) == disk_.target(), "session attempted foreign format");
     creator_.format_partition(target, password, confirm, {}, cancelled);
   }
+  bool convert_partition(const usb_vault::volume::PartitionCandidate& target, bool begin, const Secret& password,
+      const std::function<bool()>& confirm, const usb_vault::application::CreationCancellation& revoked,
+      const usb_vault::application::CreationCancellation& pause) override {
+    disk_.verify();
+    require(L"\\Device\\Harddisk"+std::to_wstring(target.disk_number)+L"\\Partition"+std::to_wstring(target.partition_number)==disk_.target(),"foreign conversion target");
+    return creator_.convert_partition(target,begin,password,confirm,[&](const auto& p){
+      if(creation_feedback && p.stage==usb_vault::volume_creation::CreationStage::formatting)creation_feedback(3,p.percent,0);
+    },revoked,pause);
+  }
   usb_vault::volume::MountResult mount_partition(const usb_vault::volume::PartitionIdentity& identity, const Secret& password, const usb_vault::volume::MountOptions& options) override {
     const auto location = usb_vault::volume::resolve_partition_location(identity, usb_vault::volume::enumerate_partition_locations());
     require(location && L"\\Device\\Harddisk" + std::to_wstring(location->disk_number) + L"\\Partition" + std::to_wstring(location->partition_number) == disk_.target(), "session attempted foreign mount");
@@ -644,6 +653,56 @@ void session_roundtrip(OwnedDisk& disk) {
   root.clear();
   require(::DeleteFileW(disk.container_path().replace_extension(L".index").c_str()), "session index cleanup failed");
   std::cout << "PASS: synthetic authenticated session, real KDF/index/helper/driver, file manager, alternate login remount/readback and card-removal cleanup" << std::endl;
+}
+
+void inplace_session_roundtrip(OwnedDisk& disk) {
+  using namespace usb_vault;
+  const auto candidate=disk.prepare_ntfs();
+  const std::wstring original=candidate.volume_path+L"original.bin";
+  std::vector<std::byte> expected(1024*1024+317);
+  for(std::size_t i=0;i<expected.size();++i)expected[i]=std::byte((i+i/509)%251);
+  {
+    Handle file(::CreateFileW(original.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,0,nullptr)); DWORD done{};
+    require(file.get()!=INVALID_HANDLE_VALUE && ::WriteFile(file.get(),expected.data(),static_cast<DWORD>(expected.size()),&done,nullptr) && done==expected.size() && ::FlushFileBuffers(file.get()),"write original session file");
+  }
+  security::SecureBuffer root(32);
+  require(::BCryptGenRandom(nullptr,reinterpret_cast<PUCHAR>(root.data()),32,BCRYPT_USE_SYSTEM_PREFERRED_RNG)==0,"generate fixture card root");
+  application::ContainerLayout layout; layout.container_a.salt=application::kContainerASalt; layout.container_b.salt=application::kContainerBSalt;
+  for(int phase=0;phase<2;++phase) {
+    application::CardAuthenticationSession auth; PartitionSessionRuntime runtime(disk);
+    application::detail::CardLoginMountSessionCore session(auth,runtime,layout,application::LoginMountPolicy::manual);
+    security::SecureBuffer fresh(root.size());std::copy(root.bytes().begin(),root.bytes().end(),fresh.bytes().begin());
+    security::SecureBuffer input(16);std::fill(input.bytes().begin(),input.bytes().end(),phase ? std::byte{'b'} : std::byte{'a'});
+    session.consume_authenticated_login(std::move(fresh),std::move(input));
+    bool pause=false;runtime.creation_cancelled=[&]{return pause;};runtime.creation_revoked=[]{return false;};
+    runtime.creation_feedback=[&](unsigned stage,unsigned percent,wchar_t){if(!phase && stage==3 && percent>=2)pause=true;};
+    try {
+      if(!phase) {
+        require(session.begin_partition_conversion(candidate,[&](const auto& target){return target==candidate;}),"session normal pause failed");
+        const auto row=session.container_statuses().at(0);
+        require(row.conversion_state==2 && !row.mounted,"session did not retain paused state");
+        bool refused=false;try{session.mount_adopted_container(row.id);}catch(const std::logic_error&){refused=true;}
+        require(refused,"session mounted unfinished conversion");
+        auth.clear_authentication();
+        std::cout << "PASS: real KDF/helper conversion paused, encrypted state persisted and partial mount blocked" << std::endl;
+      } else {
+        const auto row=session.container_statuses().at(0);
+        require(row.conversion_state==2 && !row.mounted,"reopened session lost pause permission");
+        require(!session.resume_partition_conversion(row.id),"session resume did not complete");
+        const auto ready=session.container_statuses().at(0);
+        require(ready.conversion_state==0 && ready.mounted,"session conversion did not become mountable");
+        {
+          const auto file=std::wstring(1,ready.drive_letter)+L":\\original.bin";
+          Handle input_file(::CreateFileW(file.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+          std::vector<std::byte> actual(expected.size());DWORD done{};
+          require(input_file.get()!=INVALID_HANDLE_VALUE && ::ReadFile(input_file.get(),actual.data(),static_cast<DWORD>(actual.size()),&done,nullptr) && done==actual.size() && actual==expected,"authenticated resumed file content mismatch");
+        }
+        auth.clear_authentication();static_cast<void>(session.force_unmount_active());require(!session.mounted(),"revocation retained completed mount");
+      }
+    } catch(...) {try{static_cast<void>(session.force_unmount_active());}catch(...){}throw;}
+  }
+  root.clear();require(::DeleteFileW(disk.container_path().replace_extension(L".index").c_str()),"remove fixture index");
+  std::cout << "PASS: reopened authenticated session, persisted pause permission, separate helper resume, original file readback and revocation cleanup" << std::endl;
 }
 
 void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool helper = false) {
@@ -748,7 +807,7 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-helper")) {
+  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-session")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -763,6 +822,7 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create();
+    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-session") { inplace_session_roundtrip(disk); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace") { inplace_roundtrip(disk,password); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-plan") { inplace_plan_probe(disk); disk.cleanup(); return 0; }

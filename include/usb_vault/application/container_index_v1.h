@@ -53,6 +53,7 @@ inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
 // number, discovery path, preformat filesystem serial, password or role is
 // persisted. A match locates a candidate; only authenticated mounting proves it.
 using ContainerIndexPartition = volume::PartitionIdentity;
+enum class PartitionConversionState : std::uint32_t { normal = 0, uncertain = 1, paused = 2 };
 [[nodiscard]] bool valid_container_index_partition(
     const ContainerIndexPartition& partition) noexcept;
 
@@ -60,7 +61,8 @@ using ContainerIndexPartition = volume::PartitionIdentity;
 // this metadata in a sidecar. Older applications cannot safely edit v3 indexes.
 [[nodiscard]] security::SecureBuffer seal_container_index_partition(
     std::span<const std::byte> key, const ContainerIndexPartition& partition,
-    std::optional<std::uint32_t> order = std::nullopt);
+    std::optional<std::uint32_t> order = std::nullopt,
+    PartitionConversionState conversion = PartitionConversionState::normal);
 
 // Version 2 adds an authenticated order at offset 524, inside the same sealed
 // slot. Version 1 remains readable and has no order. Physical slot placement
@@ -70,6 +72,7 @@ struct ContainerIndexEntry {
   std::optional<std::uint32_t> order;
   // v3: path is empty; v1/v2: partition is empty.
   std::optional<ContainerIndexPartition> partition;
+  PartitionConversionState conversion{PartitionConversionState::normal};
 };
 
 // Opens supported file and partition payloads; callers must inspect partition.
