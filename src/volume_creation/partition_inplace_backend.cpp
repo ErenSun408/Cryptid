@@ -31,7 +31,11 @@ volume::detail::InplaceControl PartitionInplaceBackend::control() {
 volume::detail::InplaceRange PartitionInplaceBackend::open_authenticated() {
   std::array<std::uint64_t,3> range{};
   checked(open_(target_,offset_,size_,reinterpret_cast<const unsigned char*>(password_.data()),64,
-      begin_ ? TRUE : FALSE,range.data(),sizeof(range)));
+      begin_ ? TRUE : FALSE,range.data(),sizeof(range),
+      [](void* context) -> BOOL {
+        try { return static_cast<PartitionInplaceBackend*>(context)->control_() != volume::detail::InplaceControl::revoked; }
+        catch (...) { return FALSE; }
+      },this));
   opened_=true; converted_=range[2];
   if (range[0]!=size_) throw std::runtime_error("in-place backend size mismatch");
   return {range[0],range[1],range[2]};

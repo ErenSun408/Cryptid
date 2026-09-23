@@ -17,4 +17,7 @@ struct PartitionWriteFacts final {
 // revalidate identity before modifying anything. No lock/dismount/write here.
 [[nodiscard]] bool check_partition_write_policy(
     HANDLE handle, const PartitionCandidate& expected) noexcept;
+// Structural RAW gate only: requires a paused encrypted record, backup-header
+// authentication and exclusive locking before writes. Never a format fallback.
+[[nodiscard]] bool check_partition_resume_policy(HANDLE handle, const PartitionLocation& expected) noexcept;
 }  // namespace usb_vault::volume::detail

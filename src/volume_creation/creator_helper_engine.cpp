@@ -1,3 +1,4 @@
+#include "volume_creation/partition_inplace_backend.h"
 #include "volume_creation/creator_helper_engine.h"
 #include "volume_creation/import_unique_name.h"
 #include "volume/partition_catalog_detail.h"
@@ -57,8 +58,9 @@ class Failure final : public std::system_error {
 // Only remove access paths of the consented, retained volume. Never change
 // the partition table or system-wide automount policy, and never restore an
 // access path after a potentially partial encrypted write.
-void remove_partition_access_paths(HANDLE handle, const volume::PartitionCandidate& expected) {
-  if (!volume::detail::matches_partition_handle_identity(handle, expected))
+void remove_partition_access_paths(HANDLE handle, const volume::PartitionCandidate& expected, const volume::PartitionLocation* location = nullptr) {
+  const auto matches = [&] { return location ? volume::detail::matches_partition_location_handle(handle,*location) : volume::detail::matches_partition_handle_identity(handle,expected); };
+  if (!matches())
     fail(CreationError::target_access_denied, "partition changed before access removal");
   std::vector<wchar_t> paths(32768);
   DWORD required{};
@@ -72,7 +74,7 @@ void remove_partition_access_paths(HANDLE handle, const volume::PartitionCandida
     wchar_t volume_name[64]{};
     if (!::GetVolumeNameForVolumeMountPointW(path.c_str(), volume_name, 64) ||
         ::CompareStringOrdinal(volume_name, -1, expected.volume_path.c_str(), -1, TRUE) != CSTR_EQUAL ||
-        !volume::detail::matches_partition_handle_identity(handle, expected) ||
+        !matches() ||
         !::DeleteVolumeMountPointW(path.c_str()))
       fail(CreationError::target_access_denied, "cannot remove verified partition access path");
     offset += path.size() + 1;
@@ -234,6 +236,29 @@ class FormatBackend final {
     }
   }
 
+  void require_inplace_exports() {
+    static_cast<void>(symbol<format_abi::InplaceOpen>("VeraCryptInplaceOpenBinary"));
+    static_cast<void>(symbol<format_abi::InplaceEncrypt>("VeraCryptInplaceEncrypt"));
+    static_cast<void>(symbol<format_abi::InplaceSave>("VeraCryptInplaceSave"));
+    static_cast<void>(symbol<format_abi::InplaceFinalize>("VeraCryptInplaceFinalize"));
+    static_cast<void>(symbol<format_abi::InplaceClose>("VeraCryptInplaceClose"));
+  }
+  bool convert_partition(HANDLE handle, const PartitionTarget& target, const security::SecureBuffer& password, bool begin) {
+    unsigned control = 0, reported = UINT_MAX;
+    PartitionInplaceBackend backend(module_.get(),handle,target.offset_bytes,target.length_bytes,password,begin,
+        [&] {
+          for (auto next=inplace_control_requested(pipe_,nonce_); next; next=inplace_control_requested(pipe_,nonce_))
+            control=(std::max)(control,next);
+          return control==2 ? volume::detail::InplaceControl::revoked : control==1 ? volume::detail::InplaceControl::pause : volume::detail::InplaceControl::proceed;
+        }, [&](const CreationProgress& p) {
+          if (p.percent!=reported) { reported=p.percent; write_response(pipe_,Response{.type=MessageType::progress,.stage=CreationStage::formatting,.percent=p.percent}); }
+        });
+    const auto result=volume::detail::run_partition_inplace(backend);
+    if (result==volume::detail::InplaceResult::paused) return true;
+    if (result==volume::detail::InplaceResult::completed) return false;
+    fail(result==volume::detail::InplaceResult::revoked || control==2 ? CreationError::operation_cancelled : CreationError::io_error,"partition conversion incomplete");
+  }
+
   void require_partition_export() {
     partition_binary_ = symbol<format_abi::FormatPartitionBinary>("VeraCryptFormatPartitionBinary");
   }
@@ -308,11 +333,11 @@ class FormatBackend final {
 };
 
 void validate_request(const Request& request) {
-  if (request.operation == Operation::check_partition || request.operation == Operation::format_partition) {
+  if (partition_operation(request.operation)) {
     if (!request.partition_target || !valid_partition_target(*request.partition_target) ||
         !valid_partition_path(request.target_path) || request.outer_size_bytes || request.hidden_size_bytes ||
         request.mounted_drive || request.mount_id ||
-        request.first_password.size() != (request.operation == Operation::format_partition ? 64u : 0u) || !request.second_password.empty() ||
+        request.first_password.size() != (request.operation != Operation::check_partition ? 64u : 0u) || !request.second_password.empty() ||
         !request.source_path.empty() || !request.destination_relative.empty())
       fail(CreationError::invalid_request, "invalid partition identity request");
     return;
@@ -991,7 +1016,7 @@ void serve_maintenance_session(HANDLE pipe, const std::array<std::byte, kNonceSi
 
 std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
-  if (request.operation == Operation::check_partition || request.operation == Operation::format_partition) {
+  if (partition_operation(request.operation)) {
     const auto& target = *request.partition_target;
     volume::PartitionCandidate expected{};
     expected.volume_path = request.target_path;
@@ -1005,34 +1030,45 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     expected.device_id = target.device_id;
     expected.device_id_flags = target.device_flags;
     expected.availability = volume::PartitionAvailability::candidate;
+    const bool resume = request.operation == Operation::resume_partition_inplace;
+    if (resume) {
+      const auto native=L"\\Device\\Harddisk"+std::to_wstring(target.disk_number)+L"\\Partition"+std::to_wstring(target.partition_number);
+      for(const auto& mounted: volume::VolumeProvider{}.mounted_volumes())
+        if (::CompareStringOrdinal(mounted.volume_path.c_str(),-1,native.c_str(),-1,TRUE)==CSTR_EQUAL)
+          fail(CreationError::target_access_denied,"resume target already mounted");
+    }
+    const bool converting = inplace_operation(request.operation);
+    const volume::PartitionLocation location{{target.device_id,target.device_flags,1,target.sector_bytes,target.offset_bytes,target.length_bytes},request.target_path,target.disk_number,target.partition_number};
     // Independent enumeration excludes the current Windows volume before any
     // target handle is opened. Passing enumeration alone grants no write authorization.
-    if (!volume::matches_partition_snapshot(expected, volume::enumerate_partition_candidates()))
+    if (resume ? volume::resolve_partition_location(location.identity,volume::enumerate_partition_locations()) != location : !volume::matches_partition_snapshot(expected, volume::enumerate_partition_candidates()))
       fail(CreationError::target_access_denied, "partition snapshot no longer matches");
     std::wstring path = request.target_path;
     path.pop_back(); // Only the validated volume GUID name reaches CreateFile.
-    const bool formatting = request.operation == Operation::format_partition;
+    const bool formatting = request.operation != Operation::check_partition;
     const Handle handle(::CreateFileW(path.c_str(), GENERIC_READ | (formatting ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING, 0, nullptr));
-    if (handle.get() == INVALID_HANDLE_VALUE || !volume::detail::matches_partition_handle_identity(handle.get(), expected))
+    if (handle.get() == INVALID_HANDLE_VALUE || (resume ? !volume::detail::matches_partition_location_handle(handle.get(),location) : !volume::detail::matches_partition_handle_identity(handle.get(), expected)))
       fail(CreationError::target_access_denied, "partition handle identity mismatch");
-    if (!volume::detail::check_partition_write_policy(handle.get(), expected))
+    const auto policy = [&] { return resume ? volume::detail::check_partition_resume_policy(handle.get(),location) : volume::detail::check_partition_write_policy(handle.get(),expected); };
+    if (!policy())
       fail(CreationError::target_access_denied, "partition write policy rejected");
     if (formatting) {
       FormatBackend backend(pipe, request.nonce);
-      backend.require_partition_export(); // Resolve before asking for destructive consent.
+      if (converting) backend.require_inplace_exports(); else backend.require_partition_export();
       write_response(pipe, Response{.type = MessageType::progress, .stage = CreationStage::partition_ready});
       if (!read_partition_confirmation(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition erase not confirmed");
       // Confirmation can take time. Re-run every policy gate on the retained
       // handle; the DLL then locks, rechecks geometry and formats that handle.
-      if (!volume::detail::check_partition_write_policy(handle.get(), expected))
+      if (!policy())
         fail(CreationError::target_access_denied, "partition changed after confirmation");
-      if (cancel_requested(pipe, request.nonce))
+      if (!converting && cancel_requested(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition format cancelled before write");
-      remove_partition_access_paths(handle.get(), expected);
-      if (cancel_requested(pipe, request.nonce))
+      remove_partition_access_paths(handle.get(), expected, resume ? &location : nullptr);
+      if (!converting && cancel_requested(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition cancelled after access removal");
+      if (converting) return backend.convert_partition(handle.get(),target,request.first_password, !resume) ? 1u : 0u;
       backend.format_partition(handle.get(), target, request.first_password);
     }
     return 0; // No target deletion, implicit retry or retained consent.

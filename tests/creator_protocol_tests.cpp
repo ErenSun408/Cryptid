@@ -75,11 +75,11 @@ void expect(const bool condition, const char* const message) {
   return result;
 }
 
-void test_partition_format_protocol() {
+void test_partition_format_protocol(Operation operation = Operation::format_partition) {
   const std::wstring path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
   PartitionTarget target{}; target.device_id[0] = 7; target.partition_number = 2;
   target.offset_bytes = 1048576; target.length_bytes = 256ULL * 1024 * 1024;
-  RequestHeader header{.operation = Operation::format_partition, .path_characters = 49,
+  RequestHeader header{.operation = operation, .path_characters = 49,
       .first_password_bytes = 64, .partition_target_bytes = sizeof(PartitionTarget)};
   header.nonce[0] = std::byte{0x91};
   SecureBuffer secret(64); secret.bytes()[63] = std::byte{0xff};
@@ -87,7 +87,7 @@ void test_partition_format_protocol() {
   auto wire = make_pipe();
   write_request(wire.write.get(), header, path, secret, empty, {}, {}, &target);
   const auto read = read_request(wire.read.get(), header.nonce);
-  expect(read.operation == Operation::format_partition && read.partition_target &&
+  expect(read.operation == operation && read.partition_target &&
       read.first_password.size() == 64 && read.first_password.bytes()[0] == std::byte{0} &&
       read.first_password.bytes()[63] == std::byte{0xff}, "binary partition format round trip");
   for (int field = 0; field < 10; ++field) {
@@ -190,10 +190,10 @@ void test_partition_check_protocol() {
 }
 
 void test_partition_helper_rejects_invalid_requests() {
-  for (auto operation : {Operation::check_partition, Operation::format_partition}) {
+  for (auto operation : {Operation::check_partition, Operation::format_partition, Operation::begin_partition_inplace, Operation::resume_partition_inplace}) {
     for (int field = 0; field < 8; ++field) {
       Request request{}; request.operation = operation;
-      if (operation == Operation::format_partition) request.first_password = SecureBuffer(64);
+      if (operation != Operation::check_partition) request.first_password = SecureBuffer(64);
       request.target_path = LR"(\\?\Volume{12345678-1234-1234-1234-123456789abc}\)";
       request.partition_target.emplace();
       request.partition_target->device_id[0] = 1;
@@ -248,6 +248,24 @@ void test_binary_password_round_trip() {
                      second.size()) == 0,
          "binary second password changed");
   expect(decoded.nonce == nonce, "the request nonce did not round-trip");
+}
+
+void test_inplace_controls() {
+  std::array<std::byte,kNonceSize> nonce{}; nonce[0]=std::byte{7};
+  auto pipe=make_pipe();
+  expect(inplace_control_requested(pipe.read.get(),nonce)==0,"empty in-place control");
+  write_pause_request(pipe.write.get(),nonce);
+  write_cancel_request(pipe.write.get(),nonce);
+  expect(inplace_control_requested(pipe.read.get(),nonce)==1,"pause not distinct");
+  expect(inplace_control_requested(pipe.read.get(),nonce)==2,"revoke lost after pause");
+  expect(inplace_control_requested(pipe.read.get(),nonce)==0,"control replay");
+  for (bool wrong_nonce : {false,true}) {
+    auto bad=make_pipe(); write_pause_request(bad.write.get(),nonce); bool rejected=false;
+    try { if (wrong_nonce) static_cast<void>(inplace_control_requested(bad.read.get(),{}));
+          else static_cast<void>(cancel_requested(bad.read.get(),nonce)); }
+    catch (const std::system_error&) { rejected=true; }
+    expect(rejected,"pause accepted by wrong operation or nonce");
+  }
 }
 
 void test_cancel_request_round_trip() {
@@ -693,6 +711,9 @@ void test_pipe_dacl_names_system_and_token_user_explicitly() {
 int main() {
   try {
     test_partition_format_protocol();
+    test_partition_format_protocol(Operation::begin_partition_inplace);
+    test_partition_format_protocol(Operation::resume_partition_inplace);
+    test_inplace_controls();
     test_partition_check_protocol();
     test_partition_helper_rejects_invalid_requests();
     test_binary_password_round_trip();

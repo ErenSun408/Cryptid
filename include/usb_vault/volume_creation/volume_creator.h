@@ -85,6 +85,13 @@ class VolumeCreator final {
                         const ProgressCallback& progress = {},
                         const CancellationQuery& cancelled = {}) const;
 
+  // Returns true only after a normal pause checkpoint was flushed; false means complete.
+  // Resume requires the caller's authenticated paused record and a freshly resolved target.
+  [[nodiscard]] bool convert_partition(const volume::PartitionCandidate& target, bool begin,
+      const security::SecureBuffer& password, const std::function<bool()>& confirm,
+      const ProgressCallback& progress, const CancellationQuery& revoked,
+      const CancellationQuery& pause) const;
+
   void create_standard(std::wstring_view target_path,
                        std::uint64_t size_bytes,
                        const security::SecureBuffer& volume_password,

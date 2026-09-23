@@ -276,9 +276,11 @@ class Handle final {
     const ProgressCallback& progress,
     const CancellationQuery& cancelled,
     const detail::PartitionTarget* partition_target = nullptr,
-    const std::function<bool()>& confirm_erase = {}) {
+    const std::function<bool()>& confirm_erase = {},
+    const CancellationQuery& pause = {}) {
   const bool checking_partition = operation == detail::Operation::check_partition;
-  const bool formatting_partition = operation == detail::Operation::format_partition;
+  const bool converting = detail::inplace_operation(operation);
+  const bool formatting_partition = operation == detail::Operation::format_partition || converting;
   const bool partition_operation = checking_partition || formatting_partition;
   const bool measuring = operation == detail::Operation::scan_tail_space;
   // A measurement names a volume root, which is not a container path and does
@@ -331,6 +333,7 @@ class Handle final {
   detail::write_request(pipe.get(), header, normalized_path, first_password,
                         second_password, {}, {}, partition_target);
 
+  bool pause_sent = false;
   bool cancel_sent = false;
   bool partition_confirmed = false;
   bool partition_challenged = false;
@@ -346,13 +349,16 @@ class Handle final {
           detail::write_cancel_request(pipe.get(), nonce);
           cancel_sent = true;
         }
+        if (converting && !cancel_sent && !pause_sent && pause && pause()) {
+          detail::write_pause_request(pipe.get(), nonce); pause_sent = true;
+        }
         if (available >= sizeof(detail::Response)) break;
         ::Sleep(10);
       }
     }
     const detail::Response response = detail::read_response(pipe.get());
     if (formatting_partition) {
-      if (response.value != 0) throw_creation(CreationError::protocol_error, "unexpected partition result");
+      if (response.value > (converting ? 1u : 0u)) throw_creation(CreationError::protocol_error, "unexpected partition result");
       if (response.type == detail::MessageType::progress && response.stage == CreationStage::partition_ready) {
         if (partition_challenged || response.percent != 0)
           throw_creation(CreationError::protocol_error, "repeated partition confirmation");
@@ -688,6 +694,20 @@ void VolumeCreator::format_partition(const volume::PartitionCandidate& candidate
       .length_bytes = candidate.length_bytes};
   static_cast<void>(invoke(helper_path_, detail::Operation::format_partition, candidate.volume_path,
       0, 0, password, security::SecureBuffer{}, progress, cancelled, &target, confirm_erase));
+}
+
+bool VolumeCreator::convert_partition(const volume::PartitionCandidate& candidate, bool begin,
+    const security::SecureBuffer& password, const std::function<bool()>& confirm,
+    const ProgressCallback& progress, const CancellationQuery& revoked, const CancellationQuery& pause) const {
+  if (!revoked || !pause || candidate.layout != volume::PartitionLayout::mbr ||
+      (begin && !volume::matches_partition_snapshot(candidate, {&candidate,1})))
+    throw std::invalid_argument("invalid in-place target or controls");
+  const detail::PartitionTarget target{.device_id=candidate.device_id,.device_flags=candidate.device_id_flags,
+      .disk_number=candidate.disk_number,.partition_number=candidate.partition_number,
+      .sector_bytes=candidate.logical_sector_bytes,.layout=1,.filesystem_serial=candidate.filesystem_serial,
+      .offset_bytes=candidate.offset_bytes,.length_bytes=candidate.length_bytes};
+  return invoke(helper_path_, begin ? detail::Operation::begin_partition_inplace : detail::Operation::resume_partition_inplace,
+      candidate.volume_path,0,0,password,security::SecureBuffer{},progress,revoked,&target,confirm,pause)==1;
 }
 
 void VolumeCreator::create_standard(

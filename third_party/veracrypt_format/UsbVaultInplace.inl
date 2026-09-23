@@ -48,10 +48,10 @@ bool UvIpHeaderWrite(UvIpState& s, uint64_t offset, uint64_t start, uint64_t len
 }
 }
 extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_t offset, uint64_t size,
-    const unsigned char* password, uint32_t passwordBytes, BOOL begin, uint64_t* range, uint32_t rangeBytes) {
+    const unsigned char* password, uint32_t passwordBytes, BOOL begin, uint64_t* range, uint32_t rangeBytes, BOOL (CALLBACK *allowed)(void*), void* context) {
     if (range && rangeBytes == 3*sizeof(uint64_t)) memset(range, 0, rangeBytes);
     if (!target || target == INVALID_HANDLE_VALUE || !password || passwordBytes != 64 || !range ||
-        rangeBytes != 3*sizeof(uint64_t) || (begin != TRUE && begin != FALSE) ||
+        rangeBytes != 3*sizeof(uint64_t) || !allowed || (begin != TRUE && begin != FALSE) ||
         !UvIpRange(size, size >= UvIpHeader ? size-UvIpHeader : 0, 0) || !offset || offset%512 || offset > INT64_MAX-size)
         return VCF_ERROR_INVALID_PARAMETER;
     try {
@@ -63,6 +63,7 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_
         memcpy(s->secret.value->Text,password,64); s->secret.value->Length=64;
         if (!DuplicateHandle(GetCurrentProcess(),target,GetCurrentProcess(),&s->disk.value,0,FALSE,DUPLICATE_SAME_ACCESS) ||
             !UsbVaultPartitionMatches(s->disk.value,offset,size)) return VCF_ERROR_INVALID_PARAMETER;
+        if (!allowed(context)) return VCF_ERROR_USER_ABORT;
         DWORD returned=0;
         unsigned char boot[512] = {};
         if (begin) {
@@ -75,6 +76,7 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_
                 static_cast<uint64_t>(n.FreeClusters.QuadPart)<2*UvIpHeader/n.BytesPerCluster)
                 return VCF_ERROR_INVALID_PARAMETER;
             if (!DeviceIoControl(s->disk.value,FSCTL_ALLOW_EXTENDED_DASD_IO,NULL,0,NULL,0,&returned,NULL)) return VCF_ERROR_OS_ERROR;
+            if (!allowed(context)) return VCF_ERROR_USER_ABORT;
             SHRINK_VOLUME_INFORMATION shrink = {};
             shrink.ShrinkRequestType=ShrinkPrepare;
             shrink.NewNumberOfSectors=n.NumberSectors.QuadPart-2*UvIpHeader/512;
@@ -90,6 +92,7 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_
                 static_cast<uint64_t>(n.NumberSectors.QuadPart)>targetSectors || !UvIpIo(s->disk.value,0,boot,512,false) ||
                 memcmp(boot+3,"NTFS    ",8)!=0) return VCF_ERROR_OS_ERROR;
         }
+        if (!allowed(context)) return VCF_ERROR_USER_ABORT;
         if (!DeviceIoControl(s->disk.value,FSCTL_LOCK_VOLUME,NULL,0,NULL,0,&returned,NULL)) return VCF_ERROR_ACCESS_DENIED;
         s->disk.locked=true;
         if (begin) {
@@ -98,9 +101,22 @@ extern "C" VCF_API int __cdecl VeraCryptInplaceOpenBinary(HANDLE target, uint64_
         }
         if (!DeviceIoControl(s->disk.value,FSCTL_DISMOUNT_VOLUME,NULL,0,NULL,0,&returned,NULL) ||
             !UsbVaultPartitionMatches(s->disk.value,offset,size)) return VCF_ERROR_OS_ERROR;
+        if (!begin) {
+            // A paused operation retains the concealed NTFS boot sector until
+            // finalization. Reject BitLocker, ordinary RAW and finalized volumes
+            // even if an old in-place backup header happens to remain at the tail.
+            unsigned char pausedBoot[512] = {};
+            if (!UvIpIo(s->disk.value,0,pausedBoot,512,false)) return VCF_ERROR_OS_ERROR;
+            for (unsigned i=0;i<512;++i) pausedBoot[i]^=0xff;
+            uint64_t sectors=0; memcpy(&sectors,pausedBoot+40,sizeof(sectors));
+            if (memcmp(pausedBoot+3,"NTFS    ",8) || pausedBoot[11]!=0 || pausedBoot[12]!=2 ||
+                pausedBoot[510]!=0x55 || pausedBoot[511]!=0xaa || !sectors || sectors>(size-2*UvIpHeader)/512)
+                return VCF_ERROR_INVALID_PARAMETER;
+        }
         UsbVaultLockedHeaders headers;
         if (!headers.states) return VCF_ERROR_OUT_OF_MEMORY;
         auto& h=headers.states[0];
+        if (!allowed(context)) return VCF_ERROR_USER_ABORT;
         if (begin) {
             RandSetHashFunction(SHA512);
             if (!UvIpHeaderWrite(*s,size-UvIpHeader,size-UvIpHeader,0) ||

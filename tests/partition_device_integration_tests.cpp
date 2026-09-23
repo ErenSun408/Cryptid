@@ -646,7 +646,7 @@ void session_roundtrip(OwnedDisk& disk) {
   std::cout << "PASS: synthetic authenticated session, real KDF/index/helper/driver, file manager, alternate login remount/readback and card-removal cleanup" << std::endl;
 }
 
-void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password) {
+void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& password, bool helper = false) {
   using namespace usb_vault;
   const auto candidate=disk.prepare_ntfs();
   const auto original=candidate.volume_path+L"preserved.bin";
@@ -659,6 +659,16 @@ void inplace_roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer&
   }
   const auto run=[&](bool begin,bool pause,const security::SecureBuffer& secret) {
     disk.verify();
+    if (helper) {
+      unsigned percent=0;
+      volume_creation::VolumeCreator creator(executable_directory()/L"usb_vault_volume_creator.exe");
+      try {
+        const bool paused=creator.convert_partition(candidate,begin,secret,[]{return true;},
+            [&](const volume_creation::CreationProgress& p){if(p.stage==volume_creation::CreationStage::formatting)percent=p.percent;},
+            []{return false;},[&]{return pause && percent>=2;});
+        return paused ? volume::detail::InplaceResult::paused : volume::detail::InplaceResult::completed;
+      } catch (const std::exception& e) { if (&secret==&password) std::cerr << "conversion helper: " << e.what() << std::endl; return volume::detail::InplaceResult::failed; }
+    }
     auto path=candidate.volume_path; path.pop_back();
     Handle raw(::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,0,nullptr));
     require(raw.get()!=INVALID_HANDLE_VALUE,"open conversion fixture");
@@ -738,7 +748,7 @@ void roundtrip(OwnedDisk& disk, const usb_vault::security::SecureBuffer& passwor
 }
 }
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace")) {
+  if (argc != 2 || (std::wstring_view(argv[1]) != L"--run-owned-vhd" && std::wstring_view(argv[1]) != L"--run-owned-vhd-handle" && std::wstring_view(argv[1]) != L"--run-owned-vhd-helper" && std::wstring_view(argv[1]) != L"--run-owned-vhd-session" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-plan" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace" && std::wstring_view(argv[1]) != L"--run-owned-vhd-inplace-helper")) {
     std::cout << "SKIP: explicit --run-owned-vhd required; no existing disk arguments accepted\n"; return 77;
   }
   try {
@@ -753,6 +763,7 @@ int wmain(int argc, wchar_t** argv) {
       OwnedDisk cancelled; cancelled.create(); backend.format(cancelled, password, true, true); cancelled.cleanup();
     }
     OwnedDisk disk; disk.create();
+    if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-helper") { inplace_roundtrip(disk,password,true); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace") { inplace_roundtrip(disk,password); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-inplace-plan") { inplace_plan_probe(disk); disk.cleanup(); return 0; }
     if (std::wstring_view(argv[1]) == L"--run-owned-vhd-session") { session_roundtrip(disk); disk.cleanup(); return 0; }

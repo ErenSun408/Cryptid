@@ -39,8 +39,9 @@ struct Options final {
 using FormatPartitionBinary = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
     const unsigned char*, std::uint32_t, ProgressCallback, void*);
 
+using InplaceContinue = BOOL(CALLBACK*)(void*);
 using InplaceOpen = int(__cdecl*)(HANDLE, std::uint64_t, std::uint64_t,
-    const unsigned char*, std::uint32_t, BOOL, std::uint64_t*, std::uint32_t);
+    const unsigned char*, std::uint32_t, BOOL, std::uint64_t*, std::uint32_t, InplaceContinue, void*);
 using InplaceEncrypt = int(__cdecl*)(std::uint64_t, unsigned char*, std::uint32_t);
 using InplaceSave = int(__cdecl*)(std::uint64_t, std::uint64_t);
 using InplaceFinalize = int(__cdecl*)();

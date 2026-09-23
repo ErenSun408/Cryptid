@@ -155,4 +155,22 @@ bool check_partition_write_policy(HANDLE handle, const PartitionCandidate& expec
         matches_partition_snapshot(expected, enumerate_partition_candidates());
   } catch (...) { return false; }
 }
+bool check_partition_resume_policy(HANDLE handle, const PartitionLocation& expected) noexcept {
+  try {
+    if (!matches_partition_location_handle(handle, expected)) return false;
+    const auto before=resolve_partition_location(expected.identity,enumerate_partition_locations());
+    if (!before || *before!=expected) return false;
+    // A paused volume deliberately has no usable NTFS filesystem. WMI exposes
+    // null filesystem-derived flags here, so the initial NTFS write gate cannot
+    // establish a resume permit. Require RAW plus the structural exclusions;
+    // the writer must ALSO authenticate the in-place backup header under the
+    // current card key, require a durably paused record and take an exclusive
+    // lock. This function alone is never authorization for arbitrary RAW writes.
+    wchar_t filesystem[32]{};
+    if (!::GetVolumeInformationByHandleW(handle,nullptr,0,nullptr,nullptr,nullptr,filesystem,32) ||
+        ::CompareStringOrdinal(filesystem,-1,L"RAW",-1,TRUE)!=CSTR_EQUAL) return false;
+    const auto after=resolve_partition_location(expected.identity,enumerate_partition_locations());
+    return after && *after==expected && matches_partition_location_handle(handle,expected);
+  } catch (...) { return false; }
+}
 }  // namespace usb_vault::volume::detail

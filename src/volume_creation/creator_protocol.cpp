@@ -21,7 +21,7 @@ namespace {
 }
 
 [[nodiscard]] bool valid_operation(const Operation operation) noexcept {
-  return operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
+  return inplace_operation(operation) || operation == Operation::format_partition || operation == Operation::check_partition || operation == Operation::create_standard ||
          operation == Operation::create_with_hidden ||
          operation == Operation::scan_tail_space ||
          operation == Operation::scan_protected_space || operation == Operation::scan_maintenance_space || operation == Operation::import_protected_file;
@@ -68,9 +68,9 @@ bool valid_request_header(const RequestHeader& header) noexcept {
     return false;
   }
 
-  if (header.operation == Operation::check_partition || header.operation == Operation::format_partition) {
+  if (partition_operation(header.operation)) {
     return header.partition_target_bytes == sizeof(PartitionTarget) && header.path_characters == 49 &&
-        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == (header.operation == Operation::format_partition ? 64u : 0u) &&
+        header.outer_size_bytes == 0 && header.hidden_size_bytes == 0 && header.first_password_bytes == (header.operation != Operation::check_partition ? 64u : 0u) &&
         header.second_password_bytes == 0 && header.mounted_drive == 0 && header.mount_id == 0 &&
         header.source_characters == 0 && header.destination_characters == 0;
   }
@@ -178,7 +178,7 @@ void write_request(const HANDLE pipe, const RequestHeader& header,
       second_password.size() != header.second_password_bytes) {
     throw std::invalid_argument("invalid volume-creation request");
   }
-  if ((header.operation == Operation::check_partition || header.operation == Operation::format_partition) != (partition_target != nullptr) ||
+  if ((partition_operation(header.operation)) != (partition_target != nullptr) ||
       (partition_target && (!valid_partition_target(*partition_target) || !valid_partition_path(target_path))))
     throw std::invalid_argument("invalid partition check request");
   write_exact(pipe, &header, sizeof(header));
@@ -237,7 +237,7 @@ Request read_request(
   if (request.source_path.find(L'\0') != std::wstring::npos || request.destination_relative.find(L'\0') != std::wstring::npos || request.target_path.find(L'\0') != std::wstring::npos) {
     throw_protocol_error("target path contains an embedded NUL");
   }
-  if ((request.operation == Operation::check_partition || request.operation == Operation::format_partition) && !valid_partition_path(request.target_path))
+  if ((partition_operation(request.operation)) && !valid_partition_path(request.target_path))
     throw_protocol_error("invalid partition volume name");
   return request;
 }
@@ -296,6 +296,21 @@ void write_cancel_request(const HANDLE pipe,
   CancelRequest request{};
   request.nonce = nonce;
   write_exact(pipe, &request, sizeof(request));
+}
+
+void write_pause_request(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce) {
+  CancelRequest request{.magic = 0x32504355U, .nonce = nonce};
+  write_exact(pipe, &request, sizeof(request));
+}
+unsigned inplace_control_requested(HANDLE pipe, const std::array<std::byte, kNonceSize>& nonce) {
+  DWORD available{};
+  if (!::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) throw_last_error("in-place control pipe");
+  if (available < sizeof(CancelRequest)) return 0;
+  CancelRequest request{}; read_exact(pipe, &request, sizeof(request));
+  const bool pause = request.magic == 0x32504355U;
+  if (pause) request.magic = kProtocolMagic;
+  if (!valid_cancel_request(request, nonce)) throw_protocol_error("invalid in-place control request");
+  return pause ? 1u : 2u;
 }
 
 bool cancel_requested(
