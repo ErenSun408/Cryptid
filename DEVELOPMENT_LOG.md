@@ -3836,3 +3836,15 @@
 - 验证限制：未做实体分区反复挂卸实测，未复现 Windows 侧改派盘符的具体成因；tests/partition_device_integration_tests.cpp 的自建 VHD 循环复现需管理员权限，本次未执行。
 - 安全与风险：不放宽身份复验、清空确认或 BitLocker 门禁，无新增持久化。残留风险两项：驱动查询失败时挂载被拒但卷仍在，会话没有盘符可供释放；allocate_drive_letter 现会因驱动不可用而提前抛出。页面兜底文案与 E_FAIL 的拆分留作下一片。
 - 提交：实现与测试完成待用户审阅，未提交、未推送。
+
+
+### 2026-09-23 — fix / 目录读取失败按原因分开报告
+- 范围与审计：接上一片，用户要求拆掉页面那句覆盖所有失败的兜底文案，以及 invoke_list_container_directory 的 catch (...) 一律 E_FAIL。只改失败报告，不改列目录本身的行为与越卷防护。
+- 检查与实现：宿主对象按异常类型区分未挂载、容器不在会话、卷不可达、目录不存在、权限、IO、内容被拒和未知八类，存入 directory_error_，新增 DISPID 120 与 getDirectoryError 供页面读取；成功列目录会清零。
+- 检查与实现：not_found 不再直接归咎于文件夹——先用容器当前盘符探一次卷根，卷根不答则报卷不可达。access_denied 只认 Win32 ERROR_ACCESS_DENIED，不用 std::errc 比较，因为通用映射会把写保护等无关情况折进 permission_denied。
+- 检查与实现：页面按原因查表给出对应中文提示，读取失败时退回"原因无法确定"，不再声称文件可能已不在容器里。查询失败原因不清空重试结果。
+- 验证：宿主对象新增 8 项分类用例（含成功列目录不留失败痕迹）通过；页面契约新增两条断言，要求文案取自桥的原因且全文不再出现旧兜底句。card_product_webview_host_object、card_product_ui_page_contract、card_product_ui_session_controller、card_login_mount_session、mount_orchestrator CTest 5/5 通过；navigation DOM 307 项通过；exit／login-reset／startup 三组 DOM 通过。
+- 验证：上一片的盘符修复补做实机验证——管理员权限下 partition_device_integration_tests 的 --run-owned-vhd-session 与 --run-owned-vhd-handle 均通过，并新增断言要求真实驱动对分区和文件容器都回报请求的盘符，证明回读匹配在真实驱动上成立。
+- 已知问题：bitlocker、partition、partition-creation、partition-conversion 四组 DOM 在 HEAD（7f54e65 之前）即已失败，与本片无关，已用 stash 对照确认，尚未定位。
+- 安全与风险：新增原因码只描述失败类别，不暴露路径、盘符或容器内容；卷根探测只读属性。未做实机人工界面走查。
+- 提交：本片实现与测试待用户审阅，未提交、未推送。

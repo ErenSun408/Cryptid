@@ -2574,6 +2574,31 @@
     renderBackupCentre();
   };
 
+  // One message for every failure told the user their files were gone whenever
+  // anything went wrong. These are the cases a person can act on differently;
+  // none of them claims the contents are missing unless the volume itself
+  // answered and the folder was the part that was not there.
+  const directoryFailureMessages = {
+    1: "这个容器当前没有挂载，请先挂载再浏览。",
+    2: "这个容器已不在当前会话，请刷新列表后重试。",
+    3: "读不到这个容器的磁盘。它可能已被卸载或断开，请重新挂载后再试。",
+    4: "这个文件夹已经不在了，可能已被删除或移动。已返回容器根目录。",
+    5: "没有读取这个文件夹的权限。",
+    6: "读取磁盘时出错，请检查存储设备的连接及可用状态。",
+    7: "这个文件夹的内容无法安全显示，已拒绝读取。",
+  };
+  const kDirectoryFailureUnknown =
+    "暂时读不到这个文件夹，原因无法确定。请确认容器仍处于挂载状态后重试。";
+  const readDirectoryFailure = async () => {
+    try {
+      const reason = await bridge.getDirectoryError();
+      if (Number.isInteger(reason) && directoryFailureMessages[reason]) {
+        return directoryFailureMessages[reason];
+      }
+    } catch (_) {}
+    return kDirectoryFailureUnknown;
+  };
+
   const refreshFileManager = async () => {
     const revision = ++fileListingRevision;
     fileRefreshPendingRevision = revision;
@@ -2608,7 +2633,7 @@
       fileEntries = [];
       filePath = [];
       renderFileBreadcrumb();
-      setFileStatus("无法读取这个文件夹，它可能已经不在这个容器里了。", "error");
+      setFileStatus(await readDirectoryFailure(), "error");
     } finally {
       if (fileRefreshPendingRevision === revision) fileRefreshPendingRevision = 0;
       updateFileRefreshAvailability();

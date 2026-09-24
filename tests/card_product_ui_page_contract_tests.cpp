@@ -1071,6 +1071,18 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
               std::string::npos,
           "the listing is not requested by container identifier");
 
+  // A single message for every failure told a person their files were gone
+  // whenever anything went wrong -- an unmounted container and an unreachable
+  // drive said the same thing as a deleted folder. The page asks the bridge
+  // which failure it was and never decides that on its own.
+  require(script.find("setFileStatus(await readDirectoryFailure(), \"error\");") !=
+              std::string::npos &&
+              script.find("const reason = await bridge.getDirectoryError();") !=
+                  std::string::npos,
+          "the listing failure message is not chosen from the bridge's reason");
+  require(count_occurrences(script, "无法读取这个文件夹") == 0,
+          "the page still blames the container for every listing failure");
+
   // One call brings a whole directory back, separated by the two control
   // characters no name off a mounted volume can hold.
   //

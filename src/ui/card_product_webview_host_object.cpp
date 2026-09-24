@@ -122,6 +122,7 @@ constexpr DISPID kSetRememberContainerPathsId = 33;
 constexpr DISPID kGetMountImportedContainersId = 34;
 constexpr DISPID kSetMountImportedContainersId = 35;
 
+constexpr DISPID kDirectoryErrorId = 120;
 constexpr DISPID kListContainerDirectoryId = 36;
 constexpr DISPID kDeleteContainerEntryId = 37;
 constexpr DISPID kRenameContainerEntryId = 38;
@@ -219,7 +220,24 @@ unsigned int volume_failure_status(const std::error_code& error) noexcept {
 constexpr DISPID kGetOperationLoggingEnabledId = 45;
 constexpr DISPID kSetOperationLoggingEnabledId = 46;
 
+// Why the last listing failed. One catch-all left the page telling the user a
+// folder was gone whenever anything went wrong -- an unreachable volume, a
+// refused path, a container that is simply not mounted -- so the reasons a
+// person can act on differently are separated here.
+enum class DirectoryFailure : unsigned int {
+  none = 0,
+  not_mounted = 1,
+  unknown_container = 2,
+  volume_unreachable = 3,
+  directory_missing = 4,
+  access_denied = 5,
+  io_error = 6,
+  contents_refused = 7,
+  unknown = 8,
+};
+
 constexpr wchar_t kListContainerDirectoryName[] = L"listContainerDirectory";
+constexpr wchar_t kDirectoryErrorName[] = L"getDirectoryError";
 constexpr wchar_t kDeleteContainerEntryName[] = L"deleteContainerEntry";
 constexpr wchar_t kRenameContainerEntryName[] = L"renameContainerEntry";
 constexpr wchar_t kCreateContainerDirectoryName[] = L"createContainerDirectory";
@@ -545,6 +563,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kListContainerDirectoryId;
       return S_OK;
     }
+    if (matches(names[0], kDirectoryErrorName)) {
+      ids[0] = kDirectoryErrorId;
+      return S_OK;
+    }
     if (matches(names[0], kDeleteContainerEntryName)) {
       ids[0] = kDeleteContainerEntryId;
       return S_OK;
@@ -755,7 +777,10 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetStartupViewId:
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
-      case kListContainerDirectoryId: break;
+      case kListContainerDirectoryId:
+      // Reading why the last listing failed must not discard retry results
+      // either; it is the page asking about a failure it has already seen.
+      case kDirectoryErrorId: break;
       default:
         last_volume_member_ = 0;
         clear_batch();
@@ -1063,6 +1088,14 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kListContainerDirectoryId:
         return invoke_list_container_directory(parameters, result,
                                                argument_error);
+      case kDirectoryErrorId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result == nullptr) return E_POINTER;
+        ::VariantInit(result);
+        result->vt = VT_UI4;
+        result->ulVal = directory_error_.load();
+        return S_OK;
+      }
       case kDeleteContainerEntryId:
       case kCreateContainerDirectoryId:
         return invoke_entry_by_name(member, parameters, result, argument_error);
@@ -2172,6 +2205,55 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   // Two arguments: the container identifier and the directory inside it. COM
   // delivers them in reverse order, as it does everywhere here.
+  void record_directory_failure(const DirectoryFailure reason) noexcept {
+    directory_error_.store(static_cast<unsigned int>(reason));
+  }
+
+  // Whether the drive carrying this container still answers. A not-found
+  // result means two different things to a person -- the folder was deleted,
+  // or the drive it lived on is no longer there -- and only the volume root
+  // separates them.
+  [[nodiscard]] bool volume_root_reachable(const std::uint32_t id) noexcept {
+    try {
+      for (const ContainerUiStatus& status : controller_.container_statuses()) {
+        if (status.id != id) continue;
+        if (status.drive_letter < L'A' || status.drive_letter > L'Z') return false;
+        const wchar_t root[] = {status.drive_letter, L':', L'\\', L'\0'};
+        const DWORD attributes = ::GetFileAttributesW(root);
+        return attributes != INVALID_FILE_ATTRIBUTES &&
+               (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+      }
+    } catch (...) {
+    }
+    return false;
+  }
+
+  [[nodiscard]] DirectoryFailure classify_listing_error(
+      const std::uint32_t id, const std::system_error& error) noexcept {
+    const std::error_code code = error.code();
+    const int value = code.value();
+    // Matched on the Win32 value alone. The generic mapping folds unrelated
+    // conditions such as a write-protected device into permission_denied, and
+    // telling someone they lack permission to read is wrong in those cases.
+    if (value == static_cast<int>(ERROR_ACCESS_DENIED) &&
+        code.category() == std::system_category()) {
+      return DirectoryFailure::access_denied;
+    }
+    if (value == static_cast<int>(ERROR_NOT_READY) ||
+        value == static_cast<int>(ERROR_INVALID_DRIVE) ||
+        value == static_cast<int>(ERROR_DEV_NOT_EXIST) ||
+        value == static_cast<int>(ERROR_UNRECOGNIZED_VOLUME)) {
+      return DirectoryFailure::volume_unreachable;
+    }
+    if (code != std::errc::no_such_file_or_directory &&
+        value != static_cast<int>(ERROR_FILE_NOT_FOUND) &&
+        value != static_cast<int>(ERROR_PATH_NOT_FOUND)) {
+      return DirectoryFailure::io_error;
+    }
+    return volume_root_reachable(id) ? DirectoryFailure::directory_missing
+                                     : DirectoryFailure::volume_unreachable;
+  }
+
   HRESULT invoke_list_container_directory(
       DISPPARAMS* const parameters, VARIANT* const result,
       UINT* const argument_error) noexcept {
@@ -2190,13 +2272,29 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (result == nullptr) return S_OK;
 
     std::wstring packed;
+    directory_error_.store(static_cast<unsigned int>(DirectoryFailure::none));
     try {
       packed = pack_directory_listing(
           controller_.list_container_directory(id, relative_directory));
     } catch (const std::invalid_argument&) {
+      // The page only ever sends an adopted identifier and a directory it was
+      // given, so in practice this is a container the session no longer holds.
+      record_directory_failure(DirectoryFailure::unknown_container);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
+    } catch (const std::logic_error&) {
+      record_directory_failure(DirectoryFailure::not_mounted);
+      return E_FAIL;
+    } catch (const std::system_error& error) {
+      record_directory_failure(classify_listing_error(id, error));
+      return E_FAIL;
+    } catch (const std::runtime_error&) {
+      // The containment gate and the entry-name check both land here: the
+      // volume answered, and what it answered with was refused.
+      record_directory_failure(DirectoryFailure::contents_refused);
+      return E_FAIL;
     } catch (...) {
+      record_directory_failure(DirectoryFailure::unknown);
       return E_FAIL;
     }
     // The packed listing is a volume's file names, so it is cleared here for
@@ -2827,6 +2925,8 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::atomic<bool> bitlocker_consent_{false};
   std::atomic<std::uint64_t> bitlocker_epoch_{0};
   std::atomic<unsigned int> creation_error_{0};
+  std::atomic<unsigned int> directory_error_{
+      static_cast<unsigned int>(DirectoryFailure::none)};
   std::atomic<unsigned int> creation_status_{0};
   std::atomic<bool> creation_paused_{false};
   std::atomic<std::uint64_t> creation_progress_{0};

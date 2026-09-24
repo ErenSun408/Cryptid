@@ -302,7 +302,11 @@ class Backend {
       const DWORD used = ::GetLogicalDrives(); require(used, "regression drive list");
       wchar_t drive = L'Z'; while (drive >= L'D' && (used & (DWORD{1} << (drive - L'A')))) --drive;
       require(drive >= L'D', "no regression drive");
-      static_cast<void>(provider.mount_file(file.native(), key, {.drive_letter = drive, .notify_shell = false}));
+      // The driver names a file container differently from a partition, so the
+      // letter read-back has to be proven against a real one of each.
+      require(provider.mount_file(file.native(), key,
+                  {.drive_letter = drive, .notify_shell = false}).drive_letter == drive,
+              "driver did not report the file container's drive");
       const auto identity = provider.mount_identity(drive);
       try {
         const auto list = provider.mounted_volumes();
@@ -630,7 +634,8 @@ void mount_owned(const OwnedDisk& disk, const usb_vault::security::SecureBuffer&
   usb_vault::volume::VolumeProvider provider;
   usb_vault::volume::MountOptions options{.drive_letter=drive,.notify_shell=false};
   if (protection) options.hidden_volume_protection=usb_vault::volume::HiddenVolumeProtection{.password=protection};
-  static_cast<void>(provider.mount_partition(*identity, password, options));
+  require(provider.mount_partition(*identity, password, options).drive_letter == drive,
+          "driver did not report the partition's drive");
 }
 wchar_t free_letter() {
   const DWORD used = ::GetLogicalDrives(); require(used != 0, "drive list unavailable");

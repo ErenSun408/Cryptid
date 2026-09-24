@@ -409,6 +409,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
       const std::wstring_view relative_directory) override {
     listed.push_back({.id = id, .directory = std::wstring(relative_directory)});
     if (reject_listing) throw std::invalid_argument("no such directory");
+    // Each way a listing can fail, so the bridge can be asked to tell them
+    // apart instead of answering every one of them the same way.
+    if (listing_not_mounted) throw std::logic_error("that container is not mounted");
+    if (listing_refused) throw std::runtime_error("the directory resolves outside its volume");
+    if (listing_system_error) {
+      throw std::system_error(static_cast<int>(listing_system_error),
+                              std::system_category(), "open the directory");
+    }
     return listing;
   }
 
@@ -474,6 +482,9 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   usb_vault::volume::VolumeDirectoryListing listing;
   bool reject_listing{};
+  bool listing_not_mounted{};
+  bool listing_refused{};
+  unsigned long listing_system_error{};
   std::vector<DirectoryCall> listed;
   std::vector<EntryCall> deleted;
   std::vector<EntryCall> renamed;
@@ -2897,6 +2908,86 @@ void test_a_directory_listing_arrives_as_one_packed_string() {
   clear_arguments(empty_values.data(), 2);
 }
 
+void test_a_failed_listing_says_which_way_it_failed() {
+  // One catch-all left the page telling the user their folder was gone for
+  // every failure, including a container that is merely unmounted. The reasons
+  // a person acts on differently have to arrive separately.
+  const auto reason_for = [](Fixture& fixture) {
+    ComPtr<IDispatch> host = make_host(fixture.controller);
+    std::array<VARIANTARG, 2> values{};
+    values[1] = number_argument(7);
+    values[0] = text_argument(L"reports");
+    // A null result is answered before the listing is ever attempted, so the
+    // call has to ask for one to reach the failure it is about to read.
+    VARIANT listed{};
+    ::VariantInit(&listed);
+    static_cast<void>(invoke_named(*host.Get(), L"listContainerDirectory",
+                                   values.data(), 2, &listed, nullptr));
+    static_cast<void>(::VariantClear(&listed));
+    clear_arguments(values.data(), 2);
+    VARIANT reason{};
+    ::VariantInit(&reason);
+    require(invoke_named(*host.Get(), L"getDirectoryError", nullptr, 0, &reason,
+                         nullptr) == S_OK && reason.vt == VT_UI4,
+            "the bridge did not answer why the listing failed");
+    const unsigned int value = reason.ulVal;
+    static_cast<void>(::VariantClear(&reason));
+    return value;
+  };
+
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing_not_mounted = true;
+    require(reason_for(fixture) == 1, "an unmounted container was not reported as one");
+  }
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.reject_listing = true;
+    require(reason_for(fixture) == 2, "a container the session does not hold was not reported as one");
+  }
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing_refused = true;
+    require(reason_for(fixture) == 7, "a refused directory was not reported as one");
+  }
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing_system_error = ERROR_ACCESS_DENIED;
+    require(reason_for(fixture) == 5, "a denied directory was not reported as one");
+  }
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing_system_error = ERROR_NOT_READY;
+    require(reason_for(fixture) == 3, "a detached volume was not reported as one");
+  }
+  {
+    // Nothing is mounted behind this fixture, so a missing path cannot be
+    // blamed on the folder: the drive carrying it does not answer either.
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing_system_error = ERROR_PATH_NOT_FOUND;
+    require(reason_for(fixture) == 3,
+            "a missing path was blamed on the folder while the volume was gone");
+  }
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    fixture.volume.listing_system_error = ERROR_WRITE_PROTECT;
+    require(reason_for(fixture) == 6, "an unclassified failure was not reported as I/O");
+  }
+  {
+    // A listing that works leaves no failure behind for the page to read.
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    require(reason_for(fixture) == 0, "a successful listing left a failure behind");
+  }
+}
+
 void test_the_file_manager_bridge_checks_its_shapes() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -3798,6 +3889,7 @@ int main() {
     test_opening_maintenance_runs_on_the_volume_worker();
     test_maintenance_facts_are_async_current_and_session_scoped();
     test_a_directory_listing_arrives_as_one_packed_string();
+    test_a_failed_listing_says_which_way_it_failed();
     test_the_file_manager_bridge_checks_its_shapes();
     test_the_bridge_carries_each_file_manager_action();
     test_the_bridge_carries_both_exports();
