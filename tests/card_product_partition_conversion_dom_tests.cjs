@@ -17,7 +17,7 @@ async function run(fail){
   assert.equal(w.navigationFixture.partitionCreated,undefined);assert.match($('#creation-cancel-work').textContent,/暂停/);
   if(fail === true){
    w.navigationFixture.pendingCreation.reject();await until(()=>!$('#create-volume-cancel').disabled);
-   assert.equal($('#create-volume-status').textContent,'创建失败。错误码17');$('#create-volume-cancel').click();
+   assert.equal($('#create-volume-status').textContent,'读写失败。请检查保存位置的剩余空间、文件系统限制（FAT32 单个文件不能超过 4 GiB）以及设备连接。（错误码17）');$('#create-volume-cancel').click();
    assert.equal($('[data-container-id="101"][data-container-action="resume"]'),null);
    assert.equal($('[data-container-id="101"][data-container-action="mount"]').disabled,true);
    assert.equal($('[data-container-id="101"][data-container-action="forget"]').disabled,true);
@@ -33,7 +33,7 @@ async function run(fail){
    $('[data-container-id="101"][data-container-action="resume"]').click();await until(()=>w.navigationFixture.partitionResumed===101);
    if(fail === 'resume') {
     w.navigationFixture.pendingCreation.reject();await until(()=>!$('#create-volume-cancel').disabled);
-    assert.equal($('#create-volume-status').textContent,'创建失败。错误码17');
+    assert.equal($('#create-volume-status').textContent,'读写失败。请检查保存位置的剩余空间、文件系统限制（FAT32 单个文件不能超过 4 GiB）以及设备连接。（错误码17）');
     assert.equal(w.navigationFixture.containers.find(c=>c.id===101).conversion,1);
     return;
    }

@@ -1083,6 +1083,24 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
   require(count_occurrences(script, "无法读取这个文件夹") == 0,
           "the page still blames the container for every listing failure");
 
+  // A creation failure said only "创建失败" on the file path and a bare number
+  // on the disk one. Every path now goes through the same description, and the
+  // code stays on the end so a user's report still carries it.
+  // Three callers: the container-B/pair flow, partition creation and in-place
+  // conversion. The definition itself is named without a call parenthesis.
+  require(count_occurrences(script, "describeCreationFailure(") == 3 &&
+              script.find("const describeCreationFailure = (code) => {") !=
+                  std::string::npos,
+          "the creation paths do not share one failure description");
+  require(count_occurrences(script, "创建失败。错误码") == 0,
+          "a creation failure is still reported as a bare error code");
+  // The two a person can actually act on, and the one that must never be
+  // rewritten into a cleaner-sounding cause than it is.
+  require(script.find("FAT32 单个文件不能超过 4 GiB") != std::string::npos &&
+              script.find("该位置已存在同名文件") != std::string::npos &&
+              script.find("15: kCreationCleanupMessage,") != std::string::npos,
+          "the creation failure table lost an actionable cause");
+
   // One call brings a whole directory back, separated by the two control
   // characters no name off a mounted volume can hold.
   //

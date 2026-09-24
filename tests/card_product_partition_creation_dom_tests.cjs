@@ -41,7 +41,7 @@ async function run(outcome) {
     assert.doesNotMatch($('#forget-container-description').textContent,/可通过「导入」/);
   }
   else {
-    assert.equal($('#create-volume-status').textContent, `创建失败。错误码${outcome === "cancel" ? 16 : 17}`);
+    assert.equal($('#create-volume-status').textContent, (outcome === "cancel" ? '已取消创建。（错误码16）' : '读写失败。请检查保存位置的剩余空间、文件系统限制（FAT32 单个文件不能超过 4 GiB）以及设备连接。（错误码17）'));
     assert.doesNotMatch($('#create-volume-status').textContent,/没有留下|未修改/);
   }
   assert.equal($('#partition-erase-consent').checked,false);

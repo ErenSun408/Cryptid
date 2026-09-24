@@ -5420,9 +5420,16 @@
           error.message === kCreationCancelled;
         const cleanupFailed = error instanceof Error &&
           error.message === kCreationCleanupFailed;
-        creationStatus.textContent = disk ? `创建失败。错误码${await readCreationFailureCode(creationAccepted)}` : cleanupFailed ? kCreationCleanupMessage : cancelled
-          ? "已取消创建，没有留下容器文件。重试前需要重新填写名称、路径与诱饵密码。"
-          : "创建失败。重试前需要重新填写名称、路径与诱饵密码。";
+        let failure;
+        if (cleanupFailed) failure = kCreationCleanupMessage;
+        else if (cancelled) failure = "已取消创建，没有留下容器文件。重试前需要重新填写名称、路径与诱饵密码。";
+        else {
+          failure = describeCreationFailure(await readCreationFailureCode(creationAccepted));
+          // The file flow clears what was typed, so it has to say so; the disk
+          // flow has nothing to retype and drops its selection instead.
+          if (!disk) failure += "重试前需要重新填写名称、路径与诱饵密码。";
+        }
+        creationStatus.textContent = failure;
         creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
         updateCreationAvailability();
       }
@@ -5438,6 +5445,34 @@
     }
   };
 
+  // A bare number told the user nothing, and the file-container path did not
+  // even show that much. These say what happened and what can be done about
+  // it; the code stays on the end so a report still carries it.
+  const creationFailureMessages = {
+    1: "创建参数不被接受，请检查容量、名称与保存位置。",
+    2: "与安全组件的通信异常，请重新打开应用后重试。",
+    3: "未获得管理员授权，创建已取消。",
+    4: "无法启动安全组件，请确认应用安装完整后重试。",
+    5: "无法连接安全组件，请重新打开应用后重试。",
+    6: "安全组件未取得所需权限，请重新打开应用并允许管理员授权。",
+    7: "加密组件不可用，请确认应用安装完整。",
+    8: "加密组件初始化失败，请重新打开应用后重试。",
+    9: "目标被加密组件拒绝，请检查容量设置与保存位置。",
+    10: "该位置已存在同名文件，请换一个名称或保存位置。",
+    11: "无法在该位置创建文件。请检查写入权限，或换一个不受安全软件保护的位置。",
+    12: "无法挂载卷。可能没有空闲盘符，或目标暂时被占用。",
+    13: "无法读取外层卷的空间分布，请重试。",
+    14: "隐藏盘容量超出外层卷能安全容纳的范围，请调小隐藏容量。",
+    15: kCreationCleanupMessage,
+    16: "已取消创建。",
+    17: "读写失败。请检查保存位置的剩余空间、文件系统限制（FAT32 单个文件不能超过 4 GiB）以及设备连接。",
+    18: "安全组件意外结束，请重新打开应用后重试。",
+  };
+  const describeCreationFailure = (code) => {
+    const known = creationFailureMessages[code];
+    return known ? `${known}（错误码${code}）`
+                 : `创建失败，原因无法确定。（错误码${code}）`;
+  };
   const readCreationFailureCode = async (accepted) => {
     try {
       const code = accepted ? await bridge.getCreationError() : 0;
@@ -5472,7 +5507,7 @@
       const failureCode = await readCreationFailureCode(creationAccepted);
       try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; }
       busy = false; render(messageForCurrentState());
-      creationStatus.textContent = `创建失败。错误码${failureCode}`;
+      creationStatus.textContent = describeCreationFailure(failureCode);
       creationStatus.dataset.tone = "error";
     } finally {
       busy = false; if (!resume) discardPartitions(); finishCreationProgress(); updateCreationAvailability();
@@ -5513,7 +5548,7 @@
       busy = false;
       render(messageForCurrentState());
       if (!creationDialog.hidden && currentState === nativeState.authenticated) {
-        creationStatus.textContent = `创建失败。错误码${failureCode}`;
+        creationStatus.textContent = describeCreationFailure(failureCode);
         creationStatus.dataset.tone = "error";
       }
     } finally {
