@@ -4,6 +4,8 @@
 #include "volume/partition_catalog_detail.h"
 #include "volume/partition_write_policy.h"
 
+#include "volume/drive_letter_pool.h"
+
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume/volume_space.h"
@@ -476,12 +478,9 @@ void as_caller(const HANDLE pipe, Action&& action) {
       used |= std::uint32_t{1} << index;
     }
   }
-  for (wchar_t letter = L'Z'; letter >= L'D'; --letter) {
-    const auto index = static_cast<unsigned>(letter - L'A');
-    if ((used & (std::uint32_t{1} << index)) == 0) {
-      return letter;
-    }
-  }
+  // Randomised for the same reason the session's own allocation is: this mount
+  // is brief, but it is still a drive letter the machine saw being used.
+  if (const wchar_t letter = volume::choose_free_drive_letter(used)) return letter;
   fail(CreationError::mount_failed, "no temporary drive letter is available");
 }
 

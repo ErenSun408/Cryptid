@@ -11,6 +11,7 @@
 #include "usb_vault/volume/volume_entry_path.h"
 #include "usb_vault/volume/volume_file_operations.h"
 #include "usb_vault/volume_creation/volume_creator.h"
+#include "volume/drive_letter_pool.h"
 #include "volume/mount_request.h"
 
 #include <Windows.h>
@@ -240,10 +241,9 @@ class ProductionCardLoginMountSessionRuntime final
       const auto index = static_cast<unsigned>(mounted.drive_letter - L'A');
       if (index < 26) drives |= 1UL << index;
     }
-    for (wchar_t letter = L'Z'; letter >= L'D'; --letter) {
-      const DWORD mask = 1UL << static_cast<DWORD>(letter - L'A');
-      if ((drives & mask) == 0) return letter;
-    }
+    const wchar_t letter =
+        volume::choose_free_drive_letter(static_cast<std::uint32_t>(drives));
+    if (letter) return letter;
     throw std::system_error(
         std::make_error_code(std::errc::no_space_on_device),
         "no free drive letter is available for a container mount");

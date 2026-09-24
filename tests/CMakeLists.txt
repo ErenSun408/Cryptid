@@ -1168,6 +1168,12 @@ if(USB_VAULT_FORMAT_DLL)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${USB_VAULT_FORMAT_DLL}" "$<TARGET_FILE_DIR:partition_device_integration_tests>/VeraCryptFormat.dll")
 endif()
 
+add_executable(drive_letter_pool_tests drive_letter_pool_tests.cpp)
+target_include_directories(drive_letter_pool_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(drive_letter_pool_tests PRIVATE usb_vault_core)
+usb_vault_configure_target(drive_letter_pool_tests)
+add_test(NAME drive_letter_pool_tests COMMAND drive_letter_pool_tests)
+
 add_executable(partition_inplace_plan_tests partition_inplace_plan_tests.cpp)
 target_include_directories(partition_inplace_plan_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(partition_inplace_plan_tests PRIVATE usb_vault_core)
