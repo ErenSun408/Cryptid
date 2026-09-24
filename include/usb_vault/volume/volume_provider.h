@@ -78,6 +78,12 @@ struct MountResult final {
   bool is_ntfs{false};
   bool master_key_vulnerable{false};
   std::chrono::milliseconds elapsed{};
+  // Where the volume actually came up, read back from the driver rather than
+  // assumed from the request. The requested letter is a request: the mount
+  // manager can land the volume on another one, and a caller that writes down
+  // what it asked for then addresses a drive that holds nothing. Zero means
+  // the driver's own list did not account for this mount.
+  wchar_t drive_letter{};
 };
 
 struct UnmountResult final {

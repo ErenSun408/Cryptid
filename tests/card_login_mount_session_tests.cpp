@@ -157,23 +157,31 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool partition_mount_fail{};
   bool partition_pair{};
   std::function<void()> after_partition_mount;
+  // The mount manager can publish a volume on a letter other than the one it
+  // was asked for, so the fake driver can be told to do exactly that, and to
+  // answer with no letter at all.
+  wchar_t partition_lands_on{};
+  bool partition_reports_no_drive{};
   usb_vault::volume::MountResult mount_partition(const usb_vault::volume::PartitionIdentity& identity,
       const SecureBuffer& password, const usb_vault::volume::MountOptions& options) override {
     require(usb_vault::volume::valid_partition_identity(identity) && password.size() == 64,
             "partition mount identity or password invalid");
     events.emplace_back("mount:partition");
     if (partition_mount_fail) throw std::runtime_error("partition unavailable");
+    const wchar_t landed =
+        partition_lands_on ? partition_lands_on : options.drive_letter;
     if (options.hidden_volume_protection) {
       if (!partition_pair) throw usb_vault::application::DecoyMaintenanceRefused();
-      attached_volume_types[options.drive_letter] = usb_vault::volume::VolumeType::outer;
-      identities[options.drive_letter] = {.drive_letter=options.drive_letter,
+      attached_volume_types[landed] = usb_vault::volume::VolumeType::outer;
+      identities[landed] = {.drive_letter=landed,
           .unique_id=next_mount_id++, .volume_path=L"partition",
           .disk_length=identity.length_bytes-262144, .protected_outer_writable=true};
     } else if (partition_pair && password.bytes()[0] == std::byte{'p'})
       throw std::system_error(usb_vault::volume::make_error_code(usb_vault::volume::DriverError::authentication_failed));
-    attached_volume_sizes[options.drive_letter] = identity.length_bytes - 262144;
+    attached_volume_sizes[landed] = identity.length_bytes - 262144;
     if (after_partition_mount) after_partition_mount();
-    return {};
+    // A driver reports the letter it actually mounted on, not the request.
+    return {.drive_letter = partition_reports_no_drive ? wchar_t{} : landed};
   }
   bool partition_password_64{};
   bool partition_skip_confirmation{};
@@ -594,7 +602,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
           .unique_id=next_mount_id++, .volume_path=std::wstring(path),
           .disk_length=attached_volume_sizes[options.drive_letter],
           .protected_outer_writable=protected_volume_type==usb_vault::volume::VolumeType::outer};
-      return {};
+      return {.drive_letter = options.drive_letter};
     }
     if (!login_derived_path.empty() && path == login_derived_path &&
         (nothing_opens_it || !derived_from_login(volume_password))) {
@@ -607,13 +615,16 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
           "wrong password");
     }
     if (fail_created_mount) throw std::runtime_error("mount created failed");
-    return {};
+    return {.drive_letter = options.drive_letter};
   }
 
   void notify_mounted(const wchar_t drive_letter) override {
     events.emplace_back("notify:A");
-    require(drive_letter == allocated_drive_letter,
-            "creation notified the wrong drive");
+    // The shell is told about the drive the volume actually came up on, which
+    // is the allocated one unless this driver was told to land it elsewhere.
+    require(drive_letter ==
+                (partition_lands_on ? partition_lands_on : allocated_drive_letter),
+            "the shell was told about a drive the volume is not on");
     if (fail_notify) throw std::runtime_error("notify failed");
   }
 
@@ -3908,6 +3919,46 @@ void test_partition_creation_persistence_and_mounting() {
   }
 }
 
+void test_a_mount_is_recorded_where_the_driver_put_it() {
+  // The letter a mount asks for is a request. When the mount manager lands the
+  // volume somewhere else, a session that writes down its own request then
+  // addresses a drive holding nothing, and every later listing fails as though
+  // the contents had gone missing from the container.
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.partition_password_64 = true;
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.creation_cancelled = [] { return false; };
+  runtime.remember_paths = true;
+  usb_vault::volume::PartitionCandidate target;
+  target.layout = usb_vault::volume::PartitionLayout::mbr;
+  target.device_id[0] = 7;
+  target.offset_bytes = 1048576;
+  target.length_bytes = 64ULL * 1024 * 1024;
+  target.logical_sector_bytes = 512;
+  const std::uint32_t id = session.create_partition(target, [](const auto&) { return true; });
+  session.unmount_container(id);
+
+  runtime.partition_lands_on = L'K';
+  session.mount_adopted_container(id);
+  const auto statuses = session.container_statuses();
+  require(statuses.size() == 1 && statuses[0].mounted && statuses[0].drive_letter == L'K',
+          "the session recorded the requested drive instead of the mounted one");
+  session.unmount_container(id);
+  require(!runtime.attached_volume_sizes.contains(L'K'),
+          "release addressed a drive the volume was never on");
+
+  // A driver that cannot say where the volume went leaves nothing to address,
+  // so the mount is refused rather than recorded under a letter that was never
+  // confirmed.
+  runtime.partition_reports_no_drive = true;
+  require_throws<std::runtime_error>([&] { session.mount_adopted_container(id); },
+      "a mount the driver did not account for was recorded anyway");
+  require(!session.container_statuses()[0].mounted,
+          "an unaccounted mount was left marked as mounted");
+}
+
 void test_partition_pair_session() {
   for (int scenario = 0; scenario < 5; ++scenario) {
     CardAuthenticationSession auth;
@@ -4068,6 +4119,7 @@ int main() {
   try {
     test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
+    test_a_mount_is_recorded_where_the_driver_put_it();
     test_partition_pair_session();
     test_partition_card_removal_and_drive_conflicts();
     test_partition_format_card_session_boundary();

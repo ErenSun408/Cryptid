@@ -226,11 +226,19 @@ class ProductionCardLoginMountSessionRuntime final
   }
 
   [[nodiscard]] wchar_t allocate_drive_letter() override {
-    const DWORD drives = ::GetLogicalDrives();
+    DWORD drives = ::GetLogicalDrives();
     if (drives == 0) {
       throw std::system_error(static_cast<int>(::GetLastError()),
                               std::system_category(),
                               "inspect available drive letters");
+    }
+    // A driver mount the DOS namespace has not published is still a letter in
+    // use. Asking for one makes the mount manager land the volume elsewhere,
+    // which the caller would otherwise never learn. The helper's own temporary
+    // allocation reads both lists for the same reason.
+    for (const volume::MountedVolume& mounted : provider_.mounted_volumes()) {
+      const auto index = static_cast<unsigned>(mounted.drive_letter - L'A');
+      if (index < 26) drives |= 1UL << index;
     }
     for (wchar_t letter = L'Z'; letter >= L'D'; --letter) {
       const DWORD mask = 1UL << static_cast<DWORD>(letter - L'A');
@@ -749,6 +757,20 @@ void throw_if_creation_cancelled(
   return nullptr;
 }
 
+// The letter a mount asked for is a request; the letter the driver reports is
+// where the volume is. Windows can land it elsewhere, and a session that
+// writes down its own request then addresses a drive holding nothing -- every
+// later listing, read and write goes to the wrong place, and the page blames
+// the container. A mount the driver cannot account for is refused rather than
+// recorded under a letter that was never confirmed.
+[[nodiscard]] wchar_t settled_drive_letter(const volume::MountResult& mounted) {
+  if (mounted.drive_letter < L'A' || mounted.drive_letter > L'Z') {
+    throw std::runtime_error(
+        "the driver did not report which drive the volume mounted on");
+  }
+  return mounted.drive_letter;
+}
+
 [[nodiscard]] SessionContainer* find_by_path(
     CardLoginMountSessionState& state,
     const std::wstring_view path) noexcept {
@@ -1130,10 +1152,11 @@ CardLoginMountSessionCore::mount_with_either_derivation(
                .pim = 0,
                .read_only = false,
                .notify_shell = false};
-    static_cast<void>(
-        runtime_.mount_created(path, standard_password, options));
+    const volume::MountResult mounted =
+        runtime_.mount_created(path, standard_password, options);
     standard_password.clear();
-    return {.drive_letter = drive_letter, .hidden_volume = false};
+    return {.drive_letter = settled_drive_letter(mounted),
+            .hidden_volume = false};
   } catch (const std::system_error& error) {
     standard_password.clear();
     // The user selects a file, never a container class, and the page must not
@@ -1150,9 +1173,9 @@ CardLoginMountSessionCore::mount_with_either_derivation(
     standard_password.clear();
     throw;
   }
-  static_cast<void>(
-      runtime_.mount_created(path, hidden_container_password(), options));
-  return {.drive_letter = drive_letter, .hidden_volume = true};
+  return {.drive_letter = settled_drive_letter(
+              runtime_.mount_created(path, hidden_container_password(), options)),
+          .hidden_volume = true};
 }
 
 wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
@@ -1408,14 +1431,14 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                      OperationOutcome::succeeded,
                      container_name);
 
-    const wchar_t drive_letter = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_created(path,
-                                             volume_password,
-                                             {.drive_letter = drive_letter,
-                                              .prf = volume::Pkcs5Prf::sha512,
-                                              .pim = 0,
-                                              .read_only = false,
-                                              .notify_shell = false}));
+    const wchar_t drive_letter = settled_drive_letter(
+        runtime_.mount_created(path,
+                               volume_password,
+                               {.drive_letter = reserve_drive_letter(),
+                                .prf = volume::Pkcs5Prf::sha512,
+                                .pim = 0,
+                                .read_only = false,
+                                .notify_shell = false}));
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -1516,14 +1539,14 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                      OperationOutcome::succeeded,
                      container_name);
 
-    const wchar_t drive_letter = reserve_drive_letter();
-    static_cast<void>(runtime_.mount_created(path,
-                                             hidden_password,
-                                             {.drive_letter = drive_letter,
-                                              .prf = volume::Pkcs5Prf::sha512,
-                                              .pim = 0,
-                                              .read_only = false,
-                                              .notify_shell = false}));
+    const wchar_t drive_letter = settled_drive_letter(
+        runtime_.mount_created(path,
+                               hidden_password,
+                               {.drive_letter = reserve_drive_letter(),
+                                .prf = volume::Pkcs5Prf::sha512,
+                                .pim = 0,
+                                .read_only = false,
+                                .notify_shell = false}));
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -1588,7 +1611,6 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   // The hidden volume's password is the session's own, never the caller's: the
   // driver reads that header only to learn what to refuse writes to.
   const security::SecureBuffer& hidden_password = hidden_container_password();
-  const wchar_t drive_letter = reserve_drive_letter();
   const auto refuse = [&]() {
     if (mode == MaintenanceMount::open) {
       record_operation(OperationKind::container_mounted,
@@ -1598,16 +1620,22 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
     return DecoyMaintenanceRefused();
   };
 
+  // Everything below -- the volume-type gate, the identity check and the
+  // forced release when either refuses -- addresses this drive. It has to be
+  // the one the driver reported, or a wrong-type mount would be left behind
+  // while a letter that holds nothing is the one asked to let go of it.
+  wchar_t drive_letter{};
   try {
-    const volume::MountOptions options{.drive_letter = drive_letter,
+    const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
          .prf = volume::Pkcs5Prf::sha512,
          .pim = 0,
          .read_only = false,
          .notify_shell = false,
          .hidden_volume_protection =
              volume::HiddenVolumeProtection{.password = &hidden_password}};
-    if (entry.partition) static_cast<void>(runtime_.mount_partition(*entry.partition, outer_password, options));
-    else static_cast<void>(runtime_.mount_created(entry.path, outer_password, options));
+    drive_letter = settled_drive_letter(entry.partition
+        ? runtime_.mount_partition(*entry.partition, outer_password, options)
+        : runtime_.mount_created(entry.path, outer_password, options));
   } catch (...) {
     // Every driver rejection means the same thing to everyone above.
     throw refuse();
@@ -1990,10 +2018,11 @@ void CardLoginMountSessionCore::mount_adopted_container(
     const wchar_t drive = reserve_drive_letter();
     const volume::MountOptions options{.drive_letter = drive, .notify_shell = false};
     bool login_derived = entry->derivation_known && entry->release_first;
+    volume::MountResult mounted{};
     if (!login_derived) {
       auto password = derive_standard_password();
       if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
-      try { static_cast<void>(runtime_.mount_partition(*entry->partition, password, options)); }
+      try { mounted = runtime_.mount_partition(*entry->partition, password, options); }
       catch (const std::system_error& error) {
         if (entry->derivation_known || state_.login_password.empty() ||
             error.code() != volume::make_error_code(volume::DriverError::authentication_failed)) throw;
@@ -2003,14 +2032,15 @@ void CardLoginMountSessionCore::mount_adopted_container(
     if (login_derived) {
       const auto& password = hidden_container_password();
       if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
-      static_cast<void>(runtime_.mount_partition(*entry->partition, password, options));
+      mounted = runtime_.mount_partition(*entry->partition, password, options);
     }
-    entry->drive_letter = drive;
+    const wchar_t settled = settled_drive_letter(mounted);
+    entry->drive_letter = settled;
     entry->mounted = true;
     entry->release_first = login_derived;
     entry->derivation_known = true;
-    record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, entry->name, drive);
-    runtime_.notify_mounted(drive);
+    record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, entry->name, settled);
+    runtime_.notify_mounted(settled);
     return;
   }
   const std::wstring container_name = entry->name;
@@ -2041,14 +2071,14 @@ void CardLoginMountSessionCore::mount_adopted_container(
       if (!hidden_volume) standard_password = derive_standard_password();
       const security::SecureBuffer& volume_password =
           hidden_volume ? hidden_container_password() : standard_password;
-      drive_letter = reserve_drive_letter();
-      static_cast<void>(runtime_.mount_created(entry->path,
-                                               volume_password,
-                                               {.drive_letter = drive_letter,
-                                                .prf = volume::Pkcs5Prf::sha512,
-                                                .pim = 0,
-                                                .read_only = false,
-                                                .notify_shell = false}));
+      drive_letter = settled_drive_letter(
+          runtime_.mount_created(entry->path,
+                                 volume_password,
+                                 {.drive_letter = reserve_drive_letter(),
+                                  .prf = volume::Pkcs5Prf::sha512,
+                                  .pim = 0,
+                                  .read_only = false,
+                                  .notify_shell = false}));
     }
     mounted = true;
     record_operation(OperationKind::container_mounted,

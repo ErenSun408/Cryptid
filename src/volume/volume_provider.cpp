@@ -16,8 +16,10 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace usb_vault::volume {
 namespace {
@@ -169,6 +171,34 @@ void notify_shell(const LONG event, const std::int32_t drive_number) noexcept {
   ::SHChangeNotify(event, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, root, nullptr);
 }
 
+// Which drive a volume came up on is read back, never assumed from the letter
+// that was asked for. The mount manager can publish a volume somewhere other
+// than the requested letter, and a caller that writes down its own request
+// then addresses a drive holding nothing. Exactly one mounted drive must
+// report the path that was just sent; no match, or more than one, stays
+// unresolved rather than guessed at.
+[[nodiscard]] wchar_t mounted_drive_for(
+    const std::vector<MountedVolume>& mounted,
+    const wchar_t (&sent)[detail::abi::kMaxPath]) noexcept {
+  const auto end = std::find(std::begin(sent), std::end(sent), L'\0');
+  const std::wstring_view wanted(std::begin(sent), end);
+  if (wanted.empty()) return {};
+  constexpr std::wstring_view kNtPrefix = L"\\??\\";
+  wchar_t found{};
+  for (const MountedVolume& volume : mounted) {
+    std::wstring_view reported(volume.volume_path);
+    if (reported.starts_with(kNtPrefix)) reported.remove_prefix(kNtPrefix.size());
+    if (reported.size() != wanted.size() ||
+        ::CompareStringOrdinal(reported.data(), static_cast<int>(reported.size()),
+                               wanted.data(), static_cast<int>(wanted.size()),
+                               TRUE) != CSTR_EQUAL)
+      continue;
+    if (found) return {};  // An ambiguous inventory fails closed.
+    found = volume.drive_letter;
+  }
+  return (found >= L'A' && found <= L'Z') ? found : wchar_t{};
+}
+
 [[nodiscard]] VolumeType to_volume_type(const std::int32_t value) noexcept {
   switch (value) {
     case 0:
@@ -248,7 +278,7 @@ MountResult VolumeProvider::mount_file(
 
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - start);
-  const MountResult result{
+  MountResult result{
       .filesystem_dirty = request.filesystem_dirty != 0,
       .read_only_after_access_denied =
           request.read_only_after_access_denied != 0,
@@ -259,10 +289,21 @@ MountResult VolumeProvider::mount_file(
       .elapsed = elapsed,
   };
   const std::int32_t drive_number = request.drive_number;
+  // Read back where the volume actually landed while the request buffer still
+  // holds the path that was sent. A failing driver query leaves the letter
+  // unresolved: it must never turn a mount that succeeded into a throw, which
+  // would leave a mounted volume nobody above is holding.
+  try {
+    result.drive_letter = mounted_drive_for(mounted_volumes(), request.volume_path);
+  } catch (...) {
+    result.drive_letter = {};
+  }
   locked_request.clear();
 
   if (options.notify_shell) {
-    notify_shell(SHCNE_DRIVEADD, drive_number);
+    notify_shell(SHCNE_DRIVEADD, result.drive_letter
+                                     ? detail::drive_number(result.drive_letter)
+                                     : drive_number);
   }
   return result;
 }
@@ -308,7 +349,7 @@ MountResult VolumeProvider::mount_partition(
 
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - start);
-  const MountResult result{
+  MountResult result{
       .filesystem_dirty = request.filesystem_dirty != 0,
       .read_only_after_access_denied =
           request.read_only_after_access_denied != 0,
@@ -319,10 +360,21 @@ MountResult VolumeProvider::mount_partition(
       .elapsed = elapsed,
   };
   const std::int32_t drive_number = request.drive_number;
+  // Read back where the volume actually landed while the request buffer still
+  // holds the path that was sent. A failing driver query leaves the letter
+  // unresolved: it must never turn a mount that succeeded into a throw, which
+  // would leave a mounted volume nobody above is holding.
+  try {
+    result.drive_letter = mounted_drive_for(mounted_volumes(), request.volume_path);
+  } catch (...) {
+    result.drive_letter = {};
+  }
   locked_request.clear();
 
   if (options.notify_shell) {
-    notify_shell(SHCNE_DRIVEADD, drive_number);
+    notify_shell(SHCNE_DRIVEADD, result.drive_letter
+                                     ? detail::drive_number(result.drive_letter)
+                                     : drive_number);
   }
   return result;
 }
