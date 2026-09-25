@@ -4,6 +4,8 @@
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/container_target_path.h"
 #include "usb_vault/ui/password_ingress.h"
+#include "usb_vault/volume/volume_space.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <algorithm>
 #include <Windows.h>
@@ -128,12 +130,25 @@ class SecureBufferGuard final {
 // the kind of local artifact section 8.4 forbids, on a path the user may have
 // mistyped.
 [[nodiscard]] std::wstring resolve_target_path(
-    const std::wstring_view directory, const std::wstring_view name) {
+    const std::wstring_view directory, const std::wstring_view name,
+    const std::uint64_t required_bytes) {
   std::wstring path = resolve_container_target_path(directory, name);
+  const std::wstring location(directory);
   std::error_code probe;
-  if (!std::filesystem::is_directory(std::filesystem::path(directory),
-                                     probe)) {
+  if (!std::filesystem::is_directory(std::filesystem::path(location), probe)) {
     throw std::invalid_argument("save location is not an existing directory");
+  }
+  // The container is written at its full size, so a location that cannot hold
+  // it fails somewhere inside the format -- after a partial file exists and
+  // after the user has waited. Asking first turns that into a refusal that
+  // names the cause. It is a check, not a reservation: the space can still go
+  // away before the write, which the volume layer continues to report.
+  if (required_bytes != 0 &&
+      volume::writable_free_bytes(location) < required_bytes) {
+    throw std::system_error(
+        volume_creation::make_error_code(
+            volume_creation::CreationError::destination_full),
+        "save location has less free space than the container needs");
   }
   return path;
 }
@@ -312,7 +327,8 @@ void CardProductUiSessionController::create_container(
     throw std::invalid_argument("container size is outside the UI range");
   }
 
-  const std::wstring path = resolve_target_path(directory, name);
+  const std::wstring path = resolve_target_path(
+      directory, name, static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
   static_cast<void>(volume_session_.create_container(
       path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib));
 }
@@ -342,7 +358,9 @@ void CardProductUiSessionController::create_container_b(
 
   // The location is settled before anything is derived or committed, so a
   // rejected name leaves the card and the second password untouched.
-  const std::wstring path = resolve_target_path(directory, name);
+  const std::wstring path = resolve_target_path(
+      directory, name,
+      static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib);
 
   // The page no longer asks for the password the session was opened under:
   // the session still holds it, and which of the two it is stays unknown here

@@ -70,6 +70,20 @@ VolumeSpace volume_space(const wchar_t drive_letter) {
   return {.total_bytes = total.QuadPart, .free_bytes = available.QuadPart};
 }
 
+std::uint64_t writable_free_bytes(const std::wstring& directory) {
+  if (directory.empty()) {
+    throw std::invalid_argument("a save location is required");
+  }
+  ULARGE_INTEGER available{};
+  ULARGE_INTEGER total{};
+  ULARGE_INTEGER free_bytes{};
+  if (::GetDiskFreeSpaceExW(directory.c_str(), &available, &total,
+                            &free_bytes) == FALSE) {
+    throw_last_error(::GetLastError(), "query save location free space");
+  }
+  return available.QuadPart;
+}
+
 TailSpace scan_volume_tail_space(const wchar_t drive_letter) {
   const wchar_t letter = validated_letter(drive_letter);
   const wchar_t device[] = {L'\\', L'\\', L'.', L'\\', letter, L':', L'\0'};

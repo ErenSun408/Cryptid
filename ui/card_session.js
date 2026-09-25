@@ -5467,6 +5467,7 @@
     16: "已取消创建。",
     17: "读写失败。请检查保存位置的剩余空间、文件系统限制（FAT32 单个文件不能超过 4 GiB）以及设备连接。",
     18: "安全组件意外结束，请重新打开应用后重试。",
+    19: "保存位置的剩余空间不足，装不下这个容量的容器。请换个位置，或调小容量。",
   };
   const describeCreationFailure = (code) => {
     const known = creationFailureMessages[code];

@@ -4,6 +4,8 @@
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/offline_card_password_policy.h"
+#include "usb_vault/volume/volume_space.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <array>
 #include <concepts>
@@ -1048,6 +1050,66 @@ void test_container_collection_is_projected_only_when_authenticated() {
           "an unmounted container kept a drive letter or a capacity");
 }
 
+void test_a_location_without_room_is_refused_before_anything_is_written() {
+  // A container is written at its full size, so a location that cannot hold it
+  // used to fail inside the format, after a partial file existed and after the
+  // user had waited. It has to be refused first, and refused by name.
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  const std::wstring directory = fixture.directory.wide();
+  const std::uint64_t free_bytes =
+      usb_vault::volume::writable_free_bytes(directory);
+  const std::uint64_t free_mib = free_bytes / (1024ULL * 1024ULL);
+  if (free_mib + 1 > kContainerCreationMaximumMib) {
+    // Nothing this machine can ask for exceeds what it has free, so there is
+    // no honest way to exercise the refusal here.
+    std::cout << "  (skipped: the save location has more room than the "
+                 "largest container the UI allows)\n";
+    return;
+  }
+  const auto too_large = static_cast<std::uint32_t>(free_mib + 1);
+
+  const auto refused_as_full = [&](auto&& action) {
+    try {
+      action();
+    } catch (const std::system_error& error) {
+      return error.code() ==
+             usb_vault::volume_creation::make_error_code(
+                 usb_vault::volume_creation::CreationError::destination_full);
+    } catch (...) {
+      return false;
+    }
+    return false;
+  };
+
+  require(refused_as_full([&] {
+            fixture.controller.create_container(L"work", directory, too_large);
+          }),
+          "a container larger than the location was not refused as such");
+  require(!std::filesystem::exists(fixture.directory.target(L"work")),
+          "a refused creation still left a file behind");
+  require(fixture.volume.create_calls == 0,
+          "a refused creation still reached the volume session");
+
+  // The hidden container is measured by its outer size: the hidden volume
+  // lives inside that file and costs the location nothing extra.
+  require(refused_as_full([&] {
+            auto decoy = bytes("decoy-password");
+            auto confirmation = bytes("decoy-password");
+            fixture.controller.create_container_b(L"decoy", directory, too_large,
+                                                  too_large / 2, decoy,
+                                                  confirmation);
+          }),
+          "a hidden container larger than the location was not refused as such");
+
+  // A size the location can hold still passes this gate.
+  require(!refused_as_full([&] {
+            fixture.controller.create_container(L"fits", directory,
+                                                kContainerCreationMinimumMib);
+          }),
+          "a container that fits was refused for space");
+}
+
 void test_container_creation_is_bounded_and_validated() {
   Fixture fixture;
   const std::wstring directory = fixture.directory.wide();
@@ -2058,6 +2120,7 @@ int main() {
     test_residual_mount_blocks_new_card_actions_until_cleanup();
     test_unmount_forwards_only_unified_active_state();
     test_container_collection_is_projected_only_when_authenticated();
+    test_a_location_without_room_is_refused_before_anything_is_written();
     test_container_creation_is_bounded_and_validated();
     test_browsing_for_a_directory_only_reports_the_choice();
     test_adopted_container_remounts_without_reselecting_its_file();

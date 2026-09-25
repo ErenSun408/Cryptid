@@ -32,6 +32,9 @@ enum class CreationError : std::int32_t {
   operation_cancelled = 16,
   io_error = 17,
   helper_terminated = 18,
+  // Raised before anything is written, by the one place a page-supplied
+  // location becomes a path. The helper never sends it.
+  destination_full = 19,
 };
 
 [[nodiscard]] const std::error_category& creation_error_category() noexcept;

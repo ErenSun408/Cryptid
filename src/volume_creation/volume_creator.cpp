@@ -76,6 +76,8 @@ class CreationErrorCategory final : public std::error_category {
         return "volume-creation I/O failed";
       case CreationError::helper_terminated:
         return "volume-creation helper terminated unexpectedly";
+      case CreationError::destination_full:
+        return "the save location does not have room for the container";
       default:
         return "unknown volume-creation error";
     }
