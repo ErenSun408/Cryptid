@@ -4,6 +4,7 @@
 #include "usb_vault/application/container_index_v1.h"
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -90,14 +91,51 @@ enum class ContainerIndexWriteV1 {
     std::span<const std::byte> key, std::span<std::byte> file,
     std::wstring_view path);
 
-// Places the requested known paths first, preserving the relative order of
-// omitted paths (including containers on disconnected disks). Rejects unknown
-// or repeated paths before mutation. Re-seals only entries this key opens;
-// opaque slots and the fixed file size are preserved. An exception leaves the
-// supplied buffer unchanged. The caller still owns atomic file replacement.
+// One container an ordering names: a file container by its path, or a disk
+// container by its identity. The user arranges both kinds in a single list, so
+// both have to be nameable by the same call. Exactly one of the two is set.
+struct ContainerIndexRef final {
+  std::wstring path;
+  std::optional<ContainerIndexPartition> partition;
+};
+
+// Places the requested known containers first, preserving the relative order
+// of omitted ones (including containers on disconnected disks). Rejects
+// unknown or repeated entries before mutation. Re-seals only entries this key
+// opens; opaque slots and the fixed file size are preserved. An exception
+// leaves the supplied buffer unchanged. The caller still owns atomic file
+// replacement.
+//
+// Both kinds share one order, because the list the user drags holds both. A
+// disk container used to be excluded here, which left it with no order at all:
+// it then sorted by the slot it happened to land in, and that slot is chosen at
+// random on purpose, so its position was arbitrary and moved whenever another
+// record was written.
+void reorder_container_index_v1(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    std::span<const ContainerIndexRef> order);
+
+// The file-only ordering, kept for callers that must not disturb partition
+// records: those slots stay byte-for-byte, so a disk container keeps whatever
+// position it already had. Ordering a list holding both kinds needs the call
+// above instead.
 void reorder_container_index_paths_v1(
     std::span<const std::byte> key, std::span<std::byte> file,
     std::span<const std::wstring> paths);
+
+// Every container this key opens, in authenticated display order, naming each
+// one the way an ordering does. The caller can rank its own rows against this
+// without caring which kind each is.
+[[nodiscard]] std::vector<ContainerIndexRef> list_container_index_refs_v1(
+    std::span<const std::byte> key, std::span<const std::byte> file);
+
+// Ordered insertion, the disk-container counterpart of the path prepend: a
+// genuinely new partition goes first; one already recorded keeps its position
+// and leaves the buffer unchanged.
+[[nodiscard]] ContainerIndexWriteV1 prepend_container_index_partition(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    const ContainerIndexPartition& partition,
+    PartitionConversionState state = PartitionConversionState::normal);
 
 // Fills the slot holding this path with fresh random bytes, and reports
 // whether there was one. Only a slot this key opens can be found, so a record

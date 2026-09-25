@@ -3921,6 +3921,67 @@ void test_partition_creation_persistence_and_mounting() {
   }
 }
 
+void test_a_dragged_order_records_disk_containers_too() {
+  // A disk container had no position of its own in the index: ordering wrote
+  // only the file paths, so its place came back from the slot it happened to
+  // land in, and that slot is chosen at random on purpose. What the user drags
+  // has to reach the index for both kinds.
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.partition_password_64 = true;
+  runtime.remember_paths = true;
+  runtime.free_drive_letters = {L'X', L'W', L'V', L'U', L'T'};
+  runtime.creation_cancelled = [] { return false; };
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  const auto identity_of = [](std::uint8_t device) {
+    usb_vault::volume::PartitionIdentity identity{};
+    identity.device_id[0] = device;
+    identity.layout = static_cast<std::uint32_t>(usb_vault::volume::PartitionLayout::mbr);
+    identity.logical_sector_bytes = 512;
+    identity.offset_bytes = 1048576;
+    identity.length_bytes = 64ULL * 1024 * 1024;
+    return identity;
+  };
+  const auto create = [&](std::uint8_t device) {
+    usb_vault::volume::PartitionCandidate target;
+    target.layout = usb_vault::volume::PartitionLayout::mbr;
+    target.device_id[0] = device;
+    target.offset_bytes = 1048576;
+    target.length_bytes = 64ULL * 1024 * 1024;
+    target.logical_sector_bytes = 512;
+    return session.create_partition(target, [](const auto&) { return true; });
+  };
+
+  const auto first = create(7);
+  const auto second = create(8);
+  const auto third = create(9);
+  // Newest first, each with the next number.
+  const auto shown = session.container_statuses();
+  std::vector<std::wstring> names;
+  for (const auto& status : shown)
+    if (status.partition) names.push_back(status.name);
+  require(names.size() == 3 && names[0] == L"磁盘容器 3" &&
+              names[1] == L"磁盘容器 2" && names[2] == L"磁盘容器 1",
+          "a newly created disk container did not go first with the next number");
+
+  // Drag them into an order no slot layout would produce, oldest in the middle.
+  std::vector<std::uint32_t> dragged;
+  for (const auto& status : shown) if (!status.partition) dragged.push_back(status.id);
+  dragged.insert(dragged.begin(), {second, first, third});
+  session.reorder_containers(dragged);
+
+  const auto key = usb_vault::application::derive_shared_container_index_key_v1(root_secret().bytes());
+  const auto refs = usb_vault::application::list_container_index_refs_v1(
+      key.bytes(), runtime.container_index);
+  std::vector<usb_vault::volume::PartitionIdentity> recorded;
+  for (const auto& ref : refs) if (ref.partition) recorded.push_back(*ref.partition);
+  require(recorded.size() == 3 && recorded[0] == identity_of(8) &&
+              recorded[1] == identity_of(7) && recorded[2] == identity_of(9),
+          "the dragged order did not reach the index for disk containers");
+}
+
 void test_disk_containers_are_numbered_among_themselves() {
   // A disk container has no file name, so it is numbered. The number used to
   // come from the id every container shares, so a file container adopted in
@@ -4171,6 +4232,7 @@ int main() {
   try {
     test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
+    test_a_dragged_order_records_disk_containers_too();
     test_disk_containers_are_numbered_among_themselves();
     test_a_mount_is_recorded_where_the_driver_put_it();
     test_partition_pair_session();

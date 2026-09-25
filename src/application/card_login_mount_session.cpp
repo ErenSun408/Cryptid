@@ -825,7 +825,11 @@ SessionContainer& adopt_partition(CardLoginMountSessionState& state,
   entry.derivation_known = false;
   entry.partition = identity;
   state.containers.push_back(std::move(entry));
-  return state.containers.back();
+  // Newest first, the way a newly created file container is placed. The
+  // index records the same position, so it survives the session.
+  std::rotate(state.containers.begin(), state.containers.end() - 1,
+              state.containers.end());
+  return state.containers.front();
 }
 
 void record_residual_mount(const ContainerLayout& layout,
@@ -1067,8 +1071,13 @@ void CardLoginMountSessionCore::reorder_containers(
     throw std::invalid_argument("ordering must contain every current container");
   std::vector<SessionContainer> ordered;
   std::vector<std::wstring> paths;
+  // The user drags one list holding both kinds, so the saved order has to name
+  // both. Recording only the paths left every disk container with no position
+  // of its own, to be re-derived from its random slot on the next login.
+  std::vector<ContainerIndexRef> refs;
   ordered.reserve(ids.size());
   paths.reserve(ids.size());
+  refs.reserve(ids.size());
   for (const auto id : ids) {
     const auto* entry = find_by_id(state_, id);
     if (!entry || std::any_of(ordered.begin(), ordered.end(),
@@ -1076,6 +1085,9 @@ void CardLoginMountSessionCore::reorder_containers(
       throw std::invalid_argument("invalid container order");
     ordered.push_back(*entry);
     if (!entry->partition) paths.push_back(entry->path);
+    refs.push_back(entry->partition
+        ? ContainerIndexRef{.partition = *entry->partition}
+        : ContainerIndexRef{.path = entry->path});
   }
   if (runtime_.remember_container_paths()) {
     auto key = container_index_key();
@@ -1088,7 +1100,15 @@ void CardLoginMountSessionCore::reorder_containers(
       if (add_container_index_path_v1(key.bytes(), file, path) == ContainerIndexWriteV1::full)
         throw std::runtime_error("container index is full");
     }
-    reorder_container_index_paths_v1(key.bytes(), file, paths);
+    // A partition is recorded when it is created and its record goes when it is
+    // forgotten, so the index knows every one the session holds. Ordering names
+    // only what it can find rather than refusing the whole arrangement over a
+    // record that is somehow not there.
+    const auto recorded = list_container_index_partitions(key.bytes(), file);
+    std::erase_if(refs, [&](const auto& ref) {
+      return ref.partition && std::ranges::find(recorded, *ref.partition) == recorded.end();
+    });
+    reorder_container_index_v1(key.bytes(), file, refs);
     key.clear();
     runtime_.write_container_index(file);
   }
@@ -1113,30 +1133,39 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     if (!runtime_.remember_container_paths()) return;
     security::SecureBuffer key = container_index_key();
     const std::vector<std::byte> file = runtime_.read_container_index();
-    const std::vector<std::wstring> paths =
-        list_container_index_paths_v1(key.bytes(), file);
+    const auto refs = list_container_index_refs_v1(key.bytes(), file);
     const auto partitions = list_container_index_partition_entries(key.bytes(), file);
     key.clear();
-    for (const auto& partition : partitions) adopt_partition(state_, *partition.partition).conversion_state=static_cast<std::uint32_t>(partition.conversion);
-    for (const std::wstring& path : paths) {
+    // Oldest first, so the number a disk container shows counts the order they
+    // were created in rather than where they sit. Each is adopted at the front,
+    // which leaves them newest first -- the order the index holds and the list
+    // shows.
+    for (auto item = partitions.rbegin(); item != partitions.rend(); ++item)
+      adopt_partition(state_, *item->partition).conversion_state =
+          static_cast<std::uint32_t>(item->conversion);
+    for (const auto& ref : refs) {
+      if (ref.partition) continue;
       // A remembered path whose file is not here is passed over and left in
       // the index. A container on a drive that is not plugged in is absent in
       // exactly the way a deleted one is, and clearing a slot on that evidence
       // would throw the record away for good.
-      if (!runtime_.container_exists(path)) continue;
-      static_cast<void>(adopt(state_, path, wchar_t{}, false, false, false));
+      if (!runtime_.container_exists(ref.path)) continue;
+      static_cast<void>(adopt(state_, ref.path, wchar_t{}, false, false, false));
     }
     // Layout containers may already be adopted. Match all visible entries to
     // the saved order without changing mount flags or dropping absent paths.
+    // Both kinds are ranked against one list now, so a disk container keeps the
+    // position it was given instead of following the slot it landed in.
+    const auto rank = [&](const auto& entry) {
+      const auto found = std::find_if(refs.begin(), refs.end(), [&](const auto& ref) {
+        if (entry.partition) return ref.partition && *ref.partition == *entry.partition;
+        return !ref.partition && ::CompareStringOrdinal(
+            ref.path.c_str(), -1, entry.path.c_str(), -1, TRUE) == CSTR_EQUAL;
+      });
+      return found - refs.begin();
+    };
     std::stable_sort(state_.containers.begin(), state_.containers.end(),
-        [&](const auto& a, const auto& b) {
-          const auto rank = [&](const auto& entry) {
-            return std::find_if(paths.begin(), paths.end(), [&](const auto& path) {
-              return ::CompareStringOrdinal(path.c_str(), -1, entry.path.c_str(), -1, TRUE) == CSTR_EQUAL;
-            }) - paths.begin();
-          };
-          return rank(a) < rank(b);
-        });
+        [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
   } catch (...) {
   }
 }
@@ -1297,7 +1326,7 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
     if (entry.partition == identity) throw std::logic_error("partition already recorded");
   auto key = container_index_key();
   auto index = runtime_.read_container_index();
-  const auto insertion = add_container_index_partition(key.bytes(), index, identity);
+  const auto insertion = prepend_container_index_partition(key.bytes(), index, identity);
   if (insertion != ContainerIndexWriteV1::added) throw std::runtime_error("partition index unavailable or already recorded");
   key.clear();
   // Allocate the session row before irreversible work, but remove it on failure.

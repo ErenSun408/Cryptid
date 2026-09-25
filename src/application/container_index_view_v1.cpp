@@ -216,22 +216,36 @@ list_container_index_paths_v1(const std::span<const std::byte> key,
   return paths;
 }
 
-void reorder_container_index_paths_v1(
-    const std::span<const std::byte> key, const std::span<std::byte> file,
-    const std::span<const std::wstring> paths) {
-  if (paths.size() > kContainerIndexV1SlotCount)
-    throw std::invalid_argument("too many container paths");
+namespace {
+// Shared by both orderings. `include_partitions` is the difference that
+// matters: a file-only ordering must leave partition slots byte-for-byte, so
+// those records are dropped from the working set and never re-sealed.
+void reorder_entries(const std::span<const std::byte> key,
+                     const std::span<std::byte> file,
+                     const std::span<const ContainerIndexRef> requested,
+                     const bool include_partitions) {
+  if (requested.size() > kContainerIndexV1SlotCount)
+    throw std::invalid_argument("too many containers");
   auto entries = ordered_entries(key, file);
-  std::erase_if(entries, [](const auto& item) { return item.entry.partition.has_value(); });
+  if (!include_partitions)
+    std::erase_if(entries, [](const auto& item) { return item.entry.partition.has_value(); });
+  const auto names = [](const LocatedEntry& item, const ContainerIndexRef& ref) {
+    if (ref.partition) {
+      return item.entry.partition.has_value() && *item.entry.partition == *ref.partition;
+    }
+    return !item.entry.partition.has_value() && same_path(item.entry.path, ref.path);
+  };
   std::vector<std::size_t> order;
   std::vector<bool> selected(entries.size(), false);
-  for (const auto& path : paths) {
+  for (const auto& ref : requested) {
+    if (ref.path.empty() == !ref.partition.has_value())
+      throw std::invalid_argument("an ordering names a path or a partition");
     const auto found = std::find_if(entries.begin(), entries.end(),
-        [&](const auto& item) { return same_path(item.entry.path, path); });
+        [&](const auto& item) { return names(item, ref); });
     if (found == entries.end())
-      throw std::invalid_argument("unknown container path");
+      throw std::invalid_argument("unknown container");
     const auto index = static_cast<std::size_t>(found - entries.begin());
-    if (selected[index]) throw std::invalid_argument("duplicate container path");
+    if (selected[index]) throw std::invalid_argument("duplicate container");
     selected[index] = true;
     order.push_back(index);
   }
@@ -239,16 +253,37 @@ void reorder_container_index_paths_v1(
     if (!selected[index]) order.push_back(index);
 
   // Stage all encryption before touching the caller's buffer. No record is
-  // relocated into an opaque slot, even when it belongs to another key.
+  // relocated into an opaque slot, even when it belongs to another key. A
+  // partition is re-sealed as a partition: only its order changes, and its
+  // conversion state has to survive the rewrite untouched.
   std::vector<std::byte> updated(file.begin(), file.end());
   for (std::size_t rank = 0; rank < order.size(); ++rank) {
     const auto& item = entries[order[rank]];
-    const auto sealed = seal_container_index_entry_v1(
-        key, item.entry.path, static_cast<std::uint32_t>(rank));
+    const auto position = static_cast<std::uint32_t>(rank);
+    const auto sealed = item.entry.partition
+        ? seal_container_index_partition(key, *item.entry.partition, position,
+                                         item.entry.conversion)
+        : seal_container_index_entry_v1(key, item.entry.path, position);
     std::ranges::copy(sealed.bytes(),
         container_index_v1_mutable_slot(updated, item.slot).begin());
   }
   std::ranges::copy(updated, file.begin());
+}
+}  // namespace
+
+void reorder_container_index_v1(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const std::span<const ContainerIndexRef> order) {
+  reorder_entries(key, file, order, true);
+}
+
+void reorder_container_index_paths_v1(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const std::span<const std::wstring> paths) {
+  std::vector<ContainerIndexRef> refs;
+  refs.reserve(paths.size());
+  for (const auto& path : paths) refs.push_back({.path = path});
+  reorder_entries(key, file, refs, false);
 }
 
 ContainerIndexWriteV1
@@ -322,6 +357,17 @@ std::vector<ContainerIndexPartition> list_container_index_partitions(
   return result;
 }
 
+std::vector<ContainerIndexRef> list_container_index_refs_v1(
+    const std::span<const std::byte> key, const std::span<const std::byte> file) {
+  std::vector<ContainerIndexRef> result;
+  for (const auto& located : ordered_entries(key, file)) {
+    result.push_back({.path = located.entry.partition ? std::wstring()
+                                                      : located.entry.path,
+                      .partition = located.entry.partition});
+  }
+  return result;
+}
+
 ContainerIndexWriteV1 add_container_index_partition(
     const std::span<const std::byte> key, const std::span<std::byte> file,
     const ContainerIndexPartition& partition, const PartitionConversionState state) {
@@ -336,6 +382,20 @@ ContainerIndexWriteV1 add_container_index_partition(
   if (free_slots.empty()) return ContainerIndexWriteV1::full;
   std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(
       file, free_slots[random_below(free_slots.size())]).begin());
+  return ContainerIndexWriteV1::added;
+}
+
+ContainerIndexWriteV1 prepend_container_index_partition(
+    const std::span<const std::byte> key, const std::span<std::byte> file,
+    const ContainerIndexPartition& partition,
+    const PartitionConversionState state) {
+  std::vector<std::byte> updated(file.begin(), file.end());
+  const auto result = add_container_index_partition(key, updated, partition, state);
+  if (result != ContainerIndexWriteV1::added) return result;
+  const ContainerIndexRef first{.partition = partition};
+  reorder_container_index_v1(key, updated,
+                             std::span<const ContainerIndexRef>(&first, 1));
+  std::ranges::copy(updated, file.begin());
   return ContainerIndexWriteV1::added;
 }
 

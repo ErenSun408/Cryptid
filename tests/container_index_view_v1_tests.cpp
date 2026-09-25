@@ -418,9 +418,87 @@ void test_mixed_partition_and_file_index_preserves_both_kinds() {
          "partition writer evicted an existing record");
 }
 
+void test_one_order_covers_both_kinds_and_survives_reload() {
+  using namespace usb_vault::application;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x43));
+  const auto make = [](std::uint8_t tag, std::uint64_t offset) {
+    ContainerIndexPartition partition;
+    partition.device_id.fill(tag);
+    partition.offset_bytes = offset;
+    partition.length_bytes = 64 * 1024 * 1024;
+    return partition;
+  };
+  const auto older = make(0x61, 1024 * 1024);
+  const auto newer = make(0x61, 96ULL * 1024 * 1024);
+  auto file = fresh_file();
+
+  // A newly recorded disk container goes first, the way a new path does.
+  expect(prepend_container_index_partition(key.bytes(), file, older) ==
+             ContainerIndexWriteV1::added, "first partition was not recorded");
+  expect(prepend_container_index_partition(key.bytes(), file, newer) ==
+             ContainerIndexWriteV1::added, "second partition was not recorded");
+  auto refs = list_container_index_refs_v1(key.bytes(), file);
+  expect(refs.size() == 2 && refs[0].partition == newer && refs[1].partition == older,
+         "a newly recorded disk container did not go first");
+  expect(prepend_container_index_partition(key.bytes(), file, newer) ==
+             ContainerIndexWriteV1::already_present,
+         "an existing partition was recorded twice");
+
+  static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, L"D:\\a.hc"));
+  static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, L"D:\\b.hc"));
+
+  // One arrangement naming both kinds, in an order neither grouping would give.
+  const std::vector<ContainerIndexRef> wanted{
+      {.partition = older}, {.path = L"D:\\b.hc"}, {.partition = newer},
+      {.path = L"D:\\a.hc"}};
+  reorder_container_index_v1(key.bytes(), file, wanted);
+  const auto reloaded = file;
+  refs = list_container_index_refs_v1(key.bytes(), reloaded);
+  expect(refs.size() == 4 && refs[0].partition == older &&
+             refs[1].partition == std::nullopt && refs[1].path == L"D:\\b.hc" &&
+             refs[2].partition == newer &&
+             refs[3].partition == std::nullopt && refs[3].path == L"D:\\a.hc",
+         "a mixed arrangement did not survive the reload");
+  // The file-only view keeps its own relative order out of the same records.
+  expect(list_container_index_paths_v1(key.bytes(), reloaded) ==
+             std::vector<std::wstring>{L"D:\\b.hc", L"D:\\a.hc"},
+         "the file-only view disagrees with the arrangement");
+
+  // Re-sealing a partition to give it a position must not lose what else the
+  // record carries.
+  expect(set_container_index_partition_state(key.bytes(), file, newer,
+                                            PartitionConversionState::paused),
+         "conversion state could not be set");
+  const std::vector<ContainerIndexRef> again{{.partition = newer}};
+  reorder_container_index_v1(key.bytes(), file, again);
+  const auto entries = list_container_index_partition_entries(key.bytes(), file);
+  const auto found = std::ranges::find_if(entries, [&](const auto& item) {
+    return item.partition == newer;
+  });
+  expect(found != entries.end() &&
+             found->conversion == PartitionConversionState::paused,
+         "reordering a disk container lost its conversion state");
+
+  // Rejected before anything is written, both kinds alike.
+  const auto untouched = file;
+  const std::vector<ContainerIndexRef> unknown{{.partition = make(0x62, 4096)}};
+  expect_invalid_argument([&] { reorder_container_index_v1(key.bytes(), file, unknown); },
+                          "an unknown disk container was ordered");
+  expect(file == untouched, "a refused arrangement modified the index");
+  const std::vector<ContainerIndexRef> twice{{.partition = newer}, {.partition = newer}};
+  expect_invalid_argument([&] { reorder_container_index_v1(key.bytes(), file, twice); },
+                          "a repeated disk container was ordered");
+  expect(file == untouched, "a repeated arrangement modified the index");
+  const std::vector<ContainerIndexRef> neither{{}};
+  expect_invalid_argument([&] { reorder_container_index_v1(key.bytes(), file, neither); },
+                          "an ordering naming nothing was accepted");
+  expect(file == untouched, "an empty reference modified the index");
+}
+
 } // namespace
 
 int main() {
+  test_one_order_covers_both_kinds_and_survives_reload();
   test_partition_conversion_states();
   test_mixed_partition_and_file_index_preserves_both_kinds();
   test_order_survives_reload_and_preserves_unselected_and_opaque_slots();
