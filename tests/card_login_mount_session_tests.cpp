@@ -489,7 +489,9 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "creation did not use the staging path");
     require(size_bytes != 0 && size_bytes % 512ULL == 0,
             "creation received the wrong size");
-    require(volume_password.size() == 28,
+    // The A derivation is 64 bytes in a session that also makes disk
+    // containers, so the size follows the derivation rather than a literal.
+    require(volume_password.size() == (partition_password_64 ? 64u : 28u),
             "creation received the wrong derived password");
     if (fail_create) throw std::runtime_error("create failed");
     if (is_container_a) {
@@ -566,7 +568,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
                                        : "mount-created:other");
     require(!is_container_a || container_a_exists,
             "creation mounted before publication");
-    require(volume_password.size() == 28,
+    require(volume_password.size() == (partition_password_64 ? 64u : 28u),
             "created mount received the wrong derived password");
     require(options.drive_letter == allocated_drive_letter &&
                 options.prf == usb_vault::volume::Pkcs5Prf::sha512 &&
@@ -3919,6 +3921,56 @@ void test_partition_creation_persistence_and_mounting() {
   }
 }
 
+void test_disk_containers_are_numbered_among_themselves() {
+  // A disk container has no file name, so it is numbered. The number used to
+  // come from the id every container shares, so a file container adopted in
+  // between consumed one and the disk containers came back with gaps.
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.partition_password_64 = true;
+  runtime.remember_paths = true;
+  // Four containers are created and each keeps its mount, so the fake needs
+  // more letters than its default three.
+  runtime.free_drive_letters = {L'X', L'W', L'V', L'U', L'T'};
+  CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.creation_cancelled = [] { return false; };
+
+  const auto make_partition = [&](const std::uint8_t device) {
+    usb_vault::volume::PartitionCandidate target;
+    target.layout = usb_vault::volume::PartitionLayout::mbr;
+    target.device_id[0] = device;
+    target.offset_bytes = 1048576;
+    target.length_bytes = 64ULL * 1024 * 1024;
+    target.logical_sector_bytes = 512;
+    return session.create_partition(target, [](const auto&) { return true; });
+  };
+
+  static_cast<void>(make_partition(7));
+  // A file container in between takes a container id but must not take a disk
+  // container's number.
+  static_cast<void>(session.create_container(L"C:\\vault\\between.hc", 64ULL * 1024 * 1024));
+  static_cast<void>(make_partition(8));
+  static_cast<void>(make_partition(9));
+
+  std::vector<std::wstring> disk_names;
+  for (const auto& status : session.container_statuses()) {
+    if (status.name.starts_with(L"磁盘容器 ")) disk_names.push_back(status.name);
+  }
+  std::ranges::sort(disk_names);
+  require(disk_names.size() == 3 && disk_names[0] == L"磁盘容器 1" &&
+              disk_names[1] == L"磁盘容器 2" && disk_names[2] == L"磁盘容器 3",
+          "disk containers were not numbered one after another among themselves");
+
+  // The ids themselves stay unique across every kind: they are the handle the
+  // page addresses a container by, and nothing here may collapse two of them.
+  std::vector<std::uint32_t> ids;
+  for (const auto& status : session.container_statuses()) ids.push_back(status.id);
+  std::ranges::sort(ids);
+  require(std::ranges::adjacent_find(ids) == ids.end(),
+          "container identifiers stopped being unique");
+}
+
 void test_a_mount_is_recorded_where_the_driver_put_it() {
   // The letter a mount asks for is a request. When the mount manager lands the
   // volume somewhere else, a session that writes down its own request then
@@ -4119,6 +4171,7 @@ int main() {
   try {
     test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
+    test_disk_containers_are_numbered_among_themselves();
     test_a_mount_is_recorded_where_the_driver_put_it();
     test_partition_pair_session();
     test_partition_card_removal_and_drive_conflicts();

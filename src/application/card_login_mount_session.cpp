@@ -818,7 +818,10 @@ SessionContainer& adopt_partition(CardLoginMountSessionState& state,
   if (state.next_container_id == UINT32_MAX) throw std::overflow_error("container IDs exhausted");
   SessionContainer entry;
   entry.id = state.next_container_id++;
-  entry.name = L"磁盘容器 " + std::to_wstring(entry.id);
+  // The shown number counts disk containers only. It is still session-local:
+  // what a disk container is called, and where it sits in the list, do not
+  // survive a restart yet.
+  entry.name = L"磁盘容器 " + std::to_wstring(state.next_partition_ordinal++);
   entry.derivation_known = false;
   entry.partition = identity;
   state.containers.push_back(std::move(entry));
