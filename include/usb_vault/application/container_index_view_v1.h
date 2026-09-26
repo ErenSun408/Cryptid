@@ -99,6 +99,14 @@ struct ContainerIndexRef final {
   std::optional<ContainerIndexPartition> partition;
 };
 
+// Shared identity rule for index ordering and session restoration. A partition
+// is matched by its complete identity, ignoring its session display path;
+// files use case-insensitive ordinal paths. Different kinds never match.
+// Invalid references match nothing. No filesystem lookup or path aliasing.
+[[nodiscard]] bool container_index_ref_matches_v1(
+    const ContainerIndexRef& reference, std::wstring_view path,
+    const std::optional<ContainerIndexPartition>& partition);
+
 // Places the requested known containers first, preserving the relative order
 // of omitted ones (including containers on disconnected disks). Rejects
 // unknown or repeated entries before mutation. Re-seals only entries whose

@@ -1176,9 +1176,7 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     // position it was given instead of following the slot it landed in.
     const auto rank = [&](const auto& entry) {
       const auto found = std::find_if(refs.begin(), refs.end(), [&](const auto& ref) {
-        if (entry.partition) return ref.partition && *ref.partition == *entry.partition;
-        return !ref.partition && ::CompareStringOrdinal(
-            ref.path.c_str(), -1, entry.path.c_str(), -1, TRUE) == CSTR_EQUAL;
+        return container_index_ref_matches_v1(ref, entry.path, entry.partition);
       });
       return found - refs.begin();
     };

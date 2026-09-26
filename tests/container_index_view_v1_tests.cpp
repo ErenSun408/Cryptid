@@ -420,6 +420,35 @@ void test_mixed_partition_and_file_index_preserves_both_kinds() {
          "partition writer evicted an existing record");
 }
 
+void test_reference_matching_keeps_file_and_partition_identity_distinct() {
+  using namespace usb_vault::application;
+  const ContainerIndexRef file{.path = L"D:\\vault.hc"};
+  expect(container_index_ref_matches_v1(file, L"d:\\VAULT.HC", std::nullopt),
+         "case-only spelling lost its rank");
+  const std::wstring longer = L"d:\\VAULT.HC.trailing";
+  expect(container_index_ref_matches_v1(file, std::wstring_view(longer).substr(0, file.path.size()), std::nullopt),
+         "matching ignored the path view length");
+  expect(!container_index_ref_matches_v1(file, longer, std::nullopt),
+         "a path prefix matched another container");
+  ContainerIndexPartition disk;
+  disk.device_id.fill(0x51);
+  disk.offset_bytes = 1048576;
+  disk.length_bytes = 64 * 1024 * 1024;
+  const ContainerIndexRef partition{.partition = disk};
+  expect(container_index_ref_matches_v1(partition, file.path, disk),
+         "partition display path changed identity matching");
+  expect(!container_index_ref_matches_v1(file, file.path, disk) &&
+             !container_index_ref_matches_v1(partition, file.path, std::nullopt),
+         "file and partition identities were conflated");
+  auto different = disk;
+  different.offset_bytes += disk.length_bytes;
+  expect(!container_index_ref_matches_v1(partition, L"", different),
+         "different partitions on one device matched");
+  expect(!container_index_ref_matches_v1({}, L"", std::nullopt) &&
+             !container_index_ref_matches_v1({.path = file.path, .partition = disk}, file.path, disk),
+         "malformed reference matched a container");
+}
+
 void test_reordering_changes_only_modified_records() {
   using namespace usb_vault::application;
   const auto key = derive_shared_container_index_key_v1(test_root(0x45));
@@ -623,6 +652,7 @@ void test_one_order_covers_both_kinds_and_survives_reload() {
 } // namespace
 
 int main() {
+  test_reference_matching_keeps_file_and_partition_identity_distinct();
   test_reordering_changes_only_modified_records();
   test_a_creation_sequence_is_recorded_and_never_moves();
   test_one_order_covers_both_kinds_and_survives_reload();

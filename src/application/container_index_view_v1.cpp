@@ -216,6 +216,14 @@ list_container_index_paths_v1(const std::span<const std::byte> key,
   return paths;
 }
 
+bool container_index_ref_matches_v1(
+    const ContainerIndexRef& reference, const std::wstring_view path,
+    const std::optional<ContainerIndexPartition>& partition) {
+  if (reference.path.empty() == !reference.partition.has_value()) return false;
+  if (reference.partition) return partition && *partition == *reference.partition;
+  return !partition && same_path(reference.path, path);
+}
+
 namespace {
 // Both entry points rank the complete visible set. Omitted records retain
 // their relative order, regardless of whether they name files or partitions.
@@ -225,19 +233,15 @@ void reorder_entries(const std::span<const std::byte> key,
   if (requested.size() > kContainerIndexV1SlotCount)
     throw std::invalid_argument("too many containers");
   auto entries = ordered_entries(key, file);
-  const auto names = [](const LocatedEntry& item, const ContainerIndexRef& ref) {
-    if (ref.partition) {
-      return item.entry.partition.has_value() && *item.entry.partition == *ref.partition;
-    }
-    return !item.entry.partition.has_value() && same_path(item.entry.path, ref.path);
-  };
   std::vector<std::size_t> order;
   std::vector<bool> selected(entries.size(), false);
   for (const auto& ref : requested) {
     if (ref.path.empty() == !ref.partition.has_value())
       throw std::invalid_argument("an ordering names a path or a partition");
     const auto found = std::find_if(entries.begin(), entries.end(),
-        [&](const auto& item) { return names(item, ref); });
+        [&](const auto& item) {
+          return container_index_ref_matches_v1(ref, item.entry.path, item.entry.partition);
+        });
     if (found == entries.end())
       throw std::invalid_argument("unknown container");
     const auto index = static_cast<std::size_t>(found - entries.begin());
