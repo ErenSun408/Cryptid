@@ -460,14 +460,6 @@ void CardProductUiSessionController::mount_container(
   volume_session_.mount_adopted_container(id);
 }
 
-void CardProductUiSessionController::mount_all() {
-  if (state() != CardProductUiState::authenticated) {
-    throw_wrong_route(
-        "mounting every container is not available in the current UI state");
-  }
-  volume_session_.mount_adopted_all();
-}
-
 void CardProductUiSessionController::unmount_container(
     const std::uint32_t id) {
   if (state() != CardProductUiState::authenticated) {

@@ -174,10 +174,6 @@ class CardProductUiSessionController final {
   // user: the session still holds everything each container needs to open.
   void mount_container(std::uint32_t id);
 
-  // Mounts every adopted container that is still closed, in one run. The page
-  // names no container: which ones are missing is the session's own fact.
-  void mount_all();
-
   // Tries one decoy password against every container and reports which ones
   // it can open for maintenance. The buffer is wiped on every path, and the
   // password itself is kept by the session rather than by this page.

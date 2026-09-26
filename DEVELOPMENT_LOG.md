@@ -4083,3 +4083,10 @@
 - 检查与实现：新增 `mark_released`，五处统一调用。收尾导入／测量、记录操作日志仍由各路径自行处理：普通与单项卸载只在卸下维护卷时收尾，拔卡在卸载前经 `release_session_secrets` 无条件收尾，两者差异是有意的，本片不改变行为。
 - 验证：`card_login_mount_session_tests`、`card_presence_controller_tests`、`card_product_webview_host_object_tests` 通过。未跑全量测试。
 - 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。
+
+### 2026-09-26 — refactor / 删除无调用方的整会话挂载链
+- 范围与审计：`mount_adopted_all` 注释称先 B 后 A、失败回滚，实现只是逐个挂载、首处失败即停，已挂上的卷保留；现有测试只覆盖 B 首项失败。核实页面自 P3.22 起一键挂载与登录自动挂载均走逐项批量接口，`beginMountAll` 在页面中已无调用方。MILESTONES 第 524 行为当时的历史记录，保留不改。
+- 检查与实现：删除会话接口虚函数及实现、核心 `mount_adopted_all`、控制器 `mount_all`、宿主 `beginMountAll` 编号／名称映射／分发；`begin_volume_operation` 只剩一键卸载一个无标识调用，简化参数判断。页面少了一个无需容器标识、由会话决定挂载范围的入口。
+- 测试：删除整会话挂载用例与分区转换中对应的一行断言（单项挂载断言已覆盖同一规则）、宿主假会话实现及其专项检查、页面模拟桥方法；宿主测试改用单项挂载验证“完成的挂载不会留下强制清理资格”，并把 `beginMountAll` 列入必须为未知名称的成员。
+- 验证：`USB Vault.exe`（p46）构建通过；`card_login_mount_session_tests`、`card_product_webview_host_object_tests`、`card_product_ui_session_controller_tests` 通过；navigation DOM 307 项通过。未跑全量测试。
+- 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。

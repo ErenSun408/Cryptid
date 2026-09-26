@@ -189,7 +189,6 @@ bool is_survey_query(DISPID member) noexcept {
          member == kCancelDecoySurveyId;
 }
 constexpr DISPID kBeginForceUnmountLastId = 55;
-constexpr DISPID kBeginMountAllId = 56;
 // Public, role-neutral outcomes: idle/running/success/unknown, busy, missing,
 // denied, unreadable container, IO failure, driver unavailable, card removed.
 unsigned int volume_failure_status(const std::error_code& error) noexcept {
@@ -636,7 +635,6 @@ class CardProductWebViewHostObject final : public IDispatch {
       return S_OK;
     }
     if (matches(names[0], L"beginMountAdoptedContainer")) { ids[0] = kBeginMountAdoptedId; return S_OK; }
-    if (matches(names[0], L"beginMountAll")) { ids[0] = kBeginMountAllId; return S_OK; }
     if (matches(names[0], L"beginUnmountContainer")) { ids[0] = kBeginUnmountContainerId; return S_OK; }
     if (matches(names[0], L"beginUnmount")) { ids[0] = kBeginUnmountId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountLast")) { ids[0] = kBeginForceUnmountLastId; return S_OK; }
@@ -849,7 +847,6 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
         return invoke_survey_query(member, parameters, result);
       case kBeginMountAdoptedId:
-      case kBeginMountAllId:
       case kBeginUnmountContainerId:
       case kBeginUnmountId:
       case kBeginForceUnmountLastId:
@@ -1670,18 +1667,14 @@ class CardProductWebViewHostObject final : public IDispatch {
         return E_ACCESSDENIED;
       member = last_volume_member_;
     }
-    // "all" is the cleanup exemption below, not merely the argument shape:
-    // unmounting everything stays reachable once the card is gone, while
-    // mounting everything is an ordinary authenticated action that happens to
-    // take no identifier. Keeping them apart is what stops beginMountAll from
-    // inheriting that exemption.
+    // Unmounting everything is the only call without an identifier, and the
+    // cleanup exemption below: it stays reachable once the card is gone.
     const bool all = member == kBeginUnmountId;
-    const bool no_id = all || member == kBeginMountAllId;
     if (!parameters || parameters->cNamedArgs != 0 ||
-        parameters->cArgs != (no_id || force ? 0U : 1U) ||
-        (!no_id && !force && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+        parameters->cArgs != (all || force ? 0U : 1U) ||
+        (!all && !force && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
     std::uint32_t id = force ? last_volume_id_ : 0;
-    if (!no_id && !force && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
+    if (!all && !force && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
       if (argument_error) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
@@ -1736,7 +1729,6 @@ class CardProductWebViewHostObject final : public IDispatch {
               space_ready_ = false;
             }
             else if (member == kBeginMountAdoptedId) controller_.mount_container(id);
-            else if (member == kBeginMountAllId) controller_.mount_all();
             else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
             else controller_.unmount();
             status = 2;

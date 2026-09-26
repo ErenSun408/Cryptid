@@ -256,7 +256,6 @@ class CardLoginMountSessionCore final {
   std::uint32_t create_container(std::wstring_view path,
                                  std::uint64_t size_bytes);
   void mount_adopted_container(std::uint32_t id);
-  void mount_adopted_all();
   [[nodiscard]] wchar_t open_decoy_maintenance(
       std::uint32_t id,
       const security::SecureBuffer& decoy_password_utf8);

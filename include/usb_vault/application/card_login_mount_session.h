@@ -244,13 +244,6 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // follows the password the session was opened with.
   virtual void mount_adopted_container(std::uint32_t id) = 0;
 
-  // Mounts every adopted container that is not mounted yet, in the fixed
-  // B-before-A order Q-07 requires, aborting on the first failure. A session
-  // implementation that cannot do this refuses rather than mounting a subset.
-  virtual void mount_adopted_all() {
-    throw std::logic_error("this session cannot mount every container at once");
-  }
-
   // Opens one container's outer volume under driver protection and returns its
   // drive letter. The password here opens the outer volume; the hidden one is
   // opened by the login input the session still holds. A mounted container is
@@ -567,7 +560,6 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void complete_initialization(security::SecureBuffer password_utf8) override;
   std::uint32_t mount_container(std::wstring_view path) override;
   void mount_adopted_container(std::uint32_t id) override;
-  void mount_adopted_all() override;
   [[nodiscard]] wchar_t open_decoy_maintenance(
       std::uint32_t id,
       const security::SecureBuffer& decoy_password_utf8) override;

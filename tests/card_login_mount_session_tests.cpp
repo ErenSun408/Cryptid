@@ -1332,58 +1332,6 @@ void test_adopted_containers_mount_without_further_input() {
       "an unknown identifier was accepted");
 }
 
-void test_mounting_every_adopted_container_keeps_b_before_a() {
-  CardAuthenticationSession authentication;
-  FakeRuntime runtime = runtime_with_both_containers();
-  // The fake never takes a letter back, and this case mounts across several
-  // runs including one that fails after allocating.
-  runtime.free_drive_letters = {L'X', L'W', L'V', L'U', L'T', L'S'};
-  CardLoginMountSessionCore session(authentication, runtime, layout(),
-                                    LoginMountPolicy::manual);
-  session.consume_authenticated_login(root_secret(),
-                                      bytes("login-password"));
-  const std::vector<ContainerStatus> adopted = session.container_statuses();
-  const std::uint32_t hidden_id = adopted[0].id;
-
-  // Q-07 fixes the order at B before A even when one call opens both, so a
-  // rollback never exposes A's drive letter first.
-  runtime.events.clear();
-  session.mount_adopted_all();
-  require_events(runtime, {"exists:final-other", "derive:B", "allocate",
-                           "mount-created:other", "notify:A",
-                           "exists:final", "derive:A", "allocate",
-                           "mount-created:A", "notify:A"});
-  const std::vector<ContainerStatus> statuses = session.container_statuses();
-  require(statuses.size() == 2 && statuses[0].mounted && statuses[1].mounted &&
-              statuses[0].drive_letter != statuses[1].drive_letter,
-          "mounting every container did not open both on distinct drives");
-
-  // A second run has nothing left to open and must touch the runtime at all.
-  runtime.events.clear();
-  session.mount_adopted_all();
-  require(runtime.events.empty(), "an already mounted session was reopened");
-
-  // Only the closed containers are retried, still B first, and the run stops
-  // at the first refusal rather than continuing to A.
-  session.unmount_active();
-  runtime.events.clear();
-  runtime.fail_created_mount = true;
-  require_throws<std::runtime_error>([&] { session.mount_adopted_all(); },
-                                     "a refused mount was reported as success");
-  runtime.fail_created_mount = false;
-  require(!session.mounted(), "a failed run left a container mounted");
-  const std::vector<ContainerStatus> after = session.container_statuses();
-  require(after.size() == 2 && !after[0].mounted && !after[1].mounted,
-          "a failed run opened a subset of the session");
-
-  // Resuming from a partly mounted session skips what is already open.
-  session.mount_adopted_container(hidden_id);
-  runtime.events.clear();
-  session.mount_adopted_all();
-  require_events(runtime, {"exists:final", "derive:A", "allocate",
-                           "mount-created:A", "notify:A"});
-}
-
 void test_forced_release_drops_the_captured_volume_password() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime = runtime_with_both_containers();
@@ -4054,7 +4002,6 @@ void test_partition_conversion_lifecycle() {
             "a converted partition was recorded without a position or a number");
     require_throws<std::logic_error>([&]{session.mount_adopted_container(rows[0].id);},"incomplete conversion mounted");
     require_throws<std::logic_error>([&]{session.forget_container(rows[0].id);},"incomplete conversion record removed");
-    session.mount_adopted_all(); require(!session.container_statuses()[0].mounted,"mount all mounted partial data");
     if(scenario!=0) {
       require_throws<std::logic_error>([&]{session.resume_partition_conversion(rows[0].id);},"uncertain conversion resumed");continue;
     }
@@ -4606,7 +4553,6 @@ int main() {
     test_container_a_notify_failure_retains_mount_state();
     test_manual_login_adopts_without_deriving_anything();
     test_adopted_containers_mount_without_further_input();
-    test_mounting_every_adopted_container_keeps_b_before_a();
     test_forced_release_drops_the_captured_volume_password();
     test_deliberate_release_keeps_the_captured_volume_password();
     test_operation_selection_does_not_query_attached_volume_capacity();
