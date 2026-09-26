@@ -217,18 +217,14 @@ list_container_index_paths_v1(const std::span<const std::byte> key,
 }
 
 namespace {
-// Shared by both orderings. `include_partitions` is the difference that
-// matters: a file-only ordering must leave partition slots byte-for-byte, so
-// those records are dropped from the working set and never re-sealed.
+// Both entry points rank the complete visible set. Omitted records retain
+// their relative order, regardless of whether they name files or partitions.
 void reorder_entries(const std::span<const std::byte> key,
                      const std::span<std::byte> file,
-                     const std::span<const ContainerIndexRef> requested,
-                     const bool include_partitions) {
+                     const std::span<const ContainerIndexRef> requested) {
   if (requested.size() > kContainerIndexV1SlotCount)
     throw std::invalid_argument("too many containers");
   auto entries = ordered_entries(key, file);
-  if (!include_partitions)
-    std::erase_if(entries, [](const auto& item) { return item.entry.partition.has_value(); });
   const auto names = [](const LocatedEntry& item, const ContainerIndexRef& ref) {
     if (ref.partition) {
       return item.entry.partition.has_value() && *item.entry.partition == *ref.partition;
@@ -260,6 +256,7 @@ void reorder_entries(const std::span<const std::byte> key,
   for (std::size_t rank = 0; rank < order.size(); ++rank) {
     const auto& item = entries[order[rank]];
     const auto position = static_cast<std::uint32_t>(rank);
+    if (item.entry.order == position) continue;
     const auto sealed = item.entry.partition
         ? seal_container_index_partition(key, *item.entry.partition, position,
                                          item.entry.conversion, item.entry.sequence)
@@ -274,7 +271,7 @@ void reorder_entries(const std::span<const std::byte> key,
 void reorder_container_index_v1(
     const std::span<const std::byte> key, const std::span<std::byte> file,
     const std::span<const ContainerIndexRef> order) {
-  reorder_entries(key, file, order, true);
+  reorder_entries(key, file, order);
 }
 
 void reorder_container_index_paths_v1(
@@ -283,7 +280,7 @@ void reorder_container_index_paths_v1(
   std::vector<ContainerIndexRef> refs;
   refs.reserve(paths.size());
   for (const auto& path : paths) refs.push_back({.path = path});
-  reorder_entries(key, file, refs, false);
+  reorder_entries(key, file, refs);
 }
 
 ContainerIndexWriteV1

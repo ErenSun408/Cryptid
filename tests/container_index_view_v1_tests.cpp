@@ -382,8 +382,10 @@ void test_mixed_partition_and_file_index_preserves_both_kinds() {
   const std::vector<std::wstring> reordered{L"D:\\first.hc"};
   reorder_container_index_paths_v1(key.bytes(), file, reordered);
   expect(remove_container_index_path_v1(key.bytes(), file, L"D:\\second.hc"), "file remove failed");
-  expect(std::ranges::equal(container_index_v1_slot(first, slot), container_index_v1_slot(file, slot)),
-         "file insertion, sorting or removal rewrote the partition slot");
+  const auto partition_after = try_open_container_index_entry(key.bytes(), container_index_v1_slot(file, slot));
+  expect(partition_after && partition_after->partition == partition &&
+             partition_after->sequence == 1 && partition_after->conversion == PartitionConversionState::normal,
+         "file operations damaged partition metadata");
   const auto reloaded = file;
   expect(list_container_index_partitions(key.bytes(), reloaded) == std::vector{partition},
          "partition reload lost stable identity");
@@ -416,6 +418,55 @@ void test_mixed_partition_and_file_index_preserves_both_kinds() {
          "file writer overwrote a partition as filler");
   expect(add_container_index_partition(key.bytes(), file, other) == ContainerIndexWriteV1::full && file == full,
          "partition writer evicted an existing record");
+}
+
+void test_reordering_changes_only_modified_records() {
+  using namespace usb_vault::application;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x45));
+  const auto stranger = derive_shared_container_index_key_v1(test_root(0x46));
+  auto file = fresh_file();
+  ContainerIndexPartition disk;
+  disk.device_id.fill(0x72);
+  disk.offset_bytes = 1048576;
+  disk.length_bytes = 64 * 1024 * 1024;
+  const auto put = [&](std::size_t slot, const auto& sealed) {
+    std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(file, slot).begin());
+  };
+  put(8, seal_container_index_entry_v1(key.bytes(), L"D:\\a.hc", 0));
+  put(3, seal_container_index_partition(key.bytes(), disk, 1, PartitionConversionState::paused, 7));
+  put(5, seal_container_index_entry_v1(key.bytes(), L"D:\\offline.hc", 2));
+  put(9, seal_container_index_entry_v1(stranger.bytes(), L"D:\\foreign.hc", 0));
+  const auto before = file;
+  const std::vector<ContainerIndexRef> requested{{.partition = disk}};
+  reorder_container_index_v1(key.bytes(), file, requested);
+  const auto refs = list_container_index_refs_v1(key.bytes(), file);
+  expect(refs.size() == 3 && refs[0].partition == disk && refs[1].path == L"D:\\a.hc" &&
+             refs[2].path == L"D:\\offline.hc", "partial mixed ordering lost omitted records");
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i) {
+    const bool unchanged = std::ranges::equal(container_index_v1_slot(before, i), container_index_v1_slot(file, i));
+    expect(unchanged == (i != 8 && i != 3), "reordering rewrote an unchanged record or opaque slot");
+  }
+  const auto moved = try_open_container_index_entry(key.bytes(), container_index_v1_slot(file, 3));
+  expect(moved && moved->order == 0u && moved->sequence == 7 &&
+             moved->conversion == PartitionConversionState::paused, "rank update damaged partition metadata");
+  const auto settled = file;
+  reorder_container_index_v1(key.bytes(), file, requested);
+  expect(file == settled, "repeating a mixed ordering changed bytes");
+  const std::vector<std::wstring> paths{L"D:\\a.hc"};
+  reorder_container_index_paths_v1(key.bytes(), file, paths);
+  const auto files_first = list_container_index_refs_v1(key.bytes(), file);
+  expect(files_first.size() == 3 && files_first[0].path == paths[0] &&
+             files_first[1].partition == disk && files_first[2].path == L"D:\\offline.hc",
+         "path ordering did not use the mixed rank space");
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i)
+    if (i != 8 && i != 3)
+      expect(std::ranges::equal(container_index_v1_slot(settled, i), container_index_v1_slot(file, i)),
+             "path ordering rewrote an unchanged slot");
+  const auto final = file;
+  reorder_container_index_paths_v1(key.bytes(), file, paths);
+  expect(file == final, "repeating a path ordering changed bytes");
+  expect(list_container_index_paths_v1(stranger.bytes(), file) == std::vector<std::wstring>{L"D:\\foreign.hc"},
+         "reordering damaged another key's record");
 }
 
 void test_a_creation_sequence_is_recorded_and_never_moves() {
@@ -516,6 +567,11 @@ void test_one_order_covers_both_kinds_and_survives_reload() {
   static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, L"D:\\a.hc"));
   static_cast<void>(prepend_container_index_path_v1(key.bytes(), file, L"D:\\b.hc"));
 
+  refs = list_container_index_refs_v1(key.bytes(), file);
+  expect(refs.size() == 4 && refs[0].path == L"D:\\b.hc" &&
+             refs[1].path == L"D:\\a.hc" && refs[2].partition == newer &&
+             refs[3].partition == older, "file prepend disrupted the mixed order");
+
   // One arrangement naming both kinds, in an order neither grouping would give.
   const std::vector<ContainerIndexRef> wanted{
       {.partition = older}, {.path = L"D:\\b.hc"}, {.partition = newer},
@@ -567,6 +623,7 @@ void test_one_order_covers_both_kinds_and_survives_reload() {
 } // namespace
 
 int main() {
+  test_reordering_changes_only_modified_records();
   test_a_creation_sequence_is_recorded_and_never_moves();
   test_one_order_covers_both_kinds_and_survives_reload();
   test_partition_conversion_states();

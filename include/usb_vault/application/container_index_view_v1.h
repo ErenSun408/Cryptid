@@ -52,7 +52,7 @@ enum class ContainerIndexWriteV1 {
 };
 
 // Partitions share the same root-derived key and fixed-size file. File-only
-// operations never expose them as paths and leave their slots byte-for-byte.
+// views never expose them as paths. Ordering uses both kinds together.
 [[nodiscard]] std::vector<ContainerIndexEntry> list_container_index_partition_entries(
     std::span<const std::byte> key, std::span<const std::byte> file);
 // Exact single-record update. No mutation if missing, duplicate or crypto failure.
@@ -101,8 +101,8 @@ struct ContainerIndexRef final {
 
 // Places the requested known containers first, preserving the relative order
 // of omitted ones (including containers on disconnected disks). Rejects
-// unknown or repeated entries before mutation. Re-seals only entries this key
-// opens; opaque slots and the fixed file size are preserved. An exception
+// unknown or repeated entries before mutation. Re-seals only entries whose
+// order changes; unchanged records, opaque slots and file size are preserved. An exception
 // leaves the supplied buffer unchanged. The caller still owns atomic file
 // replacement.
 //
@@ -115,10 +115,9 @@ void reorder_container_index_v1(
     std::span<const std::byte> key, std::span<std::byte> file,
     std::span<const ContainerIndexRef> order);
 
-// The file-only ordering, kept for callers that must not disturb partition
-// records: those slots stay byte-for-byte, so a disk container keeps whatever
-// position it already had. Ordering a list holding both kinds needs the call
-// above instead.
+// Path-based adapter to the same ordering: requested files go first, followed
+// by all omitted files and partitions in their previous relative order.
+// Partition ranks may change; their identities, states and sequences do not.
 void reorder_container_index_paths_v1(
     std::span<const std::byte> key, std::span<std::byte> file,
     std::span<const std::wstring> paths);

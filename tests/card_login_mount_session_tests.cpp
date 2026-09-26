@@ -3846,6 +3846,11 @@ void test_partition_conversion_lifecycle() {
     const auto records=list_container_index_partition_entries(key.bytes(),runtime.container_index);
     if(scenario>=3 && scenario!=4) {require(rows.empty() && records.empty(),"unconfirmed operation left a record");continue;}
     require(rows.size()==1 && !rows[0].mounted && rows[0].conversion_state==(scenario==0 ? 2u : 1u),"unsafe conversion state");
+    // A converted partition needs a position of its own for the same reason an
+    // erase-created one does: a record with no order sorts by the slot it landed
+    // in, and that slot is chosen at random on purpose.
+    require(records.size()==1 && records[0].order.has_value() && records[0].sequence!=0,
+            "a converted partition was recorded without a position or a number");
     require_throws<std::logic_error>([&]{session.mount_adopted_container(rows[0].id);},"incomplete conversion mounted");
     require_throws<std::logic_error>([&]{session.forget_container(rows[0].id);},"incomplete conversion record removed");
     session.mount_adopted_all(); require(!session.container_statuses()[0].mounted,"mount all mounted partial data");

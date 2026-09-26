@@ -1288,7 +1288,9 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
   auto persist=[&](PartitionConversionState status,bool insert){
     auto key=container_index_key(); auto file=runtime_.read_container_index();
     if(insert) {
-      if(add_container_index_partition(key.bytes(),file,identity,status)!=ContainerIndexWriteV1::added)
+      // Prepended, like an erase-created one: a record with no position sorts
+      // by the slot it landed in, and that slot is chosen at random on purpose.
+      if(prepend_container_index_partition(key.bytes(),file,identity,status)!=ContainerIndexWriteV1::added)
         throw std::runtime_error("conversion record unavailable");
     } else {
       if(resume_id && status==PartitionConversionState::uncertain) {
