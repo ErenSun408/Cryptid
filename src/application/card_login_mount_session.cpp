@@ -803,6 +803,24 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
   return state.containers.back();
 }
 
+// The published file is already a container. Keep it in the session before the
+// mount is attempted, so a later mount failure still has a row to show.
+[[nodiscard]] std::uint32_t retain_published_container(
+    CardLoginMountSessionState& state, const std::wstring_view path,
+    const bool release_first) {
+  return adopt(state, path, wchar_t{}, false, release_first, true, true).id;
+}
+
+void record_created_mount(CardLoginMountSessionState& state,
+                          const std::uint32_t id, const wchar_t drive_letter) {
+  SessionContainer* const entry = find_by_id(state, id);
+  if (entry == nullptr) {
+    throw std::logic_error("created container left the session");
+  }
+  entry->drive_letter = drive_letter;
+  entry->mounted = true;
+}
+
 SessionContainer& adopt_partition(CardLoginMountSessionState& state,
     const volume::PartitionIdentity& identity, const std::uint32_t sequence) {
   if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
@@ -1027,9 +1045,9 @@ security::SecureBuffer CardLoginMountSessionCore::container_index_key() {
 
 void CardLoginMountSessionCore::remember_container_path(
     const std::wstring_view path) noexcept {
-  // Every failure here is swallowed on purpose. The container exists and is
-  // mounted; refusing the whole operation because its path could not be
-  // written down would destroy something real to protect a convenience. The
+  // Every failure here is swallowed on purpose. The container file already
+  // exists; refusing the whole operation because its path could not be written
+  // down would throw away a finished container to protect a convenience. The
   // cost of the silence is that the path is simply not remembered, which the
   // session shows anyway for as long as it lasts.
   try {
@@ -1471,6 +1489,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
   security::SecureBuffer volume_password;
   bool staging_owned = false;
   bool published = false;
+  bool listed = false;
   bool mounted = false;
   try {
     volume_password = derive_standard_password();
@@ -1484,6 +1503,11 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     record_operation(OperationKind::container_created,
                      OperationOutcome::succeeded,
                      container_name);
+    // Publication is the point the file becomes a container. Remember it
+    // before mounting, or a mount failure leaves a real file off the list.
+    const std::uint32_t id = retain_published_container(state_, path, false);
+    listed = true;
+    remember_container_path(path);
 
     const wchar_t drive_letter = settled_drive_letter(
         runtime_.mount_created(path,
@@ -1493,15 +1517,14 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                                 .pim = 0,
                                 .read_only = false,
                                 .notify_shell = false}));
+    record_created_mount(state_, id, drive_letter);
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
                      container_name,
                      drive_letter);
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
-    const std::uint32_t id = adopt(state_, path, drive_letter, true, false, true, true).id;
     volume_password.clear();
-    remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
@@ -1510,7 +1533,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
       record_operation(OperationKind::container_created,
                        OperationOutcome::failed,
                        container_name);
-    } else if (!mounted) {
+    } else if (listed && !mounted) {
       record_operation(OperationKind::container_mounted,
                        OperationOutcome::failed,
                        container_name);
@@ -1570,6 +1593,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
   security::SecureBuffer outer_password;
   bool staging_owned = false;
   bool published = false;
+  bool listed = false;
   bool mounted = false;
   try {
     outer_password =
@@ -1592,6 +1616,12 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     record_operation(OperationKind::container_created,
                      OperationOutcome::succeeded,
                      container_name);
+    // Same rule as a standard container: the file is kept even if mounting it
+    // fails. release_first stays set so a later mount still opens the hidden
+    // volume with the login derivation.
+    const std::uint32_t id = retain_published_container(state_, path, true);
+    listed = true;
+    remember_container_path(path);
 
     const wchar_t drive_letter = settled_drive_letter(
         runtime_.mount_created(path,
@@ -1601,15 +1631,14 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                                 .pim = 0,
                                 .read_only = false,
                                 .notify_shell = false}));
+    record_created_mount(state_, id, drive_letter);
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
                      container_name,
                      drive_letter);
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
-    const std::uint32_t id = adopt(state_, path, drive_letter, true, true, true, true).id;
     outer_password.clear();
-    remember_container_path(path);
     runtime_.notify_mounted(drive_letter);
     return id;
   } catch (...) {
@@ -1618,7 +1647,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
       record_operation(OperationKind::container_created,
                        OperationOutcome::failed,
                        container_name);
-    } else if (!mounted) {
+    } else if (listed && !mounted) {
       record_operation(OperationKind::container_mounted,
                        OperationOutcome::failed,
                        container_name);

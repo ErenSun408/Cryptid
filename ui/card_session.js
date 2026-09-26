@@ -5407,7 +5407,7 @@
       updateCreationAvailability();
     } catch (error) {
       await showFileCreationFailure(error, creationAccepted,
-        "名称、路径与诱饵密码", disk);
+        "名称、路径与诱饵密码", disk, previousIds);
     } finally {
       wipe(secondBytes);
       wipe(confirmationBytes);
@@ -5457,7 +5457,7 @@
     return 2147500037; // E_FAIL when no native result is available.
   };
 
-  const showFileCreationFailure = async (error, accepted, fields, disk = false) => {
+  const showFileCreationFailure = async (error, accepted, fields, disk = false, previousIds = null) => {
     try {
       await refreshNativeState();
     } catch (_) {
@@ -5470,10 +5470,14 @@
     const cancelled = error instanceof Error && error.message === kCreationCancelled;
     const cleanupFailed = error instanceof Error && error.message === kCreationCleanupFailed;
     const retry = `重试前需要重新填写${fields}。`;
+    const publishedUnmounted = !disk && previousIds instanceof Set &&
+      containers.some((container) => !previousIds.has(container.id) && !container.mounted);
     let failure;
     if (cleanupFailed) failure = kCreationCleanupMessage;
     else if (cancelled) failure = "已取消创建，没有留下容器文件。" + retry;
-    else {
+    else if (publishedUnmounted) {
+      failure = "容器已经创建，但挂载没有成功。它已在容器列表中，可以稍后挂载。";
+    } else {
       failure = describeCreationFailure(await readCreationFailureCode(accepted));
       if (!disk) failure += retry;
     }
@@ -5601,7 +5605,7 @@
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
     } catch (error) {
-      await showFileCreationFailure(error, creationAccepted, "名称与路径");
+      await showFileCreationFailure(error, creationAccepted, "名称与路径", false, previousIds);
     } finally {
       finishCreationProgress();
       updateCreationAvailability();

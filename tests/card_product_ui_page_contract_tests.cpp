@@ -731,7 +731,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // flow, so a failure asks for the fields again rather than keeping them.
   require(count_occurrences(script, "containerName.value = \"\";") >= 1 &&
               count_occurrences(script, "containerBName.value = \"\";") >= 1 &&
-              script.find("\"名称、路径与诱饵密码\", disk)") !=
+              script.find("\"名称、路径与诱饵密码\", disk, previousIds)") !=
                   std::string::npos,
           "the hidden container flow keeps its location after a failure");
   // 8.7.3: entering it twice is the only permitted check. The page must not
@@ -911,7 +911,9 @@ void test_container_creation_form_is_bounded() {
                   std::string::npos &&
               script.find("重试前需要重新填写${fields}") !=
                   std::string::npos &&
-              script.find("showFileCreationFailure(error, creationAccepted, \"名称与路径\")") !=
+              script.find("showFileCreationFailure(error, creationAccepted, \"名称与路径\", false, previousIds)") !=
+                  std::string::npos &&
+              script.find("容器已经创建，但挂载没有成功。它已在容器列表中，可以稍后挂载。") !=
                   std::string::npos,
           "creation lacks busy, success, or recovery feedback");
 }

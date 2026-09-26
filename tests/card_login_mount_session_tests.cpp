@@ -1104,6 +1104,8 @@ void test_container_a_creation_reports_cleanup_failure() {
           "cleanup failure did not preserve precise state");
 }
 
+[[nodiscard]] bool remembers(const FakeRuntime& runtime, std::wstring_view path);
+
 void test_container_a_mount_failure_keeps_published_container() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -1118,6 +1120,10 @@ void test_container_a_mount_failure_keeps_published_container() {
   require(runtime.container_a_exists && !runtime.staging_exists &&
               !session.mounted() && authentication.authenticated(),
           "post-publication mount failure deleted data or changed auth");
+  const std::vector<ContainerStatus> kept = session.container_statuses();
+  require(kept.size() == 1 && kept[0].name == L"a.hc" && !kept[0].mounted &&
+              kept[0].drive_letter == wchar_t{} && remembers(runtime, L"C:\\vault\\a.hc"),
+          "a published container was dropped from the list when its mount failed");
   require_events(runtime,
                  {"exists:final", "exists:stage", "derive:A", "create:A",
                   "publish:A", "allocate", "mount-created:A"});
@@ -2156,6 +2162,45 @@ void test_operation_history_distinguishes_publish_from_mount_failure() {
                     L"published.hc",
                     wchar_t{},
                     "the failed mount invented a drive letter");
+  const std::vector<ContainerStatus> kept = session.container_statuses();
+  require(kept.size() == 1 && !kept[0].mounted && kept[0].name == L"published.hc" &&
+              remembers(runtime, L"C:\\vault\\published.hc"),
+          "the published container was left out of the list and the index");
+  runtime.fail_created_mount = false;
+  runtime.events.clear();
+  session.mount_adopted_container(kept[0].id);
+  require(session.container_statuses()[0].mounted,
+          "the listed container could not be mounted after the failed create");
+}
+
+void test_hidden_container_stays_listed_when_its_mount_fails() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::manual);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  runtime.fail_created_mount = true;
+  constexpr std::wstring_view path = L"C:\\vault\\hidden-published.hc";
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(session.create_container_b(
+            path, 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+            bytes("decoy-password")));
+      },
+      "a hidden container mount failure was accepted");
+  const std::vector<ContainerStatus> kept = session.container_statuses();
+  require(kept.size() == 1 && !kept[0].mounted && !session.mounted() &&
+              kept[0].name == L"hidden-published.hc" &&
+              runtime.other_existing == std::vector<std::wstring>{std::wstring(path)} &&
+              remembers(runtime, path),
+          "a published hidden container was dropped when its mount failed");
+  runtime.fail_created_mount = false;
+  runtime.events.clear();
+  session.mount_adopted_container(kept[0].id);
+  require(session.container_statuses()[0].mounted &&
+              std::find(runtime.events.begin(), runtime.events.end(), "derive:A") ==
+                  runtime.events.end(),
+          "the listed hidden container was not opened with its creation derivation");
 }
 
 void test_operation_history_records_prepublication_and_unmount_failures() {
@@ -4401,6 +4446,7 @@ int main() {
     test_both_creation_paths_preserve_cancellation_cleanup_and_retry();
     test_both_creation_paths_do_not_cancel_after_publication();
     test_operation_history_distinguishes_publish_from_mount_failure();
+    test_hidden_container_stays_listed_when_its_mount_fails();
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();
     test_container_order_persists_and_failed_writes_preserve_session_order();
