@@ -808,17 +808,6 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
   return state.containers.back();
 }
 
-// The number a partition record carries, or zero when the record is not
-// there yet. What a disk container is called comes from here rather than from
-// anything the session counts, so the two can never disagree.
-[[nodiscard]] std::uint32_t recorded_sequence(
-    const std::span<const std::byte> key, const std::span<const std::byte> file,
-    const volume::PartitionIdentity& identity) {
-  for (const auto& entry : list_container_index_partition_entries(key, file))
-    if (entry.partition == identity) return entry.sequence;
-  return 0;
-}
-
 SessionContainer& adopt_partition(CardLoginMountSessionState& state,
     const volume::PartitionIdentity& identity, const std::uint32_t sequence) {
   if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
@@ -1083,13 +1072,11 @@ void CardLoginMountSessionCore::reorder_containers(
   if (ids.empty() || ids.size() != state_.containers.size() || ids.size() > 1024)
     throw std::invalid_argument("ordering must contain every current container");
   std::vector<SessionContainer> ordered;
-  std::vector<std::wstring> paths;
   // The user drags one list holding both kinds, so the saved order has to name
   // both. Recording only the paths left every disk container with no position
   // of its own, to be re-derived from its random slot on the next login.
   std::vector<ContainerIndexRef> refs;
   ordered.reserve(ids.size());
-  paths.reserve(ids.size());
   refs.reserve(ids.size());
   for (const auto id : ids) {
     const auto* entry = find_by_id(state_, id);
@@ -1097,7 +1084,6 @@ void CardLoginMountSessionCore::reorder_containers(
         [id](const auto& item) { return item.id == id; }))
       throw std::invalid_argument("invalid container order");
     ordered.push_back(*entry);
-    if (!entry->partition) paths.push_back(entry->path);
     refs.push_back(entry->partition
         ? ContainerIndexRef{.partition = *entry->partition}
         : ContainerIndexRef{.path = entry->path});
@@ -1105,21 +1091,23 @@ void CardLoginMountSessionCore::reorder_containers(
   if (runtime_.remember_container_paths()) {
     auto key = container_index_key();
     auto file = runtime_.read_container_index();
-    const auto remembered_paths = list_container_index_paths_v1(key.bytes(), file);
-    for (const auto& path : paths) {
-      if (std::any_of(remembered_paths.begin(), remembered_paths.end(), [&](const auto& saved) {
-            return ::CompareStringOrdinal(path.c_str(), -1, saved.c_str(), -1, TRUE) == CSTR_EQUAL;
+    const auto remembered = list_container_index_entries_v1(key.bytes(), file);
+    for (const auto& ref : refs) {
+      if (ref.partition) continue;
+      if (std::any_of(remembered.begin(), remembered.end(), [&](const auto& saved) {
+            return container_index_ref_matches_v1(ref, saved.path, saved.partition);
           })) continue;
-      if (add_container_index_path_v1(key.bytes(), file, path) == ContainerIndexWriteV1::full)
+      if (add_container_index_path_v1(key.bytes(), file, ref.path) == ContainerIndexWriteV1::full)
         throw std::runtime_error("container index is full");
     }
     // A partition is recorded when it is created and its record goes when it is
     // forgotten, so the index knows every one the session holds. Ordering names
     // only what it can find rather than refusing the whole arrangement over a
     // record that is somehow not there.
-    const auto recorded = list_container_index_partitions(key.bytes(), file);
     std::erase_if(refs, [&](const auto& ref) {
-      return ref.partition && std::ranges::find(recorded, *ref.partition) == recorded.end();
+      return ref.partition && !std::any_of(remembered.begin(), remembered.end(), [&](const auto& saved) {
+        return container_index_ref_matches_v1(ref, saved.path, saved.partition);
+      });
     });
     reorder_container_index_v1(key.bytes(), file, refs);
     key.clear();
@@ -1149,18 +1137,19 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     // Records written before the creation sequence existed get one now, once.
     // A disk container's name depends on it, so settling it here is what stops
     // the name being recomputed -- and moving -- on every login.
-    if (number_container_index_partitions_v1(key.bytes(), file))
-      runtime_.write_container_index(file);
-    const auto refs = list_container_index_refs_v1(key.bytes(), file);
-    const auto partitions = list_container_index_partition_entries(key.bytes(), file);
+    const auto prepared = prepare_container_index_v1(key.bytes(), file);
+    if (prepared.numbered) runtime_.write_container_index(file);
+    std::vector<ContainerIndexRef> refs;
+    refs.reserve(prepared.entries.size());
+    for (const auto& entry : prepared.entries)
+      refs.push_back({.path = entry.path, .partition = entry.partition});
     key.clear();
-    // Oldest first, so the number a disk container shows counts the order they
-    // were created in rather than where they sit. Each is adopted at the front,
-    // which leaves them newest first -- the order the index holds and the list
-    // shows.
-    for (auto item = partitions.rbegin(); item != partitions.rend(); ++item)
-      adopt_partition(state_, *item->partition, item->sequence).conversion_state =
-          static_cast<std::uint32_t>(item->conversion);
+    // Adoption inserts at the front, so traverse backward to preserve saved
+    // order. Display numbers are fixed record attributes, not creation ranks.
+    for (auto item = prepared.entries.rbegin(); item != prepared.entries.rend(); ++item)
+      if (item->partition)
+        adopt_partition(state_, *item->partition, item->sequence).conversion_state =
+            static_cast<std::uint32_t>(item->conversion);
     for (const auto& ref : refs) {
       if (ref.partition) continue;
       // A remembered path whose file is not here is passed over and left in
@@ -1282,10 +1271,11 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
   bool recorded=resume_id.has_value(), accepted=false, requested=false;
   auto persist=[&](PartitionConversionState status,bool insert){
     auto key=container_index_key(); auto file=runtime_.read_container_index();
+    std::uint32_t numbered{};
     if(insert) {
       // Prepended, like an erase-created one: a record with no position sorts
       // by the slot it landed in, and that slot is chosen at random on purpose.
-      if(prepend_container_index_partition(key.bytes(),file,identity,status)!=ContainerIndexWriteV1::added)
+      if(prepend_container_index_partition(key.bytes(),file,identity,status,&numbered)!=ContainerIndexWriteV1::added)
         throw std::runtime_error("conversion record unavailable");
     } else {
       if(resume_id && status==PartitionConversionState::uncertain) {
@@ -1294,10 +1284,9 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
         if(saved==entries.end() || saved->conversion!=PartitionConversionState::paused)
           throw std::logic_error("durable resume permission changed");
       }
-      if(!set_container_index_partition_state(key.bytes(),file,identity,status))
+      if(!set_container_index_partition_state(key.bytes(),file,identity,status,&numbered))
         throw std::runtime_error("conversion record missing");
     }
-    const auto numbered=recorded_sequence(key.bytes(),file,identity);
     key.clear(); check(); runtime_.write_container_index(file);
     auto entry=find_by_id(state_,id);
     if(!entry)throw std::logic_error("conversion session changed");
@@ -1347,9 +1336,10 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
     if (entry.partition == identity) throw std::logic_error("partition already recorded");
   auto key = container_index_key();
   auto index = runtime_.read_container_index();
-  const auto insertion = prepend_container_index_partition(key.bytes(), index, identity);
+  std::uint32_t sequence{};
+  const auto insertion = prepend_container_index_partition(key.bytes(), index, identity,
+      PartitionConversionState::normal, &sequence);
   if (insertion != ContainerIndexWriteV1::added) throw std::runtime_error("partition index unavailable or already recorded");
-  const auto sequence = recorded_sequence(key.bytes(), index, identity);
   key.clear();
   // Allocate the session row before irreversible work, but remove it on failure.
   const auto id = adopt_partition(state_, identity, sequence).id;

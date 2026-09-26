@@ -3981,16 +3981,14 @@ void test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart() {
   require(disk_names(next) == after_drag,
           "a restart changed the disk container names or their order");
 
-  // A gap left in the middle stays a gap: the next container does not inherit
-  // the name of the one that went. Forgetting the highest one does free its
-  // number again, which the record layout cannot avoid.
+  // The new container reuses the smallest gap without renaming existing rows.
   for (const auto& status : next.container_statuses())
     if (status.partition && status.name == L"磁盘容器 2") next.forget_container(status.id);
   static_cast<void>(create(next, 10));
   const auto names = disk_names(next);
-  require(std::ranges::find(names, std::wstring(L"磁盘容器 4")) != names.end() &&
-              std::ranges::find(names, std::wstring(L"磁盘容器 2")) == names.end(),
-          "a forgotten disk container's number was handed to a new one");
+  require(std::ranges::find(names, std::wstring(L"磁盘容器 2")) != names.end() &&
+              std::ranges::find(names, std::wstring(L"磁盘容器 4")) == names.end(),
+          "the smallest unused disk container number was not reused");
 }
 
 void test_a_dragged_order_records_disk_containers_too() {
@@ -4052,6 +4050,14 @@ void test_a_dragged_order_records_disk_containers_too() {
   require(recorded.size() == 3 && recorded[0] == identity_of(8) &&
               recorded[1] == identity_of(7) && recorded[2] == identity_of(9),
           "the dragged order did not reach the index for disk containers");
+  require(usb_vault::application::remove_container_index_partition(key.bytes(), runtime.container_index, identity_of(8)),
+          "missing-index fixture could not remove the record");
+  session.reorder_containers(dragged);
+  require(session.container_statuses().front().id == second,
+          "an unrecorded partition lost its requested session position");
+  const auto remaining = usb_vault::application::list_container_index_partitions(key.bytes(), runtime.container_index);
+  require(remaining == std::vector<usb_vault::volume::PartitionIdentity>{identity_of(7), identity_of(9)},
+          "sorting failed to skip a missing partition or restored it unexpectedly");
 }
 
 void test_disk_containers_are_numbered_among_themselves() {

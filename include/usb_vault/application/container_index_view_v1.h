@@ -57,13 +57,15 @@ enum class ContainerIndexWriteV1 {
     std::span<const std::byte> key, std::span<const std::byte> file);
 // Exact single-record update. No mutation if missing, duplicate or crypto failure.
 [[nodiscard]] bool set_container_index_partition_state(std::span<const std::byte> key,
-    std::span<std::byte> file, const ContainerIndexPartition& partition, PartitionConversionState state);
+    std::span<std::byte> file, const ContainerIndexPartition& partition, PartitionConversionState state,
+    std::uint32_t* assigned_sequence = nullptr);
 [[nodiscard]] std::vector<ContainerIndexPartition> list_container_index_partitions(
     std::span<const std::byte> key, std::span<const std::byte> file);
 [[nodiscard]] ContainerIndexWriteV1 add_container_index_partition(
     std::span<const std::byte> key, std::span<std::byte> file,
     const ContainerIndexPartition& partition,
-    PartitionConversionState state = PartitionConversionState::normal);
+    PartitionConversionState state = PartitionConversionState::normal,
+    std::uint32_t* assigned_sequence = nullptr);
 [[nodiscard]] bool remove_container_index_partition(
     std::span<const std::byte> key, std::span<std::byte> file,
     const ContainerIndexPartition& partition);
@@ -136,6 +138,24 @@ void reorder_container_index_paths_v1(
 [[nodiscard]] std::vector<ContainerIndexRef> list_container_index_refs_v1(
     std::span<const std::byte> key, std::span<const std::byte> file);
 
+// One operation-local decoded snapshot, never retained across file changes.
+[[nodiscard]] std::vector<ContainerIndexEntry> list_container_index_entries_v1(
+    std::span<const std::byte> key, std::span<const std::byte> file);
+
+struct PreparedContainerIndexV1 final {
+  std::vector<ContainerIndexEntry> entries;
+  bool numbered{};
+};
+// Scans once, assigns missing partition numbers using the smallest unused
+// positive number, and returns the updated ordered entries. Existing numbers
+// and unrelated slots remain unchanged; exceptions leave the buffer unchanged.
+[[nodiscard]] PreparedContainerIndexV1 prepare_container_index_v1(
+    std::span<const std::byte> key, std::span<std::byte> file);
+
+// Insertion/state-update sequence outputs are assigned only on added,
+// already_present, or successful state update; full/missing/errors leave them
+// unchanged. New partitions reuse the smallest unused positive number.
+
 // Gives every partition record that has no creation sequence one, and reports
 // whether any did. Records written before v6 carry no such number, and what a
 // disk container is called depends on it, so it is settled once rather than
@@ -150,7 +170,8 @@ void reorder_container_index_paths_v1(
 [[nodiscard]] ContainerIndexWriteV1 prepend_container_index_partition(
     std::span<const std::byte> key, std::span<std::byte> file,
     const ContainerIndexPartition& partition,
-    PartitionConversionState state = PartitionConversionState::normal);
+    PartitionConversionState state = PartitionConversionState::normal,
+    std::uint32_t* assigned_sequence = nullptr);
 
 // Fills the slot holding this path with fresh random bytes, and reports
 // whether there was one. Only a slot this key opens can be found, so a record

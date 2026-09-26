@@ -498,6 +498,60 @@ void test_reordering_changes_only_modified_records() {
          "reordering damaged another key's record");
 }
 
+void test_preparation_and_number_outputs_preserve_existing_records() {
+  using namespace usb_vault::application;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x49));
+  const auto foreign = derive_shared_container_index_key_v1(test_root(0x50));
+  auto file = fresh_file();
+  ContainerIndexPartition disk;
+  disk.device_id.fill(0x71); disk.offset_bytes = 1048576; disk.length_bytes = 64 * 1024 * 1024;
+  const auto at = [&](std::uint64_t offset) { auto p = disk; p.offset_bytes += offset; return p; };
+  const auto put = [&](std::size_t slot, const auto& sealed) {
+    std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(file, slot).begin());
+  };
+  put(0, seal_container_index_partition(key.bytes(), disk, 0, PartitionConversionState::normal, 2));
+  put(1, seal_container_index_partition(key.bytes(), at(512), 1, PartitionConversionState::paused));
+  put(2, seal_container_index_partition(key.bytes(), at(1024), 2, PartitionConversionState::uncertain));
+  put(3, seal_container_index_partition(key.bytes(), at(1536), 3, PartitionConversionState::normal, 0xffffffffu));
+  put(4, seal_container_index_entry_v1(foreign.bytes(), L"D:\\foreign.hc", 0));
+  const auto before = file;
+  const auto prepared = prepare_container_index_v1(key.bytes(), file);
+  expect(prepared.numbered && prepared.entries.size() == 4 &&
+             prepared.entries[0].sequence == 2 && prepared.entries[1].sequence == 3 &&
+             prepared.entries[2].sequence == 1 && prepared.entries[3].sequence == 0xffffffffu,
+         "legacy numbering failed to fill gaps without overflow");
+  expect(prepared.entries[1].conversion == PartitionConversionState::paused &&
+             prepared.entries[2].conversion == PartitionConversionState::uncertain,
+         "prepared snapshot lost conversion state");
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i)
+    if (i != 1 && i != 2)
+      expect(std::ranges::equal(container_index_v1_slot(before, i), container_index_v1_slot(file, i)),
+             "preparation changed an existing or opaque record");
+  const auto settled = file;
+  expect(!prepare_container_index_v1(key.bytes(), file).numbered && file == settled,
+         "preparation was not idempotent");
+  std::uint32_t assigned = 99;
+  expect(prepend_container_index_partition(key.bytes(), file, disk, PartitionConversionState::normal, &assigned)
+             == ContainerIndexWriteV1::already_present && assigned == 2 && file == settled,
+         "existing partition output or no-op changed");
+  expect(prepend_container_index_partition(key.bytes(), file, at(2048), PartitionConversionState::normal, &assigned)
+             == ContainerIndexWriteV1::added && assigned == 4,
+         "insert did not return its smallest unused number");
+  assigned = 99;
+  expect(set_container_index_partition_state(key.bytes(), file, at(2048), PartitionConversionState::paused, &assigned)
+             && assigned == 4, "state update did not return the recorded number");
+  assigned = 99;
+  expect(!set_container_index_partition_state(key.bytes(), file, at(2560), PartitionConversionState::paused, &assigned)
+             && assigned == 99, "missing update published a number");
+  const auto full_record = seal_container_index_partition(key.bytes(), disk, 0, PartitionConversionState::normal, 2);
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i)
+    std::ranges::copy(full_record.bytes(), container_index_v1_mutable_slot(file, i).begin());
+  const auto full = file;
+  expect(prepend_container_index_partition(key.bytes(), file, at(2560), PartitionConversionState::normal, &assigned)
+             == ContainerIndexWriteV1::full && assigned == 99 && file == full,
+         "full insertion published a number or changed the file");
+}
+
 void test_a_creation_sequence_is_recorded_and_never_moves() {
   using namespace usb_vault::application;
   const auto key = derive_shared_container_index_key_v1(test_root(0x44));
@@ -544,12 +598,12 @@ void test_a_creation_sequence_is_recorded_and_never_moves() {
          "conversion state could not be set");
   expect(sequence_of(file, two) == 2, "a conversion-state update lost the sequence");
 
-  // A gap in the middle is kept rather than handed to something new.
+  // New records reuse the smallest available number; existing names stay fixed.
   expect(remove_container_index_partition(key.bytes(), file, two), "removal failed");
   const auto four = make(0x71, 288ULL * 1024 * 1024);
   expect(add_container_index_partition(key.bytes(), file, four) == ContainerIndexWriteV1::added,
          "a replacement partition was not recorded");
-  expect(sequence_of(file, four) == 4, "a middle gap was reused");
+  expect(sequence_of(file, four) == 2, "the smallest middle gap was not reused");
 
   // Records written before the sequence existed get one once, and only once.
   auto legacy = fresh_file();
@@ -652,6 +706,7 @@ void test_one_order_covers_both_kinds_and_survives_reload() {
 } // namespace
 
 int main() {
+  test_preparation_and_number_outputs_preserve_existing_records();
   test_reference_matching_keeps_file_and_partition_identity_distinct();
   test_reordering_changes_only_modified_records();
   test_a_creation_sequence_is_recorded_and_never_moves();
