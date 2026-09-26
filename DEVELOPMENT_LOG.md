@@ -4105,3 +4105,10 @@
 - 验证：p46 全部默认目标及 `USB Vault.exe` 构建通过；`card_login_mount_session_tests`、`mount_orchestrator_tests`、`card_product_webview_host_object_tests`、`card_product_ui_session_controller_tests`、`card_presence_controller_tests` 通过。`partition_device_integration_tests` 仅编译，未运行（面向实体设备）；未跑全量测试。
 - 安全与风险：不改变产品行为；少了一条在登录调用内挂载卷的路径。
 - 提交：用户检查后授权与相邻切片合并为一笔提交；历史交付日志保留工作区，禁止推送。
+
+### 2026-09-26 — refactor / 分区挂载显式写出固定挂载参数
+- 范围与审计：重构清单第四项。普通分区挂载只写盘符与不通知资源管理器，PRF、PIM、只读靠 `MountOptions` 默认值；文件挂载与维护挂载均显式写出。现在结果一致，但默认值一旦改动只会影响分区。
+- 检查与实现：`mount_adopted_container` 分区分支显式写出 SHA-512、PIM 0、可写，与文件挂载一致；其余挂载点已显式，不改。
+- 测试：假运行时的分区挂载改为校验收到的固定参数，与文件挂载的既有校验对齐。该断言在改动前同样成立，作用是钉住分区挂载参数，而非复现缺陷。
+- 验证：`card_login_mount_session_tests` 通过。未跑全量测试。
+- 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。

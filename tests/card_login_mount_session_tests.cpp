@@ -162,6 +162,9 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       const SecureBuffer& password, const usb_vault::volume::MountOptions& options) override {
     require(usb_vault::volume::valid_partition_identity(identity) && password.size() == 64,
             "partition mount identity or password invalid");
+    require(options.prf == usb_vault::volume::Pkcs5Prf::sha512 && options.pim == 0 &&
+                !options.read_only && !options.notify_shell,
+            "partition mount received other fixed options than a file mount");
     events.emplace_back("mount:partition");
     if (partition_mount_fail) throw std::runtime_error("partition unavailable");
     const wchar_t landed =

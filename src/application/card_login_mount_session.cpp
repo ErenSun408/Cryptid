@@ -2071,7 +2071,13 @@ void CardLoginMountSessionCore::mount_adopted_container(
   if (entry->conversion_state) throw std::logic_error("incomplete conversion cannot mount");
   if (entry->partition) {
     const wchar_t drive = reserve_drive_letter();
-    const volume::MountOptions options{.drive_letter = drive, .notify_shell = false};
+    // Written out like the file mounts, so a change to the defaults cannot
+    // reach partitions alone.
+    const volume::MountOptions options{.drive_letter = drive,
+                                       .prf = volume::Pkcs5Prf::sha512,
+                                       .pim = 0,
+                                       .read_only = false,
+                                       .notify_shell = false};
     bool login_derived = entry->derivation_known && entry->release_first;
     volume::MountResult mounted{};
     if (!login_derived) {
