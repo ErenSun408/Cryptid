@@ -2324,6 +2324,49 @@ void test_container_order_persists_and_failed_writes_preserve_session_order() {
   });
 }
 
+void test_restored_order_keeps_unmatched_entries_stable_and_preserves_identity() {
+  using namespace usb_vault::application;
+  FakeRuntime runtime;
+  runtime.remember_paths = true;
+  runtime.container_a_exists = true;
+  runtime.other_existing = {layout().container_b.path, L"D:\\saved.hc"};
+  auto file = runtime.read_container_index();
+  const auto key = derive_shared_container_index_key_v1(root_secret().bytes());
+  ContainerIndexPartition partition{};
+  partition.layout = static_cast<std::uint32_t>(usb_vault::volume::PartitionLayout::mbr);
+  partition.device_id[0] = 7;
+  partition.offset_bytes = 1048576;
+  partition.length_bytes = 64ULL * 1024 * 1024;
+  partition.logical_sector_bytes = 512;
+  require(prepend_container_index_partition(key.bytes(), file, partition,
+              PartitionConversionState::paused) == ContainerIndexWriteV1::added,
+          "could not prepare paused partition");
+  require(prepend_container_index_path_v1(key.bytes(), file, runtime.other_existing[1]) ==
+              ContainerIndexWriteV1::added, "could not prepare saved path");
+  runtime.container_index = file;
+  const auto reads = runtime.index_reads;
+  const auto writes = runtime.index_writes;
+  in_one_login(runtime, [&](CardLoginMountSessionCore& session) {
+    const auto shown = session.container_statuses();
+    require(shown.size() == 4, "restoring order lost a container");
+    // Layout entries are adopted B then A, followed by the partition and file.
+    require(shown[0].id == 4 && shown[1].id == 3 &&
+                shown[2].id == 1 && shown[3].id == 2,
+            "saved order or stable unmatched order changed");
+    require(shown[0].name == L"saved.hc" && !shown[0].partition &&
+                shown[1].name == L"磁盘容器 1" && shown[1].partition &&
+                shown[1].conversion_state == 2 && shown[0].conversion_state == 0 &&
+                shown[2].name == L"b.hc" && shown[3].name == L"a.hc",
+            "sorting detached identity or conversion state from its container");
+    for (const auto& entry : shown)
+      require(!entry.mounted && entry.drive_letter == wchar_t{},
+              "restoring order changed mount state");
+    require(runtime.index_reads == reads + 1 && runtime.index_writes == writes &&
+                runtime.container_index == file,
+            "restoring order added index I/O or changed ciphertext");
+  });
+}
+
 void test_every_way_a_container_arrives_writes_it_down() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -4361,6 +4404,7 @@ int main() {
     test_operation_history_records_prepublication_and_unmount_failures();
     test_operation_history_discards_only_the_oldest_events_at_capacity();
     test_container_order_persists_and_failed_writes_preserve_session_order();
+    test_restored_order_keeps_unmatched_entries_stable_and_preserves_identity();
     test_every_way_a_container_arrives_writes_it_down();
     test_adopting_a_container_lists_it_without_opening_anything();
     test_adopting_refuses_a_file_that_is_not_there();

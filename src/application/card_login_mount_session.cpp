@@ -1163,14 +1163,29 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     // the saved order without changing mount flags or dropping absent paths.
     // Both kinds are ranked against one list now, so a disk container keeps the
     // position it was given instead of following the slot it landed in.
-    const auto rank = [&](const auto& entry) {
+    struct RankedPosition {
+      std::size_t position;
+      std::size_t rank;
+    };
+    std::vector<RankedPosition> positions;
+    positions.reserve(state_.containers.size());
+    for (std::size_t position = 0; position < state_.containers.size(); ++position) {
+      const auto& entry = state_.containers[position];
       const auto found = std::find_if(refs.begin(), refs.end(), [&](const auto& ref) {
         return container_index_ref_matches_v1(ref, entry.path, entry.partition);
       });
-      return found - refs.begin();
-    };
-    std::stable_sort(state_.containers.begin(), state_.containers.end(),
-        [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
+      positions.push_back({position, static_cast<std::size_t>(found - refs.begin())});
+    }
+    // Unmatched entries share the last rank and retain their session order.
+    std::stable_sort(positions.begin(), positions.end(),
+        [](const auto& a, const auto& b) { return a.rank < b.rank; });
+    // Copy before swapping: allocation failure must not leave live entries
+    // moved from, including their mount ownership and maintenance state.
+    std::vector<SessionContainer> ordered;
+    ordered.reserve(positions.size());
+    for (const auto& item : positions)
+      ordered.push_back(state_.containers[item.position]);
+    state_.containers.swap(ordered);
   } catch (...) {
   }
 }
