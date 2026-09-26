@@ -1109,6 +1109,25 @@ void show_session(const HWND window) noexcept {
   if (FAILED(navigated)) report_webview_failure(1312, navigated);
 }
 
+// Card removal has already revoked the entry and the root secret and forced
+// every volume out. Once nothing is left mounted the old session has nothing
+// to keep, so the window starts over on the login page without a prompt. A
+// volume that refused even forced release keeps the current page, because
+// dropping the session would lose the only record of that mount.
+[[nodiscard]] bool restart_after_card_removal(
+    const HWND window,
+    const usb_vault::application::CardPresenceTransition presence) noexcept {
+  using Transition = usb_vault::application::CardPresenceTransition;
+  if (presence != Transition::card_unavailable &&
+      presence != Transition::active_session_unmounted &&
+      presence != Transition::active_session_force_unmounted) return false;
+  if (g_ui_session == nullptr || g_ui_session->mounted()) return false;
+  if (!::PostMessageW(window, kShowSessionMessage, 0, 0)) return false;
+  disarm_external_drops();
+  g_view_switch_pending = true;
+  return true;
+}
+
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) try {
   switch (message) {
@@ -1146,13 +1165,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           // The page re-arms from the maintenance screen it rebuilds; until
           // then a drag onto this window has nowhere it is allowed to land.
           disarm_external_drops();
+          if (restart_after_card_removal(window, transition.presence)) return 0;
           notify_webview_session_changed();
-        }
-        if (transition.presence ==
-            Transition::active_session_force_unmounted) {
-          show_warning(
-              L"安全卡已拔出，磁盘正在被占用，已强制卸载。"
-              L"未写入磁盘的数据可能已丢失。");
         }
         if (transition.presence == Transition::active_session_remains) {
           show_failure(
@@ -1172,15 +1186,19 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         if (g_deferred_removal) {
           const auto transition = g_card_lifecycle_controller->handle_removal();
           using Transition = usb_vault::application::CardPresenceTransition;
-          if (transition.presence == Transition::active_session_force_unmounted) {
-            show_warning(L"安全卡已拔出，磁盘正在被占用，已强制卸载。未写入磁盘的数据可能已丢失。");
-          }
           if (transition.presence == Transition::active_session_remains) {
             show_failure(L"安全卡已拔出，强制卸载仍然失败。请关闭占用磁盘的程序并重试安全卸载。");
           }
           g_startup_log.record_card_state(g_card_entry ? g_card_entry->startup_failure()
               : usb_vault::card::FailureDiagnostic{});
           g_deferred_removal = false;
+          // A card put back during the deferred work is probed again by the
+          // fresh session, so the pending arrival is dropped with the old one.
+          if (restart_after_card_removal(window, transition.presence)) {
+            g_deferred_arrival = false;
+            g_creation_work.interrupted.store(false);
+            return 0;
+          }
         }
         if (g_deferred_arrival) {
           static_cast<void>(g_card_lifecycle_controller->handle_arrival());
