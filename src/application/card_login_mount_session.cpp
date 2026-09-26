@@ -1387,15 +1387,34 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
       entry->release_first = true;
       entry->derivation_known = true;
     }
-    if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
-    throw_if_creation_cancelled(runtime_);
+    // The ciphertext is already on the partition, so from here the user can
+    // no longer cancel: stage 4 closes the page's cancel gate, and a request
+    // that won the race by a moment is ignored rather than reported as if the
+    // write had never happened. Only a revoked card still stops the mount.
+    if (runtime_.creation_feedback) {
+      try {
+        runtime_.creation_feedback(4, 0, 0);
+      } catch (const std::system_error& error) {
+        if (error.code() != volume_creation::make_error_code(
+                volume_creation::CreationError::operation_cancelled)) throw;
+      }
+    }
+    const auto revoked = [this] {
+      return runtime_.creation_revoked && runtime_.creation_revoked();
+    };
+    const auto created_unmounted = [] {
+      return std::system_error(
+          volume_creation::make_error_code(
+              volume_creation::CreationError::mount_failed),
+          "partition was created but not mounted");
+    };
+    if (revoked()) throw created_unmounted();
     mount_adopted_container(id);
-    try { throw_if_creation_cancelled(runtime_); }
-    catch (...) {
+    if (revoked()) {
       // Removal can arrive inside the driver mount. Track the mount first so
       // failed cleanup remains visible to the deferred card-removal retry.
       unmount_container_impl(id, true);
-      throw;
+      throw created_unmounted();
     }
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, find_by_id(state_, id)->drive_letter);
     return id;
@@ -1459,7 +1478,8 @@ void CardLoginMountSessionCore::format_partition(
     runtime_.format_partition_pair(snapshot, hidden_bytes, password, inner, confirm, cancelled);
   } else runtime_.format_partition(snapshot, password, confirm, cancelled);
   password.clear();
-  check();
+  // A normal return means the ciphertext is on the partition. Checking the
+  // cancel flag again would report a finished write as if it had been aborted.
   if (!accepted) throw std::logic_error("partition format completed without consent");
   // No file staging, removal, publication, index entry or mount is appropriate
   // here. A failure can leave partial ciphertext and must never trigger retry.

@@ -415,6 +415,7 @@
     creationProgressCheck.removeAttribute("aria-current");
     creationProgressAuthorize.setAttribute("aria-current", "step");
     creationCancelWork.disabled = false;
+    delete creationCancelWork.dataset.finalizing;
     creationCancelWork.textContent = creationInplace ? "暂停加密" : "取消创建";
     const started = performance.now();
     const updateTime = () => {
@@ -493,7 +494,8 @@
       if (stage >= 4) {
         creationFinalizing = true;
         creationCancelWork.disabled = true;
-        creationCancelWork.textContent = "正在完成创建，已无法取消";
+        creationCancelWork.textContent = "正在完成创建";
+        creationCancelWork.dataset.finalizing = "true";
       }
       const setStep = (step, state, text) => {
         step.className = state;
@@ -5553,7 +5555,11 @@
       busy = false;
       render(messageForCurrentState());
       if (!creationDialog.hidden && currentState === nativeState.authenticated) {
-        creationStatus.textContent = describeCreationFailure(failureCode);
+        const createdUnmounted = failureCode === 12 &&
+          containers.some((container) => !previousIds.has(container.id) && !container.mounted);
+        creationStatus.textContent = createdUnmounted
+          ? "分区已经创建，但没有挂载。它已在容器列表中，可以稍后挂载。"
+          : describeCreationFailure(failureCode);
         creationStatus.dataset.tone = "error";
       }
     } finally {
@@ -5996,7 +6002,8 @@
       const accepted = await requestCreationCancellation();
       if (creationRunning && accepted === false) {
         creationFinalizing = true;
-        creationCancelWork.textContent = "正在完成创建，已无法取消";
+        creationCancelWork.textContent = "正在完成创建";
+        creationCancelWork.dataset.finalizing = "true";
       }
     } catch (_) {
       if (creationRunning && !creationFinalizing) {

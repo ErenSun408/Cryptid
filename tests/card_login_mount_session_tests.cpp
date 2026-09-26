@@ -190,6 +190,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool partition_written{};
   std::function<void()> before_partition_confirmation;
   std::function<void()> after_partition_confirmation;
+  std::function<void()> after_partition_write;
   void format_partition(const usb_vault::volume::PartitionCandidate&,
       const SecureBuffer& password, const std::function<bool()>& confirm,
       const usb_vault::application::CreationCancellation& cancelled) override {
@@ -202,6 +203,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (after_partition_confirmation) after_partition_confirmation();
     if (cancelled() || partition_fail) throw std::runtime_error("partition stopped");
     partition_written = true;
+    if (after_partition_write) after_partition_write();
   }
   void format_partition_pair(const usb_vault::volume::PartitionCandidate& target, std::uint64_t hidden,
       const SecureBuffer& outer, const SecureBuffer& inner, const std::function<bool()>& confirm,
@@ -4394,15 +4396,18 @@ void test_partition_card_removal_and_drive_conflicts() {
     FakeRuntime runtime;
     runtime.partition_password_64 = true;
     runtime.remember_paths = true;
-    bool cancelled = false;
-    runtime.creation_cancelled = [&] { return cancelled; };
+    bool revoked = false;
+    runtime.creation_cancelled = [] { return false; };
+    runtime.creation_revoked = [&] { return revoked; };
     CardLoginMountSessionCore session(auth, runtime, layout(), LoginMountPolicy::manual);
     session.consume_authenticated_login(root_secret(), bytes("login-password"));
     usb_vault::volume::PartitionCandidate target;
     target.layout = usb_vault::volume::PartitionLayout::mbr;
     target.device_id[0] = 9; target.offset_bytes = 1048576;
     target.length_bytes = 64ULL * 1024 * 1024; target.logical_sector_bytes = 512;
-    if (scenario == 1 || scenario == 2) runtime.after_partition_mount = [&] { cancelled = true; };
+    // Card removal inside the driver mount revokes the run; a user cancel no
+    // longer reaches this point once the partition is written.
+    if (scenario == 1 || scenario == 2) runtime.after_partition_mount = [&] { revoked = true; };
     runtime.fail_manual_force = scenario == 2;
     if (scenario == 3) runtime.free_drive_letters.clear();
     if (scenario == 4) {
@@ -4500,6 +4505,78 @@ void test_partition_format_card_session_boundary() {
   }
 }
 
+void test_finished_partition_write_is_not_reported_cancelled() {
+  using usb_vault::volume_creation::CreationError;
+  using usb_vault::volume_creation::make_error_code;
+  usb_vault::volume::PartitionCandidate target;
+  target.layout = usb_vault::volume::PartitionLayout::mbr;
+  target.device_id[0] = 11;
+  target.offset_bytes = 1048576;
+  target.length_bytes = 64ULL * 1024 * 1024;
+  target.logical_sector_bytes = 512;
+  const auto confirm = [](const auto&) { return true; };
+  // 0: the cancel flag rises right after the write; 1: the page's stage 4
+  // gate lost the race and throws a cancellation; 2: the card is revoked
+  // after the write, which still stops the mount.
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    runtime.partition_password_64 = true;
+    runtime.remember_paths = true;
+    bool cancelled = false;
+    bool revoked = false;
+    runtime.creation_cancelled = [&] { return cancelled; };
+    runtime.creation_revoked = [&] { return revoked; };
+    std::vector<unsigned int> stages;
+    runtime.creation_feedback = [&](unsigned int stage, unsigned int, wchar_t) {
+      stages.push_back(stage);
+      if (stage == 4 && scenario == 1) {
+        throw std::system_error(make_error_code(CreationError::operation_cancelled));
+      }
+    };
+    runtime.after_partition_write = [&] {
+      cancelled = scenario != 2;
+      revoked = scenario == 2;
+    };
+    CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                      LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+    if (scenario == 0) {
+      session.format_partition(target, confirm);
+      require(runtime.partition_written && cancelled,
+              "a cancel after the write was treated as an unfinished format");
+      cancelled = false;
+      runtime.partition_written = false;
+      runtime.events.clear();
+      stages.clear();
+    }
+
+    std::error_code failure;
+    try {
+      static_cast<void>(session.create_partition(target, confirm));
+    } catch (const std::system_error& error) {
+      failure = error.code();
+    }
+    const auto statuses = session.container_statuses();
+    const bool mounted_now =
+        std::ranges::find(runtime.events, "mount:partition") != runtime.events.end();
+    require(runtime.partition_written &&
+                std::ranges::find(stages, 4U) != stages.end() &&
+                statuses.size() == 1 && statuses[0].partition,
+            "a finished partition write left the list or skipped stage 4");
+    if (scenario == 2) {
+      require(failure == make_error_code(CreationError::mount_failed) &&
+                  !mounted_now && !statuses[0].mounted,
+              "a revoked card still mounted the finished partition");
+    } else {
+      require(!failure && mounted_now && statuses[0].mounted &&
+                  std::ranges::find(stages, 5U) != stages.end(),
+              "a cancel after the write stopped or misreported the mount");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -4513,6 +4590,7 @@ int main() {
     test_partition_pair_session();
     test_partition_card_removal_and_drive_conflicts();
     test_partition_format_card_session_boundary();
+    test_finished_partition_write_is_not_reported_cancelled();
     test_all_container_shapes_establish_authentication();
     test_mount_failures_do_not_revoke_card_authentication();
     test_failed_rollback_retains_only_residual_mount();

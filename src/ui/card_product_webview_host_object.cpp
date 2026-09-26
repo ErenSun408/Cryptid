@@ -1825,9 +1825,10 @@ class CardProductWebViewHostObject final : public IDispatch {
               });
           controller_.set_creation_feedback([this](unsigned int stage, unsigned int percent, wchar_t drive) {
             if (stage == 4 && creation_work_->interrupted.load()) throw std::runtime_error("card removed during creation");
-            // Both session creation paths emit stage 4 before publishing,
-            // inside their staging-file cleanup scope. Close the cancel gate
-            // before exposing this stage, and abort if a request won the race.
+            // Stage 4 closes the cancel gate before mounting. File creation
+            // emits it before publishing, inside its staging-file cleanup
+            // scope, and aborts if a request won the race. Partition creation
+            // emits it after the write and ignores that late request.
             if (stage == 4 && !creation_work_->begin_finalization()) {
               throw std::system_error(volume_creation::make_error_code(
                   volume_creation::CreationError::operation_cancelled));

@@ -638,7 +638,7 @@
     $('#creation-cancel-work').click();
     await tick();
     check($('#creation-cancel-work').disabled &&
-      $('#creation-cancel-work').textContent.includes('已无法取消'),
+      $('#creation-cancel-work').textContent === '正在完成创建' && getComputedStyle($('#creation-cancel-work')).cursor === 'default',
       "A native rejection closes cancellation even before the next progress poll");
     window.navigationFixture.acceptCancellation = true;
     window.navigationFixture.creationProgress = "1,4,0,0,3";
@@ -652,7 +652,7 @@
       $('#creation-progress-check').className === "current",
       "Fast creation skips directly to mounting with completed non-spinning prior steps");
     check($('#creation-cancel-work').disabled &&
-      $('#creation-cancel-work').textContent.includes('已无法取消'),
+      $('#creation-cancel-work').textContent === '正在完成创建' && getComputedStyle($('#creation-cancel-work')).cursor === 'default',
       "Publication progress keeps cancellation disabled");
     window.navigationFixture.pendingCreation.resolve();
     window.navigationFixture.pendingCreation = null;

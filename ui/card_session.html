@@ -1146,6 +1146,9 @@
     .creation-status[data-tone="cancelled"] { color: var(--warn); }
     .modal-footer { justify-content: flex-end; gap: .5rem; border-top: 1px solid var(--line); background: rgba(255, 255, 255, .015); }
     .modal-button:disabled { cursor: not-allowed; opacity: .45; }
+    /* Mounting has begun: the button only reports progress, so it keeps the
+       ordinary pointer instead of the refusal cursor of a blocked action. */
+    .creation-cancel-work[data-finalizing]:disabled { cursor: default; }
     .modal-button.primary {
       color: #14160f; border-color: transparent;
       background: linear-gradient(145deg, var(--gold-2), var(--gold));

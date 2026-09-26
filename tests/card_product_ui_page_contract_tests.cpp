@@ -914,6 +914,8 @@ void test_container_creation_form_is_bounded() {
               script.find("showFileCreationFailure(error, creationAccepted, \"名称与路径\", false, previousIds)") !=
                   std::string::npos &&
               script.find("容器已经创建，但挂载没有成功。它已在容器列表中，可以稍后挂载。") !=
+                  std::string::npos &&
+              script.find("分区已经创建，但没有挂载。它已在容器列表中，可以稍后挂载。") !=
                   std::string::npos,
           "creation lacks busy, success, or recovery feedback");
 }
