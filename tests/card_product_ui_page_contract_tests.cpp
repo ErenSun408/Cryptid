@@ -731,7 +731,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // flow, so a failure asks for the fields again rather than keeping them.
   require(count_occurrences(script, "containerName.value = \"\";") >= 1 &&
               count_occurrences(script, "containerBName.value = \"\";") >= 1 &&
-              script.find("重试前需要重新填写名称、路径与诱饵密码") !=
+              script.find("\"名称、路径与诱饵密码\", disk)") !=
                   std::string::npos,
           "the hidden container flow keeps its location after a failure");
   // 8.7.3: entering it twice is the only permitted check. The page must not
@@ -909,9 +909,9 @@ void test_container_creation_form_is_bounded() {
   require(script.find("正在创建，正在使用本次管理员授权。") != std::string::npos &&
               script.find("创建成功，可以开始使用。") !=
                   std::string::npos &&
-              script.find("重试前需要重新填写名称与路径") !=
+              script.find("重试前需要重新填写${fields}") !=
                   std::string::npos &&
-              script.find("若容器已完成但未挂载，请重新插卡后重试") !=
+              script.find("showFileCreationFailure(error, creationAccepted, \"名称与路径\")") !=
                   std::string::npos,
           "creation lacks busy, success, or recovery feedback");
 }
@@ -1086,8 +1086,8 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
   // A creation failure said only "创建失败" on the file path and a bare number
   // on the disk one. Every path now goes through the same description, and the
   // code stays on the end so a user's report still carries it.
-  // Three callers: the container-B/pair flow, partition creation and in-place
-  // conversion. The definition itself is named without a call parenthesis.
+  // Three callers: shared file/pair failure handling, partition creation and
+  // in-place conversion. The definition itself is named without a call parenthesis.
   require(count_occurrences(script, "describeCreationFailure(") == 3 &&
               script.find("const describeCreationFailure = (code) => {") !=
                   std::string::npos,
@@ -1194,7 +1194,7 @@ void test_a_running_creation_can_be_called_off_from_the_page() {
   require(script.find("if (status === 4) throw new Error(kCreationCancelled);")
               != std::string::npos &&
               count_occurrences(script, "error.message === kCreationCancelled")
-                  == 2 &&
+                  == 1 &&
               script.find("已取消创建") != std::string::npos,
           "a cancelled creation is not told apart from a failed one");
 }

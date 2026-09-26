@@ -5406,33 +5406,8 @@
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
     } catch (error) {
-      try {
-        await refreshNativeState();
-      } catch (_) {
-        currentState = nativeState.unavailable;
-        activeVolumes = true;
-      }
-      busy = false;
-      render(messageForCurrentState());
-      if (!creationDialog.hidden &&
-          currentState === nativeState.authenticated) {
-        const cancelled = error instanceof Error &&
-          error.message === kCreationCancelled;
-        const cleanupFailed = error instanceof Error &&
-          error.message === kCreationCleanupFailed;
-        let failure;
-        if (cleanupFailed) failure = kCreationCleanupMessage;
-        else if (cancelled) failure = "已取消创建，没有留下容器文件。重试前需要重新填写名称、路径与诱饵密码。";
-        else {
-          failure = describeCreationFailure(await readCreationFailureCode(creationAccepted));
-          // The file flow clears what was typed, so it has to say so; the disk
-          // flow has nothing to retype and drops its selection instead.
-          if (!disk) failure += "重试前需要重新填写名称、路径与诱饵密码。";
-        }
-        creationStatus.textContent = failure;
-        creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
-        updateCreationAvailability();
-      }
+      await showFileCreationFailure(error, creationAccepted,
+        "名称、路径与诱饵密码", disk);
     } finally {
       wipe(secondBytes);
       wipe(confirmationBytes);
@@ -5480,6 +5455,31 @@
       if (Number.isInteger(code) && code > 0 && code <= 4294967295) return code;
     } catch (_) {}
     return 2147500037; // E_FAIL when no native result is available.
+  };
+
+  const showFileCreationFailure = async (error, accepted, fields, disk = false) => {
+    try {
+      await refreshNativeState();
+    } catch (_) {
+      currentState = nativeState.unavailable;
+      activeVolumes = true;
+    }
+    busy = false;
+    render(messageForCurrentState());
+    if (creationDialog.hidden || currentState !== nativeState.authenticated) return;
+    const cancelled = error instanceof Error && error.message === kCreationCancelled;
+    const cleanupFailed = error instanceof Error && error.message === kCreationCleanupFailed;
+    const retry = `重试前需要重新填写${fields}。`;
+    let failure;
+    if (cleanupFailed) failure = kCreationCleanupMessage;
+    else if (cancelled) failure = "已取消创建，没有留下容器文件。" + retry;
+    else {
+      failure = describeCreationFailure(await readCreationFailureCode(accepted));
+      if (!disk) failure += retry;
+    }
+    creationStatus.textContent = failure;
+    creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
+    updateCreationAvailability();
   };
 
   const runPartitionConversion = async (id, resume) => {
@@ -5576,6 +5576,7 @@
     creationStatus.textContent = "正在创建，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
+    let creationAccepted = false;
     try {
       // The name and the location are ordinary strings, but a container path
       // is what section 8.4 keeps off this machine, so the fields are cleared
@@ -5587,6 +5588,7 @@
       startCreationProgress();
       await paintCreationProgress();
       await bridge.beginCreateContainerMib(name, directory, sizeMib);
+      creationAccepted = true;
       await waitForCreation();
       confirmCreationResult();
       await refreshNativeState();
@@ -5599,27 +5601,7 @@
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
     } catch (error) {
-      try {
-        await refreshNativeState();
-      } catch (_) {
-        currentState = nativeState.unavailable;
-        activeVolumes = true;
-      }
-      busy = false;
-      render(messageForCurrentState());
-      if (!creationDialog.hidden &&
-          currentState === nativeState.authenticated) {
-        const cancelled = error instanceof Error &&
-          error.message === kCreationCancelled;
-        const cleanupFailed = error instanceof Error &&
-          error.message === kCreationCleanupFailed;
-        creationStatus.textContent = cleanupFailed ? kCreationCleanupMessage : cancelled
-          ? "已取消创建，没有留下容器文件。重试前需要重新填写名称与路径。"
-          : "创建失败。重试前需要重新填写名称与路径；" +
-            "若容器已完成但未挂载，请重新插卡后重试。";
-        creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
-        updateCreationAvailability();
-      }
+      await showFileCreationFailure(error, creationAccepted, "名称与路径");
     } finally {
       finishCreationProgress();
       updateCreationAvailability();
