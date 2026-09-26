@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <filesystem>
 #include <optional>
 #include <ranges>
@@ -2613,24 +2614,34 @@ void CardLoginMountSessionCore::unmount_active() {
 
 bool CardLoginMountSessionCore::force_unmount_active() {
   // Forced release is the card-removal path, so every retained secret goes
-  // with it. A deliberate unmount keeps them, which is what lets the user
-  // mount the container again in the same session.
+  // before any volume is asked to leave, and a refusal does not bring a
+  // secret back. One volume that will not leave must not leave the others
+  // mounted. A deliberate unmount keeps the secrets, which is what lets the
+  // user mount a container again in the same session.
   release_session_secrets();
   clear_operation_history();
   bool forced = false;
+  std::exception_ptr failure;
   for (const bool release_first : {true, false}) {
     for (SessionContainer& container : state_.containers) {
       if (!container.mounted || container.release_first != release_first) {
         continue;
       }
-      forced = runtime_.unmount_forced(container.drive_letter).forced ||
-               forced;
+      volume::UnmountEscalationResult result{};
+      try {
+        result = runtime_.unmount_forced(container.drive_letter);
+      } catch (...) {
+        if (!failure) failure = std::current_exception();
+        continue;
+      }
+      forced = result.forced || forced;
       container.mounted = false;
       container.maintenance = false;
       container.maintenance_identity.reset();
       container.drive_letter = wchar_t{};
     }
   }
+  if (failure) std::rethrow_exception(failure);
   return forced;
 }
 

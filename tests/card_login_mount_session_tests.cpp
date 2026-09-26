@@ -253,6 +253,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool fail_unmount_b{};
   bool fail_manual_force{};
   wchar_t fail_manual_force_drive{};
+  int forced_unmount_attempts{};
   bool force_required_a{};
   bool force_required_b{};
   bool container_a_exists{};
@@ -327,6 +328,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
 
   [[nodiscard]] usb_vault::volume::UnmountEscalationResult unmount_forced(
       const wchar_t drive_letter) override {
+    ++forced_unmount_attempts;
     if (fail_manual_force || drive_letter == fail_manual_force_drive)
       throw std::runtime_error("forced cleanup failed");
     attached_volume_sizes.erase(drive_letter);
@@ -980,6 +982,114 @@ void test_unmount_state_is_precise_and_forced_order_is_b_then_a() {
           "required forced unmount was not reported");
   require(!session.mounted(), "forced unmount retained active state");
   require_events(runtime, {"force:B", "force:A"});
+}
+
+[[nodiscard]] const ContainerStatus* status_named(
+    const std::vector<ContainerStatus>& statuses,
+    const std::wstring_view name) {
+  for (const ContainerStatus& status : statuses) {
+    if (status.name == name) return &status;
+  }
+  return nullptr;
+}
+
+void test_card_removal_keeps_releasing_after_one_volume_fails() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.mount_a = true;
+  runtime.mount_b = true;
+  runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  CardLoginMountSessionCore session(authentication, runtime, layout(),
+                                    LoginMountPolicy::mount_on_login);
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+  // Hidden volume first. Its refusal must still let the standard volume go,
+  // and the login password stays gone.
+  runtime.events.clear();
+  runtime.forced_unmount_attempts = 0;
+  runtime.fail_manual_force_drive = L'Y';
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(session.force_unmount_active()); },
+      "a volume that would not leave was reported as released");
+  require(runtime.forced_unmount_attempts == 2,
+          "card removal stopped after the first volume");
+  require_events(runtime, {"force:A"});
+  require(session.mounted() && session.copy_session_password().empty() &&
+              session.operation_history().empty(),
+          "card removal restored a secret or forgot the volume that stayed");
+  const std::vector<ContainerStatus> hidden_first = session.container_statuses();
+  const ContainerStatus* const hidden = status_named(hidden_first, L"b.hc");
+  const ContainerStatus* const standard = status_named(hidden_first, L"a.hc");
+  require(hidden != nullptr && hidden->mounted && hidden->drive_letter == L'Y' &&
+              standard != nullptr && !standard->mounted,
+          "the later volume stayed mounted after the earlier one refused");
+
+  // The volume that stayed can still be released later.
+  runtime.fail_manual_force_drive = 0;
+  static_cast<void>(session.force_unmount_active());
+  require(!session.mounted(), "the remaining volume could not be released");
+
+  // A later refusal leaves the volume that already left down.
+  CardAuthenticationSession again;
+  FakeRuntime later;
+  later.mount_a = true;
+  later.mount_b = true;
+  later.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+  CardLoginMountSessionCore second(again, later, layout(),
+                                   LoginMountPolicy::mount_on_login);
+  second.consume_authenticated_login(root_secret(), bytes("login-password"));
+  later.events.clear();
+  later.forced_unmount_attempts = 0;
+  later.fail_manual_force_drive = L'X';
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(second.force_unmount_active()); },
+      "a later refusal was hidden");
+  require(later.forced_unmount_attempts == 2 &&
+              later.events == std::vector<std::string>{"force:B"},
+          "a later refusal undid the volume that had already left");
+  const std::vector<ContainerStatus> standard_stuck = second.container_statuses();
+  const ContainerStatus* const still_hidden = status_named(standard_stuck, L"b.hc");
+  const ContainerStatus* const still_standard = status_named(standard_stuck, L"a.hc");
+  require(still_hidden != nullptr && !still_hidden->mounted &&
+              still_standard != nullptr && still_standard->mounted &&
+              still_standard->drive_letter == L'X' &&
+              second.copy_session_password().empty(),
+          "the earlier volume was mounted again or the password came back");
+
+  // Two ordinary volumes share one release group. The second is still asked.
+  CardAuthenticationSession plain;
+  FakeRuntime files;
+  files.free_drive_letters = {L'X', L'W'};
+  CardLoginMountSessionCore created(plain, files, layout(),
+                                    LoginMountPolicy::manual);
+  created.consume_authenticated_login(root_secret(), bytes("login-password"));
+  require(plain.authenticated() && !created.mounted(),
+          "test precondition did not establish an empty session");
+  files.events.clear();
+  static_cast<void>(created.create_container(L"C:\\vault\\a.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  static_cast<void>(created.create_container(L"C:\\vault\\second.hc",
+                                             64ULL * 1024ULL * 1024ULL));
+  const std::vector<ContainerStatus> created_statuses = created.container_statuses();
+  const ContainerStatus* const newer = status_named(created_statuses, L"second.hc");
+  const ContainerStatus* const older = status_named(created_statuses, L"a.hc");
+  require(newer != nullptr && older != nullptr && newer->mounted && older->mounted,
+          "the two ordinary volumes were not both mounted");
+  files.events.clear();
+  files.forced_unmount_attempts = 0;
+  files.fail_manual_force_drive = newer->drive_letter;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(created.force_unmount_active()); },
+      "one ordinary volume stopped the other");
+  require(files.forced_unmount_attempts == 2,
+          "card removal stopped inside one release group");
+  const std::vector<ContainerStatus> after = created.container_statuses();
+  const ContainerStatus* const newer_after = status_named(after, L"second.hc");
+  const ContainerStatus* const older_after = status_named(after, L"a.hc");
+  require(newer_after != nullptr && newer_after->mounted &&
+              older_after != nullptr && !older_after->mounted &&
+              created.copy_session_password().empty(),
+          "the other ordinary volume stayed mounted or the password came back");
 }
 
 void establish_empty_authenticated_session(
@@ -4408,6 +4518,7 @@ int main() {
     test_failed_rollback_retains_only_residual_mount();
     test_invalid_or_duplicate_handoff_fails_before_mount();
     test_unmount_state_is_precise_and_forced_order_is_b_then_a();
+    test_card_removal_keeps_releasing_after_one_volume_fails();
     test_container_a_creation_requires_authentication_and_valid_size();
     test_container_a_creation_publishes_then_mounts();
     test_container_a_creation_rejects_existing_targets();
