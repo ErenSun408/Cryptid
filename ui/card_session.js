@@ -3838,7 +3838,7 @@
     name.title = container.name;
     const state = document.createElement("div");
     state.className = "container-state";
-    state.textContent = container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成，请保留记录并检查磁盘" : maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.mounted ? "已挂载" : "未挂载";
+    state.textContent = container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成，请保留记录并检查磁盘" : maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.unavailable ? "无法读取卷状态" : container.mounted ? "已挂载" : "未挂载";
     identity.append(name, state);
 
     const facts = document.createElement("div");
@@ -3881,7 +3881,7 @@
       grid.className = "container-details-grid";
       grid.append(
         containerFact("名称", container.name),
-        containerFact("状态", container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成" : container.mounted ? "已挂载" : "未挂载"),
+        containerFact("状态", container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成" : container.unavailable ? "无法读取卷状态" : container.mounted ? "已挂载" : "未挂载"),
         containerFact("盘符", container.mounted ? container.drive : "—"),
         containerFact("容量", container.mounted && container.sizeMib > 0 ? containerSizeText(container) : "—"),
         containerFact("加密", "AES-256-XTS"),
@@ -4279,6 +4279,7 @@
         const drive = await bridge.getContainerDriveLetter(index);
         const partition = await bridge.getContainerPartition(index);
         const conversion = await bridge.getContainerConversion(index);
+        const unavailable = await bridge.getContainerVolumeUnavailable(index);
         const validId = Number.isInteger(id) && id > 0;
         const validName = typeof name === "string" && name.length !== 0;
         const validMounted = mounted === true || mounted === false;
@@ -4288,10 +4289,11 @@
           ((mounted === true && /^[A-Z]:$/.test(drive) && nextActiveVolumes) ||
            (mounted !== true && drive === ""));
         if (!validId || !validName || !validMounted || !validSize ||
-            !validDrive || typeof partition !== "boolean" || !Number.isInteger(conversion) || conversion < 0 || conversion > 2 || (conversion && (!partition || mounted))) {
+            !validDrive || typeof partition !== "boolean" || !Number.isInteger(conversion) || conversion < 0 || conversion > 2 || (conversion && (!partition || mounted)) ||
+            typeof unavailable !== "boolean" || (unavailable && (!mounted || sizeMib !== 0))) {
           throw new Error("invalid container status");
         }
-        nextContainers.push({ id, name, mounted, sizeMib, drive, partition, conversion });
+        nextContainers.push({ id, name, mounted, sizeMib, drive, partition, conversion, unavailable });
       }
 
       const operationCount = await bridge.getOperationCount();

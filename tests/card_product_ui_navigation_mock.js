@@ -191,6 +191,7 @@ window.navigationFixture = {
     getContainerId: (i) => displayContainers()[i].id,
     getContainerName: (i) => displayContainers()[i].name,
     getContainerPartition: (i) => Boolean(displayContainers()[i].partition),
+    getContainerVolumeUnavailable: (i) => Boolean(displayContainers()[i].unavailable),
     getContainerConversion: (i) => displayContainers()[i].conversion || 0,
     getContainerMounted: (i) => displayContainers()[i].mounted,
     getContainerSizeMib: (i) => displayContainers()[i].size,

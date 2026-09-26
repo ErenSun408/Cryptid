@@ -687,14 +687,17 @@ CardProductUiSessionController::container_statuses() {
   std::vector<ContainerUiStatus> result;
   result.reserve(statuses.size());
   for (const application::ContainerStatus& status : statuses) {
-    // Capacity and drive letter now share one rule: both describe an attached
-    // volume, so both are present exactly when the container is mounted.
+    // Capacity and drive letter share one rule: both describe an attached
+    // volume, so both are present exactly when the container is mounted. The
+    // one exception is a mounted row the driver could not report, which keeps
+    // its letter but has no capacity to show.
     if (status.id == 0 || status.name.empty() ||
         (status.mounted &&
          (status.drive_letter < L'A' || status.drive_letter > L'Z' ||
-          status.size_bytes == 0)) ||
+          (status.size_bytes == 0) != status.volume_unavailable)) ||
         (!status.mounted &&
-         (status.drive_letter != wchar_t{} || status.size_bytes != 0))) {
+         (status.drive_letter != wchar_t{} || status.size_bytes != 0 ||
+          status.volume_unavailable))) {
       throw std::runtime_error("container status is inconsistent");
     }
     result.push_back({.id = status.id,
@@ -702,7 +705,8 @@ CardProductUiSessionController::container_statuses() {
                       .mounted = status.mounted,
                       .size_mib = displayable_size_mib(status.size_bytes),
                       .drive_letter = status.drive_letter,
-                      .partition = status.partition, .conversion_state=status.conversion_state});
+                      .partition = status.partition, .conversion_state=status.conversion_state,
+                      .volume_unavailable = status.volume_unavailable});
   }
   return result;
 }

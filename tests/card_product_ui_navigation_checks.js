@@ -378,6 +378,19 @@
     action(home, 2, "details").click();
     check(!$(home + " .container-details"), "Details collapse");
 
+    const unreadable = window.navigationFixture.containers.find(item => item.id === 1);
+    Object.assign(unreadable, { unavailable: true, size: 0 });
+    window.dispatchEvent(new window.Event("usb-vault-session-changed"));
+    const unreadableState = () => all(`${home} .container-row`)
+      .find(row => row.contains(action(home, 1, "details")))?.querySelector(".container-state")?.textContent;
+    await wait(() => unreadableState() === "无法读取卷状态");
+    check(all(`${home} .container-row`).length === 3 && action(home, 1, "unmount") &&
+      all(`${home} .container-row .container-state`).filter(state => state.textContent === "无法读取卷状态").length === 1,
+      "An unreadable volume is marked on its own row and the rest of the list still renders");
+    Object.assign(unreadable, { unavailable: false, size: 65536 });
+    window.dispatchEvent(new window.Event("usb-vault-session-changed"));
+    await wait(() => unreadableState() === "已挂载" && !$(home + " .container-grab").disabled);
+
     const rows = all(`${home} .container-row`);
     const grip = rows[2].querySelector(".container-grab");
     grip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 7 }));

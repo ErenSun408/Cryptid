@@ -351,9 +351,13 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   // The driver's own view: what capacity is attached to a drive letter right
   // now. It is deliberately not the file size - for a container with a hidden
   // volume the two differ, which is the whole reason the session asks here.
+  wchar_t fail_volume_size_drive{};
   [[nodiscard]] std::optional<std::uint64_t> mounted_volume_size(
       const wchar_t drive_letter) override {
     events.emplace_back("volume-size");
+    if (drive_letter == fail_volume_size_drive) {
+      throw std::runtime_error("volume query failed");
+    }
     const auto entry = attached_volume_sizes.find(drive_letter);
     if (entry == attached_volume_sizes.end()) return std::nullopt;
     return entry->second;
@@ -1613,12 +1617,59 @@ void test_capacity_reports_the_attached_volume_not_the_file() {
               statuses[0].size_bytes == 64ULL * 1024ULL * 1024ULL,
           "an unmounted container still reported a capacity");
 
-  // A container this session believes is mounted, on a drive the driver has
-  // nothing on, is an inconsistency rather than a container without a size.
+  // A container this session believes is mounted, on a drive the driver
+  // reports empty, was released outside the application.
   runtime.attached_volume_sizes.erase(standard_drive);
-  require_throws<std::runtime_error>(
-      [&] { static_cast<void>(session.container_statuses()); },
-      "a mounted container without a volume was reported as usable");
+  statuses = session.container_statuses();
+  require(statuses.size() == 2 && !statuses[0].mounted &&
+              statuses[0].drive_letter == wchar_t{} &&
+              !statuses[0].volume_unavailable && !session.mounted(),
+          "a volume released outside the application still read as mounted");
+}
+
+void test_one_unreadable_volume_does_not_hide_the_list() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.free_drive_letters = {L'S', L'T', L'U'};
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t first = session.create_container(
+      L"D:\\first.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t second = session.create_container(
+      L"D:\\second.hc", 64ULL * 1024ULL * 1024ULL);
+  std::vector<ContainerStatus> statuses = session.container_statuses();
+  const wchar_t first_drive = status_named(statuses, L"first.hc")->drive_letter;
+  const wchar_t second_drive = status_named(statuses, L"second.hc")->drive_letter;
+
+  // The driver cannot answer for one drive. That row keeps its mount and its
+  // letter, and every other row is reported as usual.
+  runtime.fail_volume_size_drive = first_drive;
+  statuses = session.container_statuses();
+  const ContainerStatus* unreadable = status_named(statuses, L"first.hc");
+  const ContainerStatus* readable = status_named(statuses, L"second.hc");
+  require(statuses.size() == 2 && unreadable != nullptr && readable != nullptr &&
+              unreadable->mounted && unreadable->volume_unavailable &&
+              unreadable->size_bytes == 0 &&
+              unreadable->drive_letter == first_drive &&
+              readable->mounted && !readable->volume_unavailable &&
+              readable->size_bytes == 64ULL * 1024ULL * 1024ULL,
+          "one unreadable volume hid or misreported the rest of the list");
+
+  // The mount was not disproved, so it can still be taken down.
+  session.unmount_container(first);
+  runtime.fail_volume_size_drive = wchar_t{};
+  require(!status_named(session.container_statuses(), L"first.hc")->mounted,
+          "an unreadable row could not be unmounted");
+
+  // A volume released outside the application reads as unmounted and can be
+  // mounted again.
+  runtime.attached_volume_sizes.erase(second_drive);
+  statuses = session.container_statuses();
+  require(!status_named(statuses, L"second.hc")->mounted && !session.mounted(),
+          "an externally released volume kept its mounted row");
+  session.mount_adopted_container(second);
+  require(status_named(session.container_statuses(), L"second.hc")->mounted,
+          "an externally released container could not be mounted again");
 }
 
 void test_container_a_status_projects_live_file_and_mount_facts() {
@@ -4398,6 +4449,7 @@ int main() {
     test_container_b_creation_cleans_a_failed_format();
     test_hidden_containers_are_unlimited_and_share_one_derivation();
     test_capacity_reports_the_attached_volume_not_the_file();
+    test_one_unreadable_volume_does_not_hide_the_list();
     test_container_a_status_projects_live_file_and_mount_facts();
     test_login_authenticates_without_mounting();
     test_initialization_handoff_supports_hidden_creation();

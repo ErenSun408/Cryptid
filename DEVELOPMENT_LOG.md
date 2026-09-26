@@ -4112,3 +4112,12 @@
 - 测试：假运行时的分区挂载改为校验收到的固定参数，与文件挂载的既有校验对齐。该断言在改动前同样成立，作用是钉住分区挂载参数，而非复现缺陷。
 - 验证：`card_login_mount_session_tests` 通过。未跑全量测试。
 - 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。
+
+### 2026-09-26 — fix / 单个卷查不到时不再拖垮整份容器列表
+- 范围与审计：重构清单最后一项。`container_statuses` 对任一已挂载容器查不到卷或容量为 0 时整体抛错，宿主取数量与逐项信息返回 E_FAIL，页面整份列表刷新失败，其余容器无法查看与操作。用户选择区分两种情况处理。
+- 检查与实现：驱动正常应答且该盘符已无卷，视为卷已在应用外释放，该行按 `mark_released` 改回未挂载（维护卷同时收尾导入／测量），可重新挂载或移除；查询本身失败或容量为 0，该行保持已挂载与原盘符、容量为 0 并带 `volume_unavailable`，仍可卸载。其余行照常返回。
+- 界面与桥：`ContainerStatus`／`ContainerUiStatus` 增加 `volume_unavailable`；控制器一致性规则只对带该标记的已挂载行放行零容量。容量 0 也可能来自超出显示上限的大卷，不能靠容量推断，故新增只读 `getContainerVolumeUnavailable`（DISPID 121）；页面校验该标记只出现在已挂载且容量为 0 的行，状态显示“无法读取卷状态”。
+- 测试：会话新增一项查询失败、其余正常、仍可卸载、外部释放后可重挂的用例，原“盘符无卷即整体报错”断言改为验证改回未挂载；控制器新增标记放行与两种不一致拒绝；宿主测试校验新字段；页面契约与导航 DOM 各补一条。
+- 验证：p46 全部默认目标及 `USB Vault.exe` 构建通过；`card_login_mount_session_tests`、`card_product_ui_session_controller_tests`、`card_product_webview_host_object_tests`、`card_product_ui_page_contract_tests` 通过；navigation DOM 308 项通过。全量 CTest 73 项中 72 项通过，唯一失败为 vikey_helper_hid_compatibility_tests（开发 HID 探针丢失受限进程属性），与本片无关、历史同机多次出现，不能称为全绿。未做实机外部卸载验证。
+- 安全与风险：只有驱动明确应答无卷时才改回未挂载，查询失败不会误判；新标记不含档位或卷类型信息。外部释放不记入操作日志。
+- 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。

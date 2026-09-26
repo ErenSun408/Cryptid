@@ -2470,7 +2470,31 @@ void CardLoginMountSessionCore::export_container_file(
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
   std::vector<ContainerStatus> result;
   result.reserve(state_.containers.size());
-  for (const SessionContainer& container : state_.containers) {
+  for (SessionContainer& container : state_.containers) {
+    // The driver is the only authority on an attached volume: it alone knows
+    // whether the hidden or the outer volume of a two-volume container is the
+    // one currently on that drive. One row it cannot speak for never takes
+    // the rest of the list down with it.
+    std::optional<std::uint64_t> size;
+    bool answered = container.mounted;
+    if (container.mounted) {
+      try {
+        size = runtime_.mounted_volume_size(container.drive_letter);
+      } catch (...) {
+        answered = false;
+      }
+    }
+    if (answered && !size.has_value()) {
+      // The driver answered and nothing is on that letter any more: the
+      // volume was released outside this application. Say so rather than
+      // keep a row that can neither be unmounted nor removed.
+      const bool ended_maintenance = container.maintenance;
+      mark_released(container);
+      if (ended_maintenance) {
+        runtime_.end_imports();
+        runtime_.end_measurements();
+      }
+    }
     if (!container.mounted) {
       // An unmounted container has no capacity to report. The backing file
       // size is not a volume size, and for a container holding two volumes
@@ -2483,21 +2507,16 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
                         .partition = container.partition.has_value(), .conversion_state=container.conversion_state});
       continue;
     }
-    // The driver is the only authority on an attached volume: it alone knows
-    // whether the hidden or the outer volume of a two-volume container is the
-    // one currently on that drive.
-    const std::optional<std::uint64_t> size =
-        runtime_.mounted_volume_size(container.drive_letter);
-    if (!size.has_value() || *size == 0) {
-      throw std::runtime_error(
-          "mounted container has no volume on its drive letter");
-    }
+    // Either the query failed or it reported no capacity. The mount is not
+    // disproved, so the row stays mounted and can still be unmounted.
+    const bool unavailable = !size.has_value() || *size == 0;
     result.push_back({.id = container.id,
                       .name = container.name,
                       .mounted = true,
-                      .size_bytes = *size,
+                      .size_bytes = unavailable ? 0 : *size,
                       .drive_letter = container.drive_letter,
-                      .partition = container.partition.has_value(), .conversion_state=container.conversion_state});
+                      .partition = container.partition.has_value(), .conversion_state=container.conversion_state,
+                      .volume_unavailable = unavailable});
   }
   return result;
 }

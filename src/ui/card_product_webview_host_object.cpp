@@ -35,6 +35,7 @@ constexpr DISPID kPartitionCheckStatusId = 108;
 constexpr DISPID kPartitionCreateId = 109;
 constexpr DISPID kGetContainerPartitionId = 110;
 constexpr DISPID kGetContainerConversionId = 111;
+constexpr DISPID kGetContainerVolumeUnavailableId = 121;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
@@ -490,6 +491,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginPartitionConversion")) { ids[0]=kPartitionConvertId; return S_OK; }
     if (matches(names[0], L"beginPartitionResume")) { ids[0]=kPartitionResumeId; return S_OK; }
     if (matches(names[0], L"getContainerPartition")) { ids[0] = kGetContainerPartitionId; return S_OK; }
+    if (matches(names[0], L"getContainerVolumeUnavailable")) { ids[0] = kGetContainerVolumeUnavailableId; return S_OK; }
     if (matches(names[0], L"beginPartitionPair")) { ids[0] = kPartitionPairId; return S_OK; }
     if (matches(names[0], L"beginPartitionCreate")) { ids[0] = kPartitionCreateId; return S_OK; }
     if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
@@ -787,6 +789,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetContainerCountId: case kGetContainerIdId: case kGetContainerNameId:
       case kGetContainerMountedId: case kGetContainerSizeMibId: case kGetContainerDriveLetterId:
       case kGetContainerPartitionId: case kGetContainerConversionId:
+      case kGetContainerVolumeUnavailableId:
       case kGetOperationCountId: case kGetOperationCompletedAtId: case kGetOperationKindId:
       case kGetOperationOutcomeId: case kGetOperationContainerNameId: case kGetOperationDriveLetterId:
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
@@ -1137,6 +1140,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetContainerSizeMibId:
       case kGetContainerPartitionId:
       case kGetContainerConversionId:
+      case kGetContainerVolumeUnavailableId:
       case kGetContainerDriveLetterId:
         return invoke_container_fact(
             member, parameters, result, argument_error);
@@ -2577,6 +2581,11 @@ class CardProductWebViewHostObject final : public IDispatch {
         case kGetContainerPartitionId:
           result->vt = VT_BOOL;
           result->boolVal = status.partition ? VARIANT_TRUE : VARIANT_FALSE;
+          return S_OK;
+        case kGetContainerVolumeUnavailableId:
+          result->vt = VT_BOOL;
+          result->boolVal =
+              status.volume_unavailable ? VARIANT_TRUE : VARIANT_FALSE;
           return S_OK;
         case kGetContainerDriveLetterId:
         default: {

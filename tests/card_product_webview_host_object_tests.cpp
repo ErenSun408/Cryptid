@@ -519,12 +519,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     std::vector<usb_vault::application::ContainerStatus> result;
     result.reserve(containers.size());
     for (const Adopted& entry : containers) {
+      const bool unavailable = entry.mounted && entry.unavailable;
       result.push_back({.id = entry.id,
                         .name = entry.name,
                         .mounted = entry.mounted,
-                        .size_bytes = entry.mounted ? entry.size_bytes : 0,
+                        .size_bytes =
+                            entry.mounted && !unavailable ? entry.size_bytes : 0,
                         .drive_letter =
-                            entry.mounted ? entry.drive_letter : wchar_t{}});
+                            entry.mounted ? entry.drive_letter : wchar_t{},
+                        .volume_unavailable = unavailable});
     }
     return result;
   }
@@ -536,6 +539,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     std::uint64_t size_bytes{};
     wchar_t drive_letter{};
     bool mounted{};
+    bool unavailable{};
   };
 
   std::uint32_t adopt(const std::wstring_view path,
@@ -1239,6 +1243,19 @@ RecordingCloseSink g_close_sink;
   return mounted;
 }
 
+[[nodiscard]] bool invoke_container_bool(IDispatch& host,
+                                         const wchar_t* const name,
+                                         const std::uint32_t index) {
+  VARIANT result{};
+  ::VariantInit(&result);
+  require(SUCCEEDED(invoke_with_number(host, name, index, &result, nullptr)),
+          "container flag query failed");
+  require(result.vt == VT_BOOL, "container flag returned the wrong type");
+  const bool value = result.boolVal == VARIANT_TRUE;
+  static_cast<void>(::VariantClear(&result));
+  return value;
+}
+
 [[nodiscard]] std::wstring invoke_container_text(IDispatch& host,
                                                  const wchar_t* const name,
                                                  const std::uint32_t index) {
@@ -1774,8 +1791,19 @@ void test_container_collection_is_exposed_by_position_and_route_gated() {
               invoke_container_number(*host.Get(), L"getContainerSizeMib",
                                       0) == 64UL &&
               invoke_container_text(*host.Get(), L"getContainerDriveLetter",
-                                    0) == L"D:",
+                                    0) == L"D:" &&
+              !invoke_container_bool(*host.Get(), L"getContainerVolumeUnavailable", 0),
           "host lost an adopted container fact");
+
+  // A volume the session could not read is still one row with its letter.
+  fixture.volume.containers[0].unavailable = true;
+  require(invoke_container_count(*host.Get()) == 1UL &&
+              invoke_container_mounted(*host.Get(), 0) &&
+              invoke_container_bool(*host.Get(), L"getContainerVolumeUnavailable", 0) &&
+              invoke_container_number(*host.Get(), L"getContainerSizeMib", 0) == 0UL &&
+              invoke_container_text(*host.Get(), L"getContainerDriveLetter", 0) == L"D:",
+          "host did not report an unreadable volume as its own row");
+  fixture.volume.containers[0].unavailable = false;
 
   VARIANT result{};
   ::VariantInit(&result);

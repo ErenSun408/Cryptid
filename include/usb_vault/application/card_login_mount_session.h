@@ -61,6 +61,9 @@ struct ContainerStatus final {
   wchar_t drive_letter{};
   bool partition{};
   std::uint32_t conversion_state{}; // 0 ready, 1 incomplete/uncertain, 2 durably paused.
+  // Mounted, but the driver could not report the volume this time. The size
+  // is then zero; the drive letter is still the one the session holds.
+  bool volume_unavailable{};
 };
 
 // One best-effort, process-local fact from the current authenticated session.

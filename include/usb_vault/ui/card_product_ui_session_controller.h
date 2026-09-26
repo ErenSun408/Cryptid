@@ -43,6 +43,8 @@ struct ContainerUiStatus final {
   wchar_t drive_letter{};
   bool partition{};
   std::uint32_t conversion_state{};
+  // A mounted row whose volume the driver could not report; size_mib is 0.
+  bool volume_unavailable{};
 };
 
 // One entry of a directory inside a mounted container, projected for the

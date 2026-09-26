@@ -425,9 +425,10 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
           {.id = entry.id,
            .name = entry.name,
            .mounted = entry.mounted,
-           .size_bytes = entry.mounted ? entry.size_bytes : 0,
+           .size_bytes = entry.mounted && !zero_mounted_size ? entry.size_bytes : 0,
            .drive_letter = entry.mounted ? entry.drive_letter
-                                         : inconsistent_unmounted_drive});
+                                         : inconsistent_unmounted_drive,
+           .volume_unavailable = entry.mounted && flag_unavailable});
     }
     return result;
   }
@@ -532,6 +533,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   // Lets one test hand the controller an unmounted container that still
   // reports a drive letter, which must fail closed instead of being shown.
   wchar_t inconsistent_unmounted_drive{};
+  bool zero_mounted_size{};
+  bool flag_unavailable{};
   bool reject_create{};
   bool reject_create_b{};
   bool reject_mount{};
@@ -1773,6 +1776,34 @@ void test_inconsistent_container_status_fails_closed() {
       "UI displayed a drive letter for an unmounted container");
 }
 
+void test_unreadable_volume_is_shown_rather_than_rejected() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.controller.create_container(L"work", fixture.directory.wide(), 64);
+
+  // The session could not read this volume: the row stays mounted, keeps its
+  // letter and carries no capacity.
+  fixture.volume.zero_mounted_size = true;
+  fixture.volume.flag_unavailable = true;
+  const auto statuses = fixture.controller.container_statuses();
+  require(statuses.size() == 1 && statuses[0].mounted &&
+              statuses[0].volume_unavailable && statuses[0].size_mib == 0 &&
+              statuses[0].drive_letter != wchar_t{},
+          "an unreadable volume was not shown as its own row");
+
+  // Without the flag a mounted row without capacity is still inconsistent,
+  // and the flag never travels with a capacity.
+  fixture.volume.flag_unavailable = false;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.container_statuses()); },
+      "a mounted row without capacity was accepted without the flag");
+  fixture.volume.zero_mounted_size = false;
+  fixture.volume.flag_unavailable = true;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(fixture.controller.container_statuses()); },
+      "an unavailable flag was accepted together with a capacity");
+}
+
 void test_operation_history_is_authenticated_sanitized_and_clearable() {
   Fixture fixture;
   require(fixture.controller.operation_history().empty() &&
@@ -2135,6 +2166,7 @@ int main() {
     test_capacity_rounds_the_attached_volume_to_whole_mib();
     test_card_reset_releases_the_session_and_refuses_while_mounted();
     test_inconsistent_container_status_fails_closed();
+    test_unreadable_volume_is_shown_rather_than_rejected();
     test_operation_history_is_authenticated_sanitized_and_clearable();
     test_operation_history_rejects_paths_and_impossible_shapes();
     test_dropping_a_container_takes_the_record_and_not_the_file();
