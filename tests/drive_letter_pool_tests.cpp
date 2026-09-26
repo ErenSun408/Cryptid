@@ -2,6 +2,7 @@
 // These assertions hold the two properties that matter: it is never a letter
 // something else is on, and over many draws it is not stuck on a few.
 #include "volume/drive_letter_pool.h"
+#include "usb_vault/volume/volume_provider.h"
 
 #include <array>
 #include <cstdint>
@@ -29,6 +30,35 @@ void require(const bool condition, const char* const message) {
   for (wchar_t letter = L'A'; letter <= L'Z'; ++letter) used |= bit(letter);
   for (const wchar_t letter : free) used &= ~bit(letter);
   return used;
+}
+
+void test_driver_only_mounts_are_excluded_from_the_free_set() {
+  using usb_vault::volume::MountedVolume;
+  using usb_vault::volume::occupied_drive_letters;
+  // DOS offers Q and Z, but Q is already mounted in the driver.
+  const auto logical = all_busy_but({L'Q', L'Z'});
+  const std::array mounts{MountedVolume{.drive_letter = L'Q'},
+                          MountedVolume{.drive_letter = L'Q'},
+                          MountedVolume{.drive_letter = L'D'},
+                          MountedVolume{.drive_letter = wchar_t{}},
+                          MountedVolume{.drive_letter = L'@'},
+                          MountedVolume{.drive_letter = L'['},
+                          MountedVolume{.drive_letter = L'z'}};
+  const auto used = occupied_drive_letters(logical, mounts);
+  require(used == (logical | bit(L'Q')), "occupancy union changed unrelated bits");
+  require(choose_free_drive_letter(used, [](std::uint32_t bound) {
+            require(bound == 1, "driver-only mount remained in the free set");
+            return 0U;
+          }) == L'Z', "driver-only mount was offered again");
+  const std::array last{MountedVolume{.drive_letter = L'Z'}};
+  require(choose_free_drive_letter(occupied_drive_letters(used, last)) == wchar_t{},
+          "combined full occupancy still offered a letter");
+  require(occupied_drive_letters(logical, {}) == logical,
+          "empty driver inventory changed DOS occupancy");
+  const std::array edges{MountedVolume{.drive_letter = L'A'},
+                        MountedVolume{.drive_letter = L'Z'}};
+  require(occupied_drive_letters(0, edges) == (bit(L'A') | bit(L'Z')),
+          "boundary drive letters were not preserved");
 }
 
 void test_a_letter_in_use_is_never_handed_out() {
@@ -128,6 +158,7 @@ void test_the_random_source_stays_inside_its_bound() {
 
 int main() {
   try {
+    test_driver_only_mounts_are_excluded_from_the_free_set();
     test_a_letter_in_use_is_never_handed_out();
     test_the_system_drives_are_never_offered();
     test_a_full_machine_answers_with_nothing();

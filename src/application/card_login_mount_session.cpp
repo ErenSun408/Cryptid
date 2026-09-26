@@ -233,14 +233,9 @@ class ProductionCardLoginMountSessionRuntime final
                               std::system_category(),
                               "inspect available drive letters");
     }
-    // A driver mount the DOS namespace has not published is still a letter in
-    // use. Asking for one makes the mount manager land the volume elsewhere,
-    // which the caller would otherwise never learn. The helper's own temporary
-    // allocation reads both lists for the same reason.
-    for (const volume::MountedVolume& mounted : provider_.mounted_volumes()) {
-      const auto index = static_cast<unsigned>(mounted.drive_letter - L'A');
-      if (index < 26) drives |= 1UL << index;
-    }
+    // Driver-only mounts also occupy their requested letters; a collision
+    // must not be offered merely because DOS has not published the mount.
+    drives = volume::occupied_drive_letters(drives, provider_.mounted_volumes());
     const wchar_t letter =
         volume::choose_free_drive_letter(static_cast<std::uint32_t>(drives));
     if (letter) return letter;

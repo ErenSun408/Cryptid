@@ -471,13 +471,7 @@ void as_caller(const HANDLE pipe, Action&& action) {
 [[nodiscard]] wchar_t choose_temporary_drive(
     const volume::VolumeProvider& provider) {
   std::uint32_t used = ::GetLogicalDrives();
-  for (const volume::MountedVolume& mounted : provider.mounted_volumes()) {
-    const unsigned index =
-        static_cast<unsigned>(mounted.drive_letter - L'A');
-    if (index < 26) {
-      used |= std::uint32_t{1} << index;
-    }
-  }
+  used = volume::occupied_drive_letters(used, provider.mounted_volumes());
   // Randomised for the same reason the session's own allocation is: this mount
   // is brief, but it is still a drive letter the machine saw being used.
   if (const wchar_t letter = volume::choose_free_drive_letter(used)) return letter;

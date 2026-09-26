@@ -2,8 +2,17 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 
 namespace usb_vault::volume {
+
+struct MountedVolume;
+
+// Include driver mounts even when their letters are absent from the caller's
+// DOS namespace. Invalid letters are ignored; this snapshot does not reserve
+// a letter against concurrent mounts. Query failures remain the caller's policy.
+[[nodiscard]] std::uint32_t occupied_drive_letters(
+    std::uint32_t logical_drives, std::span<const MountedVolume> mounted) noexcept;
 
 // Letters a mount may take. A and B are the legacy floppy pair and C is where
 // Windows conventionally lives, so a container never asks for any of them.

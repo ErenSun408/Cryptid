@@ -1,4 +1,5 @@
 #include "volume/drive_letter_pool.h"
+#include "usb_vault/volume/volume_provider.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -20,6 +21,15 @@ namespace {
 }
 
 }  // namespace
+
+std::uint32_t occupied_drive_letters(
+    std::uint32_t logical_drives, const std::span<const MountedVolume> mounted) noexcept {
+  for (const auto& volume : mounted) {
+    const auto index = static_cast<unsigned>(volume.drive_letter - L'A');
+    if (index < 26) logical_drives |= std::uint32_t{1} << index;
+  }
+  return logical_drives;
+}
 
 std::uint32_t uniform_random_below(const std::uint32_t bound) {
   if (bound <= 1) return 0;
