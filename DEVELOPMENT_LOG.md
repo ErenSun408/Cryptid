@@ -4024,3 +4024,14 @@
 - 验证：p46 全量构建通过，creator_protocol_tests 与 drive_letter_pool_tests 2/2 通过（0.32 秒），git diff --check 通过。
 - 验证边界：未注入 GetLogicalDrives 返回零、未做实际格式化／清理验收，失败短路和清理路径结论来自代码审查；未重跑全量 CTest，不改变历史 helper 测试失败状态。
 - 提交：用户已授权提交本修复，沿用全量构建与 2/2 定向测试结果，最终差异检查通过；仅提交本片代码与日志，历史交付日志保留工作区，禁止推送。
+
+
+### 2026-09-26 — refactor / 空间查询与容量计算去重
+- 范围与审计：按下一组计划核对需求空间预检／配额语义、R-03／8.6 与里程碑；仅去重普通空间查询及创建参数计算，不修改 FAT32 安全空间算法。
+- 检查与实现：检查 volume_space、writable_free_bytes、resolve_target_path 的两个调用方及既有空间／UI 创建测试；两个入口均先校验至少 20 MiB，因此零容量跳过条件不可达。
+- 检查与实现：在 volume_space.cpp 内部共享 query_space，保留各自输入校验、原始查询目录、Windows 错误类别／值及上下文；仍返回 available 而非全卷 free_bytes。
+- 检查与实现：移除 required_bytes 非零判断；普通容量与外层容量各转换一次，预检和真正创建共用同一字节数，保持转换前提升为 uint64_t。
+- 验证：p46 全量构建通过；volume_space_tests、container_target_path_tests、card_product_ui_session_controller_tests 3/3 通过（0.78 秒）；日志未出现跳过提示；git diff --check 通过。
+- 安全与风险：没有增加查询、缓存、持久化或密钥副本；文件夹挂载卷仍按指定目录查询，配额语义保持；不改变空间预检与真实写入之间的竞争边界。
+- 验证边界：沿用已有行为测试，未新增镜像实现测试；未重跑全量 CTest、配额卷／文件夹挂载卷专项实测或实机格式化验收，历史 helper 失败状态不变。
+- 提交：用户授权复查后提交，最终差异检查通过，沿用全量构建及 3/3 定向测试结果；历史交付日志保留工作区，禁止推送。

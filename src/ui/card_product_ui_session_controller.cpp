@@ -143,8 +143,7 @@ class SecureBufferGuard final {
   // after the user has waited. Asking first turns that into a refusal that
   // names the cause. It is a check, not a reservation: the space can still go
   // away before the write, which the volume layer continues to report.
-  if (required_bytes != 0 &&
-      volume::writable_free_bytes(location) < required_bytes) {
+  if (volume::writable_free_bytes(location) < required_bytes) {
     throw std::system_error(
         volume_creation::make_error_code(
             volume_creation::CreationError::destination_full),
@@ -327,10 +326,9 @@ void CardProductUiSessionController::create_container(
     throw std::invalid_argument("container size is outside the UI range");
   }
 
-  const std::wstring path = resolve_target_path(
-      directory, name, static_cast<std::uint64_t>(size_mib) * kBytesPerMib);
-  static_cast<void>(volume_session_.create_container(
-      path, static_cast<std::uint64_t>(size_mib) * kBytesPerMib));
+  const auto size_bytes = static_cast<std::uint64_t>(size_mib) * kBytesPerMib;
+  const std::wstring path = resolve_target_path(directory, name, size_bytes);
+  static_cast<void>(volume_session_.create_container(path, size_bytes));
 }
 
 void CardProductUiSessionController::create_container_b(
@@ -358,9 +356,8 @@ void CardProductUiSessionController::create_container_b(
 
   // The location is settled before anything is derived or committed, so a
   // rejected name leaves the card and the second password untouched.
-  const std::wstring path = resolve_target_path(
-      directory, name,
-      static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib);
+  const auto outer_size_bytes = static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib;
+  const std::wstring path = resolve_target_path(directory, name, outer_size_bytes);
 
   // The page no longer asks for the password the session was opened under:
   // the session still holds it, and which of the two it is stays unknown here
@@ -384,7 +381,7 @@ void CardProductUiSessionController::create_container_b(
   // password that opens nothing yet is harmless and can be set again.
   entry_.set_second_card_password(duplicate(login), duplicate(second));
   static_cast<void>(volume_session_.create_container_b(
-      path, static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib,
+      path, outer_size_bytes,
       static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second));
 }
 

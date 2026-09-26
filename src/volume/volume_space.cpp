@@ -53,35 +53,33 @@ class Handle final {
   return upper;
 }
 
+// Keep the original location: a directory may itself be a volume mount point.
+[[nodiscard]] VolumeSpace query_space(const wchar_t* const location,
+                                     const char* const context) {
+  ULARGE_INTEGER available{};
+  ULARGE_INTEGER total{};
+  ULARGE_INTEGER free_bytes{};
+  if (::GetDiskFreeSpaceExW(location, &available, &total, &free_bytes) == FALSE) {
+    throw_last_error(::GetLastError(), context);
+  }
+  // Use the caller's available bytes, not volume-wide free bytes: quotas can
+  // make the latter overstate what this caller may write.
+  return {.total_bytes = total.QuadPart, .free_bytes = available.QuadPart};
+}
+
 }  // namespace
 
 VolumeSpace volume_space(const wchar_t drive_letter) {
   const wchar_t letter = validated_letter(drive_letter);
   const wchar_t root[] = {letter, L':', L'\\', L'\0'};
-
-  ULARGE_INTEGER available{};
-  ULARGE_INTEGER total{};
-  ULARGE_INTEGER free_bytes{};
-  if (::GetDiskFreeSpaceExW(root, &available, &total, &free_bytes) == FALSE) {
-    throw_last_error(::GetLastError(), "query mounted volume free space");
-  }
-  // What this caller may still write, not what the volume holds in total: on a
-  // quota-bearing volume the two differ and the smaller one is the honest answer.
-  return {.total_bytes = total.QuadPart, .free_bytes = available.QuadPart};
+  return query_space(root, "query mounted volume free space");
 }
 
 std::uint64_t writable_free_bytes(const std::wstring& directory) {
   if (directory.empty()) {
     throw std::invalid_argument("a save location is required");
   }
-  ULARGE_INTEGER available{};
-  ULARGE_INTEGER total{};
-  ULARGE_INTEGER free_bytes{};
-  if (::GetDiskFreeSpaceExW(directory.c_str(), &available, &total,
-                            &free_bytes) == FALSE) {
-    throw_last_error(::GetLastError(), "query save location free space");
-  }
-  return available.QuadPart;
+  return query_space(directory.c_str(), "query save location free space").free_bytes;
 }
 
 TailSpace scan_volume_tail_space(const wchar_t drive_letter) {
