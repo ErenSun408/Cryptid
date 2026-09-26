@@ -3919,3 +3919,16 @@
 - 安全与风险：序号在 AES-GCM 载荷内，只有持根派生密钥者可见；但这引入一项新推断——持密钥者可由"最高序号 > 记录数"看出曾删除过磁盘容器，而此前删除不留痕。该信息不指示密码档位或隐藏卷存在性，且持密钥者本就能看到全部记录，判断为可接受，但属本片新增。
 - 兼容性（重要）：本机写出或补号过的索引，已交付安装包中的应用无法读取，且登录一次即不可逆完成升级。需求原已规定不支持不认识相应版本的旧客户端改写同一索引，本片属该规则内，但现场影响是真实的。
 - 提交：实现与测试待用户审阅，未提交、未推送。
+
+
+### 2026-09-25 — fix / 创建失败码只接受创建错误类别（修回归）
+- 范围与审计：/simplify 四路审查发现 9c90d3e 引入的回归。begin_creation 的 catch 用 error.code().value() 存码，丢弃 category，而 CreationError 取值 1..19 与 errno／Win32 密集撞号。
+- 已核实的撞号（UCRT errno.h 实测）：errc::file_exists=17 撞 io_error=17，errc::no_such_file_or_directory=2 撞 protocol_error=2，EACCES=13 撞 bitmap_scan_failed=13。会话在 1469／1564 行正是以 file_exists 抛出"同名文件已存在"，于是页面把它报成"读写失败……FAT32 单个文件不能超过 4 GiB"，而表中第 10 条本就有正确文案。
+- 性质：9c90d3e 之前页面只印裸数字，印错不了；加了文案表之后才把撞号变成自信的错误诊断，故该片比改动前更糟，属回归而非既有缺陷。
+- 检查与实现：新增 creation_failure_code，把该通道定义为"一个 CreationError 或零"。本类别权威直接取值；唯一有精确对应的通用条件 errc::file_exists 译为 target_exists；其余留零，由既有的 status 3 兜底转成 E_FAIL，页面照原样显示"原因无法确定"。状态分类（取消／清理失败）本就按完整 error_code 比较，不受影响。
+- 对称性记录：目录读取那条通道当初处理了 category（并刻意收紧 access_denied 只认 Win32 值，不吃 std::errc 折叠），创建这条却没处理。同一个坑一处防了一处没防。
+- 验证：既有用例本就有一例"以通用类别抛出 operation_cancelled 的数值"，把断言收紧为"状态 3 必须读回 E_FAIL"后，该例同时证明撞号码不会被当成创建错误交给页面；另新增一例以 errc::file_exists 抛出并要求读回 target_exists。负向对照把存码改回原样后失败于"a failure outside the creation vocabulary was reported as one"。
+- 验证：全量 CTest 73 项中 72 项通过（vikey_helper_hid_compatibility_tests 与本片无关）。页面未改动，契约测试通过。
+- 未修（审查同批发现，已向用户报告并排期）：D2 原地转换路径仍用 add_container_index_partition，order 为 nullopt；且文件专用重排会让文件与磁盘容器落在同一 rank，新建文件容器后磁盘位置再由随机槽位决定——5c4eadd 的修复不完整。D3 settled_drive_letter 抛异常会留下无人持有的挂载，且装载管理器异步发布可能使回读暂态为零而误伤正常挂载。
+- 安全与风险：只收窄页面可读到的码的取值域，不新增持久化、不改门禁；诊断信息未扩大，非本类别的原始 Win32 值不再送到页面显示。
+- 提交：实现与测试待用户审阅，未提交、未推送。

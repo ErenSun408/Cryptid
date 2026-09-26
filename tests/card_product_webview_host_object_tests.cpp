@@ -1347,11 +1347,14 @@ HRESULT begin_creation_for_test(IDispatch& host, Fixture& fixture,
   return result;
 }
 
+// `expected_code` is the value the page must read back, when the caller cares
+// which one it is. Zero leaves it to the rule for the expected status.
 void check_background_creation_outcome(const std::exception_ptr& failure,
                                        const bool request_cancel,
                                        const std::wstring_view expected_status,
                                        const bool skip_checkpoint = false,
-                                       const bool hidden = false) {
+                                       const bool hidden = false,
+                                       const unsigned int expected_code = 0) {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   fixture.volume.pause_creation.store(true);
@@ -1400,6 +1403,12 @@ void check_background_creation_outcome(const std::exception_ptr& failure,
       failure_code.vt == VT_UI4 && failure_code.ulVal != 0, "creation failure code missing");
   if (expected_status == L"4,") require(failure_code.ulVal == 16, "cancellation code lost");
   if (expected_status == L"5,") require(failure_code.ulVal == 15 || failure_code.ulVal == static_cast<unsigned int>(E_FAIL), "cleanup code lost");
+  if (expected_code)
+    require(failure_code.ulVal == expected_code,
+            "the page would read a creation failure code that is not the one");
+  else if (expected_status == L"3,")
+    require(failure_code.ulVal == static_cast<unsigned int>(E_FAIL),
+            "a failure outside the creation vocabulary was reported as one");
   ::VariantClear(&failure_code);
 
   // Reuse the same host, name and authenticated session. No stale cancellation
@@ -1440,11 +1449,19 @@ void test_a_running_creation_can_be_called_off() {
       check_background_creation_outcome(combined, requested, L"5,", false, hidden);
       check_background_creation_outcome(std::make_exception_ptr(
           std::runtime_error("unrelated failure")), requested, L"3,", false, hidden);
-      // Same numeric value in another category must not count as cancellation.
+      // Same numeric value in another category must not count as cancellation,
+      // and must not be handed to the page as that creation error either.
       check_background_creation_outcome(std::make_exception_ptr(
           std::system_error(std::error_code(
               static_cast<int>(CreationError::operation_cancelled),
               std::generic_category()))), requested, L"3,", false, hidden);
+      // A name already taken arrives as errc::file_exists, whose value is the
+      // one io_error uses. It has an exact counterpart, so it must arrive as
+      // that one rather than as a read-write failure.
+      check_background_creation_outcome(std::make_exception_ptr(
+          std::system_error(std::make_error_code(std::errc::file_exists))),
+          requested, L"3,", false, hidden,
+          static_cast<unsigned int>(CreationError::target_exists));
     }
     check_background_creation_outcome(cancelled, false, L"4,", false, hidden);
   }

@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -235,6 +236,25 @@ enum class DirectoryFailure : unsigned int {
   contents_refused = 7,
   unknown = 8,
 };
+
+// What the page may read as a creation failure: a CreationError or nothing.
+//
+// CreationError runs 1..19, which collides densely with errno and Win32. A
+// duplicate container name arrives as errc::file_exists, whose value is 17 --
+// exactly CreationError::io_error -- so storing a foreign code unchanged had
+// the page name a cause that was not the one, and name it confidently. Only
+// this category is authoritative here; the one generic condition with an exact
+// counterpart is translated, and anything else is left for the caller to
+// report as undetermined rather than guessed at.
+[[nodiscard]] unsigned int creation_failure_code(const std::error_code& code) noexcept {
+  if (code.category() == volume_creation::creation_error_category()) {
+    return static_cast<unsigned int>(code.value());
+  }
+  if (code == std::errc::file_exists) {
+    return static_cast<unsigned int>(volume_creation::CreationError::target_exists);
+  }
+  return 0;
+}
 
 constexpr wchar_t kListContainerDirectoryName[] = L"listContainerDirectory";
 constexpr wchar_t kDirectoryErrorName[] = L"getDirectoryError";
@@ -1821,7 +1841,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         } catch (const application::ContainerCreationCleanupError&) {
           status = 5;
         } catch (const std::system_error& error) {
-          creation_error_.store(static_cast<unsigned int>(error.code().value()));
+          creation_error_.store(creation_failure_code(error.code()));
           // A request alone proves neither cancellation nor successful cleanup.
           // Only the creator's confirmed outcome may claim cancellation.
           if (error.code() == volume_creation::make_error_code(
