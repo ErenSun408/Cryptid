@@ -757,12 +757,9 @@ void throw_if_creation_cancelled(
   return nullptr;
 }
 
-// The letter a mount asked for is a request; the letter the driver reports is
-// where the volume is. Windows can land it elsewhere, and a session that
-// writes down its own request then addresses a drive holding nothing -- every
-// later listing, read and write goes to the wrong place, and the page blames
-// the container. A mount the driver cannot account for is refused rather than
-// recorded under a letter that was never confirmed.
+// A successful provider result always identifies the mounted driver device.
+// Keep the range check as a runtime-contract guard; production completion
+// must not return zero after a successful mount or query inventory afterward.
 [[nodiscard]] wchar_t settled_drive_letter(const volume::MountResult& mounted) {
   if (mounted.drive_letter < L'A' || mounted.drive_letter > L'Z') {
     throw std::runtime_error(

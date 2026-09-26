@@ -91,6 +91,8 @@ class CardLoginMountSessionRuntime {
     target.logical_sector_bytes=identity.logical_sector_bytes; target.offset_bytes=identity.offset_bytes; target.length_bytes=identity.length_bytes;
     return target;
   }
+  // Successful mount operations must return an owned A..Z drive, never zero.
+  // Production uses the provider completion contract without a later query.
   virtual volume::MountResult mount_partition(const volume::PartitionIdentity&,
       const security::SecureBuffer&, const volume::MountOptions&) {
     throw std::logic_error("partition mounting unavailable");

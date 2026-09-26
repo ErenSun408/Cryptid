@@ -4,6 +4,7 @@
 #include "volume/locked_driver_buffer.h"
 #include "volume/mount_request.h"
 #include "volume/mount_identity.h"
+#include "volume/mount_completion.h"
 #include "volume/veracrypt_driver_abi.h"
 
 #include <cstddef>
@@ -334,6 +335,66 @@ void test_mount_identity_validation() {
   require(!decode_mount_identity(bad, 24).protected_outer_writable, "unsupported PRF ignored");
 }
 
+void test_mount_completion_retains_ownership_and_clears_secrets() {
+  using namespace usb_vault::volume;
+  using usb_vault::volume::detail::complete_mount;
+  const auto password = fixture_password(64);
+  const auto protection = fixture_password(64, 3);
+  const auto cleared = [](const MountRequest& request) {
+    const auto raw = std::as_bytes(std::span(&request, 1));
+    return std::ranges::all_of(raw, [](std::byte b) { return b == std::byte{}; });
+  };
+  for (wchar_t drive = L'A'; drive <= L'Z'; ++drive) {
+    LockedDriverBuffer<MountRequest> buffer;
+    detail::populate_mount_request(buffer.get(), L"D:\\vault\\pair.hc", password,
+        {.drive_letter = drive, .hidden_volume_protection = HiddenVolumeProtection{.password = &protection}});
+    unsigned calls = 0;
+    const auto result = complete_mount(buffer, [&](MountRequest& request) {
+      ++calls;
+      require(request.volume_password.length == 64 && request.protected_hidden_volume_password.length == 64,
+              "mount completion cleared credentials before the transaction");
+      request.return_code = 0;
+      request.filesystem_dirty = 1;
+      request.read_only_after_access_denied = 1;
+      request.read_only_after_device_write_protected = 1;
+      request.is_ntfs = 1;
+      request.master_key_vulnerable = 1;
+    });
+    require(calls == 1 && result.drive_letter == drive,
+            "successful mount lost ownership or repeated the mount transaction");
+    require(result.filesystem_dirty && result.read_only_after_access_denied &&
+                result.read_only_after_device_write_protected && result.is_ntfs && result.master_key_vulnerable,
+            "mount completion lost driver result flags");
+    require(cleared(buffer.get()), "successful mount retained credentials");
+  }
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    LockedDriverBuffer<MountRequest> buffer;
+    detail::populate_mount_request(buffer.get(), L"D:\\vault\\pair.hc", password, {.drive_letter = L'K'});
+    bool rejected = false;
+    try {
+      static_cast<void>(complete_mount(buffer, [&](MountRequest& request) {
+        if (scenario == 0) throw std::system_error(std::make_error_code(std::errc::io_error));
+        request.return_code = scenario == 1 ? 3 : 6;
+      }));
+    } catch (const std::system_error& error) {
+      rejected = true;
+      const auto expected = scenario == 0 ? std::make_error_code(std::errc::io_error)
+          : make_error_code(scenario == 1 ? DriverError::authentication_failed : DriverError::volume_busy);
+      require(error.code() == expected, "mount completion changed the failure category");
+    }
+    require(rejected && cleared(buffer.get()), "failed mount succeeded or retained credentials");
+  }
+  for (const int drive : {-1, 26}) {
+    LockedDriverBuffer<MountRequest> buffer;
+    buffer.get().drive_number = drive;
+    bool called = false;
+    require_invalid_argument([&] {
+      static_cast<void>(complete_mount(buffer, [&](MountRequest&) { called = true; }));
+    }, "invalid drive reached the mount transaction");
+    require(!called && cleared(buffer.get()), "invalid mount was sent or retained its request");
+  }
+}
+
 void test_driver_error_codes() {
   const std::error_code busy =
       usb_vault::volume::make_error_code(
@@ -349,6 +410,7 @@ void test_driver_error_codes() {
 
 int main() {
   try {
+    test_mount_completion_retains_ownership_and_clears_secrets();
     test_valid_mount_request();
     test_protected_mount_request();
     test_invalid_mount_requests();

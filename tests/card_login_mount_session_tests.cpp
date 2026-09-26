@@ -1,4 +1,5 @@
 #include "application/card_login_mount_session_internal.h"
+#include "volume/mount_completion.h"
 
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/container_index_v1.h"
@@ -157,11 +158,9 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   bool partition_mount_fail{};
   bool partition_pair{};
   std::function<void()> after_partition_mount;
-  // The mount manager can publish a volume on a letter other than the one it
-  // was asked for, so the fake driver can be told to do exactly that, and to
-  // answer with no letter at all.
+  // A synthetic provider result lets the session test verify that it uses
+  // the returned ownership handle, independently of its allocation request.
   wchar_t partition_lands_on{};
-  bool partition_reports_no_drive{};
   usb_vault::volume::MountResult mount_partition(const usb_vault::volume::PartitionIdentity& identity,
       const SecureBuffer& password, const usb_vault::volume::MountOptions& options) override {
     require(usb_vault::volume::valid_partition_identity(identity) && password.size() == 64,
@@ -178,10 +177,12 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
           .disk_length=identity.length_bytes-262144, .protected_outer_writable=true};
     } else if (partition_pair && password.bytes()[0] == std::byte{'p'})
       throw std::system_error(usb_vault::volume::make_error_code(usb_vault::volume::DriverError::authentication_failed));
-    attached_volume_sizes[landed] = identity.length_bytes - 262144;
-    if (after_partition_mount) after_partition_mount();
-    // A driver reports the letter it actually mounted on, not the request.
-    return {.drive_letter = partition_reports_no_drive ? wchar_t{} : landed};
+    usb_vault::volume::detail::LockedDriverBuffer<usb_vault::volume::detail::abi::MountRequest> request;
+    request.get().drive_number = static_cast<std::int32_t>(landed - L'A');
+    return usb_vault::volume::detail::complete_mount(request, [&](auto&) {
+      attached_volume_sizes[landed] = identity.length_bytes - 262144;
+      if (after_partition_mount) after_partition_mount();
+    });
   }
   bool partition_password_64{};
   bool partition_skip_confirmation{};
@@ -4104,10 +4105,8 @@ void test_disk_containers_are_numbered_among_themselves() {
 }
 
 void test_a_mount_is_recorded_where_the_driver_put_it() {
-  // The letter a mount asks for is a request. When the mount manager lands the
-  // volume somewhere else, a session that writes down its own request then
-  // addresses a drive holding nothing, and every later listing fails as though
-  // the contents had gone missing from the container.
+  // The session owns the valid drive returned by its runtime. The fake uses
+  // the production completion path, including its nonzero result guarantee.
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
   runtime.partition_password_64 = true;
@@ -4133,14 +4132,14 @@ void test_a_mount_is_recorded_where_the_driver_put_it() {
   require(!runtime.attached_volume_sizes.contains(L'K'),
           "release addressed a drive the volume was never on");
 
-  // A driver that cannot say where the volume went leaves nothing to address,
-  // so the mount is refused rather than recorded under a letter that was never
-  // confirmed.
-  runtime.partition_reports_no_drive = true;
+  // A rejected mount creates no driver attachment. A successful mount must
+  // instead return a valid ownership handle, never zero after attaching.
+  runtime.partition_mount_fail = true;
   require_throws<std::runtime_error>([&] { session.mount_adopted_container(id); },
-      "a mount the driver did not account for was recorded anyway");
+      "a rejected mount was recorded anyway");
   require(!session.container_statuses()[0].mounted,
-          "an unaccounted mount was left marked as mounted");
+          "a rejected mount was left marked as mounted");
+  require(runtime.attached_volume_sizes.empty(), "failed mount left an unowned attachment");
 }
 
 void test_partition_pair_session() {

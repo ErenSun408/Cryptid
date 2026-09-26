@@ -78,11 +78,10 @@ struct MountResult final {
   bool is_ntfs{false};
   bool master_key_vulnerable{false};
   std::chrono::milliseconds elapsed{};
-  // Where the volume actually came up, read back from the driver rather than
-  // assumed from the request. The requested letter is a request: the mount
-  // manager can land the volume on another one, and a caller that writes down
-  // what it asked for then addresses a drive that holds nothing. Zero means
-  // the driver's own list did not account for this mount.
+  // On successful mount_file/mount_partition return, always A..Z: the drive
+  // number validated before the successful VeraCrypt mount transaction.
+  // The pinned driver creates and unmounts its device under that number;
+  // ownership does not depend on a later inventory or shell readiness query.
   wchar_t drive_letter{};
 };
 
