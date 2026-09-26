@@ -822,6 +822,15 @@ void record_created_mount(CardLoginMountSessionState& state,
   entry->mounted = true;
 }
 
+// What a volume that has left its drive no longer has. Anything that differs
+// by path -- ending imports, measurements or logging -- stays with the caller.
+void mark_released(SessionContainer& container) noexcept {
+  container.mounted = false;
+  container.maintenance = false;
+  container.maintenance_identity.reset();
+  container.drive_letter = wchar_t{};
+}
+
 SessionContainer& adopt_partition(CardLoginMountSessionState& state,
     const volume::PartitionIdentity& identity, const std::uint32_t sequence) {
   if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
@@ -1855,10 +1864,7 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
           const wchar_t drive_letter = mount_outer_for_maintenance(
               entry, outer_password, MaintenanceMount::trial);
           static_cast<void>(runtime_.unmount_forced(drive_letter));
-          entry.mounted = false;
-          entry.maintenance = false;
-          entry.maintenance_identity.reset();
-          entry.drive_letter = wchar_t{};
+          mark_released(entry);
           survey.maintainable.push_back(entry.id);
         } catch (const DecoyMaintenanceRefused&) {
           // Not one this password maintains, which is all anyone learns.
@@ -2071,10 +2077,7 @@ bool CardLoginMountSessionCore::verify_decoy_maintenance(
   // Nothing stays up on the strength of having asked. A volume that will not
   // come down stays recorded as mounted and the failure reaches the caller.
   static_cast<void>(runtime_.unmount_forced(drive_letter));
-  entry.mounted = false;
-  entry.maintenance = false;
-  entry.maintenance_identity.reset();
-  entry.drive_letter = wchar_t{};
+  mark_released(entry);
   return true;
 }
 
@@ -2333,10 +2336,7 @@ void CardLoginMountSessionCore::unmount_container_impl(
     try {
       if (allow_force) static_cast<void>(runtime_.unmount_forced(drive_letter));
       else static_cast<void>(runtime_.unmount(drive_letter));
-      container.mounted = false;
-      container.maintenance = false;
-      container.maintenance_identity.reset();
-      container.drive_letter = wchar_t{};
+      mark_released(container);
       if (ended_maintenance) runtime_.end_imports();
       if (ended_maintenance && end_measurements) runtime_.end_measurements();
       record_operation(OperationKind::container_unmounted,
@@ -2612,10 +2612,7 @@ void CardLoginMountSessionCore::unmount_active() {
       const bool ended_maintenance = container.maintenance;
       try {
         static_cast<void>(runtime_.unmount(drive_letter));
-        container.mounted = false;
-        container.maintenance = false;
-        container.maintenance_identity.reset();
-        container.drive_letter = wchar_t{};
+        mark_released(container);
         if (ended_maintenance) { runtime_.end_imports(); runtime_.end_measurements(); }
         record_operation(OperationKind::container_unmounted,
                          OperationOutcome::succeeded,
@@ -2655,10 +2652,7 @@ bool CardLoginMountSessionCore::force_unmount_active() {
         continue;
       }
       forced = result.forced || forced;
-      container.mounted = false;
-      container.maintenance = false;
-      container.maintenance_identity.reset();
-      container.drive_letter = wchar_t{};
+      mark_released(container);
     }
   }
   if (failure) std::rethrow_exception(failure);
