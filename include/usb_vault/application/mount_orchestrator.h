@@ -57,14 +57,4 @@ class MountRollbackError final : public std::runtime_error {
     const security::SecureBuffer& password_utf8,
     const security::SecureBuffer& card_secret);
 
-// P2 Card Record mount policy. Authentication has already completed before
-// this call: B uses the original login input, A always uses the fixed diskA
-// domain, and no container files is a successful authenticated no-volume
-// result. B remains the gate whenever it exists.
-[[nodiscard]] MountSessionResult mount_authenticated_card_session(
-    const volume::VolumeProvider& provider,
-    const ContainerLayout& layout,
-    const security::SecureBuffer& login_password_utf8,
-    const security::SecureBuffer& root_secret);
-
 }  // namespace usb_vault::application

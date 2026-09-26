@@ -17,8 +17,6 @@ namespace {
 using usb_vault::application::ContainerLayout;
 using usb_vault::application::MountRollbackError;
 using usb_vault::application::detail::MountRuntime;
-using usb_vault::application::detail::
-    mount_authenticated_card_session_with_runtime;
 using usb_vault::application::detail::mount_session_with_runtime;
 using usb_vault::security::SecureBuffer;
 
@@ -248,31 +246,6 @@ void test_single_container_branches() {
   require_events(neither, {"probe:B", "probe:A"});
 }
 
-void test_authenticated_card_policy_uses_fixed_a_and_allows_no_volume() {
-  const SecureBuffer password = bytes("login-password");
-  const SecureBuffer root = bytes("root");
-
-  FakeRuntime only_a;
-  only_a.b_exists = false;
-  const auto a_result = mount_authenticated_card_session_with_runtime(
-      only_a, layout(), password, root);
-  require(a_result.container_a.has_value() &&
-              !a_result.container_b.has_value(),
-          "authenticated A-only result was incorrect");
-  require_events(only_a, {"probe:B", "probe:A", "derive:A", "mount:A",
-                          "notify:A"});
-
-  FakeRuntime neither;
-  neither.a_exists = false;
-  neither.b_exists = false;
-  const auto empty_result = mount_authenticated_card_session_with_runtime(
-      neither, layout(), password, root);
-  require(!empty_result.container_a.has_value() &&
-              !empty_result.container_b.has_value(),
-          "authenticated no-volume result invented a mount");
-  require_events(neither, {"probe:B", "probe:A"});
-}
-
 void test_a_failures_roll_back_b_before_reporting() {
   const SecureBuffer password = bytes("real-password");
   const SecureBuffer card = bytes("card");
@@ -374,7 +347,6 @@ int main() {
     test_b_then_a_success_is_silent_until_complete();
     test_wrong_b_password_never_touches_a();
     test_single_container_branches();
-    test_authenticated_card_policy_uses_fixed_a_and_allows_no_volume();
     test_a_failures_roll_back_b_before_reporting();
     test_busy_rollback_forces_once();
     test_failed_force_reports_residual_drive();

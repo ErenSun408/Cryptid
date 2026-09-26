@@ -27,10 +27,6 @@ class CardLoginMountSessionRuntime {
   CreationCancellation creation_revoked;
   virtual ~CardLoginMountSessionRuntime() noexcept = default;
 
-  [[nodiscard]] virtual MountSessionResult mount_authenticated(
-      const ContainerLayout& layout,
-      const security::SecureBuffer& login_password_utf8,
-      const security::SecureBuffer& root_secret) = 0;
   [[nodiscard]] virtual volume::UnmountResult unmount(
       wchar_t drive_letter) = 0;
   [[nodiscard]] virtual volume::UnmountEscalationResult unmount_forced(
@@ -235,8 +231,7 @@ class CardLoginMountSessionCore final {
   CardLoginMountSessionCore(
       CardAuthenticationSession& authentication,
       CardLoginMountSessionRuntime& runtime,
-      ContainerLayout layout,
-      ::usb_vault::application::LoginMountPolicy login_mount_policy);
+      ContainerLayout layout);
 
   void consume_authenticated_login(
       security::SecureBuffer root_secret,
@@ -406,7 +401,6 @@ class CardLoginMountSessionCore final {
   CardAuthenticationSession& authentication_;
   CardLoginMountSessionRuntime& runtime_;
   ContainerLayout layout_;
-  ::usb_vault::application::LoginMountPolicy login_mount_policy_;
   CardLoginMountSessionState state_;
 };
 

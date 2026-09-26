@@ -613,7 +613,6 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
                        login_password_utf8.bytes().end());
     authentication_.establish(std::move(root));
     login_password_utf8.clear();
-    mounted_state = mount_on_login;
   }
 
   void unmount_active() override {
@@ -654,7 +653,6 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   CardAuthenticationSession& authentication_;
   std::vector<std::byte> login_bytes;
   std::vector<usb_vault::application::OperationEvent> operation_events;
-  bool mount_on_login{};
   bool mounted_state{};
   bool reject_unmount{};
   std::atomic<bool> pause_volume{false};
@@ -1612,7 +1610,6 @@ void test_login_consumes_and_wipes_one_array() {
     Fixture fixture;
     fixture.entry.route = CardEntryRoute::login_required;
     fixture.entry.reject_credential = reject;
-    fixture.volume.mount_on_login = true;
     ComPtr<IDispatch> host = make_host(fixture.controller);
     std::vector<std::byte> password{
         std::byte{'e'}, std::byte{0xCC}, std::byte{0x81}};
@@ -1630,8 +1627,8 @@ void test_login_consumes_and_wipes_one_array() {
       require(result == S_OK &&
                   equals(fixture.volume.login_bytes, expected) &&
                   invoke_state(*host.Get()) == 3L &&
-                  invoke_mounted(*host.Get()),
-              "login host changed NFC, state, or mounted semantics");
+                  !invoke_mounted(*host.Get()),
+              "login host changed NFC or state, or mounted at login");
     }
   }
 }

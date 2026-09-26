@@ -485,8 +485,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   auto volume_session = std::make_unique<
       usb_vault::application::CardLoginMountSession>(
           *authentication, *g_volume_provider, std::move(layout),
-          child_path(directory, L"usb_vault_volume_creator.exe"),
-          usb_vault::application::LoginMountPolicy::manual);
+          child_path(directory, L"usb_vault_volume_creator.exe"));
   auto password_policy = std::make_unique<
       usb_vault::security::OfflineCardPasswordPolicy>();
   auto file_chooser = std::make_unique<

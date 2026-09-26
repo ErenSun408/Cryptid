@@ -4090,3 +4090,18 @@
 - 测试：删除整会话挂载用例与分区转换中对应的一行断言（单项挂载断言已覆盖同一规则）、宿主假会话实现及其专项检查、页面模拟桥方法；宿主测试改用单项挂载验证“完成的挂载不会留下强制清理资格”，并把 `beginMountAll` 列入必须为未知名称的成员。
 - 验证：`USB Vault.exe`（p46）构建通过；`card_login_mount_session_tests`、`card_product_webview_host_object_tests`、`card_product_ui_session_controller_tests` 通过；navigation DOM 307 项通过。未跑全量测试。
 - 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。
+
+### 2026-09-26 — test / 会话测试不再借登录挂载策略搭环境
+- 范围与审计：清理 `mount_on_login` 的第一片，只改测试。正式应用只用 `manual`，“登录后自动挂载”由页面在登录后发起逐项批次（8.7.5）；会话测试中 17 处 `mount_on_login` 多数只是借它得到“已登录且 A、B 已挂载”的起点。
+- 检查与实现：新增 `login_and_mount_both`，以 `manual` 登录后按先 B 后 A 单项挂载到布局盘符 Y、X。卸载顺序、两处拔卡继续卸载用例改用它；七个 A 创建用例与容器 A 状态用例改为 `manual`，后者的已挂载半段改为单项挂载 A；四种容器形态认证用例改为按文件存在与否验证登录只认证、只收录不挂载；挂载失败不撤销认证改为验证单项挂载失败。
+- 保留：残留回滚与“登录收录已挂载容器”两个用例专测旧路径，留到第二片与实现一并删除。
+- 验证：`card_login_mount_session_tests` 通过。未跑全量测试。
+- 提交：用户检查后授权与相邻切片合并为一笔提交；历史交付日志保留工作区，禁止推送。
+
+### 2026-09-26 — refactor / 移除登录时整体挂载（mount_on_login）
+- 范围与审计：清理第二片。正式应用只用 `manual`；“登录后自动挂载”按 8.7.5 由页面在登录后发起逐项后台批次。需求表第 1655、1656 行仍写“登录挂载保留先 B 后 A、失败回滚的事务约束”，与 8.7.5 冲突；以 8.7.5 为准，两行已加注记说明旧路径移除。
+- 检查与实现：删除 `LoginMountPolicy` 枚举与会话构造参数、登录调用内的整体挂载分支、运行时 `mount_authenticated`、残留挂载记录 `record_residual_mount`；编排层删除 `mount_authenticated_card_session` 及其策略分支，P1 `mount_session`（开发诊断工具仍用）保留。登录现只认证、收录容器并清除入参口令，会话保存的登录口令不变。
+- 测试：删除残留回滚、登录收录已挂载容器、编排层卡会话策略三个专测旧路径的用例及假运行时对应实现；“手动策略不挂载”改名为“登录不挂载”；宿主测试假会话不再模拟登录即挂载，改为断言登录后无挂载；集成测试去掉策略参数与覆盖函数。
+- 验证：p46 全部默认目标及 `USB Vault.exe` 构建通过；`card_login_mount_session_tests`、`mount_orchestrator_tests`、`card_product_webview_host_object_tests`、`card_product_ui_session_controller_tests`、`card_presence_controller_tests` 通过。`partition_device_integration_tests` 仅编译，未运行（面向实体设备）；未跑全量测试。
+- 安全与风险：不改变产品行为；少了一条在登录调用内挂载卷的路径。
+- 提交：用户检查后授权与相邻切片合并为一笔提交；历史交付日志保留工作区，禁止推送。

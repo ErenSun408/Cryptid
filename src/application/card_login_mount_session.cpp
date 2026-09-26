@@ -43,14 +43,6 @@ class ProductionCardLoginMountSessionRuntime final
         creator_(volume_creator_helper_path),
         imports_(std::move(volume_creator_helper_path)) {}
 
-  [[nodiscard]] MountSessionResult mount_authenticated(
-      const ContainerLayout& layout,
-      const security::SecureBuffer& login_password_utf8,
-      const security::SecureBuffer& root_secret) override {
-    return mount_authenticated_card_session(
-        provider_, layout, login_password_utf8, root_secret);
-  }
-
   [[nodiscard]] volume::UnmountResult unmount(
       const wchar_t drive_letter) override {
     return volume::unmount_with_retry(provider_, drive_letter);
@@ -374,11 +366,9 @@ struct CardLoginMountSession::Impl final {
   Impl(CardAuthenticationSession& authentication,
        const volume::VolumeProvider& provider,
        ContainerLayout layout,
-       std::filesystem::path volume_creator_helper_path,
-       LoginMountPolicy login_mount_policy)
+       std::filesystem::path volume_creator_helper_path)
       : runtime(provider, std::move(volume_creator_helper_path)),
-        core(authentication, runtime, std::move(layout),
-             login_mount_policy) {}
+        core(authentication, runtime, std::move(layout)) {}
 
   ProductionCardLoginMountSessionRuntime runtime;
   detail::CardLoginMountSessionCore core;
@@ -388,12 +378,10 @@ CardLoginMountSession::CardLoginMountSession(
     CardAuthenticationSession& authentication,
     const volume::VolumeProvider& provider,
     ContainerLayout layout,
-    std::filesystem::path volume_creator_helper_path,
-    const LoginMountPolicy login_mount_policy)
+    std::filesystem::path volume_creator_helper_path)
     : impl_(std::make_unique<Impl>(authentication, provider,
                                    std::move(layout),
-                                   std::move(volume_creator_helper_path),
-                                   login_mount_policy)) {}
+                                   std::move(volume_creator_helper_path))) {}
 
 CardLoginMountSession::~CardLoginMountSession() noexcept = default;
 
@@ -853,34 +841,15 @@ SessionContainer& adopt_partition(CardLoginMountSessionState& state,
   return state.containers.front();
 }
 
-void record_residual_mount(const ContainerLayout& layout,
-                           CardLoginMountSessionState& state,
-                           const wchar_t drive_letter) noexcept {
-  try {
-    if (drive_letter == layout.container_a.drive_letter) {
-      static_cast<void>(adopt(state, layout.container_a.path, drive_letter,
-                              true));
-    } else if (drive_letter == layout.container_b.drive_letter) {
-      static_cast<void>(adopt(state, layout.container_b.path, drive_letter,
-                              true, true));
-    }
-  } catch (...) {
-    // A residual drive letter that cannot be recorded is still held by this
-    // session; the unified cleanup path releases it by drive letter.
-  }
-}
-
 }  // namespace
 
 CardLoginMountSessionCore::CardLoginMountSessionCore(
     CardAuthenticationSession& authentication,
     CardLoginMountSessionRuntime& runtime,
-    ContainerLayout layout,
-    const LoginMountPolicy login_mount_policy)
+    ContainerLayout layout)
     : authentication_(authentication),
       runtime_(runtime),
-      layout_(std::move(layout)),
-      login_mount_policy_(login_mount_policy) {
+      layout_(std::move(layout)) {
   state_.operation_logging_enabled = runtime_.operation_logging_enabled();
 }
 
@@ -979,27 +948,10 @@ void CardLoginMountSessionCore::consume_authenticated_login(
                               false));
     }
     adopt_remembered_containers();
-    if (login_mount_policy_ == LoginMountPolicy::manual) {
-      // The login input only ever existed for the synchronous mount call, so
-      // the manual policy releases it as soon as authentication is volatile.
-      login_password_utf8.clear();
-      return;
-    }
-    const MountSessionResult result = runtime_.mount_authenticated(
-        layout_, login_password_utf8, authentication_.root_secret_);
-    if (result.container_a.has_value()) {
-      static_cast<void>(adopt(state_, layout_.container_a.path,
-                              layout_.container_a.drive_letter, true));
-    }
-    if (result.container_b.has_value()) {
-      static_cast<void>(adopt(state_, layout_.container_b.path,
-                              layout_.container_b.drive_letter, true, true));
-    }
+    // Login only authenticates and lists what exists. Mounting is always a
+    // later, separate request; the page's automatic mount after login is one
+    // of those, run as an ordinary batch (8.7.5).
     login_password_utf8.clear();
-  } catch (const MountRollbackError& error) {
-    record_residual_mount(layout_, state_, error.residual_drive_letter());
-    login_password_utf8.clear();
-    throw;
   } catch (...) {
     login_password_utf8.clear();
     throw;

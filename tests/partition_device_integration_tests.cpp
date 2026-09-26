@@ -655,7 +655,6 @@ class PartitionSessionRuntime final : public usb_vault::application::detail::Car
     usb_vault::application::ensure_container_index_v1_file(index_.wstring());
     creation_cancelled = [] { return false; };
   }
-  usb_vault::application::MountSessionResult mount_authenticated(const usb_vault::application::ContainerLayout&, const Secret&, const Secret&) override { throw std::logic_error("manual fixture only"); }
   bool container_exists(std::wstring_view) override { return false; }
   std::optional<std::uint64_t> container_size_if_present(std::wstring_view) override { return {}; }
   std::optional<std::uint64_t> mounted_volume_size(wchar_t drive) override {
@@ -756,7 +755,7 @@ void session_roundtrip(OwnedDisk& disk, bool pair = false) {
   for (int login = 0; login < (pair ? 3 : 2); ++login) {
     application::CardAuthenticationSession auth;
     PartitionSessionRuntime runtime(disk);
-    application::detail::CardLoginMountSessionCore session(auth, runtime, layout, application::LoginMountPolicy::manual);
+    application::detail::CardLoginMountSessionCore session(auth, runtime, layout);
     security::SecureBuffer input(16); std::fill(input.bytes().begin(), input.bytes().end(), (pair ? login == 2 : login != 0) ? std::byte{'b'} : std::byte{'a'});
     session.consume_authenticated_login(copy_root(), std::move(input));
     try {
@@ -831,7 +830,7 @@ void inplace_session_roundtrip(OwnedDisk& disk) {
   application::ContainerLayout layout; layout.container_a.salt=application::kContainerASalt; layout.container_b.salt=application::kContainerBSalt;
   for(int phase=0;phase<2;++phase) {
     application::CardAuthenticationSession auth; PartitionSessionRuntime runtime(disk);
-    application::detail::CardLoginMountSessionCore session(auth,runtime,layout,application::LoginMountPolicy::manual);
+    application::detail::CardLoginMountSessionCore session(auth,runtime,layout);
     security::SecureBuffer fresh(root.size());std::copy(root.bytes().begin(),root.bytes().end(),fresh.bytes().begin());
     security::SecureBuffer input(16);std::fill(input.bytes().begin(),input.bytes().end(),phase ? std::byte{'b'} : std::byte{'a'});
     session.consume_authenticated_login(std::move(fresh),std::move(input));
