@@ -3921,6 +3921,72 @@ void test_partition_creation_persistence_and_mounting() {
   }
 }
 
+void test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart() {
+  // The name used to be derived from where the container sat, so rearranging the
+  // list renamed things and every login renumbered them. It is recorded with the
+  // container now: the list may be reordered freely and the names must not move.
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.partition_password_64 = true;
+  runtime.remember_paths = true;
+  runtime.free_drive_letters = {L'X', L'W', L'V', L'U', L'T'};
+  runtime.creation_cancelled = [] { return false; };
+  const auto create = [&](CardLoginMountSessionCore& session, std::uint8_t device) {
+    usb_vault::volume::PartitionCandidate target;
+    target.layout = usb_vault::volume::PartitionLayout::mbr;
+    target.device_id[0] = device;
+    target.offset_bytes = 1048576;
+    target.length_bytes = 64ULL * 1024 * 1024;
+    target.logical_sector_bytes = 512;
+    return session.create_partition(target, [](const auto&) { return true; });
+  };
+  const auto disk_names = [](CardLoginMountSessionCore& session) {
+    std::vector<std::wstring> names;
+    for (const auto& status : session.container_statuses())
+      if (status.partition) names.push_back(status.name);
+    return names;
+  };
+
+  std::vector<std::wstring> after_drag;
+  {
+    CardLoginMountSessionCore session(authentication, runtime, layout(), LoginMountPolicy::manual);
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    const auto first = create(session, 7);
+    const auto second = create(session, 8);
+    const auto third = create(session, 9);
+    require(disk_names(session) == std::vector<std::wstring>{L"磁盘容器 3", L"磁盘容器 2", L"磁盘容器 1"},
+            "creation did not number disk containers in the order they were made");
+
+    // Oldest to the top, newest into the middle: a position no numbering implies.
+    std::vector<std::uint32_t> dragged{first, third, second};
+    for (const auto& status : session.container_statuses())
+      if (!status.partition) dragged.push_back(status.id);
+    session.reorder_containers(dragged);
+    after_drag = disk_names(session);
+    require(after_drag == std::vector<std::wstring>{L"磁盘容器 1", L"磁盘容器 3", L"磁盘容器 2"},
+            "dragging the list renamed the disk containers");
+  }
+
+  // A fresh session over the same index is what a restart looks like: both the
+  // arrangement and the names have to come back exactly.
+  CardAuthenticationSession next_auth;
+  CardLoginMountSessionCore next(next_auth, runtime, layout(), LoginMountPolicy::manual);
+  next.consume_authenticated_login(root_secret(), bytes("login-password"));
+  require(disk_names(next) == after_drag,
+          "a restart changed the disk container names or their order");
+
+  // A gap left in the middle stays a gap: the next container does not inherit
+  // the name of the one that went. Forgetting the highest one does free its
+  // number again, which the record layout cannot avoid.
+  for (const auto& status : next.container_statuses())
+    if (status.partition && status.name == L"磁盘容器 2") next.forget_container(status.id);
+  static_cast<void>(create(next, 10));
+  const auto names = disk_names(next);
+  require(std::ranges::find(names, std::wstring(L"磁盘容器 4")) != names.end() &&
+              std::ranges::find(names, std::wstring(L"磁盘容器 2")) == names.end(),
+          "a forgotten disk container's number was handed to a new one");
+}
+
 void test_a_dragged_order_records_disk_containers_too() {
   // A disk container had no position of its own in the index: ordering wrote
   // only the file paths, so its place came back from the slot it happened to
@@ -4232,6 +4298,7 @@ int main() {
   try {
     test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
+    test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart();
     test_a_dragged_order_records_disk_containers_too();
     test_disk_containers_are_numbered_among_themselves();
     test_a_mount_is_recorded_where_the_driver_put_it();

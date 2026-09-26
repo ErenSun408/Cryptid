@@ -59,10 +59,17 @@ enum class PartitionConversionState : std::uint32_t { normal = 0, uncertain = 1,
 
 // Version 3 is a partition payload inside the same sealed slot. Never store
 // this metadata in a sidecar. Older applications cannot safely edit v3 indexes.
+//
+// Version 6 supersedes 3, 4 and 5 for everything written from now on: it takes
+// the layout from its own field instead of from the version number, always
+// carries the conversion state, and adds the creation sequence. A non-zero
+// sequence is what makes it a v6 record; passing zero writes the legacy shape
+// so existing records can be re-sealed unchanged.
 [[nodiscard]] security::SecureBuffer seal_container_index_partition(
     std::span<const std::byte> key, const ContainerIndexPartition& partition,
     std::optional<std::uint32_t> order = std::nullopt,
-    PartitionConversionState conversion = PartitionConversionState::normal);
+    PartitionConversionState conversion = PartitionConversionState::normal,
+    std::uint32_t sequence = 0);
 
 // Version 2 adds an authenticated order at offset 524, inside the same sealed
 // slot. Version 1 remains readable and has no order. Physical slot placement
@@ -73,6 +80,11 @@ struct ContainerIndexEntry {
   // v3: path is empty; v1/v2: partition is empty.
   std::optional<ContainerIndexPartition> partition;
   PartitionConversionState conversion{PartitionConversionState::normal};
+  // Which disk container this is, counting the order they were created in.
+  // It is what a disk container is called, so it must not move when the user
+  // rearranges the list: `order` is the position, this is the identity.
+  // Zero means a record written before v6, which recorded no such thing.
+  std::uint32_t sequence{};
 };
 
 // Opens supported file and partition payloads; callers must inspect partition.

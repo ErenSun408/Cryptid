@@ -28,7 +28,8 @@ constexpr std::size_t kPlaintextSize =
 //   [4, 6)     path length, in UTF-16 code units
 //   [6, 524)   path, padded to its full capacity with random bytes
 //   [524, 528) v2: display order; v1: random
-//   [528, 740) reserved, random
+//   [528, 532) v6: creation sequence; earlier versions: random
+//   [532, 740) reserved, random
 //
 // The reserved tail is what lets a later version carry more than a path
 // without changing the size of a slot, and so without changing the size of the
@@ -40,6 +41,13 @@ constexpr std::size_t kPathOffset = 6;
 constexpr std::size_t kOrderOffset = 524;
 constexpr std::uint32_t kOrderedEntryVersion = 2;
 constexpr std::uint32_t kPartitionEntryVersion = 3;
+// v6 reads its layout from field 24 rather than from the version, always
+// carries the conversion state, and adds the creation sequence. It is what
+// every partition record written from now on uses.
+constexpr std::uint32_t kSequencedPartitionVersion = 6;
+constexpr std::size_t kSequenceOffset = 528;
+constexpr std::size_t kConversionOffset = 48;
+constexpr std::size_t kPartitionIdOffset = 52;
 // v3: device ID [4,20), flags [20,24), layout [24,28), sector [28,32),
 // offset [32,40), length [40,48), order [524,528). Remaining bytes are random.
 // UINT32_MAX is an unordered partition; no field outside the GCM payload.
@@ -242,7 +250,8 @@ static security::SecureBuffer seal_index_entry(
     const std::span<const std::byte> key, const std::wstring_view path,
     const std::optional<std::uint32_t> order,
     const ContainerIndexPartition* const partition,
-    PartitionConversionState conversion = PartitionConversionState::normal) {
+    PartitionConversionState conversion = PartitionConversionState::normal,
+    std::uint32_t sequence = 0) {
   require_key(key);
   if (static_cast<std::uint32_t>(conversion)>2 || (!partition && conversion!=PartitionConversionState::normal))
     throw std::invalid_argument("invalid partition conversion state");
@@ -251,6 +260,8 @@ static security::SecureBuffer seal_index_entry(
   }
   if (partition && !valid_container_index_partition(*partition))
     throw std::invalid_argument("invalid partition index identity");
+  if (sequence && !partition)
+    throw std::invalid_argument("only a partition record carries a sequence");
   if (!partition && path.empty()) {
     throw std::invalid_argument("container index path is empty");
   }
@@ -268,12 +279,17 @@ static security::SecureBuffer seal_index_entry(
   fill_random(plaintext.bytes());
   if (partition) {
     const bool gpt = partition->layout == 2;
-    write_u32(plaintext.bytes(), kVersionOffset, gpt ? 5 :
-        (conversion == PartitionConversionState::normal ? kPartitionEntryVersion : 4));
-    if (gpt || conversion != PartitionConversionState::normal)
-      write_u32(plaintext.bytes(), 48, static_cast<std::uint32_t>(conversion));
+    write_u32(plaintext.bytes(), kVersionOffset, sequence ? kSequencedPartitionVersion
+        : (gpt ? 5 : (conversion == PartitionConversionState::normal
+                          ? kPartitionEntryVersion : 4)));
+    if (sequence) {
+      write_u32(plaintext.bytes(), kConversionOffset, static_cast<std::uint32_t>(conversion));
+      write_u32(plaintext.bytes(), kSequenceOffset, sequence);
+    } else if (gpt || conversion != PartitionConversionState::normal) {
+      write_u32(plaintext.bytes(), kConversionOffset, static_cast<std::uint32_t>(conversion));
+    }
     if (gpt) for (std::size_t i = 0; i < partition->partition_id.size(); ++i)
-      plaintext.bytes()[52 + i] = static_cast<std::byte>(partition->partition_id[i]);
+      plaintext.bytes()[kPartitionIdOffset + i] = static_cast<std::byte>(partition->partition_id[i]);
     for (std::size_t i = 0; i < partition->device_id.size(); ++i)
       plaintext.bytes()[4 + i] = static_cast<std::byte>(partition->device_id[i]);
     write_u32(plaintext.bytes(), 20, partition->device_id_flags);
@@ -340,8 +356,9 @@ security::SecureBuffer seal_container_index_entry_v1(
 
 security::SecureBuffer seal_container_index_partition(
     const std::span<const std::byte> key, const ContainerIndexPartition& partition,
-    const std::optional<std::uint32_t> order, const PartitionConversionState conversion) {
-  return seal_index_entry(key, {}, order, &partition, conversion);
+    const std::optional<std::uint32_t> order, const PartitionConversionState conversion,
+    const std::uint32_t sequence) {
+  return seal_index_entry(key, {}, order, &partition, conversion, sequence);
 }
 
 std::optional<ContainerIndexEntry>
@@ -386,17 +403,25 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   // which it was would hand out the distinction this format exists to deny.
   const auto contents = plaintext.bytes();
   const std::uint32_t version = read_u32(contents, kVersionOffset);
-  if (version == kPartitionEntryVersion || version == 4 || version == 5) {
-    const auto state = version >= 4 ? read_u32(contents, 48) : 0u;
+  const bool sequenced = version == kSequencedPartitionVersion;
+  if (sequenced || version == kPartitionEntryVersion || version == 4 || version == 5) {
+    const auto state = version >= 4 ? read_u32(contents, kConversionOffset) : 0u;
     if (state > 2 || (version == 4 && state == 0)) return std::nullopt;
+    // A v6 record must carry a sequence; zero there is not a legacy record but
+    // a malformed one, and reads as filler like any other unsupported slot.
+    const auto sequence = sequenced ? read_u32(contents, kSequenceOffset) : 0u;
+    if (sequenced && sequence == 0) return std::nullopt;
     ContainerIndexPartition partition;
     for (std::size_t i = 0; i < partition.device_id.size(); ++i)
       partition.device_id[i] = std::to_integer<std::uint8_t>(contents[4 + i]);
     partition.device_id_flags = read_u32(contents, 20);
     partition.layout = read_u32(contents, 24);
-    if (partition.layout != (version == 5 ? 2U : 1U)) return std::nullopt;
-    if (version == 5) for (std::size_t i = 0; i < partition.partition_id.size(); ++i)
-      partition.partition_id[i] = std::to_integer<std::uint8_t>(contents[52 + i]);
+    // Before v6 the version implied the layout. v6 states it, so it is read and
+    // then checked against what a valid identity allows.
+    if (!sequenced && partition.layout != (version == 5 ? 2U : 1U)) return std::nullopt;
+    if (sequenced ? partition.layout == 2 : version == 5)
+      for (std::size_t i = 0; i < partition.partition_id.size(); ++i)
+        partition.partition_id[i] = std::to_integer<std::uint8_t>(contents[kPartitionIdOffset + i]);
     partition.logical_sector_bytes = read_u32(contents, 28);
     partition.offset_bytes = read_u32(contents, 32) |
         (static_cast<std::uint64_t>(read_u32(contents, 36)) << 32);
@@ -406,7 +431,8 @@ try_open_container_index_entry(const std::span<const std::byte> key,
     if (!valid_container_index_partition(partition) ||
         (rank != UINT32_MAX && rank >= kContainerIndexV1SlotCount)) return std::nullopt;
     return ContainerIndexEntry{{}, rank == UINT32_MAX ? std::nullopt :
-        std::optional<std::uint32_t>(rank), partition, static_cast<PartitionConversionState>(state)};
+        std::optional<std::uint32_t>(rank), partition,
+        static_cast<PartitionConversionState>(state), sequence};
   }
   const std::size_t length = read_u16(contents, kPathLengthOffset);
   if ((version != kContainerIndexEntryV1Version && version != kOrderedEntryVersion) || length == 0 ||

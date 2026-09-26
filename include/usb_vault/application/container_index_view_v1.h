@@ -129,6 +129,14 @@ void reorder_container_index_paths_v1(
 [[nodiscard]] std::vector<ContainerIndexRef> list_container_index_refs_v1(
     std::span<const std::byte> key, std::span<const std::byte> file);
 
+// Gives every partition record that has no creation sequence one, and reports
+// whether any did. Records written before v6 carry no such number, and what a
+// disk container is called depends on it, so it is settled once rather than
+// recomputed per session. Nothing recorded creation order before, so for those
+// records the numbers follow the positions they currently hold.
+[[nodiscard]] bool number_container_index_partitions_v1(
+    std::span<const std::byte> key, std::span<std::byte> file);
+
 // Ordered insertion, the disk-container counterpart of the path prepend: a
 // genuinely new partition goes first; one already recorded keeps its position
 // and leaves the buffer unchanged.

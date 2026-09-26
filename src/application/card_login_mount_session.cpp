@@ -811,17 +811,33 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
   return state.containers.back();
 }
 
-SessionContainer& adopt_partition(CardLoginMountSessionState& state,
+// The number a partition record carries, or zero when the record is not
+// there yet. What a disk container is called comes from here rather than from
+// anything the session counts, so the two can never disagree.
+[[nodiscard]] std::uint32_t recorded_sequence(
+    const std::span<const std::byte> key, const std::span<const std::byte> file,
     const volume::PartitionIdentity& identity) {
+  for (const auto& entry : list_container_index_partition_entries(key, file))
+    if (entry.partition == identity) return entry.sequence;
+  return 0;
+}
+
+SessionContainer& adopt_partition(CardLoginMountSessionState& state,
+    const volume::PartitionIdentity& identity, const std::uint32_t sequence) {
   if (!volume::valid_partition_identity(identity)) throw std::invalid_argument("invalid partition identity");
   for (auto& entry : state.containers) if (entry.partition == identity) return entry;
   if (state.next_container_id == UINT32_MAX) throw std::overflow_error("container IDs exhausted");
   SessionContainer entry;
   entry.id = state.next_container_id++;
-  // The shown number counts disk containers only. It is still session-local:
-  // what a disk container is called, and where it sits in the list, do not
-  // survive a restart yet.
-  entry.name = L"磁盘容器 " + std::to_wstring(state.next_partition_ordinal++);
+  // The recorded creation sequence, so the name is the container's own and
+  // does not move when the list is rearranged. A record with none left to read
+  // falls back to a session-local count, which is what every record had
+  // before the sequence was written down.
+  const auto shown = sequence ? sequence : state.next_partition_ordinal;
+  entry.name = L"磁盘容器 " + std::to_wstring(shown);
+  // The fallback stays one past the highest number handed out, so a record
+  // with no sequence never lands on one a recorded container answers to.
+  state.next_partition_ordinal = std::max(state.next_partition_ordinal, shown + 1);
   entry.derivation_known = false;
   entry.partition = identity;
   state.containers.push_back(std::move(entry));
@@ -1132,7 +1148,12 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
   try {
     if (!runtime_.remember_container_paths()) return;
     security::SecureBuffer key = container_index_key();
-    const std::vector<std::byte> file = runtime_.read_container_index();
+    std::vector<std::byte> file = runtime_.read_container_index();
+    // Records written before the creation sequence existed get one now, once.
+    // A disk container's name depends on it, so settling it here is what stops
+    // the name being recomputed -- and moving -- on every login.
+    if (number_container_index_partitions_v1(key.bytes(), file))
+      runtime_.write_container_index(file);
     const auto refs = list_container_index_refs_v1(key.bytes(), file);
     const auto partitions = list_container_index_partition_entries(key.bytes(), file);
     key.clear();
@@ -1141,7 +1162,7 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     // which leaves them newest first -- the order the index holds and the list
     // shows.
     for (auto item = partitions.rbegin(); item != partitions.rend(); ++item)
-      adopt_partition(state_, *item->partition).conversion_state =
+      adopt_partition(state_, *item->partition, item->sequence).conversion_state =
           static_cast<std::uint32_t>(item->conversion);
     for (const auto& ref : refs) {
       if (ref.partition) continue;
@@ -1262,7 +1283,7 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
   struct Reset {bool& value; ~Reset(){value=false;}} reset{partition_format_active_};
   auto password=derive_standard_password();
   if(password.size()!=security::kKdfV1OutputSize)throw std::logic_error("invalid conversion password");
-  const auto id=resume_id ? *resume_id : adopt_partition(state_,identity).id;
+  const auto id=resume_id ? *resume_id : adopt_partition(state_,identity,0).id;
   bool recorded=resume_id.has_value(), accepted=false, requested=false;
   auto persist=[&](PartitionConversionState status,bool insert){
     auto key=container_index_key(); auto file=runtime_.read_container_index();
@@ -1279,10 +1300,13 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
       if(!set_container_index_partition_state(key.bytes(),file,identity,status))
         throw std::runtime_error("conversion record missing");
     }
+    const auto numbered=recorded_sequence(key.bytes(),file,identity);
     key.clear(); check(); runtime_.write_container_index(file);
     auto entry=find_by_id(state_,id);
     if(!entry)throw std::logic_error("conversion session changed");
     entry->conversion_state=static_cast<std::uint32_t>(status);
+    // The record now carries a number; the row was named before it existed.
+    if(numbered)entry->name=L"磁盘容器 "+std::to_wstring(numbered);
   };
   try {
     const bool paused=runtime_.convert_partition(snapshot,!resume_id,password,[&]{
@@ -1328,9 +1352,10 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
   auto index = runtime_.read_container_index();
   const auto insertion = prepend_container_index_partition(key.bytes(), index, identity);
   if (insertion != ContainerIndexWriteV1::added) throw std::runtime_error("partition index unavailable or already recorded");
+  const auto sequence = recorded_sequence(key.bytes(), index, identity);
   key.clear();
   // Allocate the session row before irreversible work, but remove it on failure.
-  const auto id = adopt_partition(state_, identity).id;
+  const auto id = adopt_partition(state_, identity, sequence).id;
   bool recorded = false;
   try {
     format_partition(target, [&](const auto& frozen) {

@@ -418,6 +418,75 @@ void test_mixed_partition_and_file_index_preserves_both_kinds() {
          "partition writer evicted an existing record");
 }
 
+void test_a_creation_sequence_is_recorded_and_never_moves() {
+  using namespace usb_vault::application;
+  const auto key = derive_shared_container_index_key_v1(test_root(0x44));
+  const auto make = [](std::uint8_t tag, std::uint64_t offset) {
+    ContainerIndexPartition partition;
+    partition.device_id.fill(tag);
+    partition.offset_bytes = offset;
+    partition.length_bytes = 64 * 1024 * 1024;
+    return partition;
+  };
+  const auto sequence_of = [&](const std::vector<std::byte>& file,
+                               const ContainerIndexPartition& partition) {
+    for (const auto& entry : list_container_index_partition_entries(key.bytes(), file))
+      if (entry.partition == partition) return entry.sequence;
+    return 0u;
+  };
+  const auto one = make(0x71, 1024 * 1024);
+  const auto two = make(0x71, 96ULL * 1024 * 1024);
+  const auto three = make(0x71, 192ULL * 1024 * 1024);
+  auto file = fresh_file();
+
+  expect(add_container_index_partition(key.bytes(), file, one) == ContainerIndexWriteV1::added &&
+             add_container_index_partition(key.bytes(), file, two) == ContainerIndexWriteV1::added &&
+             add_container_index_partition(key.bytes(), file, three) == ContainerIndexWriteV1::added,
+         "partitions were not recorded");
+  expect(sequence_of(file, one) == 1 && sequence_of(file, two) == 2 &&
+             sequence_of(file, three) == 3,
+         "creation sequences were not handed out in order");
+
+  // The position may change freely; the sequence is the container's own.
+  const std::vector<ContainerIndexRef> wanted{{.partition = three}, {.partition = one},
+                                              {.partition = two}};
+  reorder_container_index_v1(key.bytes(), file, wanted);
+  expect(sequence_of(file, one) == 1 && sequence_of(file, two) == 2 &&
+             sequence_of(file, three) == 3,
+         "reordering moved a creation sequence");
+  const auto refs = list_container_index_refs_v1(key.bytes(), file);
+  expect(refs.size() == 3 && refs[0].partition == three && refs[1].partition == one,
+         "reordering did not take effect");
+
+  // A conversion-state update must not drop it either.
+  expect(set_container_index_partition_state(key.bytes(), file, two,
+                                            PartitionConversionState::paused),
+         "conversion state could not be set");
+  expect(sequence_of(file, two) == 2, "a conversion-state update lost the sequence");
+
+  // A gap in the middle is kept rather than handed to something new.
+  expect(remove_container_index_partition(key.bytes(), file, two), "removal failed");
+  const auto four = make(0x71, 288ULL * 1024 * 1024);
+  expect(add_container_index_partition(key.bytes(), file, four) == ContainerIndexWriteV1::added,
+         "a replacement partition was not recorded");
+  expect(sequence_of(file, four) == 4, "a middle gap was reused");
+
+  // Records written before the sequence existed get one once, and only once.
+  auto legacy = fresh_file();
+  const auto legacy_sealed = seal_container_index_partition(key.bytes(), one);
+  std::ranges::copy(legacy_sealed.bytes(),
+                    container_index_v1_mutable_slot(legacy, 3).begin());
+  expect(sequence_of(legacy, one) == 0, "a legacy record already carried a sequence");
+  expect(list_container_index_partitions(key.bytes(), legacy) == std::vector{one},
+         "a legacy record stopped being readable");
+  expect(number_container_index_partitions_v1(key.bytes(), legacy),
+         "a legacy record was not given a sequence");
+  expect(sequence_of(legacy, one) == 1, "the numbering did not take");
+  const auto settled = legacy;
+  expect(!number_container_index_partitions_v1(key.bytes(), legacy) && legacy == settled,
+         "numbering ran a second time");
+}
+
 void test_one_order_covers_both_kinds_and_survives_reload() {
   using namespace usb_vault::application;
   const auto key = derive_shared_container_index_key_v1(test_root(0x43));
@@ -498,6 +567,7 @@ void test_one_order_covers_both_kinds_and_survives_reload() {
 } // namespace
 
 int main() {
+  test_a_creation_sequence_is_recorded_and_never_moves();
   test_one_order_covers_both_kinds_and_survives_reload();
   test_partition_conversion_states();
   test_mixed_partition_and_file_index_preserves_both_kinds();

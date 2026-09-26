@@ -262,7 +262,7 @@ void reorder_entries(const std::span<const std::byte> key,
     const auto position = static_cast<std::uint32_t>(rank);
     const auto sealed = item.entry.partition
         ? seal_container_index_partition(key, *item.entry.partition, position,
-                                         item.entry.conversion)
+                                         item.entry.conversion, item.entry.sequence)
         : seal_container_index_entry_v1(key, item.entry.path, position);
     std::ranges::copy(sealed.bytes(),
         container_index_v1_mutable_slot(updated, item.slot).begin());
@@ -336,15 +336,16 @@ bool set_container_index_partition_state(const std::span<const std::byte> key,
     const std::span<std::byte> file, const ContainerIndexPartition& partition, PartitionConversionState state) {
   std::optional<std::size_t> found;
   std::optional<std::uint32_t> order;
+  std::uint32_t sequence = 0;
   for (std::size_t i=0;i<kContainerIndexV1SlotCount;++i) {
     const auto entry=try_open_container_index_entry(key,container_index_v1_slot(file,i));
     if (entry && entry->partition==partition) {
       if (found) throw std::invalid_argument("ambiguous partition record");
-      found=i; order=entry->order;
+      found=i; order=entry->order; sequence=entry->sequence;
     }
   }
   if (!found) return false;
-  const auto sealed=seal_container_index_partition(key,partition,order,state);
+  const auto sealed=seal_container_index_partition(key,partition,order,state,sequence);
   std::ranges::copy(sealed.bytes(),container_index_v1_mutable_slot(file,*found).begin());
   return true;
 }
@@ -371,18 +372,52 @@ std::vector<ContainerIndexRef> list_container_index_refs_v1(
 ContainerIndexWriteV1 add_container_index_partition(
     const std::span<const std::byte> key, const std::span<std::byte> file,
     const ContainerIndexPartition& partition, const PartitionConversionState state) {
-  // Validate even if the file is full; do not mutate until all crypto succeeds.
-  const auto sealed = seal_container_index_partition(key, partition, std::nullopt, state);
   std::vector<std::size_t> free_slots;
+  // One past the highest currently recorded, so a gap left in the middle stays
+  // a gap rather than being handed to something new. Counting the records
+  // instead would reuse a number on every removal. Forgetting the highest one
+  // does free its number again: what the highest has ever been is only known
+  // from the records, and a forgotten record's slot is overwritten.
+  std::uint32_t sequence = 1;
   for (std::size_t index = 0; index < kContainerIndexV1SlotCount; ++index) {
     const auto entry = try_open_container_index_entry(key, container_index_v1_slot(file, index));
-    if (!entry) free_slots.push_back(index);
-    else if (entry->partition == partition) return ContainerIndexWriteV1::already_present;
+    if (!entry) { free_slots.push_back(index); continue; }
+    if (entry->partition == partition) return ContainerIndexWriteV1::already_present;
+    if (entry->sequence >= sequence) sequence = entry->sequence + 1;
   }
+  // Validate even if the file is full; do not mutate until all crypto succeeds.
+  const auto sealed = seal_container_index_partition(key, partition, std::nullopt,
+                                                    state, sequence);
   if (free_slots.empty()) return ContainerIndexWriteV1::full;
   std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(
       file, free_slots[random_below(free_slots.size())]).begin());
   return ContainerIndexWriteV1::added;
+}
+
+bool number_container_index_partitions_v1(
+    const std::span<const std::byte> key, const std::span<std::byte> file) {
+  auto entries = ordered_entries(key, file);
+  std::erase_if(entries, [](const auto& item) {
+    return !item.entry.partition.has_value() || item.entry.sequence != 0;
+  });
+  if (entries.empty()) return false;
+  // Nothing before v6 recorded when a disk container was made, so there is no
+  // creation order left to recover. The numbers are handed out from the bottom
+  // of the list up, which at least makes the newest-looking one the highest,
+  // and from then on they never move again.
+  std::uint32_t next = 1;
+  for (const auto& located : ordered_entries(key, file))
+    if (located.entry.partition && located.entry.sequence >= next)
+      next = located.entry.sequence + 1;
+  std::vector<std::byte> updated(file.begin(), file.end());
+  for (auto item = entries.rbegin(); item != entries.rend(); ++item) {
+    const auto sealed = seal_container_index_partition(
+        key, *item->entry.partition, item->entry.order, item->entry.conversion, next++);
+    std::ranges::copy(sealed.bytes(),
+        container_index_v1_mutable_slot(updated, item->slot).begin());
+  }
+  std::ranges::copy(updated, file.begin());
+  return true;
 }
 
 ContainerIndexWriteV1 prepend_container_index_partition(

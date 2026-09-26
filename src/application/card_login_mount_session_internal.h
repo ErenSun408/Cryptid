@@ -191,11 +191,10 @@ struct SessionContainer final {
 struct CardLoginMountSessionState final {
   std::vector<SessionContainer> containers;
   std::uint32_t next_container_id{1};
-  // A disk container has no file name to show, so it is numbered. Numbering it
-  // by the shared container id let every file container consume a number too,
-  // and the first disk container a session adopted could come back as "磁盘容器
-  // 4" with nothing between 1 and 3 to explain it. This counts disk containers
-  // and nothing else.
+  // What to call a disk container whose record carries no creation sequence,
+  // which is every record written before that was recorded. It counts disk
+  // containers and nothing else, and stays above every sequence already seen
+  // so a fallback name cannot collide with a recorded one.
   std::uint32_t next_partition_ordinal{1};
   // Volume password shared by every hidden-volume container, derived on first
   // use from the login input. One derivation opens all of them because they
