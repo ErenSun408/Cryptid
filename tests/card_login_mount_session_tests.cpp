@@ -5,12 +5,16 @@
 #include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 
 #include <cstddef>
 #include <algorithm>
 #include <concepts>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -1367,6 +1371,95 @@ void test_deliberate_release_keeps_the_captured_volume_password() {
   session.mount_adopted_container(hidden_id);
   require(session.container_statuses()[0].mounted,
           "a deliberate unmount blocked a later mount in the same session");
+}
+
+// The runtime log follows a session through its stages and failures with
+// their codes, and never carries a password or a derived key.
+void test_runtime_log_records_session_stages_and_failures() {
+#if USB_VAULT_DEBUG_LOG
+  namespace diagnostics = usb_vault::diagnostics;
+  const std::filesystem::path root =
+      std::filesystem::temp_directory_path() /
+      (L"usb-vault-session-log-" + std::to_wstring(::GetCurrentProcessId()) + L"-" +
+       std::to_wstring(::GetTickCount64()));
+  require(std::filesystem::create_directory(root), "the log fixture directory already exists");
+  const SYSTEMTIME time{2026, 9, 0, 26, 10, 0, 0, 0};
+  const std::filesystem::path path = root / L"runtime-log-20260926-100000.txt";
+  {
+    diagnostics::DebugLogFile file;
+    require(file.open(root, time), "cannot open the session log fixture");
+    diagnostics::set_runtime_log(&file);
+    struct Withdraw final {
+      ~Withdraw() { usb_vault::diagnostics::set_runtime_log(nullptr); }
+    } withdraw;
+
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    runtime.remember_paths = true;
+    runtime.free_drive_letters = {L'X', L'S', L'T', L'U'};
+    runtime.other_existing = {L"D:\\kept.hc", L"D:\\kept2.hc"};
+    runtime.other_size_bytes = 128ULL * 1024ULL * 1024ULL;
+    runtime.login_derived_path = L"D:\\kept.hc";
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+
+    session.create_container_a(64ULL * 1024ULL * 1024ULL);
+    runtime.fail_unmount_a = true;
+    require_throws<std::runtime_error>([&] { session.unmount_active(); },
+                                       "a refused unmount was accepted");
+    runtime.fail_unmount_a = false;
+    static_cast<void>(session.mount_container(L"D:\\kept.hc"));
+    runtime.fail_publish = true;
+    runtime.fail_remove = true;
+    require_throws<ContainerCreationCleanupError>(
+        [&] {
+          static_cast<void>(session.create_container(L"D:\\broken.hc",
+                                                     64ULL * 1024ULL * 1024ULL));
+        },
+        "a failed cleanup was not reported");
+    runtime.fail_publish = false;
+    runtime.fail_remove = false;
+    runtime.fail_index_write = true;
+    static_cast<void>(session.adopt_container(L"D:\\kept2.hc"));
+    runtime.fail_index_write = false;
+    authentication.clear_authentication();
+    static_cast<void>(session.force_unmount_active());
+  }
+  std::string text;
+  {
+    std::ifstream in(path, std::ios::binary);
+    require(in.good(), "the session log was not written");
+    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  for (const char* const expected : {
+           "[会话] 登录完成；收录容器数 0",
+           "[会话] 开始创建文件容器；路径 C:\\vault\\a.hc；暂存路径 C:\\vault\\a.hc.preparing；容量 67108864 字节",
+           "[会话] 挂载新建容器；路径 C:\\vault\\a.hc；请求盘符 X:；PRF 1；PIM 0；只读 否；通知资源管理器 否；隐藏卷保护 否",
+           "[会话] 新建容器挂载返回；驱动回报盘符 X:",
+           "[会话] 文件容器创建完成；容器 #",
+           "[会话] 全部卸载：卸载容器失败；容器 #",
+           "异常类型：class std::runtime_error；原文：unmount A failed",
+           "[会话] 标准派生挂载失败；路径 D:\\kept.hc；异常类型：class std::system_error；错误类别：",
+           "错误码：3（0x00000003）",
+           "[会话] 标准派生被拒，改用登录派生；路径 D:\\kept.hc",
+           "[会话] 登录派生挂载成功；路径 D:\\kept.hc",
+           "[会话] 清理暂存文件失败；暂存路径 D:\\broken.hc.preparing",
+           "[会话] 创建文件容器失败；路径 D:\\broken.hc；暂存已生成 是；已发布 否",
+           "[会话] 记录容器路径失败；路径 D:\\kept2.hc；异常类型：class std::runtime_error；原文：the index cannot be written",
+           "[会话] 拔卡清理开始",
+           "[会话] 拔卡清理结束；有卷被强制卸下"}) {
+    if (text.find(expected) == std::string::npos) {
+      throw std::runtime_error(std::string("the session log lacks: ") + expected);
+    }
+  }
+  for (const char* const secret :
+       {"login-password", "derived-b-", "derived-container-a-password", "diskA"}) {
+    require(text.find(secret) == std::string::npos,
+            "the session log carried a password or a derived key");
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(root);
+#endif
 }
 
 void test_import_falls_back_to_the_login_derivation() {
@@ -4443,6 +4536,7 @@ int main() {
     test_operation_selection_does_not_query_attached_volume_capacity();
     test_manual_forced_release_preserves_scope_secrets_and_failed_state();
     test_import_falls_back_to_the_login_derivation();
+    test_runtime_log_records_session_stages_and_failures();
     test_import_reports_a_file_no_derivation_opens();
     test_container_b_creation_derives_both_volume_passwords();
     test_container_b_creation_rejects_unusable_input();

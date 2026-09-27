@@ -16,6 +16,8 @@
 
 #include <Windows.h>
 
+#include "usb_vault/diagnostics/debug_log.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -362,6 +364,110 @@ ContainerCreationCleanupError::cleanup_failure() const noexcept {
   return cleanup_failure_;
 }
 
+namespace {
+
+// Test-phase runtime log for the public session calls: the start, the result
+// and every failure, with both halves of a creation cleanup failure. Details
+// are built only when the switch is on; logging never changes the outcome.
+constexpr std::string_view kInterfaceArea = "会话接口";
+
+void note_call(const char* const event, const char* const phase,
+               const std::string& detail) noexcept {
+  try {
+    diagnostics::debug_log(kInterfaceArea, std::string(event) + "：" + phase, detail);
+  } catch (...) {
+  }
+}
+
+// Call only inside a catch block.
+void note_call_failure(const char* const event, const std::string& detail) noexcept {
+  try {
+    diagnostics::debug_log_exception(kInterfaceArea, std::string(event) + "：失败", detail);
+    try {
+      throw;
+    } catch (const ContainerCreationCleanupError& error) {
+      diagnostics::debug_log(kInterfaceArea, std::string(event) + "：原操作失败",
+                             diagnostics::describe_exception(error.operation_failure()));
+      diagnostics::debug_log(kInterfaceArea, std::string(event) + "：清理失败",
+                             diagnostics::describe_exception(error.cleanup_failure()));
+    } catch (...) {
+    }
+  } catch (...) {
+  }
+}
+
+template <typename Result>
+[[nodiscard]] std::string call_result_text(const Result& result) {
+  if constexpr (std::is_same_v<Result, bool>) {
+    return std::string("结果 ") + (result ? "是" : "否");
+  } else if constexpr (std::is_same_v<Result, std::uint32_t>) {
+    return "结果 容器 #" + std::to_string(result);
+  } else if constexpr (std::is_same_v<Result, wchar_t>) {
+    return result >= L'A' && result <= L'Z'
+               ? "结果 盘符 " + std::string(1, static_cast<char>(result)) + ":"
+               : std::string("结果 无盘符");
+  } else if constexpr (std::is_same_v<Result, DecoyMaintenanceSurvey>) {
+    return "可维护 " + std::to_string(result.maintainable.size()) + "；无法判断 " +
+           std::to_string(result.unreachable) + "；已取消 " + (result.cancelled ? "是" : "否");
+  } else if constexpr (std::is_same_v<Result, DecoyMaintenanceSpace>) {
+    return "总量 " + std::to_string(result.total_bytes) + " 字节；剩余 " +
+           std::to_string(result.free_bytes) + " 字节；安全可写 " +
+           std::to_string(result.safe_free_bytes) + " 字节";
+  } else if constexpr (std::is_same_v<Result, volume::VolumeDirectoryListing>) {
+    return "条目数 " + std::to_string(result.entries.size()) + "；已截断 " +
+           (result.truncated ? "是" : "否");
+  } else {
+    return {};
+  }
+}
+
+template <typename Detail, typename Operation>
+auto traced_call(const char* const event, Detail&& detail, Operation&& operation)
+    -> decltype(operation()) {
+  using Result = decltype(operation());
+  std::string text;
+  if constexpr (USB_VAULT_DEBUG_LOG) {
+    try {
+      text = detail();
+    } catch (...) {
+    }
+    note_call(event, "开始", text);
+  }
+  try {
+    if constexpr (std::is_void_v<Result>) {
+      operation();
+      if constexpr (USB_VAULT_DEBUG_LOG) note_call(event, "完成", text);
+    } else {
+      Result result = operation();
+      if constexpr (USB_VAULT_DEBUG_LOG) {
+        std::string finished = text;
+        try {
+          const std::string extra = call_result_text(result);
+          if (!extra.empty()) finished += (finished.empty() ? "" : "；") + extra;
+        } catch (...) {
+        }
+        note_call(event, "完成", finished);
+      }
+      return result;
+    }
+  } catch (...) {
+    if constexpr (USB_VAULT_DEBUG_LOG) note_call_failure(event, text);
+    throw;
+  }
+}
+
+[[nodiscard]] std::string call_text(const std::wstring_view text) {
+  return diagnostics::utf8(text);
+}
+[[nodiscard]] std::string target_text(const volume::PartitionCandidate& target) {
+  return "磁盘 " + std::to_string(target.disk_number) + "；分区 " +
+         std::to_string(target.partition_number) + "；偏移 " +
+         std::to_string(target.offset_bytes) + "；长度 " +
+         std::to_string(target.length_bytes);
+}
+
+}  // namespace
+
 struct CardLoginMountSession::Impl final {
   Impl(CardAuthenticationSession& authentication,
        const volume::VolumeProvider& provider,
@@ -394,10 +500,12 @@ void CardLoginMountSession::set_creation_revocation(CreationCancellation revoked
 }
 bool CardLoginMountSession::begin_partition_conversion(const volume::PartitionCandidate& target,
     const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
-  return impl_->core.begin_partition_conversion(target,confirm);
+  return traced_call("开始分区原地加密", [&] { return target_text(target); },
+                     [&] { return impl_->core.begin_partition_conversion(target, confirm); });
 }
 bool CardLoginMountSession::resume_partition_conversion(std::uint32_t id) {
-  return impl_->core.resume_partition_conversion(id);
+  return traced_call("继续分区原地加密", [&] { return "容器 #" + std::to_string(id); },
+                     [&] { return impl_->core.resume_partition_conversion(id); });
 }
 
 void CardLoginMountSession::set_creation_cancellation(
@@ -408,36 +516,47 @@ void CardLoginMountSession::set_creation_cancellation(
 void CardLoginMountSession::consume_authenticated_login(
     security::SecureBuffer root_secret,
     security::SecureBuffer login_password_utf8) {
-  impl_->core.consume_authenticated_login(
-      std::move(root_secret), std::move(login_password_utf8));
+  traced_call("登录", [] { return std::string(); }, [&] {
+    impl_->core.consume_authenticated_login(std::move(root_secret),
+                                            std::move(login_password_utf8));
+  });
 }
 
 void CardLoginMountSession::create_container_a(
     const std::uint64_t size_bytes) {
-  impl_->core.create_container_a(size_bytes);
+  traced_call("创建布局容器 A", [&] { return "容量 " + std::to_string(size_bytes) + " 字节"; },
+              [&] { impl_->core.create_container_a(size_bytes); });
 }
 
 std::uint32_t CardLoginMountSession::create_partition(const volume::PartitionCandidate& target,
     const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
-  return impl_->core.create_partition(target, confirm);
+  return traced_call("创建分区容器", [&] { return target_text(target); },
+                     [&] { return impl_->core.create_partition(target, confirm); });
 }
 
 std::uint32_t CardLoginMountSession::create_partition_pair(const volume::PartitionCandidate& target,
     std::uint64_t hidden, const security::SecureBuffer& decoy,
     const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
-  if (!hidden || decoy.empty()) throw std::invalid_argument("partition pair inputs required");
-  return impl_->core.create_partition(target, confirm, hidden, &decoy);
+  return traced_call("创建含隐藏卷的分区容器",
+      [&] { return target_text(target) + "；隐藏卷 " + std::to_string(hidden) + " 字节"; },
+      [&] {
+        if (!hidden || decoy.empty()) throw std::invalid_argument("partition pair inputs required");
+        return impl_->core.create_partition(target, confirm, hidden, &decoy);
+      });
 }
 
 void CardLoginMountSession::format_partition(
     const volume::PartitionCandidate& target,
     const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase) {
-  impl_->core.format_partition(target, confirm_erase);
+  traced_call("格式化分区", [&] { return target_text(target); },
+              [&] { impl_->core.format_partition(target, confirm_erase); });
 }
 
 std::uint32_t CardLoginMountSession::create_container(
     const std::wstring_view path, const std::uint64_t size_bytes) {
-  return impl_->core.create_container(path, size_bytes);
+  return traced_call("创建文件容器",
+      [&] { return "路径 " + call_text(path) + "；容量 " + std::to_string(size_bytes) + " 字节"; },
+      [&] { return impl_->core.create_container(path, size_bytes); });
 }
 
 std::uint32_t CardLoginMountSession::create_container_b(
@@ -445,13 +564,20 @@ std::uint32_t CardLoginMountSession::create_container_b(
     const std::uint64_t outer_size_bytes,
     const std::uint64_t hidden_size_bytes,
     const security::SecureBuffer& decoy_password_utf8) {
-  return impl_->core.create_container_b(path, outer_size_bytes,
-                                        hidden_size_bytes,
-                                        decoy_password_utf8);
+  return traced_call("创建含隐藏卷的文件容器",
+      [&] {
+        return "路径 " + call_text(path) + "；外层 " + std::to_string(outer_size_bytes) +
+               " 字节；隐藏卷 " + std::to_string(hidden_size_bytes) + " 字节";
+      },
+      [&] {
+        return impl_->core.create_container_b(path, outer_size_bytes, hidden_size_bytes,
+                                              decoy_password_utf8);
+      });
 }
 
 void CardLoginMountSession::complete_initialization(security::SecureBuffer password_utf8) {
-  impl_->core.complete_initialization(std::move(password_utf8));
+  traced_call("初始化交接", [] { return std::string(); },
+              [&] { impl_->core.complete_initialization(std::move(password_utf8)); });
 }
 
 security::SecureBuffer CardLoginMountSession::copy_session_password() {
@@ -460,36 +586,42 @@ security::SecureBuffer CardLoginMountSession::copy_session_password() {
 
 std::uint32_t CardLoginMountSession::mount_container(
     const std::wstring_view path) {
-  return impl_->core.mount_container(path);
+  return traced_call("按路径挂载", [&] { return "路径 " + call_text(path); },
+                     [&] { return impl_->core.mount_container(path); });
 }
 
 void CardLoginMountSession::mount_adopted_container(const std::uint32_t id) {
-  impl_->core.mount_adopted_container(id);
+  traced_call("挂载容器", [&] { return "容器 #" + std::to_string(id); },
+              [&] { impl_->core.mount_adopted_container(id); });
 }
 
 wchar_t CardLoginMountSession::open_decoy_maintenance(
     const std::uint32_t id,
     const security::SecureBuffer& decoy_password_utf8) {
-  return impl_->core.open_decoy_maintenance(id, decoy_password_utf8);
+  return traced_call("打开诱饵维护", [&] { return "容器 #" + std::to_string(id); },
+                     [&] { return impl_->core.open_decoy_maintenance(id, decoy_password_utf8); });
 }
 
 bool CardLoginMountSession::verify_decoy_maintenance(
     const std::uint32_t id,
     const security::SecureBuffer& decoy_password_utf8) {
-  return impl_->core.verify_decoy_maintenance(id, decoy_password_utf8);
+  return traced_call("验证诱饵口令", [&] { return "容器 #" + std::to_string(id); },
+                     [&] { return impl_->core.verify_decoy_maintenance(id, decoy_password_utf8); });
 }
 
 DecoyMaintenanceSurvey CardLoginMountSession::survey_decoy_maintenance(
     const security::SecureBuffer& decoy_password_utf8,
     const SurveyProgress& progress,
     const SurveyCancellation& cancelled) {
-  return impl_->core.survey_decoy_maintenance(decoy_password_utf8, progress,
-                                              cancelled);
+  return traced_call("搜索诱饵容器", [] { return std::string(); }, [&] {
+    return impl_->core.survey_decoy_maintenance(decoy_password_utf8, progress, cancelled);
+  });
 }
 
 DecoyMaintenanceSpace CardLoginMountSession::decoy_maintenance_space(
     const std::uint32_t id) {
-  return impl_->core.decoy_maintenance_space(id);
+  return traced_call("测量维护卷空间", [&] { return "容器 #" + std::to_string(id); },
+                     [&] { return impl_->core.decoy_maintenance_space(id); });
 }
 
 bool CardLoginMountSession::decoy_maintenance_write_blocked(const std::uint32_t id) {
@@ -497,33 +629,45 @@ bool CardLoginMountSession::decoy_maintenance_write_blocked(const std::uint32_t 
 }
 
 void CardLoginMountSession::end_decoy_maintenance(const std::uint32_t id) {
-  impl_->core.end_decoy_maintenance(id);
+  traced_call("结束诱饵维护", [&] { return "容器 #" + std::to_string(id); },
+              [&] { impl_->core.end_decoy_maintenance(id); });
 }
 
 void CardLoginMountSession::import_external_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view absolute_source,
     const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress) {
-  impl_->core.import_external_entry(id, relative_directory, absolute_source,
-                                    cancelled, progress);
+  traced_call("导入到维护卷",
+      [&] {
+        return "容器 #" + std::to_string(id) + "；目录 " + call_text(relative_directory) +
+               "；来源 " + call_text(absolute_source);
+      },
+      [&] {
+        impl_->core.import_external_entry(id, relative_directory, absolute_source, cancelled,
+                                          progress);
+      });
 }
 
 wchar_t CardLoginMountSession::open_surveyed_maintenance(
     const std::uint32_t id) {
-  return impl_->core.open_surveyed_maintenance(id);
+  return traced_call("打开已搜索的维护卷", [&] { return "容器 #" + std::to_string(id); },
+                     [&] { return impl_->core.open_surveyed_maintenance(id); });
 }
 
 void CardLoginMountSession::unmount_container(const std::uint32_t id) {
-  impl_->core.unmount_container(id);
+  traced_call("卸载容器", [&] { return "容器 #" + std::to_string(id); },
+              [&] { impl_->core.unmount_container(id); });
 }
 
 void CardLoginMountSession::forget_container(const std::uint32_t id) {
-  impl_->core.forget_container(id);
+  traced_call("从列表移除", [&] { return "容器 #" + std::to_string(id); },
+              [&] { impl_->core.forget_container(id); });
 }
 
 std::uint32_t CardLoginMountSession::adopt_container(
     const std::wstring_view path) {
-  return impl_->core.adopt_container(path);
+  return traced_call("导入容器", [&] { return "路径 " + call_text(path); },
+                     [&] { return impl_->core.adopt_container(path); });
 }
 
 bool CardLoginMountSession::mounting_imported_containers() {
@@ -532,7 +676,8 @@ bool CardLoginMountSession::mounting_imported_containers() {
 
 void CardLoginMountSession::set_mounting_imported_containers(
     const bool mount) {
-  impl_->core.set_mounting_imported_containers(mount);
+  traced_call("设置导入后自动挂载", [&] { return std::string(mount ? "开" : "关"); },
+              [&] { impl_->core.set_mounting_imported_containers(mount); });
 }
 
 bool CardLoginMountSession::remembering_container_paths() {
@@ -541,30 +686,48 @@ bool CardLoginMountSession::remembering_container_paths() {
 
 void CardLoginMountSession::set_remembering_container_paths(
     const bool remember) {
-  impl_->core.set_remembering_container_paths(remember);
+  traced_call("设置记住容器", [&] { return std::string(remember ? "开" : "关"); },
+              [&] { impl_->core.set_remembering_container_paths(remember); });
 }
 
 volume::VolumeDirectoryListing CardLoginMountSession::list_container_directory(
     const std::uint32_t id, const std::wstring_view relative_directory) {
-  return impl_->core.list_container_directory(id, relative_directory);
+  return traced_call("列出目录",
+      [&] { return "容器 #" + std::to_string(id) + "；目录 " + call_text(relative_directory); },
+      [&] { return impl_->core.list_container_directory(id, relative_directory); });
 }
 
 void CardLoginMountSession::delete_container_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name) {
-  impl_->core.delete_container_entry(id, relative_directory, name);
+  traced_call("删除条目",
+      [&] {
+        return "容器 #" + std::to_string(id) + "；目录 " + call_text(relative_directory) +
+               "；名称 " + call_text(name);
+      },
+      [&] { impl_->core.delete_container_entry(id, relative_directory, name); });
 }
 
 void CardLoginMountSession::rename_container_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name, const std::wstring_view new_name) {
-  impl_->core.rename_container_entry(id, relative_directory, name, new_name);
+  traced_call("重命名条目",
+      [&] {
+        return "容器 #" + std::to_string(id) + "；目录 " + call_text(relative_directory) +
+               "；名称 " + call_text(name) + "；新名称 " + call_text(new_name);
+      },
+      [&] { impl_->core.rename_container_entry(id, relative_directory, name, new_name); });
 }
 
 void CardLoginMountSession::create_container_directory(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name) {
-  impl_->core.create_container_directory(id, relative_directory, name);
+  traced_call("新建目录",
+      [&] {
+        return "容器 #" + std::to_string(id) + "；目录 " + call_text(relative_directory) +
+               "；名称 " + call_text(name);
+      },
+      [&] { impl_->core.create_container_directory(id, relative_directory, name); });
 }
 
 void CardLoginMountSession::move_container_entry(
@@ -572,9 +735,17 @@ void CardLoginMountSession::move_container_entry(
     const std::wstring_view source_relative_directory,
     const std::wstring_view name, const std::uint32_t destination_id,
     const std::wstring_view destination_relative_directory) {
-  impl_->core.move_container_entry(source_id, source_relative_directory, name,
-                                   destination_id,
-                                   destination_relative_directory);
+  traced_call("移动条目",
+      [&] {
+        return "来源容器 #" + std::to_string(source_id) + "；来源目录 " +
+               call_text(source_relative_directory) + "；名称 " + call_text(name) +
+               "；目标容器 #" + std::to_string(destination_id) + "；目标目录 " +
+               call_text(destination_relative_directory);
+      },
+      [&] {
+        impl_->core.move_container_entry(source_id, source_relative_directory, name,
+                                         destination_id, destination_relative_directory);
+      });
 }
 
 void CardLoginMountSession::copy_container_entry(
@@ -582,23 +753,44 @@ void CardLoginMountSession::copy_container_entry(
     const std::wstring_view source_relative_directory,
     const std::wstring_view name, const std::uint32_t destination_id,
     const std::wstring_view destination_relative_directory) {
-  impl_->core.copy_container_entry(source_id, source_relative_directory, name,
-                                   destination_id,
-                                   destination_relative_directory);
+  traced_call("复制条目",
+      [&] {
+        return "来源容器 #" + std::to_string(source_id) + "；来源目录 " +
+               call_text(source_relative_directory) + "；名称 " + call_text(name) +
+               "；目标容器 #" + std::to_string(destination_id) + "；目标目录 " +
+               call_text(destination_relative_directory);
+      },
+      [&] {
+        impl_->core.copy_container_entry(source_id, source_relative_directory, name,
+                                         destination_id, destination_relative_directory);
+      });
 }
 
 void CardLoginMountSession::export_container_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name,
     const std::wstring_view absolute_destination_directory) {
-  impl_->core.export_container_entry(id, relative_directory, name,
-                                     absolute_destination_directory);
+  traced_call("导出条目",
+      [&] {
+        return "容器 #" + std::to_string(id) + "；目录 " + call_text(relative_directory) +
+               "；名称 " + call_text(name) + "；目标目录 " +
+               call_text(absolute_destination_directory);
+      },
+      [&] {
+        impl_->core.export_container_entry(id, relative_directory, name,
+                                           absolute_destination_directory);
+      });
 }
 
 void CardLoginMountSession::export_container_file(
     const std::uint32_t id,
     const std::wstring_view absolute_destination_directory) {
-  impl_->core.export_container_file(id, absolute_destination_directory);
+  traced_call("导出容器文件",
+      [&] {
+        return "容器 #" + std::to_string(id) + "；目标目录 " +
+               call_text(absolute_destination_directory);
+      },
+      [&] { impl_->core.export_container_file(id, absolute_destination_directory); });
 }
 
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
@@ -619,6 +811,7 @@ std::vector<OperationEvent> CardLoginMountSession::operation_history() {
 
 void CardLoginMountSession::clear_operation_history() noexcept {
   impl_->core.clear_operation_history();
+  if constexpr (USB_VAULT_DEBUG_LOG) note_call("清空操作记录", "完成", std::string());
 }
 
 bool CardLoginMountSession::operation_logging_enabled() {
@@ -626,22 +819,35 @@ bool CardLoginMountSession::operation_logging_enabled() {
 }
 bool CardLoginMountSession::force_unmount_enabled() { return impl_->core.force_unmount_enabled(); }
 bool CardLoginMountSession::auto_mount_enabled() { return impl_->core.auto_mount_enabled(); }
-void CardLoginMountSession::set_auto_mount_enabled(bool enabled) { impl_->core.set_auto_mount_enabled(enabled); }
-void CardLoginMountSession::set_force_unmount_enabled(bool enabled) { impl_->core.set_force_unmount_enabled(enabled); }
-void CardLoginMountSession::reorder_containers(std::span<const std::uint32_t> ids) { impl_->core.reorder_containers(ids); }
+void CardLoginMountSession::set_auto_mount_enabled(bool enabled) {
+  traced_call("设置登录后自动挂载", [&] { return std::string(enabled ? "开" : "关"); },
+              [&] { impl_->core.set_auto_mount_enabled(enabled); });
+}
+void CardLoginMountSession::set_force_unmount_enabled(bool enabled) {
+  traced_call("设置强制卸载偏好", [&] { return std::string(enabled ? "开" : "关"); },
+              [&] { impl_->core.set_force_unmount_enabled(enabled); });
+}
+void CardLoginMountSession::reorder_containers(std::span<const std::uint32_t> ids) {
+  traced_call("调整容器顺序", [&] { return "容器数 " + std::to_string(ids.size()); },
+              [&] { impl_->core.reorder_containers(ids); });
+}
 
 void CardLoginMountSession::set_operation_logging_enabled(const bool enabled) {
-  impl_->core.set_operation_logging_enabled(enabled);
+  traced_call("设置操作记录", [&] { return std::string(enabled ? "开" : "关"); },
+              [&] { impl_->core.set_operation_logging_enabled(enabled); });
 }
 
 void CardLoginMountSession::release_session_secrets() noexcept {
   impl_->core.release_session_secrets();
 }
 
-void CardLoginMountSession::unmount_active() { impl_->core.unmount_active(); }
+void CardLoginMountSession::unmount_active() {
+  traced_call("全部卸载", [] { return std::string(); }, [&] { impl_->core.unmount_active(); });
+}
 
 bool CardLoginMountSession::force_unmount_active() {
-  return impl_->core.force_unmount_active();
+  return traced_call("拔卡清理", [] { return std::string(); },
+                     [&] { return impl_->core.force_unmount_active(); });
 }
 
 bool CardLoginMountSession::mounted() const noexcept {
@@ -649,11 +855,13 @@ bool CardLoginMountSession::mounted() const noexcept {
 }
 
 void CardLoginMountSession::force_unmount_container(const std::uint32_t id) {
-  impl_->core.force_unmount_container(id);
+  traced_call("强制卸载容器", [&] { return "容器 #" + std::to_string(id); },
+              [&] { impl_->core.force_unmount_container(id); });
 }
 
 void CardLoginMountSession::force_unmount_user_active() {
-  impl_->core.force_unmount_user_active();
+  traced_call("强制卸载全部容器", [] { return std::string(); },
+              [&] { impl_->core.force_unmount_user_active(); });
 }
 
 namespace detail {
@@ -693,6 +901,111 @@ namespace {
   return std::wstring(name);
 }
 
+// ---- Test-phase debug log -------------------------------------------------
+// Every stage and every failure of the session is written to the runtime log.
+// The detail strings are built only when the switch is on, and a failure to
+// build or write one never changes what the session does. Passwords and keys
+// are never part of a detail.
+#define SESSION_TRACE(event, detail)                                       \
+  do {                                                                     \
+    if constexpr (USB_VAULT_DEBUG_LOG) {                                   \
+      try {                                                                \
+        diagnostics::debug_log("会话", (event), (detail));                 \
+      } catch (...) {                                                      \
+      }                                                                    \
+    }                                                                      \
+  } while (false)
+// Inside a catch block only: adds the exception being handled.
+#define SESSION_TRACE_FAILURE(event, detail)                               \
+  do {                                                                     \
+    if constexpr (USB_VAULT_DEBUG_LOG) {                                   \
+      try {                                                                \
+        diagnostics::debug_log_exception("会话", (event), (detail));       \
+      } catch (...) {                                                      \
+      }                                                                    \
+    }                                                                      \
+  } while (false)
+
+[[nodiscard]] std::string wide_text(const std::wstring_view text) {
+  return diagnostics::utf8(text);
+}
+[[nodiscard]] std::string yes_no(const bool value) { return value ? "是" : "否"; }
+[[nodiscard]] std::string drive_text(const wchar_t drive) {
+  if (drive < L'A' || drive > L'Z') return "无";
+  return std::string(1, static_cast<char>(drive)) + ":";
+}
+[[nodiscard]] std::string bytes_text(const std::uint64_t bytes) {
+  char text[80]{};
+  std::snprintf(text, sizeof(text), "%llu 字节（%.2f MiB）",
+                static_cast<unsigned long long>(bytes),
+                static_cast<double>(bytes) / 1048576.0);
+  return text;
+}
+[[nodiscard]] std::string hex_text(const std::array<std::uint8_t, 16>& value) {
+  char text[40]{};
+  for (std::size_t index = 0; index < value.size(); ++index)
+    std::snprintf(text + index * 2, 3, "%02X", value[index]);
+  return text;
+}
+[[nodiscard]] std::string partition_text(const volume::PartitionIdentity& identity) {
+  return "设备 " + hex_text(identity.device_id) + "；设备标志 " +
+         std::to_string(identity.device_id_flags) + "；布局 " +
+         std::to_string(identity.layout) + "；扇区 " +
+         std::to_string(identity.logical_sector_bytes) + "；偏移 " +
+         bytes_text(identity.offset_bytes) + "；长度 " +
+         bytes_text(identity.length_bytes) + "；分区 GUID " +
+         hex_text(identity.partition_id);
+}
+[[nodiscard]] std::string candidate_text(const volume::PartitionCandidate& target) {
+  return "卷路径 " + wide_text(target.volume_path) + "；磁盘 " +
+         std::to_string(target.disk_number) + "；分区 " +
+         std::to_string(target.partition_number) + "；偏移 " +
+         bytes_text(target.offset_bytes) + "；长度 " +
+         bytes_text(target.length_bytes) + "；扇区 " +
+         std::to_string(target.logical_sector_bytes) + "；布局 " +
+         std::to_string(static_cast<int>(target.layout)) + "；可用性 " +
+         std::to_string(static_cast<int>(target.availability)) + "；查询错误 " +
+         std::to_string(target.query_error) + "；文件系统序列号 " +
+         std::to_string(target.filesystem_serial) + "；设备 " +
+         hex_text(target.device_id) + "；设备标志 " +
+         std::to_string(target.device_id_flags) + "；分区 GUID " +
+         hex_text(target.partition_id);
+}
+[[nodiscard]] std::string options_text(const volume::MountOptions& options) {
+  return "请求盘符 " + drive_text(options.drive_letter) + "；PRF " +
+         std::to_string(static_cast<int>(options.prf)) + "；PIM " +
+         std::to_string(options.pim) + "；只读 " + yes_no(options.read_only) +
+         "；通知资源管理器 " + yes_no(options.notify_shell) + "；隐藏卷保护 " +
+         yes_no(options.hidden_volume_protection.has_value());
+}
+[[nodiscard]] std::string mount_result_text(const volume::MountResult& mounted) {
+  return "驱动回报盘符 " + drive_text(mounted.drive_letter) + "；文件系统需检查 " +
+         yes_no(mounted.filesystem_dirty) + "；因拒绝访问改只读 " +
+         yes_no(mounted.read_only_after_access_denied) + "；因写保护改只读 " +
+         yes_no(mounted.read_only_after_device_write_protected) + "；NTFS " +
+         yes_no(mounted.is_ntfs) + "；主密钥存在弱点 " +
+         yes_no(mounted.master_key_vulnerable) + "；耗时 " +
+         std::to_string(mounted.elapsed.count()) + " 毫秒";
+}
+[[nodiscard]] std::string unmount_result_text(const volume::UnmountResult& result) {
+  return "尝试次数 " + std::to_string(result.attempts) + "；隐藏卷保护已触发 " +
+         yes_no(result.hidden_volume_protection_triggered) + "；耗时 " +
+         std::to_string(result.elapsed.count()) + " 毫秒";
+}
+[[nodiscard]] std::string container_text(const SessionContainer& container) {
+  return "容器 #" + std::to_string(container.id) + "；名称 " +
+         wide_text(container.name) + "；" +
+         (container.partition ? "分区 " + partition_text(*container.partition)
+                              : "文件 " + wide_text(container.path)) +
+         "；已挂载 " + yes_no(container.mounted) + "；盘符 " +
+         drive_text(container.drive_letter) + "；登录派生 " +
+         yes_no(container.release_first) + "；派生已确定 " +
+         yes_no(container.derivation_known) + "；维护中 " +
+         yes_no(container.maintenance) + "；维护需恢复 " +
+         yes_no(container.maintenance_recovery_required) + "；转换状态 " +
+         std::to_string(container.conversion_state);
+}
+
 // A cancel that lands while the helper is finishing still means no container.
 // Everything written so far is under the staging name, so throwing here hands
 // the file to the same cleanup a failure uses: asking to cancel always ends
@@ -711,12 +1024,15 @@ void throw_if_creation_cancelled(
     CardLoginMountSessionRuntime& runtime,
     const std::wstring_view staging_path,
     const std::exception_ptr& operation_failure) {
+  SESSION_TRACE("清理未完成的暂存文件", "暂存路径 " + wide_text(staging_path));
   try {
     runtime.remove_incomplete(staging_path);
   } catch (...) {
+    SESSION_TRACE_FAILURE("清理暂存文件失败", "暂存路径 " + wide_text(staging_path));
     throw ContainerCreationCleanupError(operation_failure,
                                         std::current_exception());
   }
+  SESSION_TRACE("暂存文件已清理", "暂存路径 " + wide_text(staging_path));
   std::rethrow_exception(operation_failure);
 }
 
@@ -936,14 +1252,22 @@ void CardLoginMountSessionCore::consume_authenticated_login(
     // rewrapping an envelope needs the password as key material, and the
     // record has no third slot to spare.
     state_.login_password = duplicate_secret(login_password_utf8);
-    if (runtime_.container_exists(layout_.container_b.path)) {
+    SESSION_TRACE("登录认证已建立", "登录口令长度 " +
+                                        std::to_string(login_password_utf8.size()) + " 字节");
+    const bool layout_b = runtime_.container_exists(layout_.container_b.path);
+    SESSION_TRACE("检查布局容器 B", "路径 " + wide_text(layout_.container_b.path) +
+                                        "；存在 " + yes_no(layout_b));
+    if (layout_b) {
       // The layout path predates user-chosen locations and is adopted only
       // when a file is really sitting there. Its volume password is derived on
       // first use like that of every other hidden-volume container.
       static_cast<void>(adopt(state_, layout_.container_b.path, wchar_t{},
                               false, true));
     }
-    if (runtime_.container_exists(layout_.container_a.path)) {
+    const bool layout_a = runtime_.container_exists(layout_.container_a.path);
+    SESSION_TRACE("检查布局容器 A", "路径 " + wide_text(layout_.container_a.path) +
+                                        "；存在 " + yes_no(layout_a));
+    if (layout_a) {
       static_cast<void>(adopt(state_, layout_.container_a.path, wchar_t{},
                               false));
     }
@@ -952,7 +1276,11 @@ void CardLoginMountSessionCore::consume_authenticated_login(
     // later, separate request; the page's automatic mount after login is one
     // of those, run as an ordinary batch (8.7.5).
     login_password_utf8.clear();
+    SESSION_TRACE("登录完成", "收录容器数 " + std::to_string(state_.containers.size()));
+    for (const SessionContainer& container : state_.containers)
+      SESSION_TRACE("登录后容器", container_text(container));
   } catch (...) {
+    SESSION_TRACE_FAILURE("登录会话建立失败", "");
     login_password_utf8.clear();
     throw;
   }
@@ -971,8 +1299,10 @@ security::SecureBuffer CardLoginMountSessionCore::derive_standard_password() {
             fixed_input, authentication_.root_secret_,
             layout_.container_a.salt);
     fixed_input.clear();
+    SESSION_TRACE("标准派生完成", "输出长度 " + std::to_string(volume_password.size()) + " 字节");
     return volume_password;
   } catch (...) {
+    SESSION_TRACE_FAILURE("标准派生失败", "");
     fixed_input.clear();
     throw;
   }
@@ -990,9 +1320,16 @@ CardLoginMountSessionCore::hidden_container_password() {
   // One derivation opens every hidden-volume container: they share the salt
   // and the pair of passwords, so the login input is run through the KDF once
   // and the result serves the rest of the session.
-  state_.hidden_container_password = runtime_.derive_container_password(
-      state_.login_password, authentication_.root_secret_,
-      layout_.container_b.salt);
+  try {
+    state_.hidden_container_password = runtime_.derive_container_password(
+        state_.login_password, authentication_.root_secret_,
+        layout_.container_b.salt);
+  } catch (...) {
+    SESSION_TRACE_FAILURE("登录派生失败", "");
+    throw;
+  }
+  SESSION_TRACE("登录派生完成", "输出长度 " +
+                                  std::to_string(state_.hidden_container_password.size()) + " 字节");
   return state_.hidden_container_password;
 }
 
@@ -1009,16 +1346,24 @@ void CardLoginMountSessionCore::remember_container_path(
   // cost of the silence is that the path is simply not remembered, which the
   // session shows anyway for as long as it lasts.
   try {
-    if (!runtime_.remember_container_paths()) return;
+    if (!runtime_.remember_container_paths()) {
+      SESSION_TRACE("未记录容器路径：记住容器已关闭", "路径 " + wide_text(path));
+      return;
+    }
     security::SecureBuffer key = container_index_key();
     std::vector<std::byte> file = runtime_.read_container_index();
     const ContainerIndexWriteV1 written =
         prepend_container_index_path_v1(key.bytes(), file, path);
     key.clear();
+    SESSION_TRACE("写入容器索引", "路径 " + wide_text(path) + "；结果 " +
+                                      std::to_string(static_cast<int>(written)) +
+                                      "；索引大小 " + std::to_string(file.size()) + " 字节");
     if (written == ContainerIndexWriteV1::added) {
       runtime_.write_container_index(file);
+      SESSION_TRACE("容器索引已保存", "路径 " + wide_text(path));
     }
   } catch (...) {
+    SESSION_TRACE_FAILURE("记录容器路径失败", "路径 " + wide_text(path));
   }
 }
 
@@ -1030,10 +1375,12 @@ void CardLoginMountSessionCore::forget_container_path(
     const bool removed =
         remove_container_index_path_v1(key.bytes(), file, path);
     key.clear();
+    SESSION_TRACE("从容器索引移除路径", "路径 " + wide_text(path) + "；找到 " + yes_no(removed));
     if (removed) {
       runtime_.write_container_index(file);
     }
   } catch (...) {
+    SESSION_TRACE_FAILURE("从容器索引移除路径失败", "路径 " + wide_text(path));
   }
 }
 
@@ -1083,8 +1430,17 @@ void CardLoginMountSessionCore::reorder_containers(
     reorder_container_index_v1(key.bytes(), file, refs);
     key.clear();
     runtime_.write_container_index(file);
+    SESSION_TRACE("容器顺序已写入索引", "记录数 " + std::to_string(refs.size()));
   }
   state_.containers.swap(ordered);
+  if constexpr (USB_VAULT_DEBUG_LOG) {
+    try {
+      std::string order;
+      for (const auto id : ids) order += (order.empty() ? "#" : "，#") + std::to_string(id);
+      SESSION_TRACE("容器顺序已更新", order);
+    } catch (...) {
+    }
+  }
 }
 
 bool CardLoginMountSessionCore::remembering_container_paths() {
@@ -1098,17 +1454,24 @@ void CardLoginMountSessionCore::set_remembering_container_paths(
   // switch that quietly destroyed records could not be undone by flipping it
   // again, and the user asked to stop remembering, not to forget.
   runtime_.set_remember_container_paths(remember);
+  SESSION_TRACE("记住容器设置已更改", "开启 " + yes_no(remember));
 }
 
 void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
   try {
-    if (!runtime_.remember_container_paths()) return;
+    if (!runtime_.remember_container_paths()) {
+      SESSION_TRACE("未读取容器索引：记住容器已关闭", "");
+      return;
+    }
     security::SecureBuffer key = container_index_key();
     std::vector<std::byte> file = runtime_.read_container_index();
+    SESSION_TRACE("读取容器索引", "索引大小 " + std::to_string(file.size()) + " 字节");
     // Records written before the creation sequence existed get one now, once.
     // A disk container's name depends on it, so settling it here is what stops
     // the name being recomputed -- and moving -- on every login.
     const auto prepared = prepare_container_index_v1(key.bytes(), file);
+    SESSION_TRACE("解析容器索引", "记录数 " + std::to_string(prepared.entries.size()) +
+                                      "；补写序号 " + yes_no(prepared.numbered));
     if (prepared.numbered) runtime_.write_container_index(file);
     std::vector<ContainerIndexRef> refs;
     refs.reserve(prepared.entries.size());
@@ -1118,17 +1481,25 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     // Adoption inserts at the front, so traverse backward to preserve saved
     // order. Display numbers are fixed record attributes, not creation ranks.
     for (auto item = prepared.entries.rbegin(); item != prepared.entries.rend(); ++item)
-      if (item->partition)
+      if (item->partition) {
         adopt_partition(state_, *item->partition, item->sequence).conversion_state =
             static_cast<std::uint32_t>(item->conversion);
+        SESSION_TRACE("从索引收录分区", partition_text(*item->partition) + "；序号 " +
+                                            std::to_string(item->sequence) + "；转换状态 " +
+                                            std::to_string(static_cast<int>(item->conversion)));
+      }
     for (const auto& ref : refs) {
       if (ref.partition) continue;
       // A remembered path whose file is not here is passed over and left in
       // the index. A container on a drive that is not plugged in is absent in
       // exactly the way a deleted one is, and clearing a slot on that evidence
       // would throw the record away for good.
-      if (!runtime_.container_exists(ref.path)) continue;
+      if (!runtime_.container_exists(ref.path)) {
+        SESSION_TRACE("索引中的容器文件不在，跳过", "路径 " + wide_text(ref.path));
+        continue;
+      }
       static_cast<void>(adopt(state_, ref.path, wchar_t{}, false, false, false));
+      SESSION_TRACE("从索引收录文件容器", "路径 " + wide_text(ref.path));
     }
     // Layout containers may already be adopted. Match all visible entries to
     // the saved order without changing mount flags or dropping absent paths.
@@ -1158,6 +1529,7 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
       ordered.push_back(state_.containers[item.position]);
     state_.containers.swap(ordered);
   } catch (...) {
+    SESSION_TRACE_FAILURE("从容器索引恢复列表失败", "");
   }
 }
 
@@ -1175,12 +1547,15 @@ CardLoginMountSessionCore::mount_with_either_derivation(
                .pim = 0,
                .read_only = false,
                .notify_shell = false};
+    SESSION_TRACE("以标准派生尝试挂载", "路径 " + wide_text(path) + "；" + options_text(options));
     const volume::MountResult mounted =
         runtime_.mount_created(path, standard_password, options);
     standard_password.clear();
+    SESSION_TRACE("标准派生挂载成功", "路径 " + wide_text(path) + "；" + mount_result_text(mounted));
     return {.drive_letter = settled_drive_letter(mounted),
             .hidden_volume = false};
   } catch (const std::system_error& error) {
+    SESSION_TRACE_FAILURE("标准派生挂载失败", "路径 " + wide_text(path));
     standard_password.clear();
     // The user selects a file, never a container class, and the page must not
     // offer that choice either. A file the standard derivation cannot open is
@@ -1192,22 +1567,40 @@ CardLoginMountSessionCore::mount_with_either_derivation(
         state_.login_password.empty()) {
       throw;
     }
+    SESSION_TRACE("标准派生被拒，改用登录派生", "路径 " + wide_text(path));
   } catch (...) {
+    SESSION_TRACE_FAILURE("标准派生挂载失败", "路径 " + wide_text(path));
     standard_password.clear();
     throw;
   }
-  return {.drive_letter = settled_drive_letter(
-              runtime_.mount_created(path, hidden_container_password(), options)),
-          .hidden_volume = true};
+  try {
+    SESSION_TRACE("以登录派生尝试挂载", "路径 " + wide_text(path) + "；" + options_text(options));
+    const volume::MountResult mounted =
+        runtime_.mount_created(path, hidden_container_password(), options);
+    SESSION_TRACE("登录派生挂载成功", "路径 " + wide_text(path) + "；" + mount_result_text(mounted));
+    return {.drive_letter = settled_drive_letter(mounted), .hidden_volume = true};
+  } catch (...) {
+    SESSION_TRACE_FAILURE("登录派生挂载失败", "路径 " + wide_text(path));
+    throw;
+  }
 }
 
 wchar_t CardLoginMountSessionCore::reserve_drive_letter() {
-  const wchar_t letter = runtime_.allocate_drive_letter();
+  wchar_t letter{};
+  try {
+    letter = runtime_.allocate_drive_letter();
+  } catch (...) {
+    SESSION_TRACE_FAILURE("分配盘符失败", "");
+    throw;
+  }
+  SESSION_TRACE("分配盘符", "盘符 " + drive_text(letter) + "；原始值 " +
+                                std::to_string(static_cast<unsigned int>(letter)));
   if (letter < L'A' || letter > L'Z') {
     throw std::runtime_error("allocated drive letter is out of range");
   }
   for (const SessionContainer& container : state_.containers) {
     if (container.mounted && container.drive_letter == letter) {
+      SESSION_TRACE("分配到的盘符已被本会话占用", container_text(container));
       throw std::runtime_error(
           "allocated drive letter is already held by this session");
     }
@@ -1249,6 +1642,8 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
   const auto revoked=[&]{return !authentication_.authenticated() || authentication_.generation_!=generation || revoked_query();};
   const auto check=[&]{if(revoked())throw std::system_error(volume_creation::make_error_code(volume_creation::CreationError::operation_cancelled));};
   check();
+  SESSION_TRACE("开始分区原地加密", candidate_text(target) + "；续作容器 " +
+      (resume_id ? "#" + std::to_string(*resume_id) : std::string("无")));
   partition_format_active_=true;
   struct Reset {bool& value; ~Reset(){value=false;}} reset{partition_format_active_};
   auto password=derive_standard_password();
@@ -1274,6 +1669,8 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
         throw std::runtime_error("conversion record missing");
     }
     key.clear(); check(); runtime_.write_container_index(file);
+    SESSION_TRACE("写入分区转换状态", "状态 " + std::to_string(static_cast<int>(status)) +
+                                          "；新记录 " + yes_no(insert) + "；序号 " + std::to_string(numbered));
     auto entry=find_by_id(state_,id);
     if(!entry)throw std::logic_error("conversion session changed");
     entry->conversion_state=static_cast<std::uint32_t>(status);
@@ -1288,6 +1685,7 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
       persist(PartitionConversionState::uncertain,!resume_id); recorded=true; accepted=true;
       return !revoked();
     },revoked,pause);
+    SESSION_TRACE("分区原地加密返回", "已暂停 " + yes_no(paused) + "；已同意 " + yes_no(accepted));
     password.clear(); check();
     if(!accepted)throw std::logic_error("conversion returned without consent");
     persist(paused ? PartitionConversionState::paused : PartitionConversionState::normal,false);
@@ -1297,8 +1695,12 @@ bool CardLoginMountSessionCore::convert_partition(const volume::PartitionCandida
       if(revoked()) {unmount_container_impl(id,true); check();}
     }
     if(!paused && runtime_.creation_feedback)runtime_.creation_feedback(5,100,find_by_id(state_,id)->drive_letter);
+    if (const auto* entry = find_by_id(state_, id)) SESSION_TRACE("分区原地加密结束", container_text(*entry));
     return paused;
   } catch (...) {
+    SESSION_TRACE_FAILURE("分区原地加密失败", "已写入记录 " + yes_no(recorded) +
+                                                "；已同意 " + yes_no(accepted) +
+                                                "；已请求确认 " + yes_no(requested));
     if(!recorded)std::erase_if(state_.containers,[id](const auto& entry){return entry.id==id;});
     throw;
   }
@@ -1325,6 +1727,9 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
   std::uint32_t sequence{};
   const auto insertion = prepend_container_index_partition(key.bytes(), index, identity,
       PartitionConversionState::normal, &sequence);
+  SESSION_TRACE("开始创建分区容器", candidate_text(target) + "；隐藏卷 " +
+      (decoy ? bytes_text(hidden_bytes) : std::string("无")) + "；索引写入结果 " +
+      std::to_string(static_cast<int>(insertion)) + "；序号 " + std::to_string(sequence));
   if (insertion != ContainerIndexWriteV1::added) throw std::runtime_error("partition index unavailable or already recorded");
   key.clear();
   // Allocate the session row before irreversible work, but remove it on failure.
@@ -1337,6 +1742,7 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
       // A later cancellation may leave an unmounted record, never a lost volume.
       runtime_.write_container_index(index);
       recorded = true;
+      SESSION_TRACE("分区身份已写入索引", partition_text(identity));
       return true;
     }, hidden_bytes, decoy);
     if (decoy) {
@@ -1354,6 +1760,7 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
       } catch (const std::system_error& error) {
         if (error.code() != volume_creation::make_error_code(
                 volume_creation::CreationError::operation_cancelled)) throw;
+        SESSION_TRACE("数据写完后收到的取消请求已忽略", partition_text(identity));
       }
     }
     const auto revoked = [this] {
@@ -1365,17 +1772,24 @@ std::uint32_t CardLoginMountSessionCore::create_partition(
               volume_creation::CreationError::mount_failed),
           "partition was created but not mounted");
     };
-    if (revoked()) throw created_unmounted();
+    if (revoked()) {
+      SESSION_TRACE("分区写完后安全卡已撤销，不挂载", partition_text(identity));
+      throw created_unmounted();
+    }
     mount_adopted_container(id);
     if (revoked()) {
       // Removal can arrive inside the driver mount. Track the mount first so
       // failed cleanup remains visible to the deferred card-removal retry.
+      SESSION_TRACE("挂载期间安全卡已撤销，卸下分区", partition_text(identity));
       unmount_container_impl(id, true);
       throw created_unmounted();
     }
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, find_by_id(state_, id)->drive_letter);
+    if (const auto* entry = find_by_id(state_, id)) SESSION_TRACE("分区容器创建完成", container_text(*entry));
     return id;
   } catch (...) {
+    SESSION_TRACE_FAILURE("创建分区容器失败", "索引记录已写入 " + yes_no(recorded) +
+                                                "；" + partition_text(identity));
     if (!recorded) std::erase_if(state_.containers, [id](const auto& entry) { return entry.id == id; });
     throw;
   }
@@ -1412,6 +1826,8 @@ void CardLoginMountSessionCore::format_partition(
         "partition format was cancelled");
   };
   check();
+  SESSION_TRACE("开始格式化分区", candidate_text(target) + "；隐藏卷 " +
+      (decoy ? bytes_text(hidden_bytes) : std::string("无")));
   auto password = decoy ? runtime_.derive_container_password(*decoy, authentication_.root_secret_, layout_.container_b.salt) : derive_standard_password();
   if (password.size() != security::kKdfV1OutputSize) {
     throw std::logic_error("partition password derivation returned an invalid size");
@@ -1425,15 +1841,24 @@ void CardLoginMountSessionCore::format_partition(
     try {
       accepted = confirmation(snapshot) && !cancelled();
     } catch (...) {
+      SESSION_TRACE_FAILURE("擦除确认回调失败", "");
       accepted = false;
     }
+    SESSION_TRACE("擦除确认结果", "已同意 " + yes_no(accepted));
     return accepted;
   };
-  if (decoy) {
-    const auto& inner = hidden_container_password();
-    if (inner.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition inner key");
-    runtime_.format_partition_pair(snapshot, hidden_bytes, password, inner, confirm, cancelled);
-  } else runtime_.format_partition(snapshot, password, confirm, cancelled);
+  try {
+    if (decoy) {
+      const auto& inner = hidden_container_password();
+      if (inner.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition inner key");
+      runtime_.format_partition_pair(snapshot, hidden_bytes, password, inner, confirm, cancelled);
+    } else runtime_.format_partition(snapshot, password, confirm, cancelled);
+  } catch (...) {
+    SESSION_TRACE_FAILURE("格式化分区失败", "已请求确认 " + yes_no(requested) +
+                                              "；已同意 " + yes_no(accepted));
+    throw;
+  }
+  SESSION_TRACE("格式化分区返回", "已同意 " + yes_no(accepted));
   password.clear();
   // A normal return means the ciphertext is on the partition. Checking the
   // cancel flag again would report a finished write as if it had been aborted.
@@ -1464,6 +1889,8 @@ std::uint32_t CardLoginMountSessionCore::create_container(
   }
 
   const std::wstring container_name = file_name_of(path);
+  SESSION_TRACE("开始创建文件容器", "路径 " + wide_text(path) + "；暂存路径 " +
+                                        wide_text(staging_path) + "；容量 " + bytes_text(size_bytes));
   security::SecureBuffer volume_password;
   bool staging_owned = false;
   bool published = false;
@@ -1473,11 +1900,13 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     volume_password = derive_standard_password();
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
+    SESSION_TRACE("暂存容器已生成", "暂存路径 " + wide_text(staging_path));
     throw_if_creation_cancelled(runtime_);
     if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == size_bytes) runtime_.creation_feedback(2, 100, 0);
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     runtime_.publish_created(staging_path, path);
     published = true;
+    SESSION_TRACE("容器已发布", "路径 " + wide_text(path));
     record_operation(OperationKind::container_created,
                      OperationOutcome::succeeded,
                      container_name);
@@ -1485,16 +1914,19 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     // before mounting, or a mount failure leaves a real file off the list.
     const std::uint32_t id = retain_published_container(state_, path, false);
     listed = true;
+    SESSION_TRACE("容器已收录", "容器 #" + std::to_string(id));
     remember_container_path(path);
 
-    const wchar_t drive_letter = settled_drive_letter(
-        runtime_.mount_created(path,
-                               volume_password,
-                               {.drive_letter = reserve_drive_letter(),
-                                .prf = volume::Pkcs5Prf::sha512,
-                                .pim = 0,
-                                .read_only = false,
-                                .notify_shell = false}));
+    const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
+                                       .prf = volume::Pkcs5Prf::sha512,
+                                       .pim = 0,
+                                       .read_only = false,
+                                       .notify_shell = false};
+    SESSION_TRACE("挂载新建容器", "路径 " + wide_text(path) + "；" + options_text(options));
+    const volume::MountResult mount_result =
+        runtime_.mount_created(path, volume_password, options);
+    SESSION_TRACE("新建容器挂载返回", mount_result_text(mount_result));
+    const wchar_t drive_letter = settled_drive_letter(mount_result);
     record_created_mount(state_, id, drive_letter);
     mounted = true;
     record_operation(OperationKind::container_mounted,
@@ -1504,8 +1936,12 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
     volume_password.clear();
     runtime_.notify_mounted(drive_letter);
+    if (const auto* entry = find_by_id(state_, id)) SESSION_TRACE("文件容器创建完成", container_text(*entry));
     return id;
   } catch (...) {
+    SESSION_TRACE_FAILURE("创建文件容器失败", "路径 " + wide_text(path) + "；暂存已生成 " +
+                                                yes_no(staging_owned) + "；已发布 " + yes_no(published) +
+                                                "；已收录 " + yes_no(listed) + "；已挂载 " + yes_no(mounted));
     volume_password.clear();
     if (!published) {
       record_operation(OperationKind::container_created,
@@ -1563,6 +1999,11 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                             "container creation target already exists");
   }
   const std::wstring container_name = file_name_of(path);
+  SESSION_TRACE("开始创建含隐藏卷的文件容器", "路径 " + wide_text(path) + "；暂存路径 " +
+                                                  wide_text(staging_path) + "；外层容量 " +
+                                                  bytes_text(outer_size_bytes) + "；隐藏卷容量 " +
+                                                  bytes_text(hidden_size_bytes) + "；诱饵口令长度 " +
+                                                  std::to_string(decoy_password_utf8.size()) + " 字节");
 
   // The password the caller is logged in under opens the hidden volume; the
   // password set here opens the outer one. The session never decides which of
@@ -1578,6 +2019,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
         runtime_.derive_container_password(decoy_password_utf8,
                                            authentication_.root_secret_,
                                            layout_.container_b.salt);
+    SESSION_TRACE("外层卷派生完成", "输出长度 " + std::to_string(outer_password.size()) + " 字节");
     const security::SecureBuffer& hidden_password =
         hidden_container_password();
     runtime_.create_with_hidden(staging_path,
@@ -1586,11 +2028,13 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                                 outer_password,
                                 hidden_password);
     staging_owned = true;
+    SESSION_TRACE("暂存容器已生成", "暂存路径 " + wide_text(staging_path));
     throw_if_creation_cancelled(runtime_);
     if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == outer_size_bytes) runtime_.creation_feedback(2, 100, 0);
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
     runtime_.publish_created(staging_path, path);
     published = true;
+    SESSION_TRACE("容器已发布", "路径 " + wide_text(path));
     record_operation(OperationKind::container_created,
                      OperationOutcome::succeeded,
                      container_name);
@@ -1599,16 +2043,19 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     // volume with the login derivation.
     const std::uint32_t id = retain_published_container(state_, path, true);
     listed = true;
+    SESSION_TRACE("容器已收录", "容器 #" + std::to_string(id));
     remember_container_path(path);
 
-    const wchar_t drive_letter = settled_drive_letter(
-        runtime_.mount_created(path,
-                               hidden_password,
-                               {.drive_letter = reserve_drive_letter(),
-                                .prf = volume::Pkcs5Prf::sha512,
-                                .pim = 0,
-                                .read_only = false,
-                                .notify_shell = false}));
+    const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
+                                       .prf = volume::Pkcs5Prf::sha512,
+                                       .pim = 0,
+                                       .read_only = false,
+                                       .notify_shell = false};
+    SESSION_TRACE("以登录派生挂载新建容器", "路径 " + wide_text(path) + "；" + options_text(options));
+    const volume::MountResult mount_result =
+        runtime_.mount_created(path, hidden_password, options);
+    SESSION_TRACE("新建容器挂载返回", mount_result_text(mount_result));
+    const wchar_t drive_letter = settled_drive_letter(mount_result);
     record_created_mount(state_, id, drive_letter);
     mounted = true;
     record_operation(OperationKind::container_mounted,
@@ -1618,8 +2065,12 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     if (runtime_.creation_feedback) runtime_.creation_feedback(5, 100, drive_letter);
     outer_password.clear();
     runtime_.notify_mounted(drive_letter);
+    if (const auto* entry = find_by_id(state_, id)) SESSION_TRACE("含隐藏卷的文件容器创建完成", container_text(*entry));
     return id;
   } catch (...) {
+    SESSION_TRACE_FAILURE("创建含隐藏卷的文件容器失败", "路径 " + wide_text(path) + "；暂存已生成 " +
+                                                        yes_no(staging_owned) + "；已发布 " + yes_no(published) +
+                                                        "；已收录 " + yes_no(listed) + "；已挂载 " + yes_no(mounted));
     outer_password.clear();
     if (!published) {
       record_operation(OperationKind::container_created,
@@ -1686,6 +2137,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   // the one the driver reported, or a wrong-type mount would be left behind
   // while a letter that holds nothing is the one asked to let go of it.
   wchar_t drive_letter{};
+  const char* const mode_text = mode == MaintenanceMount::open ? "打开维护" : "试挂";
   try {
     const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
          .prf = volume::Pkcs5Prf::sha512,
@@ -1694,11 +2146,16 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
          .notify_shell = false,
          .hidden_volume_protection =
              volume::HiddenVolumeProtection{.password = &hidden_password}};
-    drive_letter = settled_drive_letter(entry.partition
+    SESSION_TRACE(std::string("带保护挂载外层卷（") + mode_text + "）",
+                  container_text(entry) + "；" + options_text(options));
+    const volume::MountResult mount_result = entry.partition
         ? runtime_.mount_partition(*entry.partition, outer_password, options)
-        : runtime_.mount_created(entry.path, outer_password, options));
+        : runtime_.mount_created(entry.path, outer_password, options);
+    SESSION_TRACE("带保护挂载返回", mount_result_text(mount_result));
+    drive_letter = settled_drive_letter(mount_result);
   } catch (...) {
     // Every driver rejection means the same thing to everyone above.
+    SESSION_TRACE_FAILURE(std::string("带保护挂载外层卷失败（") + mode_text + "）", container_text(entry));
     throw refuse();
   }
 
@@ -1706,10 +2163,14 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   // so anything else means the wrong volume came up -- the hidden one included.
   const std::optional<volume::VolumeType> type =
       runtime_.mounted_volume_type(drive_letter);
+  SESSION_TRACE("维护挂载的卷类型", "盘符 " + drive_text(drive_letter) + "；类型 " +
+      (type ? std::to_string(static_cast<int>(*type)) : std::string("无")));
   if (!type.has_value() || *type != volume::VolumeType::outer) {
     try {
       static_cast<void>(runtime_.unmount_forced(drive_letter));
+      SESSION_TRACE("类型不符，已强制卸下", "盘符 " + drive_text(drive_letter));
     } catch (...) {
+      SESSION_TRACE_FAILURE("类型不符后强制卸下失败", "盘符 " + drive_text(drive_letter));
       // Still this session's to release later, so it is recorded rather than
       // dropped. The derivation flags stay untouched: nothing was established.
       entry.mounted = true;
@@ -1727,8 +2188,12 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
         throw std::runtime_error("maintenance mount identity unavailable");
     }
   } catch (...) {
+    SESSION_TRACE_FAILURE("维护挂载身份无法确认", "盘符 " + drive_text(drive_letter));
     try { static_cast<void>(runtime_.unmount_forced(drive_letter)); }
-    catch (...) { entry.mounted = true; entry.drive_letter = drive_letter; }
+    catch (...) {
+      SESSION_TRACE_FAILURE("身份无法确认后强制卸下失败", "盘符 " + drive_text(drive_letter));
+      entry.mounted = true; entry.drive_letter = drive_letter;
+    }
     throw refuse();
   }
   entry.maintenance_identity = std::move(identity);
@@ -1741,6 +2206,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   entry.release_first = true;
   entry.derivation_known = true;
   entry.maintenance = mode == MaintenanceMount::open;
+  SESSION_TRACE(std::string("带保护挂载完成（") + mode_text + "）", container_text(entry));
   if (mode == MaintenanceMount::open) {
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -1767,6 +2233,7 @@ wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
     state_.decoy_outer_password = std::move(outer_password);
     return drive_letter;
   } catch (...) {
+    SESSION_TRACE_FAILURE("打开诱饵维护失败", container_text(entry));
     outer_password.clear();
     if (switched) runtime_.end_measurements();
     throw;
@@ -1814,21 +2281,31 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
           static_cast<void>(runtime_.unmount_forced(drive_letter));
           mark_released(entry);
           survey.maintainable.push_back(entry.id);
+          SESSION_TRACE("搜索：可维护", container_text(entry));
         } catch (const DecoyMaintenanceRefused&) {
           // Not one this password maintains, which is all anyone learns.
+          SESSION_TRACE("搜索：不可维护", container_text(entry));
         } catch (...) {
           // A container that would not release, or a letter that could not be
           // taken: nothing was learned about it, and the walk goes on.
+          SESSION_TRACE_FAILURE("搜索：无法判断", container_text(entry));
           ++survey.unreachable;
         }
+      } else {
+        SESSION_TRACE("搜索：跳过标准派生容器", container_text(entry));
       }
       ++done;
       if (progress) progress(done, total);
     }
   } catch (...) {
+    SESSION_TRACE_FAILURE("诱饵搜索失败", "");
     outer_password.clear();
     throw;
   }
+  SESSION_TRACE("诱饵搜索结束", "可维护 " + std::to_string(survey.maintainable.size()) +
+                                    "；无法判断 " + std::to_string(survey.unreachable) +
+                                    "；已取消 " + yes_no(survey.cancelled) +
+                                    "；总数 " + std::to_string(total));
 
   // Keeping it is what spares the next page a second prompt; keeping it after
   // finding nothing would only be holding a secret for no one.
@@ -1863,6 +2340,7 @@ DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
       if (runtime_.mount_identity(entry->drive_letter) != *entry->maintenance_identity)
         throw std::runtime_error("maintenance mount identity changed");
     } catch (...) {
+      SESSION_TRACE_FAILURE("维护卷身份校验失败", container_text(*entry));
       runtime_.end_measurements();
       throw;
     }
@@ -1875,6 +2353,8 @@ DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
       entry->path, *entry->maintenance_identity, state_.decoy_outer_password,
       hidden_container_password());
   verify_identity();
+  SESSION_TRACE("维护卷空间", container_text(*entry) + "；总量 " + bytes_text(space.total_bytes) +
+                                  "；剩余 " + bytes_text(space.free_bytes) + "；安全可写 " + bytes_text(safe));
   return {.total_bytes = space.total_bytes,
           .free_bytes = space.free_bytes,
           .safe_free_bytes = safe};
@@ -1907,6 +2387,7 @@ void CardLoginMountSessionCore::end_decoy_maintenance(const std::uint32_t id) {
   }
   // The deliberate unmount, not the forced one: ending maintenance is not an
   // emergency, and a volume still in use is the user's to settle.
+  SESSION_TRACE("结束诱饵维护", container_text(*entry));
   unmount_container_impl(id, false);
 }
 
@@ -1953,10 +2434,15 @@ void CardLoginMountSessionCore::import_external_entry(
         throw std::runtime_error("maintenance identity changed during upload");
     };
     verify();
+    SESSION_TRACE("开始导入到维护卷", container_text(*entry) + "；来源 " + wide_text(absolute_source) +
+                                          "；目标 " + wide_text(destination));
     runtime_.import_protected(entry->path, *entry->maintenance_identity, state_.decoy_outer_password,
         hidden_container_password(), absolute_source, destination, cancelled, progress);
     verify();
+    SESSION_TRACE("导入到维护卷完成", "来源 " + wide_text(absolute_source));
   } catch (...) {
+    SESSION_TRACE_FAILURE("导入到维护卷失败", container_text(*entry) + "；来源 " +
+                                                wide_text(absolute_source));
     entry->maintenance_recovery_required = true;
     runtime_.end_imports();
     throw;
@@ -1986,6 +2472,7 @@ wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
     return mount_outer_for_maintenance(*entry, state_.decoy_outer_password,
                                        MaintenanceMount::open);
   } catch (...) {
+    SESSION_TRACE_FAILURE("打开已搜索的维护卷失败", container_text(*entry));
     if (switched) runtime_.end_measurements();
     throw;
   }
@@ -1996,6 +2483,7 @@ bool CardLoginMountSessionCore::release_other_maintenance(
   bool released = false;
   for (const SessionContainer& container : state_.containers) {
     if (container.id == next_id || !container.maintenance) continue;
+    SESSION_TRACE("切换维护卷，先卸下原维护卷", container_text(container));
     unmount_container_impl(container.id, false, false);
     released = true;
   }
@@ -2014,13 +2502,16 @@ bool CardLoginMountSessionCore::verify_decoy_maintenance(
     drive_letter = mount_outer_for_maintenance(entry, outer_password,
                                                MaintenanceMount::trial);
   } catch (const DecoyMaintenanceRefused&) {
+    SESSION_TRACE("验证诱饵口令：不匹配", container_text(entry));
     outer_password.clear();
     return false;
   } catch (...) {
+    SESSION_TRACE_FAILURE("验证诱饵口令失败", container_text(entry));
     outer_password.clear();
     throw;
   }
   outer_password.clear();
+  SESSION_TRACE("验证诱饵口令：匹配", container_text(entry));
 
   // Nothing stays up on the strength of having asked. A volume that will not
   // come down stays recorded as mounted and the failure reaches the caller.
@@ -2037,6 +2528,7 @@ void CardLoginMountSessionCore::complete_initialization(security::SecureBuffer p
   // Move the exact normalized password confirmed before card initialization.
   // No second card authentication, key derivation, or automatic mount occurs.
   state_.login_password = std::move(password_utf8);
+  SESSION_TRACE("初始化交接完成", "登录口令长度 " + std::to_string(state_.login_password.size()) + " 字节");
   clear_operation_history();
   record_operation(OperationKind::session_opened, OperationOutcome::succeeded);
 }
@@ -2047,6 +2539,9 @@ security::SecureBuffer CardLoginMountSessionCore::copy_session_password() {
 }
 
 void CardLoginMountSessionCore::release_session_secrets() noexcept {
+  SESSION_TRACE("释放会话秘密", "登录口令 " + yes_no(!state_.login_password.empty()) +
+                                    "；登录派生 " + yes_no(!state_.hidden_container_password.empty()) +
+                                    "；诱饵派生 " + yes_no(!state_.decoy_outer_password.empty()));
   for (auto& container : state_.containers) container.maintenance_identity.reset();
   state_.hidden_container_password = security::SecureBuffer();
   state_.decoy_outer_password = security::SecureBuffer();
@@ -2067,7 +2562,11 @@ void CardLoginMountSessionCore::mount_adopted_container(
     throw std::invalid_argument(
         "no container is adopted under that identifier");
   }
-  if (entry->mounted) return;
+  SESSION_TRACE("挂载已收录的容器", container_text(*entry));
+  if (entry->mounted) {
+    SESSION_TRACE("容器已挂载，无需再挂", container_text(*entry));
+    return;
+  }
   if (entry->conversion_state) throw std::logic_error("incomplete conversion cannot mount");
   if (entry->partition) {
     const wchar_t drive = reserve_drive_letter();
@@ -2083,18 +2582,31 @@ void CardLoginMountSessionCore::mount_adopted_container(
     if (!login_derived) {
       auto password = derive_standard_password();
       if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
+      SESSION_TRACE("以标准派生挂载分区", options_text(options));
       try { mounted = runtime_.mount_partition(*entry->partition, password, options); }
       catch (const std::system_error& error) {
+        SESSION_TRACE_FAILURE("标准派生挂载分区失败", container_text(*entry));
         if (entry->derivation_known || state_.login_password.empty() ||
             error.code() != volume::make_error_code(volume::DriverError::authentication_failed)) throw;
         login_derived = true;
+        SESSION_TRACE("标准派生被拒，改用登录派生挂载分区", "");
+      } catch (...) {
+        SESSION_TRACE_FAILURE("标准派生挂载分区失败", container_text(*entry));
+        throw;
       }
     }
     if (login_derived) {
       const auto& password = hidden_container_password();
       if (password.size() != security::kKdfV1OutputSize) throw std::logic_error("invalid partition password");
-      mounted = runtime_.mount_partition(*entry->partition, password, options);
+      SESSION_TRACE("以登录派生挂载分区", options_text(options));
+      try {
+        mounted = runtime_.mount_partition(*entry->partition, password, options);
+      } catch (...) {
+        SESSION_TRACE_FAILURE("登录派生挂载分区失败", container_text(*entry));
+        throw;
+      }
     }
+    SESSION_TRACE("分区挂载返回", mount_result_text(mounted));
     const wchar_t settled = settled_drive_letter(mounted);
     entry->drive_letter = settled;
     entry->mounted = true;
@@ -2102,6 +2614,7 @@ void CardLoginMountSessionCore::mount_adopted_container(
     entry->derivation_known = true;
     record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, entry->name, settled);
     runtime_.notify_mounted(settled);
+    SESSION_TRACE("分区已挂载", container_text(*entry));
     return;
   }
   const std::wstring container_name = entry->name;
@@ -2109,6 +2622,7 @@ void CardLoginMountSessionCore::mount_adopted_container(
   bool mounted = false;
   try {
     if (!runtime_.container_exists(entry->path)) {
+      SESSION_TRACE("容器文件已不存在", "路径 " + wide_text(entry->path));
       throw std::system_error(
           std::make_error_code(std::errc::no_such_file_or_directory),
           "adopted container file is no longer present");
@@ -2132,14 +2646,17 @@ void CardLoginMountSessionCore::mount_adopted_container(
       if (!hidden_volume) standard_password = derive_standard_password();
       const security::SecureBuffer& volume_password =
           hidden_volume ? hidden_container_password() : standard_password;
-      drive_letter = settled_drive_letter(
-          runtime_.mount_created(entry->path,
-                                 volume_password,
-                                 {.drive_letter = reserve_drive_letter(),
-                                  .prf = volume::Pkcs5Prf::sha512,
-                                  .pim = 0,
-                                  .read_only = false,
-                                  .notify_shell = false}));
+      const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
+                                         .prf = volume::Pkcs5Prf::sha512,
+                                         .pim = 0,
+                                         .read_only = false,
+                                         .notify_shell = false};
+      SESSION_TRACE(hidden_volume ? "以登录派生挂载文件容器" : "以标准派生挂载文件容器",
+                    options_text(options));
+      const volume::MountResult mount_result =
+          runtime_.mount_created(entry->path, volume_password, options);
+      SESSION_TRACE("文件容器挂载返回", mount_result_text(mount_result));
+      drive_letter = settled_drive_letter(mount_result);
     }
     mounted = true;
     record_operation(OperationKind::container_mounted,
@@ -2152,7 +2669,9 @@ void CardLoginMountSessionCore::mount_adopted_container(
     entry->release_first = hidden_volume;
     entry->derivation_known = true;
     runtime_.notify_mounted(drive_letter);
+    SESSION_TRACE("文件容器已挂载", container_text(*entry));
   } catch (...) {
+    SESSION_TRACE_FAILURE("挂载文件容器失败", container_text(*entry));
     standard_password.clear();
     if (!mounted) {
       record_operation(OperationKind::container_mounted,
@@ -2181,6 +2700,7 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
           std::make_error_code(std::errc::no_such_file_or_directory),
           "container file is unavailable");
     }
+    SESSION_TRACE("按路径挂载容器", "路径 " + wide_text(path));
     const ProbedMount probed = mount_with_either_derivation(path);
     mounted = true;
     record_operation(OperationKind::container_mounted,
@@ -2192,8 +2712,10 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
                                  .id;
     remember_container_path(path);
     runtime_.notify_mounted(probed.drive_letter);
+    if (const auto* entry = find_by_id(state_, id)) SESSION_TRACE("按路径挂载完成", container_text(*entry));
     return id;
   } catch (...) {
+    SESSION_TRACE_FAILURE("按路径挂载失败", "路径 " + wide_text(path));
     if (!mounted) {
       record_operation(OperationKind::container_mounted,
                        OperationOutcome::failed,
@@ -2224,6 +2746,7 @@ std::uint32_t CardLoginMountSessionCore::adopt_container(
   // about the container -- which is nothing, until something mounts it.
   const std::uint32_t id =
       adopt(state_, path, wchar_t{}, false, false, false, true).id;
+  SESSION_TRACE("导入容器", "容器 #" + std::to_string(id) + "；路径 " + wide_text(path));
   remember_container_path(path);
   return id;
 }
@@ -2235,6 +2758,7 @@ bool CardLoginMountSessionCore::mounting_imported_containers() {
 void CardLoginMountSessionCore::set_mounting_imported_containers(
     const bool mount) {
   runtime_.set_mount_imported_containers(mount);
+  SESSION_TRACE("导入后自动挂载设置已更改", "开启 " + yes_no(mount));
 }
 
 void CardLoginMountSessionCore::unmount_container(const std::uint32_t id) {
@@ -2246,6 +2770,7 @@ void CardLoginMountSessionCore::force_unmount_container(const std::uint32_t id) 
 }
 
 void CardLoginMountSessionCore::force_unmount_user_active() {
+  SESSION_TRACE("强制卸载全部容器", "");
   for (const bool release_first : {true, false}) {
     for (const SessionContainer& container : state_.containers) {
       if (container.mounted && container.release_first == release_first)
@@ -2262,9 +2787,16 @@ void CardLoginMountSessionCore::unmount_container_impl(
     if (!container.mounted) return;
     const wchar_t drive_letter = container.drive_letter;
     const bool ended_maintenance = container.maintenance;
+    SESSION_TRACE(allow_force ? "强制卸载容器" : "卸载容器", container_text(container));
     try {
-      if (allow_force) static_cast<void>(runtime_.unmount_forced(drive_letter));
-      else static_cast<void>(runtime_.unmount(drive_letter));
+      if (allow_force) {
+        const volume::UnmountEscalationResult result = runtime_.unmount_forced(drive_letter);
+        SESSION_TRACE("卸载返回", "已升级为强制 " + yes_no(result.forced) + "；" +
+                                      unmount_result_text(result.result));
+      } else {
+        const volume::UnmountResult result = runtime_.unmount(drive_letter);
+        SESSION_TRACE("卸载返回", unmount_result_text(result));
+      }
       mark_released(container);
       if (ended_maintenance) runtime_.end_imports();
       if (ended_maintenance && end_measurements) runtime_.end_measurements();
@@ -2272,8 +2804,11 @@ void CardLoginMountSessionCore::unmount_container_impl(
                        OperationOutcome::succeeded,
                        container.name,
                        drive_letter);
+      SESSION_TRACE("容器已卸载", container_text(container) + "；原盘符 " + drive_text(drive_letter) +
+                                    "；结束维护任务 " + yes_no(ended_maintenance));
       return;
     } catch (...) {
+      SESSION_TRACE_FAILURE(allow_force ? "强制卸载容器失败" : "卸载容器失败", container_text(container));
       record_operation(OperationKind::container_unmounted,
                        OperationOutcome::failed,
                        container.name,
@@ -2295,10 +2830,13 @@ void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
     }
     // The path is copied out before the entry goes, because forgetting it is
     // what the caller asked for and the entry is where it is written down.
+    SESSION_TRACE("从列表移除容器", container_text(*entry));
     if (entry->partition) {
       auto key = container_index_key();
       auto index = runtime_.read_container_index();
-      if (remove_container_index_partition(key.bytes(), index, *entry->partition)) runtime_.write_container_index(index);
+      const bool removed = remove_container_index_partition(key.bytes(), index, *entry->partition);
+      SESSION_TRACE("从容器索引移除分区", "找到 " + yes_no(removed));
+      if (removed) runtime_.write_container_index(index);
       state_.containers.erase(entry);
       return;
     }
@@ -2332,16 +2870,20 @@ volume::VolumeDirectoryListing
 CardLoginMountSessionCore::list_container_directory(
     const std::uint32_t id, const std::wstring_view relative_directory) {
   const wchar_t drive_letter = mounted_drive_letter(id);
-  return runtime_.list_directory(
-      volume::resolve_volume_entry_path(drive_letter, relative_directory));
+  const std::wstring directory =
+      volume::resolve_volume_entry_path(drive_letter, relative_directory);
+  SESSION_TRACE("列出目录", "容器 #" + std::to_string(id) + "；目录 " + wide_text(directory));
+  return runtime_.list_directory(directory);
 }
 
 void CardLoginMountSessionCore::delete_container_entry(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name) {
   const wchar_t drive_letter = mounted_drive_letter(id);
-  runtime_.delete_entry(volume::resolve_volume_child_path(
-      drive_letter, relative_directory, name));
+  const std::wstring target =
+      volume::resolve_volume_child_path(drive_letter, relative_directory, name);
+  SESSION_TRACE("删除条目", "容器 #" + std::to_string(id) + "；路径 " + wide_text(target));
+  runtime_.delete_entry(target);
 }
 
 void CardLoginMountSessionCore::rename_container_entry(
@@ -2354,6 +2896,8 @@ void CardLoginMountSessionCore::rename_container_entry(
       drive_letter, relative_directory, name);
   const std::wstring destination = volume::resolve_volume_child_path(
       drive_letter, relative_directory, new_name);
+  SESSION_TRACE("重命名条目", "容器 #" + std::to_string(id) + "；来源 " + wide_text(source) +
+                                  "；目标 " + wide_text(destination));
   runtime_.move_entry(source, destination);
 }
 
@@ -2361,8 +2905,10 @@ void CardLoginMountSessionCore::create_container_directory(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name) {
   const wchar_t drive_letter = mounted_drive_letter(id);
-  runtime_.create_directory(volume::resolve_volume_child_path(
-      drive_letter, relative_directory, name));
+  const std::wstring target =
+      volume::resolve_volume_child_path(drive_letter, relative_directory, name);
+  SESSION_TRACE("新建目录", "容器 #" + std::to_string(id) + "；路径 " + wide_text(target));
+  runtime_.create_directory(target);
 }
 
 void CardLoginMountSessionCore::move_container_entry(
@@ -2378,6 +2924,9 @@ void CardLoginMountSessionCore::move_container_entry(
       destination_drive, destination_relative_directory, name);
   // One identifier is one volume, and this session never puts two containers
   // on one letter, so the identifiers settle which move this is.
+  SESSION_TRACE("移动条目", "来源容器 #" + std::to_string(source_id) + "；来源 " + wide_text(source) +
+                                "；目标容器 #" + std::to_string(destination_id) + "；目标 " +
+                                wide_text(destination) + "；跨卷复制 " + yes_no(source_id != destination_id));
   if (source_id == destination_id) {
     runtime_.move_entry(source, destination);
     return;
@@ -2392,12 +2941,13 @@ void CardLoginMountSessionCore::copy_container_entry(
     const std::wstring_view destination_relative_directory) {
   const wchar_t source_drive = mounted_drive_letter(source_id);
   const wchar_t destination_drive = mounted_drive_letter(destination_id);
-  runtime_.copy_entry(
-      volume::resolve_volume_child_path(source_drive,
-                                        source_relative_directory, name),
-      volume::resolve_volume_child_path(destination_drive,
-                                        destination_relative_directory, name),
-      {});
+  const std::wstring source = volume::resolve_volume_child_path(
+      source_drive, source_relative_directory, name);
+  const std::wstring destination = volume::resolve_volume_child_path(
+      destination_drive, destination_relative_directory, name);
+  SESSION_TRACE("复制条目", "来源容器 #" + std::to_string(source_id) + "；来源 " + wide_text(source) +
+                                "；目标容器 #" + std::to_string(destination_id) + "；目标 " + wide_text(destination));
+  runtime_.copy_entry(source, destination, {});
 }
 
 void CardLoginMountSessionCore::export_container_entry(
@@ -2429,9 +2979,11 @@ void CardLoginMountSessionCore::export_container_entry(
   // 🔴 No `record_operation` here, and none below it. The operation history is
   // a closed schema with no export in it, and Q-04 makes leaving it that way
   // this product's obligation.
-  runtime_.copy_entry(
-      volume::resolve_volume_child_path(drive_letter, relative_directory, name),
-      destination, {});
+  const std::wstring source =
+      volume::resolve_volume_child_path(drive_letter, relative_directory, name);
+  SESSION_TRACE("导出条目", "容器 #" + std::to_string(id) + "；来源 " + wide_text(source) +
+                                "；目标 " + wide_text(destination));
+  runtime_.copy_entry(source, destination, {});
 }
 
 void CardLoginMountSessionCore::export_container_file(
@@ -2461,10 +3013,10 @@ void CardLoginMountSessionCore::export_container_file(
   // nothing is re-encrypted, nothing is added: what comes out is the file that
   // went in. No `record_operation` here either -- a migration is an export,
   // and Q-04 says an export leaves no trace of itself behind.
-  runtime_.copy_entry(entry->path,
-                      volume::resolve_exported_entry_path(
-                          absolute_destination_directory, entry->name),
-                      {});
+  const std::wstring destination = volume::resolve_exported_entry_path(
+      absolute_destination_directory, entry->name);
+  SESSION_TRACE("导出容器文件", container_text(*entry) + "；目标 " + wide_text(destination));
+  runtime_.copy_entry(entry->path, destination, {});
 }
 
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
@@ -2481,6 +3033,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
       try {
         size = runtime_.mounted_volume_size(container.drive_letter);
       } catch (...) {
+        SESSION_TRACE_FAILURE("查询已挂载卷失败", container_text(container));
         answered = false;
       }
     }
@@ -2488,6 +3041,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
       // The driver answered and nothing is on that letter any more: the
       // volume was released outside this application. Say so rather than
       // keep a row that can neither be unmounted nor removed.
+      SESSION_TRACE("盘符上已无卷，视为已在应用外卸载", container_text(container));
       const bool ended_maintenance = container.maintenance;
       mark_released(container);
       if (ended_maintenance) {
@@ -2510,6 +3064,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
     // Either the query failed or it reported no capacity. The mount is not
     // disproved, so the row stays mounted and can still be unmounted.
     const bool unavailable = !size.has_value() || *size == 0;
+    if (unavailable && answered) SESSION_TRACE("已挂载卷报告容量为 0", container_text(container));
     result.push_back({.id = container.id,
                       .name = container.name,
                       .mounted = true,
@@ -2558,8 +3113,10 @@ void CardLoginMountSessionCore::unmount_active() {
       }
       const wchar_t drive_letter = container.drive_letter;
       const bool ended_maintenance = container.maintenance;
+      SESSION_TRACE("全部卸载：卸载容器", container_text(container));
       try {
-        static_cast<void>(runtime_.unmount(drive_letter));
+        const volume::UnmountResult result = runtime_.unmount(drive_letter);
+        SESSION_TRACE("全部卸载：卸载返回", unmount_result_text(result));
         mark_released(container);
         if (ended_maintenance) { runtime_.end_imports(); runtime_.end_measurements(); }
         record_operation(OperationKind::container_unmounted,
@@ -2567,6 +3124,7 @@ void CardLoginMountSessionCore::unmount_active() {
                          container.name,
                          drive_letter);
       } catch (...) {
+        SESSION_TRACE_FAILURE("全部卸载：卸载容器失败", container_text(container));
         record_operation(OperationKind::container_unmounted,
                          OperationOutcome::failed,
                          container.name,
@@ -2583,6 +3141,7 @@ bool CardLoginMountSessionCore::force_unmount_active() {
   // secret back. One volume that will not leave must not leave the others
   // mounted. A deliberate unmount keeps the secrets, which is what lets the
   // user mount a container again in the same session.
+  SESSION_TRACE("拔卡清理开始", "已挂载容器 " + yes_no(state_.mounted()));
   release_session_secrets();
   clear_operation_history();
   bool forced = false;
@@ -2593,16 +3152,22 @@ bool CardLoginMountSessionCore::force_unmount_active() {
         continue;
       }
       volume::UnmountEscalationResult result{};
+      SESSION_TRACE("拔卡清理：卸载容器", container_text(container));
       try {
         result = runtime_.unmount_forced(container.drive_letter);
       } catch (...) {
+        SESSION_TRACE_FAILURE("拔卡清理：卸载容器失败", container_text(container));
         if (!failure) failure = std::current_exception();
         continue;
       }
+      SESSION_TRACE("拔卡清理：卸载返回", "已升级为强制 " + yes_no(result.forced) + "；" +
+                                            unmount_result_text(result.result));
       forced = result.forced || forced;
       mark_released(container);
     }
   }
+  SESSION_TRACE("拔卡清理结束", "有卷被强制卸下 " + yes_no(forced) + "；仍有卷挂着 " +
+                                    yes_no(state_.mounted()) + "；有失败 " + yes_no(static_cast<bool>(failure)));
   if (failure) std::rethrow_exception(failure);
   return forced;
 }
