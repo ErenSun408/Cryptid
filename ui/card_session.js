@@ -147,7 +147,7 @@
   // Explicit text-only surfaces. Never observe a form, input, credential
   // preview, whole dialog or whole document for its textContent.
   const pageErrorSurfaces = [
-    "dashboard-status", "card-session-status", "card-session-error", "setup-status",
+    "dashboard-status", "card-session-status", "card-session-error", "setup-status", "password-strength-description",
     "create-volume-status", "partition-status", "forgot-password-status", "reset-card-status",
     "export-confirm-status", "forget-container-status", "file-name-status", "file-list-status",
     "backup-export-status", "backup-migrate-status", "settings-window-size-status",
@@ -167,10 +167,13 @@
     try {
       for (const id of pageErrorSurfaces) {
         const element = document.getElementById(id);
+        const strengthError = id === "password-strength-description" &&
+          document.getElementById("card-session-surface").dataset.sessionState === "initialization-required" &&
+          element.closest("#password-strength").dataset.level === "invalid";
         const text = element && pageErrorVisible(element) &&
-          (element.dataset.tone === "error" || pageErrorAlwaysMarked.has(id)) ? element.textContent.trim() : "";
+          (strengthError || element.dataset.tone === "error" || pageErrorAlwaysMarked.has(id)) ? element.textContent.trim() : "";
         if (text && lastShownPageErrors.get(id) !== text) {
-          if (id.startsWith("create-container") && id.endsWith("-error")) logPageEvent(2, id, `输入校验失败；${text}`);
+          if (strengthError || (id.startsWith("create-container") && id.endsWith("-error"))) logPageEvent(2, id, `输入校验失败；${text}`);
           logShownPageError(id, text);
         }
         lastShownPageErrors.set(id, text);
@@ -185,7 +188,7 @@
   };
   const pageErrorObserver = new MutationObserver(capturePageErrors);
   pageErrorObserver.observe(document.body, {subtree: true, childList: true, characterData: true,
-    attributes: true, attributeFilter: ["data-tone", "data-result", "hidden", "class"]});
+    attributes: true, attributeFilter: ["data-tone", "data-result", "data-level", "data-session-state", "hidden", "class"]});
 
   const nativeState = Object.freeze({
     noCard: 0,
@@ -5659,6 +5662,10 @@
   };
 
   const showFileCreationFailure = async (error, accepted, fields, disk = false, previousIds = null) => {
+    const cancelled = error instanceof Error && error.message === kCreationCancelled;
+    const cleanupFailed = error instanceof Error && error.message === kCreationCleanupFailed;
+    // Read before releasing busy state, including branches with custom copy.
+    const failureCode = cancelled ? null : await readCreationFailureCode(accepted);
     try {
       await refreshNativeState();
     } catch (pageError) { logCaughtPageError("showFileCreationFailure/1", pageError);
@@ -5668,8 +5675,6 @@
     busy = false;
     render(messageForCurrentState());
     if (creationDialog.hidden || currentState !== nativeState.authenticated) return;
-    const cancelled = error instanceof Error && error.message === kCreationCancelled;
-    const cleanupFailed = error instanceof Error && error.message === kCreationCleanupFailed;
     const retry = `重试前需要重新填写${fields}。`;
     const publishedUnmounted = !disk && previousIds instanceof Set &&
       containers.some((container) => !previousIds.has(container.id) && !container.mounted);
@@ -5679,10 +5684,10 @@
     else if (publishedUnmounted) {
       failure = "容器已经创建，但挂载没有成功。它已在容器列表中，可以稍后挂载。";
     } else {
-      failure = describeCreationFailure(await readCreationFailureCode(accepted));
+      failure = describeCreationFailure(failureCode);
       if (!disk) failure += retry;
     }
-    creationStatus.textContent = failure;
+    creationStatus.textContent = cancelled ? failure : mappedPageError(failure, failureCode, creationFailureOrigin);
     creationStatus.dataset.tone = cancelled ? "cancelled" : "error";
     updateCreationAvailability();
   };
@@ -5757,7 +5762,7 @@
         const createdUnmounted = failureCode === 12 &&
           containers.some((container) => !previousIds.has(container.id) && !container.mounted);
         creationStatus.textContent = createdUnmounted
-          ? "分区已经创建，但没有挂载。它已在容器列表中，可以稍后挂载。"
+          ? mappedPageError("分区已经创建，但没有挂载。它已在容器列表中，可以稍后挂载。", failureCode, creationFailureOrigin)
           : describeCreationFailure(failureCode);
         creationStatus.dataset.tone = "error";
       }

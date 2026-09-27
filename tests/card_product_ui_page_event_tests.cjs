@@ -40,6 +40,72 @@ function rejection(window, reason) {
   window.dispatchEvent(event);
 }
 const cases = {
+  async passwordValidation() {
+    const p = await page((window, fixture) => { fixture.state = 1; });
+    try {
+      const input = p.window.document.getElementById("card-password");
+      const reports = () => p.fixture.pageEvents.filter(e => e.source === "password-strength-description");
+      const enter = async value => { input.value = value; input.dispatchEvent(new p.window.Event("input", {bubbles: true})); await sleep(); };
+      await enter("short");
+      assert.equal(reports().length, 2, "short password must report validation and displayed error");
+      assert.deepEqual(Array.from(reports(), e => e.category), [2, 1]);
+      await enter("small");
+      assert.equal(reports().length, 2, "same password validation conclusion must not repeat");
+      await enter("SAFE_SENTINEL_LONG_".repeat(8));
+      assert.equal(reports().length, 4, "changed length error must be reported");
+      assert.ok(reports().at(-1).content.includes("超过 128"));
+      await enter("ACCEPTABLE_SECRET");
+      assert.equal(reports().length, 4, "acceptable password must not produce an error");
+      await enter("");
+      await enter("short");
+      assert.equal(reports().length, 6, "a new validation episode must be reported");
+      assert.ok(p.fixture.pageEvents.every(e => !/short|small|SAFE_SENTINEL|ACCEPTABLE_SECRET/.test(e.content)),
+        "password validation reports must never include input values");
+    } finally { p.close(); }
+  },
+  async creationSpecialMappings() {
+    for (const kind of ["unmounted", "cleanup", "partition", "cancelled", "success"]) {
+      let reads = 0;
+      const code = kind === "cleanup" ? 15 : 12;
+      const p = await page((window, fixture, bridge) => { bridge.getCreationError = () => { ++reads; return code; }; });
+      try {
+        const d = p.window.document;
+        d.querySelector("[data-create-container]").click();
+        await wait(() => !d.getElementById("partition-refresh").disabled && d.querySelector("#partition-list-body button"));
+        if (kind === "partition") {
+          d.querySelector("#partition-list-body button").click();
+          await wait(() => !d.getElementById("create-volume-continue").disabled);
+          d.getElementById("create-volume-continue").click();
+          d.getElementById("partition-erase-consent").click();
+        } else {
+          d.querySelector('[data-create-storage="file"]').click();
+          for (const [id, value] of [["create-container-name", "audit"], ["create-container-directory", "D:\\Audit"]]) {
+            const input = d.getElementById(id); input.value = value;
+            input.dispatchEvent(new p.window.Event("input", {bubbles: true}));
+          }
+        }
+        d.getElementById("create-volume-continue").click();
+        await wait(() => p.fixture.pendingCreation);
+        if (kind === "unmounted" || kind === "partition")
+          p.fixture.containers.push({id: 99, name: "audit", mounted: false, size: 0, drive: "", partition: kind === "partition"});
+        if (kind === "success") p.fixture.pendingCreation.resolve();
+        else p.fixture.creationProgress = `${kind === "cleanup" ? 5 : kind === "cancelled" ? 4 : 3},3,41,0,3`;
+        const status = d.getElementById("create-volume-status");
+        const tone = kind === "cancelled" ? "cancelled" : kind === "success" ? "success" : "error";
+        await wait(() => status.dataset.tone === tone);
+        await sleep();
+        const reports = p.fixture.pageEvents.filter(e => e.category === 1 && e.source === status.id);
+        if (tone === "error") {
+          assert.equal(reads, 1, `${kind}: read the native error exactly once`);
+          assert.equal(reports.length, 1, `${kind}: report a single displayed failure`);
+          assert.ok(reports[0].content.includes(`原生错误码 ${code} → ${status.textContent}`), `${kind}: native code must map to actual custom copy`);
+        } else {
+          assert.equal(reads, 0, `${kind}: do not query an error for a normal outcome`);
+          assert.equal(reports.length, 0, `${kind}: normal outcome must not report an error`);
+        }
+      } finally { p.close(); }
+    }
+  },
   async startupMapping() {
     const p = await page((window, fixture) => {
       fixture.state = 4;
