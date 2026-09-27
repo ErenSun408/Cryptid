@@ -23,8 +23,20 @@ struct CreationWorkState final {
   std::atomic<bool> interrupted{false};
   // Shares the session exclusion and deferred card-event gate with creation.
   std::atomic<bool> volume_operation{false};
+  std::atomic<bool> force_exit_running{false};
   std::atomic<bool> inplace_operation{false};
   std::atomic<std::uint64_t> card_epoch{0};
+  // Window/bridge thread only. A prompt authorizes one cleanup of this insertion.
+  void arm_close_confirmation() noexcept { close_epoch_ = card_epoch.load(); close_pending_ = true; }
+  void dismiss_close_confirmation() noexcept { close_pending_ = false; }
+  [[nodiscard]] bool close_confirmation_pending() const noexcept {
+    return close_pending_ && close_epoch_ == card_epoch.load() && !interrupted.load();
+  }
+  [[nodiscard]] bool consume_close_confirmation() noexcept {
+    const bool allowed = close_confirmation_pending();
+    close_pending_ = false;
+    return allowed;
+  }
   void begin() noexcept { phase_.store(Phase::cancellable); }
   void finish() noexcept { phase_.store(Phase::idle); }
   [[nodiscard]] bool cancellation_requested() const noexcept {
@@ -46,6 +58,8 @@ struct CreationWorkState final {
   }
 
  private:
+  bool close_pending_{};
+  std::uint64_t close_epoch_{};
   enum class Phase { idle, cancellable, cancel_requested, finalizing };
   std::atomic<Phase> phase_{Phase::idle};
 };

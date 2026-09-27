@@ -41,6 +41,8 @@ constexpr DISPID kGetContainerPartitionId = 110;
 constexpr DISPID kGetContainerConversionId = 111;
 constexpr DISPID kGetContainerVolumeUnavailableId = 121;
 constexpr DISPID kReportPageEventId = 122;
+constexpr DISPID kBeginForceUnmountForExitId = 123;
+constexpr DISPID kDismissCloseConfirmationId = 124;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
@@ -461,6 +463,8 @@ class PasswordArgumentsWiper final {
     case kCreateContainerMibId: return "createContainerMib";
     case kDeleteContainerEntryId: return "deleteContainerEntry";
     case kExitApplicationId: return "exitApplication";
+    case kBeginForceUnmountForExitId: return "beginForceUnmountForExit";
+    case kDismissCloseConfirmationId: return "dismissCloseConfirmation";
     case kExportContainerEntryId: return "exportContainerEntry";
     case kExportContainerFileId: return "exportContainerFile";
     case kForgetContainerId: return "forgetContainer";
@@ -686,6 +690,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"openDiskManagement")) { ids[0] = kPartitionToolId; return S_OK; }
     if (matches(names[0], L"returnToLogin")) { ids[0] = kReturnToLoginId; return S_OK; }
     if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
+    if (matches(names[0], L"beginForceUnmountForExit")) { ids[0] = kBeginForceUnmountForExitId; return S_OK; }
+    if (matches(names[0], L"dismissCloseConfirmation")) { ids[0] = kDismissCloseConfirmationId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1003,6 +1009,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     // revokes the last cleanup target, so a stale page cannot force a new mount.
     switch (member) {
       case kBeginForceUnmountLastId: case kVolumeOperationStatusId:
+      case kBeginForceUnmountForExitId: case kDismissCloseConfirmationId:
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
       case kBeginOpenDecoyMaintenanceId: // Opening one is what a survey is for.
@@ -1031,6 +1038,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       // either; it is the page asking about a failure it has already seen.
       case kDirectoryErrorId: break;
       default:
+        creation_work_->dismiss_close_confirmation();
         last_volume_member_ = 0;
         clear_batch();
         clear_survey();
@@ -1038,6 +1046,12 @@ class CardProductWebViewHostObject final : public IDispatch {
         break;
     }
     switch (member) {
+      case kDismissCloseConfirmationId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        creation_work_->dismiss_close_confirmation();
+        return S_OK;
+      case kBeginForceUnmountForExitId:
+        return begin_volume_operation(member, parameters, result, argument_error);
       case kBeginMountBatchId: case kBeginUnmountBatchId:
       case kBeginForceUnmountBatchId:
         return begin_batch(member == kBeginMountBatchId, member == kBeginForceUnmountBatchId, parameters, result);
@@ -1919,8 +1933,13 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   HRESULT begin_volume_operation(DISPID member, DISPPARAMS* parameters,
                                  VARIANT* result, UINT* argument_error) noexcept {
-    const bool force = member == kBeginForceUnmountLastId;
-    if (force) {
+    const bool force_exit = member == kBeginForceUnmountForExitId;
+    const bool force = force_exit || member == kBeginForceUnmountLastId;
+    if (force_exit) {
+      if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+      if (!creation_work_->consume_close_confirmation()) return E_ACCESSDENIED;
+      member = kBeginUnmountId;
+    } else if (force) {
       if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
       if (volume_status_.load() != 4 || last_volume_epoch_ != creation_work_->card_epoch.load() ||
           (last_volume_member_ != kBeginUnmountId && last_volume_member_ != kBeginUnmountContainerId))
@@ -1933,7 +1952,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (!parameters || parameters->cNamedArgs != 0 ||
         parameters->cArgs != (all || force ? 0U : 1U) ||
         (!all && !force && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
-    std::uint32_t id = force ? last_volume_id_ : 0;
+    std::uint32_t id = force && !force_exit ? last_volume_id_ : 0;
     if (!all && !force && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
       if (argument_error) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
@@ -1948,6 +1967,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       // Retire it only after admitting the next volume operation and joining
       // its worker, or the gate will reject getVolumeOperationStatus as a
       // non-survey query while the mount is still running.
+      if (force_exit) { clear_batch(); clear_space(); }
       clear_survey();
       if (member == kBeginOpenDecoyMaintenanceId ||
           member == kBeginMeasureDecoySpaceId ||
@@ -1961,8 +1981,9 @@ class CardProductWebViewHostObject final : public IDispatch {
       creation_work_->finish(); // Volume operations cannot be cancelled.
       creation_work_->volume_operation.store(true);
       volume_status_.store(1);
+      creation_work_->force_exit_running.store(force_exit);
       creation_work_->running.store(true);
-      creation_thread_ = std::thread([this, member, id, force,
+      creation_thread_ = std::thread([this, member, id, force, force_exit,
                                       operation_epoch] {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         unsigned int status = 3;
@@ -1991,6 +2012,8 @@ class CardProductWebViewHostObject final : public IDispatch {
             else if (member == kBeginMountAdoptedId) controller_.mount_container(id);
             else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
             else controller_.unmount();
+            if (force_exit && controller_.mounted())
+              throw std::runtime_error("forced exit cleanup left mounted containers");
             status = 2;
           }
         } catch (const std::system_error& error) {
@@ -2011,12 +2034,14 @@ class CardProductWebViewHostObject final : public IDispatch {
                             diagnostics::flag_text(force) + "；状态码 " + std::to_string(status) +
                             "；安全卡中断 " + diagnostics::flag_text(creation_work_->interrupted.load()));
         volume_status_.store(status);
+        creation_work_->force_exit_running.store(false);
         creation_work_->running.store(false);
       });
       return complete_selection(true, result);
     } catch (...) {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       volume_status_.store(3);
+      creation_work_->force_exit_running.store(false);
       creation_work_->running.store(false);
       return E_FAIL;
     }

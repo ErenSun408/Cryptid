@@ -388,6 +388,14 @@
           <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘容器</button>
           <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件容器</button>
         </div>
+<div id="force-exit-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="force-exit-title" hidden>
+  <div class="modal"><h3 id="force-exit-title">退出应用</h3>
+    <p>当前仍有挂载中的容器，确定要强制卸载并退出吗？</p>
+    <output id="force-exit-status" aria-live="polite"></output>
+    <button id="force-exit-cancel" type="button">取消</button>
+    <button id="force-exit-confirm" type="button">确认</button>
+  </div>
+</div>
 <script src="card_session.js?v=p2-17g-card-reset"></script>
   <script src="card_product_webview_integration.js?v=p2-17g-card-reset"></script>
 

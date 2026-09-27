@@ -1300,6 +1300,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                       "后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()) +
                           "；卷操作 " + usb_vault::diagnostics::flag_text(g_creation_work.volume_operation.load()));
       if (g_creation_work.running.load()) {
+        if (g_creation_work.force_exit_running.load()) return 0;
         if (g_creation_work.volume_operation.load()) {
           ::MessageBoxW(window, L"正在处理磁盘操作，请等待处理结果后再关闭。",
                         kWindowTitle, MB_OK | MB_ICONINFORMATION);
@@ -1324,9 +1325,31 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         }
         return 0;
       }
+      if (g_creation_work.close_confirmation_pending()) {
+        if (g_webview && g_webview_startup.current(g_page_generation)) return 0;
+        g_creation_work.dismiss_close_confirmation();
+      }
       if (g_ui_session != nullptr &&
           !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
         USB_VAULT_TRACE("窗口", "关闭前卸载失败，保留窗口", "");
+        if (g_webview && g_webview_startup.current(g_page_generation)) {
+          g_creation_work.arm_close_confirmation();
+          const auto generation = g_page_generation;
+          const HRESULT shown = g_webview->ExecuteScript(
+              L"typeof window.usbVaultConfirmForceExit === 'function' && window.usbVaultConfirmForceExit()",
+              Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                  [generation](HRESULT result, LPCWSTR value) -> HRESULT {
+                    if (!g_webview_startup.current(generation) ||
+                        !g_creation_work.close_confirmation_pending()) return S_OK;
+                    if (FAILED(result) || !value || std::wstring_view(value) != L"true") {
+                      g_creation_work.dismiss_close_confirmation();
+                      show_failure(L"无法安全卸载当前磁盘，且无法显示退出确认。请关闭占用文件后重试。");
+                    }
+                    return S_OK;
+                  }).Get());
+          if (SUCCEEDED(shown)) return 0;
+          g_creation_work.dismiss_close_confirmation();
+        }
         show_failure(L"无法安全卸载当前磁盘，请关闭占用文件后重试。");
         return 0;
       }
