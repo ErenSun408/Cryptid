@@ -1,5 +1,6 @@
 #include "volume_creation/elevation_session.h"
 #include "volume_creation/creator_pipe_security.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include <bcrypt.h>
 #include <shellapi.h>
 #include <array>
@@ -66,19 +67,35 @@ bool begin_elevation_session(const std::filesystem::path& verified_helper) {
   const auto args=L"--session "+std::to_wstring(::GetCurrentProcessId())+L" --pipe "+nonce+L" --nonce "+nonce;
   SHELLEXECUTEINFOW info{};info.cbSize=sizeof(info);info.fMask=SEE_MASK_NOCLOSEPROCESS|SEE_MASK_NOASYNC|SEE_MASK_FLAG_NO_UI;
   info.lpVerb=L"runas";info.lpFile=session.helper.c_str();info.lpParameters=args.c_str();info.nShow=SW_HIDE;
-  if(!::ShellExecuteExW(&info)||!info.hProcess)return false;
+  USB_VAULT_TRACE("管理员会话", "请求管理员会话", diagnostics::utf8(session.helper.native()));
+  if(!::ShellExecuteExW(&info)||!info.hProcess){
+    USB_VAULT_TRACE("管理员会话", "UAC 提权失败", "Win32 " + std::to_string(::GetLastError()));
+    return false;
+  }
   session.process=info.hProcess;
   const auto name=pipe_name(nonce);const auto start=::GetTickCount64();
   while(::GetTickCount64()-start<60000 && ::WaitForSingleObject(session.process,0)==WAIT_TIMEOUT){
     const auto p=::CreateFileW(name.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,
         SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,nullptr);
     if(p!=INVALID_HANDLE_VALUE){session.pipe=p;break;}
-    const auto error=::GetLastError();if(error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PIPE_BUSY)break;
+    const auto error=::GetLastError();if(error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PIPE_BUSY){
+      USB_VAULT_TRACE("管理员会话", "连接会话管道失败", "Win32 " + std::to_string(error));
+      break;
+    }
     ::Sleep(20);
   }
   ULONG server{};Reply ready{};
   if(!session.pipe||!::GetNamedPipeServerProcessId(session.pipe,&server)||server!=::GetProcessId(session.process)||
-      !read_packet(session.pipe,&ready,sizeof(ready),session.process,10000)||ready.tag!=magic||ready.error||ready.handle){session.close();return false;}
+      !read_packet(session.pipe,&ready,sizeof(ready),session.process,10000)||ready.tag!=magic||ready.error||ready.handle){
+    DWORD exit_code{};
+    if(session.process)static_cast<void>(::GetExitCodeProcess(session.process,&exit_code));
+    USB_VAULT_TRACE("管理员会话", "管理员会话未就绪",
+                    "已连接管道 " + diagnostics::flag_text(session.pipe!=nullptr) + "；服务端 " +
+                        std::to_string(server) + "；就绪错误 " + std::to_string(ready.error) +
+                        "；助手退出码 " + std::to_string(exit_code));
+    session.close();return false;
+  }
+  USB_VAULT_TRACE("管理员会话", "管理员会话已建立", "进程号 " + std::to_string(::GetProcessId(session.process)));
   return true;
 }
 void end_elevation_session() noexcept {std::lock_guard lock(session.mutex);session.close();}
@@ -88,8 +105,14 @@ HANDLE detail::launch_session_helper(const std::filesystem::path& helper,std::ws
   if(!session.pipe||!session.process||std::filesystem::absolute(helper).lexically_normal()!=session.helper||!nonce_valid(nonce))
     throw std::runtime_error("administrator session unavailable");
   Request request;std::copy(nonce.begin(),nonce.end(),request.nonce.begin());Reply reply{};
-  if(!write_packet(session.pipe,&request,sizeof(request))||!read_packet(session.pipe,&reply,sizeof(reply),session.process,10000)||reply.tag!=magic){session.close();throw std::runtime_error("administrator session disconnected");}
-  if(reply.error||!reply.handle)throw std::runtime_error("administrator session launch rejected");
+  if(!write_packet(session.pipe,&request,sizeof(request))||!read_packet(session.pipe,&reply,sizeof(reply),session.process,10000)||reply.tag!=magic){
+    USB_VAULT_TRACE("管理员会话", "管理员会话已断开", "Win32 " + std::to_string(::GetLastError()));
+    session.close();throw std::runtime_error("administrator session disconnected");
+  }
+  if(reply.error||!reply.handle){
+    USB_VAULT_TRACE("管理员会话", "管理员会话拒绝启动助手", "错误 " + std::to_string(reply.error));
+    throw std::runtime_error("administrator session launch rejected");
+  }
   const auto process=reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(reply.handle));
   if(!::GetProcessId(process)){::CloseHandle(process);throw std::runtime_error("invalid session child handle");}
   return process;

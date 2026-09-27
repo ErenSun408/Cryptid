@@ -6,6 +6,7 @@
 
 #include "card/vikey/vikey_helper_protocol.h"
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
 #include <aclapi.h>
@@ -1002,6 +1003,23 @@ void require_clean_exit(const HANDLE process, const HANDLE response_pipe,
 
 namespace {
 
+[[nodiscard]] VikeyHelperProbe probe_vikey_helper_operation_unlogged(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    const helper::Operation operation,
+    const std::filesystem::path* const vendor_path,
+    const Sha256Digest* const vendor_digest,
+    const DevelopmentSessionInputs* const session_inputs,
+    std::uint32_t* const success_detail,
+    const HelperBoundary boundary,
+    const std::chrono::milliseconds timeout,
+    security::SecureBuffer* const blob_response,
+    std::uint32_t* const success_result,
+    std::uint32_t* const success_logical_state);
+
+// The card helper runs in a restricted process of its own. Every call is
+// recorded with the operation, the boundary and the helper's full failure
+// record: card error, diagnostic stage, native code and security step.
 [[nodiscard]] VikeyHelperProbe probe_vikey_helper_operation(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_digest,
@@ -1015,6 +1033,55 @@ namespace {
     security::SecureBuffer* const blob_response = nullptr,
     std::uint32_t* const success_result = nullptr,
     std::uint32_t* const success_logical_state = nullptr) {
+  const std::string request_text =
+      "操作 " + std::to_string(static_cast<int>(operation)) + "；边界 " +
+      (boundary == HelperBoundary::zero_network_app_container ? std::string("零网络 AppContainer")
+                                                              : std::string("联网开发")) +
+      "；超时 " + std::to_string(timeout.count()) + " 毫秒；助手 " +
+      diagnostics::utf8(helper_path.native());
+  USB_VAULT_TRACE("卡助手", "开始卡助手操作", request_text);
+  try {
+    VikeyHelperProbe result = probe_vikey_helper_operation_unlogged(
+        helper_path, expected_digest, operation, vendor_path, vendor_digest,
+        session_inputs, success_detail, boundary, timeout, blob_response,
+        success_result, success_logical_state);
+    USB_VAULT_TRACE("卡助手", "卡助手操作完成",
+                    request_text + "；安全属性 " + diagnostics::hex_text(result.security_properties) +
+                        (success_detail ? "；细节 " + diagnostics::hex_text(*success_detail) : std::string()) +
+                        (success_result ? "；结果 " + std::to_string(*success_result) : std::string()) +
+                        (success_logical_state ? "；逻辑状态 " + std::to_string(*success_logical_state)
+                                               : std::string()));
+    return result;
+  } catch (...) {
+    std::string codes;
+    try {
+      throw;
+    } catch (const DiagnosticError& error) {
+      codes = "诊断阶段 " + std::to_string(static_cast<std::uint32_t>(error.stage())) +
+              "；原生码 " + std::to_string(error.native()) + "（" +
+              diagnostics::hex_text(error.native()) + "）；原生码类型 " +
+              std::to_string(static_cast<std::uint32_t>(error.kind())) + "；安全步骤 " +
+              std::to_string(error.step());
+    } catch (...) {
+    }
+    USB_VAULT_TRACE_FAILURE("卡助手", "卡助手操作失败", request_text + (codes.empty() ? "" : "；" + codes));
+    throw;
+  }
+}
+
+[[nodiscard]] VikeyHelperProbe probe_vikey_helper_operation_unlogged(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_digest,
+    const helper::Operation operation,
+    const std::filesystem::path* const vendor_path,
+    const Sha256Digest* const vendor_digest,
+    const DevelopmentSessionInputs* const session_inputs,
+    std::uint32_t* const success_detail,
+    const HelperBoundary boundary,
+    const std::chrono::milliseconds timeout,
+    security::SecureBuffer* const blob_response,
+    std::uint32_t* const success_result,
+    std::uint32_t* const success_logical_state) {
   CardOperationLease operation_lease;
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,
@@ -1205,6 +1272,7 @@ namespace {
   }
   Handle process(process_info.hProcess);
   Handle thread(process_info.hThread);
+  USB_VAULT_TRACE("卡助手", "卡助手进程已创建", "进程号 " + std::to_string(process_info.dwProcessId));
   request_pipe.child_end.reset();
   response_pipe.child_end.reset();
   error_pipe.reset();
@@ -1355,6 +1423,16 @@ namespace {
     const helper::Response response = read_response_until(
         response_pipe.parent_end.get(), process.get(), request.nonce,
         operation, deadline);
+    USB_VAULT_TRACE("卡助手", "卡助手应答",
+                    "状态 " + std::to_string(response.status) + "；安全属性 " +
+                        diagnostics::hex_text(response.security_properties) + "；细节 " +
+                        std::to_string(response.detail) + "（" + diagnostics::hex_text(response.detail) +
+                        "）；结果 " + std::to_string(response.result) + "；逻辑状态 " +
+                        std::to_string(response.logical_state) + "；诊断阶段 " +
+                        std::to_string(response.diagnostic) + "；原生码类型 " +
+                        std::to_string(response.native_kind) + "；安全步骤 " +
+                        std::to_string(response.security_step) + "；载荷 " +
+                        std::to_string(response.payload_bytes) + " 字节");
     if (response.status != 0) {
       throw DiagnosticError(make_error_code(static_cast<CardError>(response.status)),
           static_cast<DiagnosticStage>(response.diagnostic), "helper operation failed",

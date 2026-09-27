@@ -8,6 +8,7 @@
 #include "usb_vault/application/card_entry_router.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -291,6 +293,53 @@ void test_restricted_helper_probe(const std::filesystem::path& helper) {
          "helper did not report the exact required security boundary");
   expect(helper_profile_count() == profiles_before,
          "ephemeral helper AppContainer profile was left behind");
+}
+
+void test_runtime_log_records_helper_calls(const std::filesystem::path& helper) {
+#if USB_VAULT_DEBUG_LOG
+  namespace diagnostics = usb_vault::diagnostics;
+  const std::filesystem::path root =
+      std::filesystem::temp_directory_path() /
+      (L"usb-vault-helper-log-" + std::to_wstring(::GetCurrentProcessId()) + L"-" +
+       std::to_wstring(::GetTickCount64()));
+  expect(std::filesystem::create_directory(root), "the helper log fixture already exists");
+  const SYSTEMTIME time{2026, 9, 0, 26, 11, 0, 0, 0};
+  const std::filesystem::path path = root / L"runtime-log-20260926-110000.txt";
+  {
+    diagnostics::DebugLogFile file;
+    expect(file.open(root, time), "cannot open the helper log fixture");
+    diagnostics::set_runtime_log(&file);
+    struct Withdraw final {
+      ~Withdraw() { usb_vault::diagnostics::set_runtime_log(nullptr); }
+    } withdraw;
+    static_cast<void>(probe_vikey_helper(helper, file_digest(helper), 5s));
+    Sha256Digest wrong = file_digest(helper);
+    wrong.front() ^= std::byte{1};
+    try {
+      static_cast<void>(probe_vikey_helper(helper, wrong, 5s));
+      fail("a helper with the wrong digest was started");
+    } catch (const std::system_error&) {
+    }
+  }
+  std::string text;
+  {
+    std::ifstream in(path, std::ios::binary);
+    expect(in.good(), "the helper log was not written");
+    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  for (const char* const expected :
+       {"[卡助手] 开始卡助手操作；操作 ", "边界 零网络 AppContainer", "[卡助手] 卡助手进程已创建；进程号 ",
+        "[卡助手] 卡助手应答；状态 0；安全属性 0x", "[卡助手] 卡助手操作完成；",
+        "[卡助手] 卡助手操作失败；", "异常类型："}) {
+    if (text.find(expected) == std::string::npos) {
+      fail((std::string("the helper log lacks: ") + expected).c_str());
+    }
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(root);
+#else
+  static_cast<void>(helper);
+#endif
 }
 
 void test_network_isolation(const std::filesystem::path& fixture) {
@@ -1208,6 +1257,8 @@ int wmain(const int argc, wchar_t** const argv) {
     if (!elevated_development) {
       run_test("restricted helper probe",
                [&] { test_restricted_helper_probe(helper); });
+      run_test("runtime log records helper calls",
+               [&] { test_runtime_log_records_helper_calls(helper); });
       run_test("vendor runtime staging",
                [&] { test_vendor_runtime_staging(helper, vendor); });
       run_test("vendor digest mismatch", [&] {

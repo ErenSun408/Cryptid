@@ -1,5 +1,6 @@
 #include "usb_vault/volume/partition_catalog.h"
 #include "volume/partition_catalog_detail.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <array>
 #include <cstring>
@@ -270,7 +271,33 @@ bool matches_partition_snapshot(const PartitionCandidate& selected,
   return matching_paths == 1 && unchanged;
 }
 
+static std::vector<PartitionCandidate> enumerate_partitions_unlogged(const bool location_only);
+
 static std::vector<PartitionCandidate> enumerate_partitions(const bool location_only) {
+  try {
+    auto result = enumerate_partitions_unlogged(location_only);
+    USB_VAULT_TRACE("分区", location_only ? "枚举分区位置" : "枚举分区候选",
+                    "卷数 " + std::to_string(result.size()));
+    for (const auto& candidate : result) {
+      USB_VAULT_TRACE("分区", "分区",
+                      "卷路径 " + diagnostics::utf8(candidate.volume_path) + "；磁盘 " +
+                          std::to_string(candidate.disk_number) + "；分区 " +
+                          std::to_string(candidate.partition_number) + "；偏移 " +
+                          std::to_string(candidate.offset_bytes) + "；长度 " +
+                          std::to_string(candidate.length_bytes) + "；扇区 " +
+                          std::to_string(candidate.logical_sector_bytes) + "；布局 " +
+                          std::to_string(static_cast<int>(candidate.layout)) + "；可用性 " +
+                          std::to_string(static_cast<int>(candidate.availability)) +
+                          "；查询错误 " + std::to_string(candidate.query_error));
+    }
+    return result;
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("分区", "枚举分区失败", "");
+    throw;
+  }
+}
+
+static std::vector<PartitionCandidate> enumerate_partitions_unlogged(const bool location_only) {
   const std::wstring system_volume = windows_volume();
   std::array<wchar_t, 64> name{};
   const VolumeSearch search(::FindFirstVolumeW(name.data(), static_cast<DWORD>(name.size())));

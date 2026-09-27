@@ -274,4 +274,43 @@ inline void debug_log_exception(std::string_view, std::string_view, std::string_
 
 #endif
 
+// Small shared formatters for the runtime log details.
+[[nodiscard]] inline std::string flag_text(const bool value) { return value ? "是" : "否"; }
+[[nodiscard]] inline std::string hex_text(const std::uint32_t value) {
+  char text[16]{};
+  std::snprintf(text, sizeof(text), "0x%08X", value);
+  return text;
+}
+[[nodiscard]] inline std::string drive_text(const wchar_t drive) {
+  const wchar_t upper = drive >= L'a' && drive <= L'z' ? static_cast<wchar_t>(drive - L'a' + L'A') : drive;
+  if (upper < L'A' || upper > L'Z') return "无";
+  return std::string(1, static_cast<char>(upper)) + ":";
+}
+
+}  // namespace usb_vault::diagnostics
+
+// Records one runtime event. The detail expression is evaluated only when the
+// switch is on, and nothing it throws can leave the statement.
+#define USB_VAULT_TRACE(area, event, detail)                                  \
+  do {                                                                        \
+    if constexpr (USB_VAULT_DEBUG_LOG) {                                      \
+      try {                                                                   \
+        ::usb_vault::diagnostics::debug_log((area), (event), (detail));       \
+      } catch (...) {                                                         \
+      }                                                                       \
+    }                                                                         \
+  } while (false)
+// The same inside a catch block, adding the exception being handled.
+#define USB_VAULT_TRACE_FAILURE(area, event, detail)                          \
+  do {                                                                        \
+    if constexpr (USB_VAULT_DEBUG_LOG) {                                      \
+      try {                                                                   \
+        ::usb_vault::diagnostics::debug_log_exception((area), (event), (detail)); \
+      } catch (...) {                                                         \
+      }                                                                       \
+    }                                                                         \
+  } while (false)
+
+namespace usb_vault::diagnostics {
+
 }  // namespace usb_vault::diagnostics

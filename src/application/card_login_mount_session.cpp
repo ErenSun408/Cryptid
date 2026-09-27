@@ -224,15 +224,21 @@ class ProductionCardLoginMountSessionRuntime final
   [[nodiscard]] wchar_t allocate_drive_letter() override {
     DWORD drives = ::GetLogicalDrives();
     if (drives == 0) {
-      throw std::system_error(static_cast<int>(::GetLastError()),
+      const DWORD error = ::GetLastError();
+      USB_VAULT_TRACE("盘符", "读取系统盘符失败", "Win32 " + std::to_string(error));
+      throw std::system_error(static_cast<int>(error),
                               std::system_category(),
                               "inspect available drive letters");
     }
+    const DWORD logical = drives;
     // Driver-only mounts also occupy their requested letters; a collision
     // must not be offered merely because DOS has not published the mount.
     drives = volume::occupied_drive_letters(drives, provider_.mounted_volumes());
     const wchar_t letter =
         volume::choose_free_drive_letter(static_cast<std::uint32_t>(drives));
+    USB_VAULT_TRACE("盘符", "选择空闲盘符",
+                    "系统已用 " + diagnostics::hex_text(logical) + "；含驱动已用 " +
+                        diagnostics::hex_text(drives) + "；选中 " + diagnostics::drive_text(letter));
     if (letter) return letter;
     throw std::system_error(
         std::make_error_code(std::errc::no_space_on_device),

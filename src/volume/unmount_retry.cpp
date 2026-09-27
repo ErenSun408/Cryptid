@@ -1,4 +1,5 @@
 #include "usb_vault/volume/unmount_retry.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -36,8 +37,14 @@ UnmountResult unmount_with_retry(const VolumeProvider& provider,
 
       const auto now = std::chrono::steady_clock::now();
       if (now >= deadline) {
+        USB_VAULT_TRACE("卸载", "卷持续占用，重试期限已到",
+                        "盘符 " + diagnostics::drive_text(drive_letter) + "；已尝试 " +
+                            std::to_string(attempts) + " 次");
         throw;
       }
+      USB_VAULT_TRACE("卸载", "卷正忙，稍后重试",
+                      "盘符 " + diagnostics::drive_text(drive_letter) + "；第 " +
+                          std::to_string(attempts) + " 次");
       std::this_thread::sleep_for(
           std::min(kRetryInterval,
                    std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -63,6 +70,7 @@ UnmountEscalationResult unmount_with_forced_escalation(
     }
     // The caller explicitly selected escalation (card removal or confirmed
     // user cleanup). Let the forced attempt's own failure propagate.
+    USB_VAULT_TRACE("卸载", "卷正忙，升级为强制卸载", "盘符 " + diagnostics::drive_text(drive_letter));
   }
 
   UnmountResult result = provider.unmount(

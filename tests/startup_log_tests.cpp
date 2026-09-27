@@ -194,6 +194,20 @@ void verify_runtime_log(const fs::path& root) {
     fs::remove(root / name);
   }
   require(survived == 200, "rolling dropped lines");
+
+  require(diagnostics::flag_text(true) == "是" && diagnostics::flag_text(false) == "否" &&
+              diagnostics::hex_text(0x80070005u) == "0x80070005" &&
+              diagnostics::drive_text(L'x') == "X:" && diagnostics::drive_text(wchar_t{}) == "无",
+          "a shared log formatter produced the wrong text");
+  // A detail that cannot be built must never escape the trace statement.
+  USB_VAULT_TRACE("测试", "细节构造失败",
+                  (throw std::runtime_error("detail failed"), std::string()));
+  try {
+    throw std::runtime_error("handled");
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("测试", "细节构造失败",
+                            (throw std::runtime_error("detail failed"), std::string()));
+  }
 }
 
 int main() {

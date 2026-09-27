@@ -6,6 +6,7 @@
 #include "volume/mount_identity.h"
 #include "volume/mount_completion.h"
 #include "volume/veracrypt_driver_abi.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
 #include <ShlObj_core.h>
@@ -142,7 +143,11 @@ class DriverHandle final {
 }
 
 void require_supported_version(const HANDLE handle) {
-  if (query_driver_version(handle) != detail::abi::kSupportedDriverVersion) {
+  const std::uint32_t version = query_driver_version(handle);
+  if (version != detail::abi::kSupportedDriverVersion) {
+    USB_VAULT_TRACE("驱动", "驱动版本不符",
+                    "实际 " + diagnostics::hex_text(version) + "；期望 " +
+                        diagnostics::hex_text(detail::abi::kSupportedDriverVersion));
     throw std::system_error(
         std::make_error_code(std::errc::protocol_not_supported),
         "unsupported VeraCrypt driver ABI version");
@@ -195,6 +200,26 @@ template <std::size_t Size>
   return {std::begin(value), end};
 }
 
+[[nodiscard]] std::string mount_request_text(const std::wstring_view path,
+                                           const MountOptions& options) {
+  return "路径 " + diagnostics::utf8(path) + "；请求盘符 " +
+         diagnostics::drive_text(options.drive_letter) + "；PRF " +
+         std::to_string(static_cast<int>(options.prf)) + "；PIM " +
+         std::to_string(options.pim) + "；只读 " + diagnostics::flag_text(options.read_only) +
+         "；通知资源管理器 " + diagnostics::flag_text(options.notify_shell) +
+         "；隐藏卷保护 " + diagnostics::flag_text(options.hidden_volume_protection.has_value());
+}
+
+[[nodiscard]] std::string mount_result_text(const MountResult& result) {
+  return "盘符 " + diagnostics::drive_text(result.drive_letter) + "；文件系统需检查 " +
+         diagnostics::flag_text(result.filesystem_dirty) + "；因拒绝访问改只读 " +
+         diagnostics::flag_text(result.read_only_after_access_denied) + "；因写保护改只读 " +
+         diagnostics::flag_text(result.read_only_after_device_write_protected) + "；NTFS " +
+         diagnostics::flag_text(result.is_ntfs) + "；主密钥存在弱点 " +
+         diagnostics::flag_text(result.master_key_vulnerable) + "；耗时 " +
+         std::to_string(result.elapsed.count()) + " 毫秒";
+}
+
 template <typename T>
 void require_active(const std::unique_ptr<T>& impl) {
   if (impl == nullptr) {
@@ -225,8 +250,15 @@ VolumeProvider& VolumeProvider::operator=(VolumeProvider&&) noexcept = default;
 
 std::uint32_t VolumeProvider::driver_version() const {
   require_active(impl_);
-  const DriverHandle driver = open_driver();
-  return query_driver_version(driver.get());
+  try {
+    const DriverHandle driver = open_driver();
+    const std::uint32_t version = query_driver_version(driver.get());
+    USB_VAULT_TRACE("驱动", "查询驱动版本", diagnostics::hex_text(version));
+    return version;
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("驱动", "查询驱动版本失败", "");
+    throw;
+  }
 }
 
 MountResult VolumeProvider::mount_file(
@@ -234,19 +266,26 @@ MountResult VolumeProvider::mount_file(
     const security::SecureBuffer& volume_password,
     const MountOptions& options) const {
   require_active(impl_);
-  detail::LockedDriverBuffer<detail::abi::MountRequest> locked_request;
-  detail::abi::MountRequest& request = locked_request.get();
-  detail::populate_mount_request(request, volume_path, volume_password, options);
+  USB_VAULT_TRACE("驱动", "请求挂载文件卷", mount_request_text(volume_path, options));
+  try {
+    detail::LockedDriverBuffer<detail::abi::MountRequest> locked_request;
+    detail::abi::MountRequest& request = locked_request.get();
+    detail::populate_mount_request(request, volume_path, volume_password, options);
 
-  const MountResult result = detail::complete_mount(locked_request, [&](auto& mount) {
-    const DriverHandle driver = open_driver();
-    require_supported_version(driver.get());
-    transact(driver.get(), kMountVolume, mount, "mount VeraCrypt volume");
-  });
-  if (options.notify_shell) {
-    notify_shell(SHCNE_DRIVEADD, static_cast<std::int32_t>(result.drive_letter - L'A'));
+    const MountResult result = detail::complete_mount(locked_request, [&](auto& mount) {
+      const DriverHandle driver = open_driver();
+      require_supported_version(driver.get());
+      transact(driver.get(), kMountVolume, mount, "mount VeraCrypt volume");
+    });
+    if (options.notify_shell) {
+      notify_shell(SHCNE_DRIVEADD, static_cast<std::int32_t>(result.drive_letter - L'A'));
+    }
+    USB_VAULT_TRACE("驱动", "文件卷挂载完成", mount_result_text(result));
+    return result;
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("驱动", "挂载文件卷失败", mount_request_text(volume_path, options));
+    throw;
   }
-  return result;
 }
 
 MountResult VolumeProvider::mount_partition(
@@ -254,11 +293,19 @@ MountResult VolumeProvider::mount_partition(
     const security::SecureBuffer& volume_password,
     const MountOptions& options) const {
   require_active(impl_);
+  USB_VAULT_TRACE("驱动", "请求挂载分区",
+                  "偏移 " + std::to_string(identity.offset_bytes) + "；长度 " +
+                      std::to_string(identity.length_bytes) + "；" + mount_request_text(L"<分区>", options));
+  try {
   if (!valid_partition_identity(identity) || volume_password.size() != 64 || (options.hidden_volume_protection &&
       (!options.hidden_volume_protection->password || options.hidden_volume_protection->password->size() != 64)))
     throw std::invalid_argument("invalid partition mount request");
   const auto located = resolve_partition_location(identity, enumerate_partition_locations());
   if (!located) throw std::runtime_error("partition is absent or ambiguous");
+  USB_VAULT_TRACE("驱动", "分区已定位",
+                  "卷路径 " + diagnostics::utf8(located->volume_path) + "；磁盘 " +
+                      std::to_string(located->disk_number) + "；分区 " +
+                      std::to_string(located->partition_number));
   auto path = located->volume_path; path.pop_back();
   const DriverHandle retained(::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
       nullptr, OPEN_EXISTING, 0, nullptr));
@@ -277,6 +324,7 @@ MountResult VolumeProvider::mount_partition(
   std::ranges::copy(native, request.volume_path);
   request.preserve_timestamp = 0;
 
+  USB_VAULT_TRACE("驱动", "分区设备路径", diagnostics::utf8(native));
   const MountResult result = detail::complete_mount(locked_request, [&](auto& mount) {
     const DriverHandle driver = open_driver();
     require_supported_version(driver.get());
@@ -285,13 +333,24 @@ MountResult VolumeProvider::mount_partition(
   if (options.notify_shell) {
     notify_shell(SHCNE_DRIVEADD, static_cast<std::int32_t>(result.drive_letter - L'A'));
   }
+  USB_VAULT_TRACE("驱动", "分区挂载完成", mount_result_text(result));
   return result;
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("驱动", "挂载分区失败",
+                            "偏移 " + std::to_string(identity.offset_bytes) + "；长度 " +
+                                std::to_string(identity.length_bytes));
+    throw;
+  }
 }
 
 UnmountResult VolumeProvider::unmount(
     const wchar_t drive_letter,
     const UnmountOptions& options) const {
   require_active(impl_);
+  const std::string requested = "盘符 " + diagnostics::drive_text(drive_letter) +
+                                "；强制 " + diagnostics::flag_text(options.force);
+  USB_VAULT_TRACE("驱动", "请求卸载卷", requested);
+  try {
   detail::LockedDriverBuffer<detail::abi::UnmountRequest> locked_request;
   detail::abi::UnmountRequest& request = locked_request.get();
   request.drive_number = detail::drive_number(drive_letter);
@@ -302,6 +361,10 @@ UnmountResult VolumeProvider::unmount(
   require_supported_version(driver.get());
   transact(driver.get(), kUnmountVolume, request, "unmount VeraCrypt volume");
 
+  USB_VAULT_TRACE("驱动", "卸载返回码",
+                  requested + "；返回码 " + std::to_string(request.return_code) +
+                      "；隐藏卷保护已触发 " +
+                      diagnostics::flag_text(request.hidden_volume_protection_triggered != 0));
   if (request.return_code != 0) {
     throw_driver_error(request.return_code, "VeraCrypt unmount rejected");
   }
@@ -317,6 +380,10 @@ UnmountResult VolumeProvider::unmount(
     notify_shell(SHCNE_DRIVEREMOVED, request.drive_number);
   }
   return result;
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("驱动", "卸载卷失败", requested);
+    throw;
+  }
 }
 
 void VolumeProvider::notify_mounted(const wchar_t drive_letter) const {
@@ -329,10 +396,15 @@ std::vector<MountedVolume> VolumeProvider::mounted_volumes() const {
   detail::LockedDriverBuffer<detail::abi::MountedVolumes> locked_volumes;
   detail::abi::MountedVolumes& volumes = locked_volumes.get();
 
-  const DriverHandle driver = open_driver();
-  require_supported_version(driver.get());
-  transact(driver.get(), kGetMountedVolumes, volumes,
-           "query mounted VeraCrypt volumes");
+  try {
+    const DriverHandle driver = open_driver();
+    require_supported_version(driver.get());
+    transact(driver.get(), kGetMountedVolumes, volumes,
+             "query mounted VeraCrypt volumes");
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("驱动", "查询已挂载卷失败", "");
+    throw;
+  }
 
   std::vector<MountedVolume> result;
   result.reserve(detail::abi::kDriveCount);
@@ -360,11 +432,16 @@ MountIdentity VolumeProvider::mount_identity(const wchar_t drive_letter) const {
   detail::LockedDriverBuffer<detail::abi::VolumeProperties> locked;
   auto& properties = locked.get();
   properties.drive_number = drive;
-  const auto driver = open_driver();
-  require_supported_version(driver.get());
-  transact(driver.get(), kGetVolumeProperties, properties,
-           "query VeraCrypt mount identity");
-  return detail::decode_mount_identity(properties, drive);
+  try {
+    const auto driver = open_driver();
+    require_supported_version(driver.get());
+    transact(driver.get(), kGetVolumeProperties, properties,
+             "query VeraCrypt mount identity");
+    return detail::decode_mount_identity(properties, drive);
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("驱动", "查询挂载身份失败", "盘符 " + diagnostics::drive_text(drive_letter));
+    throw;
+  }
 }
 
 }  // namespace usb_vault::volume

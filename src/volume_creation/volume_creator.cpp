@@ -3,6 +3,7 @@
 #include "volume_creation/creator_protocol.h"
 #include "volume_creation/elevation_session.h"
 #include "usb_vault/volume/volume_entry_path.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -215,7 +216,19 @@ class Handle final {
 [[nodiscard]] Handle launch_elevated_helper(
     const std::filesystem::path& helper_path, const std::wstring& pipe_suffix,
     const std::wstring& nonce_hex) {
-  if (const auto process = detail::launch_session_helper(helper_path, nonce_hex)) return Handle(process);
+  HANDLE session_process{};
+  try {
+    session_process = detail::launch_session_helper(helper_path, nonce_hex);
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手", "经管理员会话启动助手失败", diagnostics::utf8(helper_path.native()));
+    throw;
+  }
+  if (session_process) {
+    USB_VAULT_TRACE("创建助手", "经管理员会话启动助手",
+                    "进程号 " + std::to_string(::GetProcessId(session_process)));
+    return Handle(session_process);
+  }
+  USB_VAULT_TRACE("创建助手", "以 UAC 提权启动助手", diagnostics::utf8(helper_path.native()));
   const std::wstring parameters =
       std::format(L"--pipe {} --nonce {}", pipe_suffix, nonce_hex);
   SHELLEXECUTEINFOW info{};
@@ -228,6 +241,7 @@ class Handle final {
   info.nShow = SW_HIDE;
   if (::ShellExecuteExW(&info) == FALSE) {
     const DWORD error = ::GetLastError();
+    USB_VAULT_TRACE("创建助手", "UAC 提权启动失败", "Win32 " + std::to_string(error));
     if (error == ERROR_CANCELLED) {
       throw_creation(CreationError::elevation_cancelled,
                      "launch elevated volume-creation helper");
@@ -236,16 +250,26 @@ class Handle final {
                             "launch elevated volume-creation helper");
   }
   if (info.hProcess == nullptr) {
+    USB_VAULT_TRACE("创建助手", "UAC 启动未返回进程句柄", "");
     throw_creation(CreationError::helper_launch_failed,
                    "volume-creation helper returned no process handle");
   }
+  USB_VAULT_TRACE("创建助手", "UAC 提权助手已启动",
+                  "进程号 " + std::to_string(::GetProcessId(info.hProcess)));
   return Handle(info.hProcess);
 }
 
 [[nodiscard]] Handle connect_to_helper(const std::wstring& pipe_name,
                                        const HANDLE process) {
-  const auto deadline =
-      std::chrono::steady_clock::now() + kHelperConnectionTimeout;
+  const auto started = std::chrono::steady_clock::now();
+  const auto deadline = started + kHelperConnectionTimeout;
+  std::uint32_t waits = 0;
+  const auto elapsed_text = [&] {
+    return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - started)
+                              .count()) +
+           " 毫秒；等待 " + std::to_string(waits) + " 次";
+  };
   for (;;) {
     const HANDLE pipe = ::CreateFileW(
         pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
@@ -253,24 +277,36 @@ class Handle final {
     if (pipe != INVALID_HANDLE_VALUE) {
       ULONG server{};
       if (!::GetNamedPipeServerProcessId(pipe, &server) || server != ::GetProcessId(process)) {
+        USB_VAULT_TRACE("创建助手", "管道服务端进程不符",
+                        "服务端 " + std::to_string(server) + "；助手 " +
+                            std::to_string(::GetProcessId(process)));
         ::CloseHandle(pipe);
         throw_creation(CreationError::helper_connection_failed, "helper process identity mismatch");
       }
+      USB_VAULT_TRACE("创建助手", "已连接助手管道", elapsed_text());
       return Handle(pipe);
     }
     const DWORD error = ::GetLastError();
     if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PIPE_BUSY) {
+      USB_VAULT_TRACE("创建助手", "连接助手管道失败", "Win32 " + std::to_string(error) + "；" + elapsed_text());
       throw std::system_error(static_cast<int>(error), std::system_category(),
                               "connect to volume-creation helper");
     }
     if (::WaitForSingleObject(process, 0) == WAIT_OBJECT_0) {
+      DWORD exit_code{};
+      static_cast<void>(::GetExitCodeProcess(process, &exit_code));
+      USB_VAULT_TRACE("创建助手", "助手在连接前已退出",
+                      "退出码 " + std::to_string(exit_code) + "（" + diagnostics::hex_text(exit_code) +
+                          "）；" + elapsed_text());
       throw_creation(CreationError::helper_terminated,
                      "volume-creation helper exited before IPC connection");
     }
     if (std::chrono::steady_clock::now() >= deadline) {
+      USB_VAULT_TRACE("创建助手", "连接助手管道超时", elapsed_text());
       throw_creation(CreationError::helper_connection_failed,
                      "timed out connecting to volume-creation helper");
     }
+    ++waits;
     static_cast<void>(::WaitNamedPipeW(pipe_name.c_str(), 100));
   }
 }
@@ -323,6 +359,19 @@ class Handle final {
               (second_password.empty() || hidden_size % 512ULL != 0))) {
     throw std::invalid_argument("invalid volume-creation request values");
   }
+  const std::string request_text =
+      "操作 " + std::to_string(static_cast<int>(operation)) + "；路径 " +
+      diagnostics::utf8(normalized_path) + "；外层 " + std::to_string(outer_size) +
+      " 字节；隐藏卷 " + std::to_string(hidden_size) + " 字节；第一口令长度 " +
+      std::to_string(first_password.size()) + "；第二口令长度 " +
+      std::to_string(second_password.size()) +
+      (partition_target ? "；磁盘 " + std::to_string(partition_target->disk_number) + "；分区 " +
+                              std::to_string(partition_target->partition_number) + "；偏移 " +
+                              std::to_string(partition_target->offset_bytes) + "；长度 " +
+                              std::to_string(partition_target->length_bytes)
+                        : std::string());
+  USB_VAULT_TRACE("创建助手", "开始助手操作", request_text);
+  try {
   const auto nonce = random_nonce();
   const std::wstring suffix = hex_nonce(nonce);
   const std::wstring pipe_name = L"\\\\.\\pipe\\usb-vault-create-" + suffix;
@@ -331,6 +380,8 @@ class Handle final {
   const HelperExitWait helper_exit(process.get());
   const Handle pipe = connect_to_helper(pipe_name, process.get());
   if (progress) progress({.stage = CreationStage::authorized, .percent = 100});
+  CreationStage last_stage{};
+  std::uint32_t last_percent = 1000;
 
   detail::RequestHeader header{
       .operation = operation,
@@ -362,9 +413,11 @@ class Handle final {
         if (!cancel_sent && cancelled && cancelled()) {
           detail::write_cancel_request(pipe.get(), nonce);
           cancel_sent = true;
+          USB_VAULT_TRACE("创建助手", "已发送取消请求", "");
         }
         if (converting && !cancel_sent && !pause_sent && pause && pause()) {
           detail::write_pause_request(pipe.get(), nonce); pause_sent = true;
+          USB_VAULT_TRACE("创建助手", "已发送暂停请求", "");
         }
         if (available >= sizeof(detail::Response)) break;
         ::Sleep(10);
@@ -378,7 +431,12 @@ class Handle final {
           throw_creation(CreationError::protocol_error, "repeated partition confirmation");
         partition_challenged = true;
         bool confirmed = false;
-        try { confirmed = (!cancelled || !cancelled()) && confirm_erase() && (!cancelled || !cancelled()); } catch (...) { confirmed = false; }
+        try { confirmed = (!cancelled || !cancelled()) && confirm_erase() && (!cancelled || !cancelled()); }
+        catch (...) {
+          USB_VAULT_TRACE_FAILURE("创建助手", "分区确认回调失败", "");
+          confirmed = false;
+        }
+        USB_VAULT_TRACE("创建助手", "回复分区写入确认", "已同意 " + diagnostics::flag_text(confirmed));
         detail::write_partition_confirmation(pipe.get(), nonce, confirmed);
         partition_confirmed = confirmed;
         continue;
@@ -393,6 +451,14 @@ class Handle final {
     if (checking_partition && (response.type != detail::MessageType::result || (!inspecting_bitlocker && response.value != 0)))
       throw_creation(CreationError::protocol_error, "unexpected partition check response");
     if (response.type == detail::MessageType::progress) {
+      if (response.stage != last_stage || last_percent == 1000 ||
+          response.percent >= last_percent + 10 || response.percent == 100) {
+        USB_VAULT_TRACE("创建助手", "进度",
+                        "阶段 " + std::to_string(static_cast<int>(response.stage)) + "；百分比 " +
+                            std::to_string(response.percent));
+        last_stage = response.stage;
+        last_percent = response.percent;
+      }
       if (progress) {
         progress({.stage = response.stage, .percent = response.percent});
       }
@@ -404,9 +470,15 @@ class Handle final {
       if (!cancel_sent && cancelled && cancelled()) {
         detail::write_cancel_request(pipe.get(), nonce);
         cancel_sent = true;
+        USB_VAULT_TRACE("创建助手", "已发送取消请求", "");
       }
       continue;
     }
+    USB_VAULT_TRACE("创建助手", "助手返回结果",
+                    "错误码 " + std::to_string(response.error) + "；返回值 " +
+                        std::to_string(response.value) + "；已发取消 " +
+                        diagnostics::flag_text(cancel_sent) + "；已发暂停 " +
+                        diagnostics::flag_text(pause_sent));
     if (response.error == 0) {
       return response.value;
     }
@@ -416,6 +488,10 @@ class Handle final {
     }
     throw_creation(static_cast<CreationError>(response.error),
                    "volume-creation helper failed");
+  }
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手", "助手操作失败", request_text);
+    throw;
   }
 }
 
@@ -485,6 +561,7 @@ std::uint64_t VolumeImportSession::protected_space(std::wstring_view container_p
     if (!impl_->connected) {
       impl_->nonce = random_nonce(); header.nonce = impl_->nonce;
       const auto suffix = hex_nonce(impl_->nonce);
+      USB_VAULT_TRACE("创建助手", "维护测量：启动助手", "容器 " + diagnostics::utf8(container));
       impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
     impl_->pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, impl_->process.get());
       impl_->container = container; impl_->drive = letter;
@@ -495,11 +572,18 @@ std::uint64_t VolumeImportSession::protected_space(std::wstring_view container_p
     for (;;) {
       const auto response = detail::read_response(impl_->pipe.get());
       if (response.type == detail::MessageType::progress) continue;
+      USB_VAULT_TRACE("创建助手", "维护测量结果",
+                      "错误码 " + std::to_string(response.error) + "；返回值 " +
+                          std::to_string(response.value) + "；盘符 " + diagnostics::drive_text(letter));
       if (response.error == 0) return response.value;
       if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid maintenance measurement result");
       throw_creation(static_cast<CreationError>(response.error), "maintenance measurement failed");
     }
-  } catch (...) { close(); throw; }
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手", "维护测量失败", "");
+    close();
+    throw;
+  }
 }
 
 void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, std::int32_t mount_id,
@@ -530,12 +614,16 @@ void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, 
   if (!impl_->connected) {
     impl_->nonce = random_nonce(); header.nonce = impl_->nonce;
     const auto suffix = hex_nonce(impl_->nonce);
+    USB_VAULT_TRACE("创建助手", "受保护导入：启动助手", "容器 " + diagnostics::utf8(container));
     impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
     impl_->pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, impl_->process.get());
     impl_->container=container;impl_->drive=letter;impl_->mount_id=mount_id;impl_->mounted_bytes=mounted_bytes;
     impl_->connected=true;
   }
   const auto& pipe = impl_->pipe;
+  USB_VAULT_TRACE("创建助手", "受保护导入：发送请求",
+                  "来源 " + diagnostics::utf8(source) + "；目标 " + diagnostics::utf8(destination) +
+                      "；盘符 " + diagnostics::drive_text(letter));
   detail::write_request(pipe.get(), header, container, outer_password, hidden_password, source, destination);
   bool sent = false;
   for (;;) {
@@ -545,11 +633,15 @@ void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, 
       if (!sent && cancelled && cancelled()) {detail::write_cancel_request(pipe.get(), header.nonce);sent=true;}
       continue;
     }
+    USB_VAULT_TRACE("创建助手", "受保护导入结果", "错误码 " + std::to_string(response.error));
     if (response.error == 0) return;
     if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid protected import result");
     throw_creation(static_cast<CreationError>(response.error), "protected import failed; maintenance recovery required");
   }
-  } catch (...) { close(); impl_->failed=true; throw; }
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手", "受保护导入失败", "");
+    close(); impl_->failed=true; throw;
+  }
 }
 
 void import_protected_file(const std::filesystem::path& helper_path,
@@ -639,6 +731,7 @@ std::uint64_t VolumeMeasurementSession::measure(
       impl_->pipe = connect_to_helper(pipe_name, impl_->process.get());
       impl_->connected = true;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("创建助手", "空间测量：启动或连接助手失败", "");
       close();
       throw;
     }
@@ -664,9 +757,12 @@ std::uint64_t VolumeMeasurementSession::measure(
     }
   } catch (...) {
     // Transport and framing failures mean the helper can no longer be trusted.
+    USB_VAULT_TRACE_FAILURE("创建助手", "空间测量：通信失败", "");
     close();
     throw;
   }
+  USB_VAULT_TRACE("创建助手", "空间测量结果",
+                  "错误码 " + std::to_string(answer.error) + "；返回值 " + std::to_string(answer.value));
   if (answer.error == 0) return answer.value;
   if (!known_error(answer.error)) {
     close();
