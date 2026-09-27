@@ -6,6 +6,8 @@
 #include <string>
 #include <regex>
 #include <algorithm>
+#include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace usb_vault::platform::windows;
@@ -28,7 +30,7 @@ void verify_card_snapshots(const fs::path& root) {
   for (unsigned short scenario = 0; scenario < 7; ++scenario) {
     SYSTEMTIME time{2026, 9, 0, 22, 12, 0, scenario, 0};
     wchar_t name[80]{};
-    swprintf_s(name, L"startup-log-20260922-1200%02u.txt", static_cast<unsigned int>(scenario));
+    swprintf_s(name, L"runtime-log-20260922-1200%02u.txt", static_cast<unsigned int>(scenario));
     const auto path = root / name;
     StartupLog log;
     require(log.open(root, time), "cannot open snapshot fixture");
@@ -64,7 +66,7 @@ void verify_card_snapshots(const fs::path& root) {
     const auto text = read(path);
     require(count(text, "错误码：2011") == expected, "card failure lost or duplicated");
     const auto ready = text.find("[完成] 页面就绪");
-    const auto end = text.find("[完成] 启动日志结束");
+    const auto end = text.find("[完成] 日志结束");
     require(ready != std::string::npos && end > ready, "final markers missing or reordered");
     if (expected) {
       require(text.rfind("错误码：2011") < ready &&
@@ -80,15 +82,130 @@ void verify_card_snapshots(const fs::path& root) {
     fs::remove(path);
   }
 }
+// The runtime half of the log: the file outlives the startup section when it is
+// published, takes events from several threads intact, describes failures with
+// their codes and moves to a new part instead of dropping lines.
+void verify_runtime_log(const fs::path& root) {
+  namespace diagnostics = usb_vault::diagnostics;
+  const auto lines_of = [](const std::string& text) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    for (size_t end; (end = text.find("\r\n", start)) != std::string::npos; start = end + 2)
+      lines.push_back(text.substr(start, end - start));
+    return lines;
+  };
+  const SYSTEMTIME time{2026, 9, 0, 26, 9, 30, 0, 0};
+  const auto path = root / L"runtime-log-20260926-093000.txt";
+  {
+    StartupLog log;
+    require(log.open(root, time), "cannot open runtime fixture");
+    log.continue_as_runtime_log();
+    log.finish();
+    log.record(StartupStep::failure, StartupOutcome::failed, {.primary = {.code = 3005}});
+#if USB_VAULT_DEBUG_LOG
+    diagnostics::debug_log("测试", "运行期事件", "路径：D:\\vault\\a.hc");
+    try {
+      throw std::system_error(std::make_error_code(std::errc::file_exists), "target exists");
+    } catch (...) {
+      diagnostics::debug_log_exception("测试", "系统错误");
+    }
+    try {
+      throw std::runtime_error("plain failure");
+    } catch (...) {
+      diagnostics::debug_log_exception("测试", "普通异常", "盘符：X:");
+    }
+    try {
+      throw 7;
+    } catch (...) {
+      diagnostics::debug_log_exception("测试", "未知异常");
+    }
+    std::vector<std::thread> writers;
+    for (int writer = 0; writer < 8; ++writer) {
+      writers.emplace_back([writer] {
+        for (int index = 0; index < 200; ++index)
+          diagnostics::debug_log("并发", "写入", "写入者：" + std::to_string(writer));
+      });
+    }
+    for (auto& writer : writers) writer.join();
+#endif
+    const auto text = read(path);
+    require(text.starts_with("\xEF\xBB\xBFUSB Vault 运行日志"), "runtime log header missing");
+    require(text.find("[失败] 启动错误") == std::string::npos,
+            "the startup section accepted a record after it ended");
+    require(text.find("日志结束") == std::string::npos,
+            "the end marker was written before the runtime log closed");
+#if USB_VAULT_DEBUG_LOG
+    const auto runtime = text.find("[测试] 运行期事件；路径：D:\\vault\\a.hc");
+    require(runtime != std::string::npos &&
+            std::regex_search(text, std::regex(R"(\[线程 \d+\] \[测试\] 运行期事件)")),
+            "runtime events did not follow the startup section in the same file");
+    require(text.find("[测试] 系统错误；异常类型：class std::system_error；错误类别：generic；错误码：17（0x00000011）；原文：target exists") !=
+                std::string::npos,
+            "a system error lost its category, code or text");
+    require(text.find("[测试] 普通异常；盘符：X:；异常类型：class std::runtime_error；原文：plain failure") !=
+                std::string::npos,
+            "a plain exception lost its detail, type or text");
+    require(text.find("[测试] 未知异常；异常类型：未知（非 std::exception）") != std::string::npos,
+            "an unknown exception was not described");
+    size_t concurrent = 0;
+    for (const auto& line : lines_of(text)) {
+      if (line.find("[并发]") == std::string::npos) continue;
+      require(std::regex_match(line, std::regex(
+                  R"(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[线程 \d+\] \[并发\] 写入；写入者：[0-7])")),
+              "a concurrent line was torn or interleaved");
+      ++concurrent;
+    }
+    require(concurrent == 1600, "concurrent lines were lost");
+#endif
+  }
+  require(diagnostics::runtime_log_slot().load() == nullptr,
+          "the runtime log stayed published after its owner went away");
+  {
+    const auto closed = read(path);
+    require(closed.ends_with("[完成] 日志结束\r\n") &&
+                closed.find("日志结束") == closed.rfind("日志结束"),
+            "the runtime log did not end with exactly one end marker");
+  }
+  diagnostics::debug_log("测试", "无主之后");
+  require(read(path).find("无主之后") == std::string::npos,
+          "an event reached a file whose owner had gone");
+  fs::remove(path);
+
+  // A small part size forces rolling; every line survives across the parts.
+  const SYSTEMTIME rolled{2026, 9, 0, 26, 9, 31, 0, 0};
+  {
+    diagnostics::DebugLogFile file(4096);
+    require(file.open(root, rolled), "cannot open rolling fixture");
+    const std::string line(62, 'x');
+    for (int index = 0; index < 200; ++index) file.write(line + "\r\n");
+    require(file.error() == 0, "rolling reported an error");
+  }
+  size_t survived = 0;
+  for (unsigned int part = 1; part <= 9; ++part) {
+    wchar_t name[80]{};
+    if (part == 1) swprintf_s(name, L"runtime-log-20260926-093100.txt");
+    else swprintf_s(name, L"runtime-log-20260926-093100-p%02u.txt", part);
+    if (!fs::exists(root / name)) continue;
+    const auto text = read(root / name);
+    require(text.size() <= 4096, "a part exceeded its size");
+    require(text.starts_with("\xEF\xBB\xBFUSB Vault 运行日志\r\n"),
+            "a part lacks the plain log header");
+    for (const auto& line : lines_of(text)) survived += line == std::string(62, 'x') ? 1 : 0;
+    fs::remove(root / name);
+  }
+  require(survived == 200, "rolling dropped lines");
+}
+
 int main() {
   const auto root = fs::current_path() / (L"startup-log-tests-" + std::to_wstring(::GetCurrentProcessId()) +
       L"-" + std::to_wstring(::GetTickCount64()));
   try {
     require(fs::create_directory(root), "fixture already exists");
     verify_card_snapshots(root);
+    verify_runtime_log(root);
     const SYSTEMTIME time{2026, 9, 0, 20, 17, 12, 34, 0};
-    const auto first = root / L"startup-log-20260920-171234.txt";
-    const auto second = root / L"startup-log-20260920-171234-01.txt";
+    const auto first = root / L"runtime-log-20260920-171234.txt";
+    const auto second = root / L"runtime-log-20260920-171234-01.txt";
     StartupLog log;
     require(log.open(root, time), "cannot create startup log");
     StartupLog collision;
@@ -140,10 +257,10 @@ int main() {
     require(bounded.open(root, time), "cannot create bounded log");
     for (int index = 0; index < 1000; ++index) bounded.record(StartupStep::webview, StartupOutcome::begin);
     bounded.finish();
-    const auto third = root / L"startup-log-20260920-171234-02.txt";
+    const auto third = root / L"runtime-log-20260920-171234-02.txt";
     const auto limited = read(third);
     require(limited.size() < 65536 && std::count(limited.begin(), limited.end(), '\n') <= 129 &&
-            limited.find("启动日志结束") != std::string::npos,
+            limited.find("日志结束") != std::string::npos,
             "log exceeded fixed record budget");
     StartupLog unavailable;
     require(!unavailable.open(root / L"missing", time) && unavailable.error() != 0,

@@ -66,7 +66,7 @@ void run_case(const fs::path& root, Case fault, unsigned int timing, unsigned in
   CardEntryContextController entry(source);
   StartupLog log;
   const SYSTEMTIME time{2026, 9, 0, 22, 13, 0, 0, 0};
-  const auto path = root / L"startup-log-20260922-130000.txt";
+  const auto path = root / L"runtime-log-20260922-130000.txt";
   require(log.open(root, time), "cannot open matrix log");
   if (timing) log.record_card_state({}, true);
   require(entry.handle_arrival() == CardEntryRoute::unavailable && !entry.has_context(),
@@ -98,7 +98,7 @@ void run_case(const fs::path& root, Case fault, unsigned int timing, unsigned in
   require(at != std::string::npos && text.find("；错误码：2011", at + 1) == std::string::npos,
       "log lost, changed or duplicated exact diagnostic fields");
   require(at < text.find("[完成] 页面就绪") &&
-      text.find("[完成] 页面就绪") < text.find("[完成] 启动日志结束"),
+      text.find("[完成] 页面就绪") < text.find("[完成] 日志结束"),
       "diagnostic was written after final markers");
   require(text.find("SENSITIVE") == std::string::npos && text.find("3735928559") == std::string::npos,
       "exception context or untyped system value leaked");

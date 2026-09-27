@@ -311,7 +311,7 @@ void finish_startup_log() noexcept {
   g_startup_log.finish();
   if (g_startup_log.error() && !g_log_warning_shown) {
     g_log_warning_shown = true;
-    show_warning(L"启动日志未能完整写入应用目录。错误码：9010。请检查目录权限和磁盘空间；应用仍可继续运行。");
+    show_warning(L"运行日志未能完整写入应用目录。错误码：9010。请检查目录权限和磁盘空间；应用仍可继续运行。");
   }
 }
 
@@ -1310,6 +1310,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     }
   } startup_scope;
   static_cast<void>(g_startup_log.open(executable_directory()));
+  // The same file carries the runtime events once the page is ready.
+  g_startup_log.continue_as_runtime_log();
   if (g_startup_log.error()) finish_startup_log();
   g_startup_log.record(StartupStep::maintenance, StartupOutcome::begin);
   try {

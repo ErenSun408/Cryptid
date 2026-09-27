@@ -2,6 +2,7 @@
 #include "card/process_security_failure.h"
 #include <Windows.h>
 #include "usb_vault/card/failure_diagnostic.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include <cstdio>
 #include <filesystem>
 #include <new>
@@ -15,10 +16,16 @@ enum class StartupOutcome : unsigned int { begin = 0, completed = 1, failed = 2 
 
 // UI-thread only. No text/payload input: success IPC detail can be an identity.
 // Create-only, bounded, flushed on each record; logging never throws or retries
-// a card operation. Logs intentionally stop when the initial page is ready.
+// a card operation. The startup section ends when the initial page is ready;
+// once published as the runtime log, the same file stays open for the runtime
+// events that follow, and the end marker is written only when it closes.
 class StartupLog final {
  public:
-  ~StartupLog() noexcept { finish(); }
+  ~StartupLog() noexcept {
+    if (diagnostics::runtime_log_slot().load() == &file_) diagnostics::set_runtime_log(nullptr);
+    finish();
+    end_log();
+  }
   StartupLog() = default;
   StartupLog(const StartupLog&) = delete;
   StartupLog& operator=(const StartupLog&) = delete;
@@ -29,46 +36,28 @@ class StartupLog final {
   }
   bool open(const std::filesystem::path& directory, const SYSTEMTIME& time) noexcept {
     finish();
+    end_log();
     error_ = 0;
     sequence_ = 0;
     last_card_failure_ = {};
     finalizing_page_ = false;
-    try {
-      const DWORD attributes = ::GetFileAttributesW(directory.c_str());
-      if (attributes == INVALID_FILE_ATTRIBUTES) { error_ = ::GetLastError(); return false; }
-      if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-        error_ = ERROR_INVALID_NAME; return false;
-      }
-      for (unsigned int collision = 0; collision < 100; ++collision) {
-        wchar_t name[96]{};
-        if (collision == 0)
-          swprintf_s(name, L"startup-log-%04u%02u%02u-%02u%02u%02u.txt",
-              time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
-        else
-          swprintf_s(name, L"startup-log-%04u%02u%02u-%02u%02u%02u-%02u.txt",
-              time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, collision);
-        file_ = ::CreateFileW((directory / name).c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-            nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
-            FILE_FLAG_WRITE_THROUGH, nullptr);
-        if (file_ != INVALID_HANDLE_VALUE) break;
-        const DWORD error = ::GetLastError();
-        if (error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) { error_ = error; return false; }
-      }
-      if (file_ == INVALID_HANDLE_VALUE) { error_ = ERROR_FILE_EXISTS; return false; }
-      constexpr char header[] = "\xEF\xBB\xBFUSB Vault 启动日志\r\n";
-      write(header, static_cast<DWORD>(sizeof(header) - 1));
-      record(StartupStep::entry, StartupOutcome::begin);
-      return error_ == 0;
-    } catch (const std::bad_alloc&) { error_ = ERROR_NOT_ENOUGH_MEMORY; }
-      catch (...) { error_ = ERROR_GEN_FAILURE; }
-    close();
-    return false;
+    finished_ = false;
+    ended_ = false;
+    if (!file_.open(directory, time)) return false;
+    record(StartupStep::entry, StartupOutcome::begin);
+    return error() == 0;
+  }
+  // Keeps the file open after the startup section ends and routes the
+  // runtime events of this launch into it.
+  void continue_as_runtime_log() noexcept {
+    keep_open_ = true;
+    diagnostics::set_runtime_log(&file_);
   }
   void record(StartupStep step, StartupOutcome outcome,
       card::FailureDiagnostic failure = {}, unsigned int event_kind = 0,
       unsigned int event_code = 0, unsigned int substep = 0) noexcept {
     // Reserve the final snapshot, page-ready marker and end marker.
-    if (file_ == INVALID_HANDLE_VALUE || error_ || sequence_ >=
+    if (!file_.is_open() || error_ || (finished_ && step != StartupStep::end) || sequence_ >=
         (finalizing_page_ || step == StartupStep::end ? 128u : 125u)) return;
     const auto primary = clean(failure.primary);
     const auto cleanup = clean(failure.cleanup);
@@ -104,11 +93,11 @@ class StartupLog final {
       append("；步骤码：%u", substep);
     append("\r\n");
     ++sequence_;
-    if (valid) write(text, static_cast<DWORD>(used));
-    else { error_ = ERROR_INVALID_DATA; close(); }
+    if (valid) file_.write(std::string_view(text, used));
+    else { error_ = ERROR_INVALID_DATA; file_.close(); }
   }
   void record_card_state(card::FailureDiagnostic failure, bool initial = false) noexcept {
-    if (file_ == INVALID_HANDLE_VALUE || error_) return;
+    if (!file_.is_open() || error_ || finished_) return;
     failure = {.primary = clean(failure.primary), .cleanup = clean(failure.cleanup)};
     const bool failed = failure.primary.code || failure.cleanup.code;
     const bool changed = !same(failure.primary, last_card_failure_.primary) ||
@@ -122,19 +111,21 @@ class StartupLog final {
     last_card_failure_ = failure;
   }
   void finish_page(card::FailureDiagnostic failure) noexcept {
-    if (file_ == INVALID_HANDLE_VALUE) return;
+    if (!file_.is_open() || finished_) return;
     finalizing_page_ = true;
     record_card_state(failure);
     record(StartupStep::ready, StartupOutcome::completed);
     finish();
     finalizing_page_ = false;
   }
+  // Ends the startup section. A log that carries on as the runtime log stays
+  // open and receives its end marker when it is closed.
   void finish() noexcept {
-    if (file_ == INVALID_HANDLE_VALUE) return;
-    record(StartupStep::end, StartupOutcome::completed);
-    close();
+    if (!file_.is_open() || finished_) return;
+    finished_ = true;
+    if (!keep_open_) end_log();
   }
-  [[nodiscard]] DWORD error() const noexcept { return error_; }
+  [[nodiscard]] DWORD error() const noexcept { return error_ ? error_ : file_.error(); }
  private:
   static card::FailureDetail clean(card::FailureDetail value) noexcept {
     if (value.code < 1000 || value.code > 9999) return {};
@@ -173,26 +164,21 @@ class StartupLog final {
         return "WebView 页面初始化";
       case StartupStep::ready: return "页面就绪";
       case StartupStep::failure: return "启动错误";
-      case StartupStep::end: return "启动日志结束";
+      case StartupStep::end: return "日志结束";
     }
     return "未知启动阶段";
   }
-  void write(const char* bytes, DWORD size) noexcept {
-    DWORD written{};
-    if (!::WriteFile(file_, bytes, size, &written, nullptr)) error_ = ::GetLastError();
-    else if (written != size) error_ = ERROR_WRITE_FAULT;
-    else if (!::FlushFileBuffers(file_)) error_ = ::GetLastError();
-    if (error_) close();
+  void end_log() noexcept {
+    if (!file_.is_open() || ended_) return;
+    record(StartupStep::end, StartupOutcome::completed);
+    ended_ = true;
+    file_.close();
   }
-  void close() noexcept {
-    if (file_ != INVALID_HANDLE_VALUE) {
-      const HANDLE file = file_;
-      file_ = INVALID_HANDLE_VALUE;
-      if (!::CloseHandle(file) && !error_) error_ = ::GetLastError();
-    }
-  }
-  HANDLE file_{INVALID_HANDLE_VALUE};
+  diagnostics::DebugLogFile file_;
   DWORD error_{};
+  bool finished_{};
+  bool ended_{};
+  bool keep_open_{};
   unsigned int sequence_{};
   card::FailureDiagnostic last_card_failure_{};
   bool finalizing_page_{};

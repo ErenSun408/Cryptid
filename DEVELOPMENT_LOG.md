@@ -4121,3 +4121,10 @@
 - 验证：p46 全部默认目标及 `USB Vault.exe` 构建通过；`card_login_mount_session_tests`、`card_product_ui_session_controller_tests`、`card_product_webview_host_object_tests`、`card_product_ui_page_contract_tests` 通过；navigation DOM 308 项通过。全量 CTest 73 项中 72 项通过，唯一失败为 vikey_helper_hid_compatibility_tests（开发 HID 探针丢失受限进程属性），与本片无关、历史同机多次出现，不能称为全绿。未做实机外部卸载验证。
 - 安全与风险：只有驱动明确应答无卷时才改回未挂载，查询失败不会误判；新标记不含档位或卷类型信息。外部释放不记入操作日志。
 - 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。
+
+### 2026-09-26 — debug / 启动日志扩展为运行日志（底座）
+- 范围与审计：用户决定测试期调试日志“什么都记”，记录路径、容器名、卷类型、派生回退及每处错误码，不另写需求文档。与需求 8.4／8.6 本地状态层约束及第 2552 行“页面就绪后结束、不追加运行期事件”冲突；按用户测试期决定执行，保留两条底线：不记口令、密钥与卡内容；以构建开关 `USB_VAULT_DEBUG_LOG`（默认开）控制，正式发布前必须关闭。
+- 检查与实现：新增仅头文件的 `DebugLogFile`（线程安全、逐条落盘、8 MiB 分段续写 `-pNN`、写失败只记错误不外抛），文件改名 `runtime-log-yyyyMMdd-HHmmss.txt`。按用户要求日志只注明开启与结束：各分段首行仅“USB Vault 运行日志”，页面就绪不再写阶段结束，文件真正关闭时写唯一的“日志结束”。`StartupLog` 改为经其写入，保留原格式、128 条上限与去重；`continue_as_runtime_log` 让启动段结束后文件继续承接运行期事件，9010 提示同步改名。
+- 接口：`debug_log`（毫秒时间、线程号、模块、事件、细节）、`debug_log_exception`（在 catch 中记录异常类型、错误类别、数值与十六进制码、原文，原文非 UTF-8 时按系统代码页转换）、`utf8`；开关关闭时两者为空实现。本片未接入业务埋点。
+- 验证：p46 全量构建与 `USB Vault.exe` 通过；`startup_log_tests` 新增启动段后续写、结束标记只在关闭时出现且唯一、异常描述、8 线程 1600 行无撕裂、小分段续写不丢行且各段标题一致、所有者析构后不再写入；`process_security_log_matrix_tests` 通过。全量 CTest 73 项中 72 项通过，唯一失败为既有 vikey_helper_hid_compatibility_tests，与本片无关。
+- 提交：用户检查后授权提交本片；历史交付日志保留工作区，禁止推送。
