@@ -1,4 +1,7 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
+#include "usb_vault/diagnostics/debug_log.h"
+
+#include <chrono>
 
 #include "usb_vault/ui/webview_password_array.h"
 #include "usb_vault/volume_creation/volume_creator.h"
@@ -413,6 +416,189 @@ class PasswordArgumentsWiper final {
   return outcome == OperationUiOutcome::succeeded ? 0 : 1;
 }
 
+
+// ---- Test-phase runtime log for page calls --------------------------------
+// The page's name for a member, taken from the same table GetIDsOfNames uses.
+[[nodiscard]] const char* member_name(const DISPID member) noexcept {
+  switch (member) {
+    case kBeginConfirmLoginResetId: return "beginConfirmLoginReset";
+    case kBeginCreateBId: return "beginCreateContainerBMib";
+    case kBeginCreateId: return "beginCreateContainerMib";
+    case kBeginDecoySurveyId: return "beginDecoySurvey";
+    case kBeginEndDecoyMaintenanceId: return "beginEndDecoyMaintenance";
+    case kBeginForceUnmountBatchId: return "beginForceUnmountBatch";
+    case kBeginForceUnmountLastId: return "beginForceUnmountLast";
+    case kBeginLoginResetPreparationId: return "beginLoginResetPreparation";
+    case kBeginMeasureDecoySpaceId: return "beginMeasureDecoySpace";
+    case kBeginMountAdoptedId: return "beginMountAdoptedContainer";
+    case kBeginMountBatchId: return "beginMountBatch";
+    case kBeginOpenDecoyMaintenanceId: return "beginOpenDecoyMaintenance";
+    case kPartitionCheckId: return "beginPartitionCheck";
+    case kPartitionConvertId: return "beginPartitionConversion";
+    case kPartitionCreateId: return "beginPartitionCreate";
+    case kPartitionPairId: return "beginPartitionPair";
+    case kPartitionBeginId: return "beginPartitionRefresh";
+    case kPartitionResumeId: return "beginPartitionResume";
+    case kBeginUnmountId: return "beginUnmount";
+    case kBeginUnmountBatchId: return "beginUnmountBatch";
+    case kBeginUnmountContainerId: return "beginUnmountContainer";
+    case kCanLoginResetId: return "canLoginReset";
+    case kCanResetCardRecordId: return "canResetCardRecord";
+    case kCancelCreationId: return "cancelContainerCreation";
+    case kCancelDecoySurveyId: return "cancelDecoySurvey";
+    case kCancelExternalDropId: return "cancelExternalDrop";
+    case kCancelLoginResetId: return "cancelLoginReset";
+    case kChooseContainerDirectoryId: return "chooseContainerDirectory";
+    case kClearExternalDropTargetId: return "clearExternalDropTarget";
+    case kClearOperationHistoryId: return "clearOperationHistory";
+    case kPartitionClearId: return "clearPartitions";
+    case kBitLockerConfirmId: return "confirmPartitionBitLocker";
+    case kCopyContainerEntryId: return "copyContainerEntry";
+    case kCreateContainerBMibId: return "createContainerBMib";
+    case kCreateContainerDirectoryId: return "createContainerDirectory";
+    case kCreateContainerMibId: return "createContainerMib";
+    case kDeleteContainerEntryId: return "deleteContainerEntry";
+    case kExitApplicationId: return "exitApplication";
+    case kExportContainerEntryId: return "exportContainerEntry";
+    case kExportContainerFileId: return "exportContainerFile";
+    case kForgetContainerId: return "forgetContainer";
+    case kGetAutoMountId: return "getAutoMountEnabled";
+    case kBatchItemIdId: return "getBatchItemId";
+    case kBatchItemNameId: return "getBatchItemName";
+    case kBatchItemOutcomeId: return "getBatchItemOutcome";
+    case kBatchProgressId: return "getBatchProgress";
+    case kGetContainerConversionId: return "getContainerConversion";
+    case kGetContainerCountId: return "getContainerCount";
+    case kGetContainerDriveLetterId: return "getContainerDriveLetter";
+    case kGetContainerIdId: return "getContainerId";
+    case kGetContainerMountedId: return "getContainerMounted";
+    case kGetContainerNameId: return "getContainerName";
+    case kGetContainerPartitionId: return "getContainerPartition";
+    case kGetContainerSizeMibId: return "getContainerSizeMib";
+    case kGetContainerVolumeUnavailableId: return "getContainerVolumeUnavailable";
+    case kCreationErrorId: return "getCreationError";
+    case kCreationProgressId: return "getCreationProgress";
+    case kDecoySpaceId: return "getDecoyMaintenanceSpace";
+    case kDecoyWriteBlockedId: return "getDecoyMaintenanceWriteBlocked";
+    case kDecoySurveyIdId: return "getDecoySurveyId";
+    case kDecoySurveyProgressId: return "getDecoySurveyProgress";
+    case kDirectoryErrorId: return "getDirectoryError";
+    case kExternalDropStatusId: return "getExternalDropStatus";
+    case kExternalFileProgressId: return "getExternalFileProgress";
+    case kGetForcePreferenceId: return "getForceUnmountEnabled";
+    case kLoginResetDrivesId: return "getLoginResetDrives";
+    case kLoginResetMountsKnownId: return "getLoginResetMountsKnown";
+    case kLoginResetStatusId: return "getLoginResetStatus";
+    case kLoginResetTicketId: return "getLoginResetTicket";
+    case kGetMountImportedContainersId: return "getMountImportedContainers";
+    case kGetOperationCompletedAtId: return "getOperationCompletedAtUnixMs";
+    case kGetOperationContainerNameId: return "getOperationContainerName";
+    case kGetOperationCountId: return "getOperationCount";
+    case kGetOperationDriveLetterId: return "getOperationDriveLetter";
+    case kGetOperationKindId: return "getOperationKind";
+    case kGetOperationLoggingEnabledId: return "getOperationLoggingEnabled";
+    case kGetOperationOutcomeId: return "getOperationOutcome";
+    case kBitLockerProgressId: return "getPartitionBitLockerProgress";
+    case kPartitionCheckStatusId: return "getPartitionCheckStatus";
+    case kPartitionDisplayId: return "getPartitionDisplay";
+    case kPartitionListId: return "getPartitionList";
+    case kPartitionStatusId: return "getPartitionRefreshStatus";
+    case kGetRememberContainerPathsId: return "getRememberContainerPaths";
+    case kPartitionSelectedId: return "getSelectedPartition";
+    case kGetSessionStateId: return "getSessionState";
+    case kGetStartupViewId: return "getStartupView";
+    case kVolumeOperationStatusId: return "getVolumeOperationStatus";
+    case kGetWindowSizeId: return "getWindowSize";
+    case kHasActiveSessionId: return "hasActiveSession";
+    case kListContainerDirectoryId: return "listContainerDirectory";
+    case kMountAdoptedContainerId: return "mountAdoptedContainer";
+    case kMountContainerId: return "mountContainer";
+    case kMoveContainerEntryId: return "moveContainerEntry";
+    case kBitLockerHelpId: return "openBitLockerHelp";
+    case kOpenConfigurationId: return "openConfiguration";
+    case kPartitionToolId: return "openDiskManagement";
+    case kRenameContainerEntryId: return "renameContainerEntry";
+    case kReorderContainersId: return "reorderContainers";
+    case kResetCardRecordId: return "resetCardRecord";
+    case kReturnToLoginId: return "returnToLogin";
+    case kSelectExternalFilesId: return "selectExternalFiles";
+    case kPartitionSelectId: return "selectPartition";
+    case kSetAutoMountId: return "setAutoMountEnabled";
+    case kExternalDropBoundsId: return "setExternalDropBounds";
+    case kExternalDropButtonBoundsId: return "setExternalDropButtonBounds";
+    case kSetExternalDropTargetId: return "setExternalDropTarget";
+    case kSetForcePreferenceId: return "setForceUnmountEnabled";
+    case kSetMountImportedContainersId: return "setMountImportedContainers";
+    case kSetOperationLoggingEnabledId: return "setOperationLoggingEnabled";
+    case kSetRememberContainerPathsId: return "setRememberContainerPaths";
+    case kSetWindowSizeId: return "setWindowSize";
+    case kSubmitInitializationPasswordBytesId: return "submitInitializationPasswordBytes";
+    case kSubmitLoginPasswordBytesId: return "submitLoginPasswordBytes";
+    case kUnmountId: return "unmount";
+    case kUnmountContainerId: return "unmountContainer";
+    default: return nullptr;
+  }
+}
+
+[[nodiscard]] std::string member_text(const DISPID member) {
+  const char* const name = member_name(member);
+  return name ? std::string(name) : "成员 " + std::to_string(member);
+}
+
+// Polling getters run many times a second while work is in flight. They are
+// recorded only when they fail for a reason other than "still busy".
+[[nodiscard]] bool polled_member(const DISPID member) noexcept {
+  const char* const name = member_name(member);
+  if (name == nullptr) return false;
+  const std::string_view text(name);
+  return text.starts_with("get") || text.starts_with("has") || text.starts_with("is") ||
+         text.ends_with("Status") || text.ends_with("Progress") || text.ends_with("Ticket") ||
+         text.ends_with("Drives") || text.ends_with("MountsKnown") || text == "canLoginReset" ||
+         text == "canResetCardRecord";
+}
+
+// A byte array is how a password crosses the bridge, so only its size is kept.
+[[nodiscard]] std::string variant_text(const VARIANT& value) {
+  if ((value.vt & VT_ARRAY) != 0) {
+    const SAFEARRAY* const array = (value.vt & VT_BYREF) ? *value.pparray : value.parray;
+    ULONG elements = 0;
+    if (array != nullptr && array->cDims == 1) elements = array->rgsabound[0].cElements;
+    return "字节数组 " + std::to_string(elements) + " 项";
+  }
+  switch (value.vt) {
+    case VT_EMPTY: return "空";
+    case VT_BOOL: return value.boolVal == VARIANT_FALSE ? "false" : "true";
+    case VT_I4: return std::to_string(value.lVal);
+    case VT_UI4: return std::to_string(value.ulVal);
+    case VT_I2: return std::to_string(value.iVal);
+    case VT_UI2: return std::to_string(value.uiVal);
+    case VT_I8: return std::to_string(value.llVal);
+    case VT_UI8: return std::to_string(value.ullVal);
+    case VT_R8: return std::to_string(value.dblVal);
+    case VT_INT: return std::to_string(value.intVal);
+    case VT_UINT: return std::to_string(value.uintVal);
+    case VT_BSTR: {
+      if (value.bstrVal == nullptr) return "\"\"";
+      const std::wstring_view text(value.bstrVal, ::SysStringLen(value.bstrVal));
+      std::string shown = diagnostics::utf8(text.substr(0, 300));
+      if (text.size() > 300) shown += "…（共 " + std::to_string(text.size()) + " 字符）";
+      return "\"" + shown + "\"";
+    }
+    default: return "类型 " + std::to_string(value.vt);
+  }
+}
+
+[[nodiscard]] std::string arguments_text(const DISPPARAMS* const parameters) {
+  if (parameters == nullptr || parameters->cArgs == 0 || parameters->rgvarg == nullptr) return "无参数";
+  std::string text = "参数 ";
+  // COM passes arguments in reverse order.
+  for (UINT index = parameters->cArgs; index > 0; --index) {
+    if (index != parameters->cArgs) text += "，";
+    text += variant_text(parameters->rgvarg[index - 1]);
+  }
+  return text;
+}
+
 class CardProductWebViewHostObject final : public IDispatch {
  public:
   CardProductWebViewHostObject(
@@ -721,10 +907,45 @@ class CardProductWebViewHostObject final : public IDispatch {
     return DISP_E_UNKNOWNNAME;
   }
 
-  HRESULT STDMETHODCALLTYPE Invoke(DISPID member, REFIID iid, LCID, WORD flags,
+  HRESULT STDMETHODCALLTYPE Invoke(DISPID member, REFIID iid, LCID locale, WORD flags,
                                    DISPPARAMS* parameters, VARIANT* result,
-                                   EXCEPINFO*, UINT* argument_error) noexcept
-      override {
+                                   EXCEPINFO* exception,
+                                   UINT* argument_error) noexcept override {
+    if constexpr (!USB_VAULT_DEBUG_LOG) {
+      return invoke_unlogged(member, iid, locale, flags, parameters, result, exception,
+                             argument_error);
+    } else {
+      // Arguments are wiped by the call itself, so they are described first.
+      std::string arguments;
+      try {
+        arguments = arguments_text(parameters);
+      } catch (...) {
+      }
+      const auto started = std::chrono::steady_clock::now();
+      const HRESULT hr = invoke_unlogged(member, iid, locale, flags, parameters, result,
+                                         exception, argument_error);
+      const bool polled = polled_member(member);
+      if (!polled || (FAILED(hr) && hr != E_PENDING)) {
+        std::string returned;
+        try {
+          if (SUCCEEDED(hr) && result != nullptr) returned = "；返回 " + variant_text(*result);
+        } catch (...) {
+        }
+        USB_VAULT_TRACE("页面桥", "页面调用 " + member_text(member),
+                        arguments + "；HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(hr)) +
+                            returned + "；耗时 " +
+                            std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - started)
+                                               .count()) +
+                            " 毫秒");
+      }
+      return hr;
+    }
+  }
+
+  HRESULT invoke_unlogged(DISPID member, REFIID iid, LCID, WORD flags,
+                          DISPPARAMS* parameters, VARIANT* result,
+                          EXCEPINFO*, UINT* argument_error) noexcept {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
     if (configuration_pending_) {
@@ -1258,9 +1479,18 @@ class CardProductWebViewHostObject final : public IDispatch {
                 outcome = 2;
               }
             } catch (const std::system_error& error) {
+              USB_VAULT_TRACE_FAILURE("页面桥", "批量操作单项失败",
+                                      "容器 #" + std::to_string(plan[i].target.id));
               outcome = volume_failure_status(error.code());
-            } catch (...) {} // One failed item does not stop an independent request.
+            } catch (...) { // One failed item does not stop an independent request.
+              USB_VAULT_TRACE_FAILURE("页面桥", "批量操作单项失败",
+                                      "容器 #" + std::to_string(plan[i].target.id));
+            }
           }
+          USB_VAULT_TRACE("页面桥", mount ? "批量挂载单项结果" : force ? "批量强制卸载单项结果" : "批量卸载单项结果",
+                          "第 " + std::to_string(i + 1) + " / " + std::to_string(plan.size()) +
+                              " 项；容器 #" + std::to_string(plan[i].target.id) + "；结果码 " +
+                              std::to_string(interrupted() ? 10u : outcome));
           {
             std::lock_guard lock(batch_mutex_);
             batch_items_[i].outcome = interrupted() ? 10 : outcome;
@@ -1271,6 +1501,10 @@ class CardProductWebViewHostObject final : public IDispatch {
         {
           std::lock_guard lock(batch_mutex_);
           batch_state_ = interrupted() ? 4U : SUCCEEDED(com) ? 2U : 3U;
+          USB_VAULT_TRACE("页面桥", "批量操作结束",
+                          "状态 " + std::to_string(batch_state_) + "；完成 " +
+                              std::to_string(batch_completed_) + " / " + std::to_string(plan.size()) +
+                              "；COM " + diagnostics::hex_text(static_cast<std::uint32_t>(com)));
           batch_current_ = 0;
           // Removed-card snapshots must not retain container names for a later login.
           if (interrupted()) batch_items_.clear();
@@ -1392,7 +1626,11 @@ class CardProductWebViewHostObject final : public IDispatch {
               }
               partition_status_.store(2);
             }
+            USB_VAULT_TRACE("页面桥", "分区枚举结束",
+                            "状态 " + std::to_string(partition_status_.load()) + "；分区数 " +
+                                std::to_string(discovered.size()));
           } catch (...) {
+            USB_VAULT_TRACE_FAILURE("页面桥", "分区枚举失败", "");
             std::lock_guard lock(partition_mutex_);
             partition_items_.clear(); partition_status_.store(3);
           }
@@ -1426,7 +1664,10 @@ class CardProductWebViewHostObject final : public IDispatch {
               partition_services_.check(target);
               status = 2;
             }
-          } catch (...) {}
+          } catch (...) {
+            USB_VAULT_TRACE_FAILURE("页面桥", "分区检查失败", "");
+          }
+          USB_VAULT_TRACE("页面桥", "分区检查结束", "状态 " + std::to_string(status));
           {
             std::lock_guard lock(partition_mutex_);
             if (creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch) status = 4;
@@ -1572,7 +1813,9 @@ class CardProductWebViewHostObject final : public IDispatch {
           state = 2;
         } catch (...) {
           // Every refusal the session makes is one refusal, and so is this.
+          USB_VAULT_TRACE_FAILURE("页面桥", "诱饵搜索失败", "");
         }
+        USB_VAULT_TRACE("页面桥", "诱饵搜索结束", "状态 " + std::to_string(state));
         password.clear();
         if (SUCCEEDED(com)) ::CoUninitialize();
         {
@@ -1738,8 +1981,11 @@ class CardProductWebViewHostObject final : public IDispatch {
             status = 2;
           }
         } catch (const std::system_error& error) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "卷操作失败", member_text(member) + "；容器 #" + std::to_string(id));
           status = volume_failure_status(error.code());
-        } catch (...) {}
+        } catch (...) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "卷操作失败", member_text(member) + "；容器 #" + std::to_string(id));
+        }
         if (SUCCEEDED(com)) ::CoUninitialize();
         // A removal during an IOCTL is handled by the deferred lifecycle path.
         // Do not present its late result as a successful user operation.
@@ -1747,6 +1993,10 @@ class CardProductWebViewHostObject final : public IDispatch {
           status = 10;
           clear_space();
         }
+        USB_VAULT_TRACE("页面桥", "卷操作结束",
+                        member_text(member) + "；容器 #" + std::to_string(id) + "；强制 " +
+                            diagnostics::flag_text(force) + "；状态码 " + std::to_string(status) +
+                            "；安全卡中断 " + diagnostics::flag_text(creation_work_->interrupted.load()));
         volume_status_.store(status);
         creation_work_->running.store(false);
       });
@@ -1836,8 +2086,10 @@ class CardProductWebViewHostObject final : public IDispatch {
           operation();
           status = creation_paused_.load() ? 6u : 2u;
         } catch (const application::ContainerCreationCleanupError&) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "创建后台任务清理失败", "");
           status = 5;
         } catch (const std::system_error& error) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "创建后台任务失败", "");
           creation_error_.store(creation_failure_code(error.code()));
           // A request alone proves neither cancellation nor successful cleanup.
           // Only the creator's confirmed outcome may claim cancellation.
@@ -1848,12 +2100,20 @@ class CardProductWebViewHostObject final : public IDispatch {
                          volume_creation::CreationError::cleanup_failed)) {
             status = 5;
           }
-        } catch (...) {}
+        } catch (...) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "创建后台任务失败", "");
+        }
         try { controller_.set_creation_feedback({}); } catch (...) {}
         try { controller_.set_creation_cancellation({}); } catch (...) {}
         try { controller_.set_creation_revocation({}); } catch (...) {}
         if (SUCCEEDED(com)) ::CoUninitialize();
         if (status >= 3 && status <= 5 && !creation_error_.load()) creation_error_.store(static_cast<unsigned int>(E_FAIL));
+        USB_VAULT_TRACE("页面桥", "创建后台任务结束",
+                        "状态 " + std::to_string(status) + "；页面错误码 " +
+                            std::to_string(creation_error_.load()) + "（" +
+                            diagnostics::hex_text(creation_error_.load()) + "）；原地加密 " +
+                            diagnostics::flag_text(creation_work_->inplace_operation.load()) + "；已暂停 " +
+                            diagnostics::flag_text(creation_paused_.load()));
         creation_status_.store(status);
         creation_work_->finish();
         creation_work_->running.store(false);
@@ -2737,15 +2997,24 @@ class CardProductWebViewHostObject final : public IDispatch {
           } else {
             if (force) {
               try { controller_.force_login_reset_mounts(ticket, interrupted); }
-              catch (...) { status = 4; }
+              catch (...) {
+                USB_VAULT_TRACE_FAILURE("页面桥", "重置前强制卸载失败", "");
+                status = 4;
+              }
             }
             if (status != 4) {
               if (interrupted()) throw std::runtime_error("reset interrupted");
               controller_.confirm_login_reset(ticket); status = 5;
             }
           }
-        } catch (...) { controller_.cancel_login_reset(); }
+        } catch (...) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "登录重置失败", confirming ? "确认阶段" : "准备阶段");
+          controller_.cancel_login_reset();
+        }
         if (interrupted()) { controller_.cancel_login_reset(); status = 6; }
+        USB_VAULT_TRACE("页面桥", "登录重置后台任务结束",
+                        std::string(confirming ? "确认阶段" : "准备阶段") + "；状态 " + std::to_string(status) +
+                            "；强制 " + diagnostics::flag_text(force));
         reset_status_.store(status);
         creation_work_->running.store(false);
       });

@@ -29,6 +29,7 @@
 #include "usb_vault/ui/external_drop_target.h"
 #include "usb_vault/application/container_layout_v1.h"
 #include "usb_vault/ui/ui_close_guard.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/ui/webview_session_event.h"
 #include "usb_vault/volume/volume_provider.h"
 
@@ -562,9 +563,19 @@ void clear_application_session() noexcept {
 bool MainWindowCloseSink::request_login() noexcept {
   if (!g_main_window || !g_ui_session || g_view_switch_pending ||
       g_creation_work.running.load() || g_ui_session->mounted() ||
-      g_ui_session->state() != usb_vault::ui::CardProductUiState::authenticated)
+      g_ui_session->state() != usb_vault::ui::CardProductUiState::authenticated) {
+    USB_VAULT_TRACE("窗口", "拒绝返回登录页",
+                    "切换进行中 " + usb_vault::diagnostics::flag_text(g_view_switch_pending) +
+                        "；后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()) +
+                        "；有挂载 " + usb_vault::diagnostics::flag_text(g_ui_session && g_ui_session->mounted()) +
+                        "；状态 " + std::to_string(g_ui_session ? static_cast<int>(g_ui_session->state()) : -1));
     return false;
-  if (!::PostMessageW(g_main_window, kShowSessionMessage, 0, 0)) return false;
+  }
+  if (!::PostMessageW(g_main_window, kShowSessionMessage, 0, 0)) {
+    USB_VAULT_TRACE("窗口", "返回登录页消息投递失败", "Win32 " + std::to_string(::GetLastError()));
+    return false;
+  }
+  USB_VAULT_TRACE("窗口", "接受返回登录页", "");
   disarm_external_drops();
   g_view_switch_pending = true;
   return true;
@@ -573,10 +584,17 @@ bool MainWindowCloseSink::request_login() noexcept {
 bool MainWindowCloseSink::request_configuration() noexcept {
   if (!g_main_window || !g_ui_session || g_creation_work.running.load() ||
       g_ui_session->state() == usb_vault::ui::CardProductUiState::authenticated ||
-      g_ui_session->mounted()) return false;
-  if (!::PostMessageW(g_main_window, kShowConfigurationMessage, 0, 0)) {
+      g_ui_session->mounted()) {
+    USB_VAULT_TRACE("窗口", "拒绝打开首次配置",
+                    "后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()) +
+                        "；状态 " + std::to_string(g_ui_session ? static_cast<int>(g_ui_session->state()) : -1));
     return false;
   }
+  if (!::PostMessageW(g_main_window, kShowConfigurationMessage, 0, 0)) {
+    USB_VAULT_TRACE("窗口", "首次配置消息投递失败", "Win32 " + std::to_string(::GetLastError()));
+    return false;
+  }
+  USB_VAULT_TRACE("窗口", "接受打开首次配置", "");
   g_view_switch_pending = true;
   return true;
 }
@@ -725,6 +743,12 @@ void detach_host_object() noexcept {
 void report_webview_failure(const std::uint32_t code,
                             const HRESULT result, const std::uint32_t event_kind,
                             const std::uint32_t event_code, const std::uint32_t step) noexcept {
+  USB_VAULT_TRACE("窗口", "WebView 故障",
+                  "错误码 " + std::to_string(code) + "；HRESULT " +
+                      usb_vault::diagnostics::hex_text(static_cast<std::uint32_t>(result)) +
+                      "；事件类别 " + std::to_string(event_kind) + "；事件码 " +
+                      std::to_string(event_code) + "；步骤码 " + std::to_string(step) +
+                      "；页面代次 " + std::to_string(g_page_generation));
   if (!g_webview_startup.fail(g_page_generation)) return;
   g_startup_log.record(StartupStep::webview, StartupOutcome::failed,
       {.primary = {.code = code, .native_kind = FAILED(result) ? 2u : 0u,
@@ -1055,6 +1079,7 @@ void initialize_webview(const HWND window) {
 // Only the card session, the bridge and the document change, so setup is a
 // page of this application rather than a second window that replaces it.
 void show_configuration(const HWND window) noexcept {
+  USB_VAULT_TRACE("窗口", "切换到首次配置页", "");
   g_view_switch_pending = false;
   begin_webview_watch(window);
   if (!g_webview_startup.current(g_page_generation)) return;
@@ -1075,6 +1100,7 @@ void show_configuration(const HWND window) noexcept {
 }
 
 void show_session(const HWND window) noexcept {
+  USB_VAULT_TRACE("窗口", "重建安全会话并加载登录页", "");
   g_view_switch_pending = false;
   g_webview_startup.stop();
   ::KillTimer(window, 2);
@@ -1091,7 +1117,10 @@ void show_session(const HWND window) noexcept {
     // on the credentials that were just saved rather than the ones it began
     // with.
     initialize_application_session(window);
+    USB_VAULT_TRACE("窗口", "安全会话已重建",
+                    "状态 " + std::to_string(g_ui_session ? static_cast<int>(g_ui_session->state()) : -1));
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("窗口", "重建安全会话失败", "");
     show_numeric_failure(L"无法重新建立安全会话。请重新启动 USB Vault。",
         usb_vault::card::capture_startup_failure(1210));
     static_cast<void>(::DestroyWindow(window));
@@ -1120,8 +1149,15 @@ void show_session(const HWND window) noexcept {
   if (presence != Transition::card_unavailable &&
       presence != Transition::active_session_unmounted &&
       presence != Transition::active_session_force_unmounted) return false;
-  if (g_ui_session == nullptr || g_ui_session->mounted()) return false;
-  if (!::PostMessageW(window, kShowSessionMessage, 0, 0)) return false;
+  if (g_ui_session == nullptr || g_ui_session->mounted()) {
+    USB_VAULT_TRACE("窗口", "拔卡后仍有卷挂着，不重建会话", "");
+    return false;
+  }
+  if (!::PostMessageW(window, kShowSessionMessage, 0, 0)) {
+    USB_VAULT_TRACE("窗口", "拔卡后重建消息投递失败", "Win32 " + std::to_string(::GetLastError()));
+    return false;
+  }
+  USB_VAULT_TRACE("窗口", "拔卡清理完成，回到登录页", "迁移 " + std::to_string(static_cast<int>(presence)));
   disarm_external_drops();
   g_view_switch_pending = true;
   return true;
@@ -1142,6 +1178,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
             wparam, lparam, kDevelopmentCardIdentity);
         if (arrival.has_value()) {
+          USB_VAULT_TRACE("窗口", *arrival ? "后台任务期间插入安全卡，延后处理" : "后台任务期间拔出安全卡，中断任务并延后处理",
+                          "后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()));
           g_creation_work.card_epoch.fetch_add(1);
           disarm_external_drops();
           if (!*arrival) { g_deferred_removal = true; g_creation_work.interrupted.store(true); }
@@ -1158,6 +1196,18 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         using Transition = usb_vault::application::CardPresenceTransition;
         if (transition.entry_changed ||
             transition.presence != Transition::no_change) {
+          const auto failure = g_card_entry ? g_card_entry->startup_failure()
+                                            : usb_vault::card::FailureDiagnostic{};
+          USB_VAULT_TRACE("窗口", "安全卡状态变化",
+                          "设备事件 " + usb_vault::diagnostics::hex_text(static_cast<std::uint32_t>(wparam)) +
+                              "；迁移 " + std::to_string(static_cast<int>(transition.presence)) +
+                              "；入口变化 " + usb_vault::diagnostics::flag_text(transition.entry_changed) +
+                              "；页面状态 " +
+                              std::to_string(g_ui_session ? static_cast<int>(g_ui_session->state()) : -1) +
+                              "；诊断错误码 " + std::to_string(failure.primary.code) + "；原因码 " +
+                              std::to_string(failure.primary.reason) + "；原生码 " +
+                              std::to_string(failure.primary.native_code) + "；清理错误码 " +
+                              std::to_string(failure.cleanup.code));
           g_startup_log.record_card_state(g_card_entry ? g_card_entry->startup_failure()
               : usb_vault::card::FailureDiagnostic{});
           g_creation_work.card_epoch.fetch_add(1);
@@ -1168,6 +1218,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           notify_webview_session_changed();
         }
         if (transition.presence == Transition::active_session_remains) {
+          USB_VAULT_TRACE("窗口", "拔卡后强制卸载仍失败，保留当前页面", "");
           show_failure(
               L"安全卡已拔出，强制卸载当前磁盘仍然失败。"
               L"请立即关闭占用该磁盘的程序并重试安全卸载。");
@@ -1184,6 +1235,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         const bool changed = g_deferred_removal || g_deferred_arrival;
         if (g_deferred_removal) {
           const auto transition = g_card_lifecycle_controller->handle_removal();
+          USB_VAULT_TRACE("窗口", "处理延后的拔卡",
+                          "迁移 " + std::to_string(static_cast<int>(transition.presence)) +
+                              "；入口变化 " + usb_vault::diagnostics::flag_text(transition.entry_changed));
           using Transition = usb_vault::application::CardPresenceTransition;
           if (transition.presence == Transition::active_session_remains) {
             show_failure(L"安全卡已拔出，强制卸载仍然失败。请关闭占用磁盘的程序并重试安全卸载。");
@@ -1200,7 +1254,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           }
         }
         if (g_deferred_arrival) {
-          static_cast<void>(g_card_lifecycle_controller->handle_arrival());
+          const auto arrival = g_card_lifecycle_controller->handle_arrival();
+          USB_VAULT_TRACE("窗口", "处理延后的插卡",
+                          "迁移 " + std::to_string(static_cast<int>(arrival.presence)) +
+                              "；入口变化 " + usb_vault::diagnostics::flag_text(arrival.entry_changed));
           g_deferred_arrival = false;
         }
         g_creation_work.interrupted.store(false);
@@ -1230,6 +1287,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     }
     case WM_CLOSE:
+      USB_VAULT_TRACE("窗口", "请求关闭窗口",
+                      "后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()) +
+                          "；卷操作 " + usb_vault::diagnostics::flag_text(g_creation_work.volume_operation.load()));
       if (g_creation_work.running.load()) {
         if (g_creation_work.volume_operation.load()) {
           ::MessageBoxW(window, L"正在处理磁盘操作，请等待处理结果后再关闭。",
@@ -1257,9 +1317,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       }
       if (g_ui_session != nullptr &&
           !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
+        USB_VAULT_TRACE("窗口", "关闭前卸载失败，保留窗口", "");
         show_failure(L"无法安全卸载当前磁盘，请关闭占用文件后重试。");
         return 0;
       }
+      USB_VAULT_TRACE("窗口", "关闭窗口", "");
       static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
@@ -1286,6 +1348,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return ::DefWindowProcW(window, message, wparam, lparam);
   }
 } catch (...) {
+  USB_VAULT_TRACE_FAILURE("窗口", "窗口消息处理异常", "消息 " + std::to_string(message));
   const auto failure = usb_vault::card::capture_startup_failure(9001);
   if (g_webview_startup.current(g_page_generation)) {
     const auto& primary = failure.primary;

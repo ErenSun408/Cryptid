@@ -1,4 +1,6 @@
 #include "usb_vault/ui/card_product_ui_session_controller.h"
+#include "card/diagnostic_error.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/security/confirmed_password.h"
@@ -181,14 +183,37 @@ CardProductUiSessionController::CardProductUiSessionController(
       password_policy_(password_policy),
       file_chooser_(file_chooser) {}
 
+// Card errors carry a stage, a native code and a security step beyond the
+// error number; the runtime log keeps all of them. Call inside a catch block.
+[[nodiscard]] std::string card_failure_codes() {
+  try {
+    throw;
+  } catch (const card::DiagnosticError& error) {
+    return "诊断阶段 " + std::to_string(static_cast<std::uint32_t>(error.stage())) + "；原生码 " +
+           std::to_string(error.native()) + "（" + diagnostics::hex_text(error.native()) +
+           "）；原生码类型 " + std::to_string(static_cast<std::uint32_t>(error.kind())) +
+           "；安全步骤 " + std::to_string(error.step());
+  } catch (...) {
+    return {};
+  }
+}
+
 void CardProductUiSessionController::submit_login(
     const std::span<std::byte> mutable_utf8) {
   MutableInputWiper input_wiper(mutable_utf8);
   if (state() != CardProductUiState::login_required) {
+    USB_VAULT_TRACE("登录", "当前状态不能登录", "状态 " + std::to_string(static_cast<int>(state())));
     throw_wrong_route("card login is not available in the current UI state");
   }
-  entry_.authenticate_login(
-      volume_session_, consume_password_utf8(mutable_utf8));
+  USB_VAULT_TRACE("登录", "开始登录", "输入长度 " + std::to_string(mutable_utf8.size()) + " 字节");
+  try {
+    entry_.authenticate_login(
+        volume_session_, consume_password_utf8(mutable_utf8));
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("登录", "登录失败", card_failure_codes());
+    throw;
+  }
+  USB_VAULT_TRACE("登录", "登录成功", "状态 " + std::to_string(static_cast<int>(state())));
 }
 
 DecoyMaintenanceUiSurvey CardProductUiSessionController::survey_decoy_maintenance(
@@ -263,9 +288,13 @@ void CardProductUiSessionController::submit_initialization(
         "password and confirmation inputs must be independent");
   }
   if (state() != CardProductUiState::initialization_required) {
+    USB_VAULT_TRACE("初始化", "当前状态不能初始化", "状态 " + std::to_string(static_cast<int>(state())));
     throw_wrong_route(
         "card initialization is not available in the current UI state");
   }
+  USB_VAULT_TRACE("初始化", "开始初始化安全卡",
+                  "口令长度 " + std::to_string(mutable_password_utf8.size()) + " 字节；确认长度 " +
+                      std::to_string(mutable_confirmation_utf8.size()) + " 字节");
 
   security::SecureBuffer password =
       consume_password_utf8(mutable_password_utf8);
@@ -275,12 +304,25 @@ void CardProductUiSessionController::submit_initialization(
   // confirmation and a verified card initialization have both succeeded.
   security::SecureBuffer session_password = duplicate(password);
   SecureBufferGuard session_password_guard(session_password);
-  security::ConfirmedPassword confirmed = security::confirm_password(
-      password_policy_, std::move(password), std::move(confirmation));
-  entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
+  security::ConfirmedPassword confirmed = [&] {
+    try {
+      return security::confirm_password(password_policy_, std::move(password), std::move(confirmation));
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("初始化", "口令未通过确认或策略", "");
+      throw;
+    }
+  }();
+  try {
+    entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("初始化", "安全卡初始化失败", card_failure_codes());
+    throw;
+  }
+  USB_VAULT_TRACE("初始化", "安全卡已初始化并认证", "");
   try {
     volume_session_.complete_initialization(std::move(session_password));
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("初始化", "初始化交接失败", "");
     volume_session_.release_session_secrets();
     authentication_.clear_authentication();
     throw;

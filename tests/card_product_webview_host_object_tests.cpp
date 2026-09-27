@@ -2,6 +2,7 @@
 
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/security/offline_card_password_policy.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -13,6 +14,8 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -1620,6 +1623,55 @@ void test_surface_and_state_projection_are_fixed() {
                 id == DISPID_UNKNOWN,
             "product host exposed a forbidden member");
   }
+}
+
+// Page calls reach the runtime log with their name, arguments and result. A
+// password array is recorded by size alone, and a successful poll is not
+// recorded at all.
+void test_runtime_log_records_page_calls() {
+#if USB_VAULT_DEBUG_LOG
+  namespace diagnostics = usb_vault::diagnostics;
+  const std::filesystem::path root =
+      std::filesystem::temp_directory_path() /
+      (L"usb-vault-bridge-log-" + std::to_wstring(::GetCurrentProcessId()) + L"-" +
+       std::to_wstring(::GetTickCount64()));
+  require(std::filesystem::create_directory(root), "the bridge log fixture already exists");
+  const SYSTEMTIME time{2026, 9, 0, 26, 12, 0, 0, 0};
+  const std::filesystem::path path = root / L"runtime-log-20260926-120000.txt";
+  {
+    diagnostics::DebugLogFile file;
+    require(file.open(root, time), "cannot open the bridge log fixture");
+    diagnostics::set_runtime_log(&file);
+    struct Withdraw final {
+      ~Withdraw() { usb_vault::diagnostics::set_runtime_log(nullptr); }
+    } withdraw;
+    Fixture fixture;
+    fixture.entry.route = CardEntryRoute::login_required;
+    ComPtr<IDispatch> host = make_host(fixture.controller);
+    std::vector<std::byte> password{std::byte{'s'}, std::byte{'e'}, std::byte{'k'},
+                                    std::byte{'r'}, std::byte{'i'}, std::byte{'t'}};
+    ByteArray argument(password);
+    require(invoke_login(*host.Get(), argument.value()) == S_OK, "the logged login failed");
+    static_cast<void>(invoke_state(*host.Get()));
+  }
+  std::string text;
+  {
+    std::ifstream in(path, std::ios::binary);
+    require(in.good(), "the bridge log was not written");
+    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  require(text.find("[页面桥] 页面调用 submitLoginPasswordBytes；参数 字节数组 6 项；HRESULT 0x00000000") !=
+              std::string::npos,
+          "the login call was not recorded with its argument size and result");
+  require(text.find("[登录] 开始登录；输入长度 6 字节") != std::string::npos &&
+              text.find("[登录] 登录成功；状态 ") != std::string::npos,
+          "the controller did not record the login");
+  require(text.find("页面调用 getSessionState") == std::string::npos,
+          "a successful poll was recorded");
+  require(text.find("sekrit") == std::string::npos, "a password reached the bridge log");
+  std::filesystem::remove(path);
+  std::filesystem::remove(root);
+#endif
 }
 
 void test_login_consumes_and_wipes_one_array() {
@@ -3890,6 +3942,7 @@ int main() {
     test_a_running_creation_can_be_called_off();
     test_creation_finalization_rejects_late_cancellation();
     test_login_consumes_and_wipes_one_array();
+    test_runtime_log_records_page_calls();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();
     test_bad_arity_still_wipes_supplied_password_array();
