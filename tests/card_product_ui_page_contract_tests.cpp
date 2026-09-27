@@ -407,9 +407,10 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
   // The card-removal unmount remains a mandatory product
   // guarantee: it is locked on because 8.4 treats the unmount as part of
   // deniability, so it must never be presented as something a user can turn
-  // off. The opt-in shortcut is independent of the four existing switches.
-  require(count_occurrences(settings, "role=\"switch\"") == 6 &&
-              count_occurrences(settings, "data-setting=\"") == 4 &&
+  // off. Tray closing and the shortcut are independent opt-in settings.
+  require(count_occurrences(settings, "role=\"switch\"") == 7 &&
+              count_occurrences(settings, "data-setting=\"") == 5 &&
+              settings.find("data-setting=\"close-to-tray\"") != std::string::npos &&
               settings.find("data-setting=\"operation-logging\" "
                             "aria-label=\"开启操作日志\"") != std::string::npos &&
               settings.find("data-setting=\"auto-mount\" "

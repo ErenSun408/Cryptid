@@ -15,9 +15,9 @@ struct ExitHotkeySettings final {
 [[nodiscard]] ExitHotkeySettings exit_hotkey_settings_v1(std::wstring_view path);
 void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings settings);
 
-enum class ProductPreference { force_unmount, operation_logging, window_size, auto_mount };
-// Neutral user preferences only. Defaults: force/auto-mount off, logging on,
-// spacious. Malformed force/auto-mount values read as off. Window presets: 0..3.
+enum class ProductPreference { force_unmount, operation_logging, window_size, auto_mount, close_to_tray };
+// Neutral preferences only. Defaults: force/auto-mount/close-to-tray off,
+// logging on, spacious. Malformed opt-ins read as off. Window presets: 0..3.
 [[nodiscard]] unsigned int product_preference_v1(std::wstring_view path, ProductPreference key);
 void set_product_preference_v1(std::wstring_view path, ProductPreference key, unsigned int value);
 

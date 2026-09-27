@@ -45,6 +45,8 @@ constexpr DISPID kBeginForceUnmountForExitId = 123;
 constexpr DISPID kDismissCloseConfirmationId = 124;
 constexpr DISPID kGetExitHotkeyId = 125;
 constexpr DISPID kSetExitHotkeyId = 126;
+constexpr DISPID kGetCloseToTrayId = 127;
+constexpr DISPID kSetCloseToTrayId = 128;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
@@ -469,6 +471,8 @@ class PasswordArgumentsWiper final {
     case kDismissCloseConfirmationId: return "dismissCloseConfirmation";
     case kGetExitHotkeyId: return "getExitHotkey";
     case kSetExitHotkeyId: return "setExitHotkey";
+    case kGetCloseToTrayId: return "getCloseToTrayEnabled";
+    case kSetCloseToTrayId: return "setCloseToTrayEnabled";
     case kExportContainerEntryId: return "exportContainerEntry";
     case kExportContainerFileId: return "exportContainerFile";
     case kForgetContainerId: return "forgetContainer";
@@ -700,6 +704,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"dismissCloseConfirmation")) { ids[0] = kDismissCloseConfirmationId; return S_OK; }
     if (matches(names[0], L"getExitHotkey")) { ids[0] = kGetExitHotkeyId; return S_OK; }
     if (matches(names[0], L"setExitHotkey")) { ids[0] = kSetExitHotkeyId; return S_OK; }
+    if (matches(names[0], L"getCloseToTrayEnabled")) { ids[0] = kGetCloseToTrayId; return S_OK; }
+    if (matches(names[0], L"setCloseToTrayEnabled")) { ids[0] = kSetCloseToTrayId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1039,6 +1045,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kGetForcePreferenceId: case kGetWindowSizeId:
       case kGetExitHotkeyId:
+      case kGetCloseToTrayId:
       case kGetStartupViewId:
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
@@ -1059,6 +1066,18 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         creation_work_->dismiss_close_confirmation();
         return S_OK;
+      case kGetCloseToTrayId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result) {
+          ::VariantInit(result); result->vt = VT_BOOL;
+          result->boolVal = close_sink_ && close_sink_->close_to_tray() ? VARIANT_TRUE : VARIANT_FALSE;
+        }
+        return S_OK;
+      case kSetCloseToTrayId:
+        if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg) return DISP_E_BADPARAMCOUNT;
+        if (parameters->rgvarg[0].vt != VT_BOOL) return DISP_E_TYPEMISMATCH;
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        return close_sink_ && close_sink_->set_close_to_tray(parameters->rgvarg[0].boolVal != VARIANT_FALSE) ? S_OK : E_FAIL;
       case kGetExitHotkeyId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         const auto settings = exit_hotkey_sink_ ? exit_hotkey_sink_->exit_hotkey() : application::ExitHotkeySettings{};

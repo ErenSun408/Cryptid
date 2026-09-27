@@ -954,6 +954,12 @@ class InitializationArguments final {
 class RecordingCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
  public:
   void request_close() noexcept override { ++close_calls; }
+  bool close_to_tray() const noexcept override { return tray_enabled; }
+  bool set_close_to_tray(bool value) noexcept override {
+    if (!allow_tray_write) return false;
+    tray_enabled = value; return true;
+  }
+  bool tray_enabled{}, allow_tray_write{true};
 
   bool request_configuration() noexcept override { ++configuration_calls; return allow_configuration; }
   bool request_login() noexcept override { ++login_calls; return allow_login; }
@@ -3953,7 +3959,17 @@ void test_leave_application_routes() {
           "exit accepted arguments");
   fixture.authentication.clear_authentication();
   require(invoke(L"returnToLogin") == E_ACCESSDENIED, "unauthenticated login return accepted");
+  VARIANTARG tray_arg{}; tray_arg.vt = VT_BOOL; tray_arg.boolVal = VARIANT_TRUE;
+  DISPPARAMS tray_args{&tray_arg, nullptr, 1, 0};
+  const auto set_tray = [&] { return host->Invoke(member_id(*host.Get(), L"setCloseToTrayEnabled"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &tray_args, nullptr, nullptr, nullptr); };
+  require(set_tray() == E_ACCESSDENIED && !sink.tray_enabled, "unauthenticated tray change accepted");
   fixture.authentication.establish(root_secret());
+  require(set_tray() == S_OK && sink.tray_enabled, "tray opt-in failed");
+  tray_arg.vt = VT_I4; require(set_tray() == DISP_E_TYPEMISMATCH, "nonboolean tray change accepted");
+  tray_arg.vt = VT_BOOL;
+  sink.allow_tray_write = false; require(set_tray() == E_FAIL, "tray save failure hidden");
+  sink.allow_tray_write = true;
   fixture.volume.mounted_state = true;
   require(invoke(L"returnToLogin") == E_ACCESSDENIED, "mounted login return accepted");
   // Exit asks the window guard, even with a mount; the bridge never destroys it.
@@ -3963,6 +3979,7 @@ void test_leave_application_routes() {
           "exit bridge discarded active session");
   work.running.store(true);
   require(invoke(L"returnToLogin") == E_PENDING, "return interrupted worker");
+  require(set_tray() == E_PENDING, "tray change interrupted worker");
   require(invoke(L"exitApplication") == E_PENDING, "exit interrupted worker");
   work.running.store(false);
   require(sink.login_calls == 0 && sink.close_calls == 1, "denied leave reached sink");

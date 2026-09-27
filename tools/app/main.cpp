@@ -8,6 +8,7 @@
 #include "card/verified_local_artifact.h"
 #include "p2_deployment.h"
 #include "global_exit_hotkey.h"
+#include "window_tray.h"
 #include "usb_vault/application/product_settings_v1.h"
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
@@ -82,6 +83,10 @@ bool g_view_switch_pending{};
 constexpr UINT kShowConfigurationMessage = WM_APP + 1;
 constexpr UINT kShowSessionMessage = WM_APP + 2;
 constexpr UINT kExitHotkeyMessage = WM_APP + 3;
+constexpr UINT kExplicitExitMessage = WM_APP + 4;
+constexpr UINT kTrayMessage = WM_APP + 5;
+const UINT kTaskbarCreatedMessage = ::RegisterWindowMessageW(L"TaskbarCreated");
+WindowTray g_tray(kTrayMessage);
 std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
 // The page and its script are verified once and then held open for as long as
 // this window exists. The start check closes its own handles when it returns,
@@ -198,9 +203,29 @@ class MainWindowCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
   bool request_login() noexcept override;
   void request_close() noexcept override {
     if (g_main_window != nullptr) {
-      static_cast<void>(::PostMessageW(g_main_window, WM_CLOSE, 0, 0));
+      static_cast<void>(::PostMessageW(g_main_window, kExplicitExitMessage, 0, 0));
     }
   }
+  bool close_to_tray() const noexcept override { return close_to_tray_; }
+  bool set_close_to_tray(bool enabled) noexcept override {
+    try {
+      usb_vault::application::set_product_preference_v1(
+          usb_vault::application::product_settings_v1_default_path(),
+          usb_vault::application::ProductPreference::close_to_tray, enabled ? 1U : 0U);
+      close_to_tray_ = enabled;
+      if (!enabled) g_tray.restore();
+      return true;
+    } catch (...) { return false; }
+  }
+  void restore_settings() noexcept {
+    try {
+      close_to_tray_ = usb_vault::application::product_preference_v1(
+          usb_vault::application::product_settings_v1_default_path(),
+          usb_vault::application::ProductPreference::close_to_tray) != 0;
+    } catch (...) { close_to_tray_ = false; }
+  }
+ private:
+  bool close_to_tray_{};
 };
 
 MainWindowCloseSink g_close_sink;
@@ -834,7 +859,7 @@ void report_webview_failure(const std::uint32_t code,
   finish_startup_log();
   // Use the normal close guard. Never destroy an authenticated session with
   // active volumes merely because its renderer failed.
-  if (::IsWindow(g_main_window)) ::PostMessageW(g_main_window, WM_CLOSE, 0, 0);
+  if (::IsWindow(g_main_window)) ::PostMessageW(g_main_window, kExplicitExitMessage, 0, 0);
 }
 
 void begin_webview_watch(const HWND window) {
@@ -1130,7 +1155,7 @@ void show_configuration(const HWND window) noexcept {
   g_view_switch_pending = false;
   begin_webview_watch(window);
   if (!g_webview_startup.current(g_page_generation)) return;
-  static_cast<void>(::KillTimer(window, 1));
+  // Keep the window timer alive: configured global exit also works on setup.
   disarm_external_drops();
   detach_host_object();
   // The retiring product bridge may outlive this call inside the old
@@ -1212,7 +1237,32 @@ void show_session(const HWND window) noexcept {
 
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) try {
+  if (kTaskbarCreatedMessage && message == kTaskbarCreatedMessage) {
+    g_tray.taskbar_recreated();
+    return 0;
+  }
   switch (message) {
+    case kTrayMessage:
+      if (!g_tray.hidden() || HIWORD(lparam) != 1) return 0;
+      if (LOWORD(lparam) == NIN_SELECT || LOWORD(lparam) == NIN_KEYSELECT || LOWORD(lparam) == WM_LBUTTONDBLCLK) {
+        g_tray.restore();
+      } else if (LOWORD(lparam) == WM_CONTEXTMENU) {
+        const HMENU menu = ::CreatePopupMenu();
+        if (!menu) { g_tray.restore(); return 0; }
+        ::AppendMenuW(menu, MF_STRING, 1, L"打开 USB Vault");
+        ::AppendMenuW(menu, MF_STRING, 2, L"退出应用");
+        POINT point{}; ::GetCursorPos(&point);
+        ::SetForegroundWindow(window);
+        const UINT selected = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                                               point.x, point.y, 0, window, nullptr);
+        ::DestroyMenu(menu);
+        ::PostMessageW(window, WM_NULL, 0, 0);
+        if (selected == 1) g_tray.restore();
+        if (selected == 2) {
+          ::PostMessageW(window, kExplicitExitMessage, 0, 0);
+        }
+      }
+      return 0;
     case kExitHotkeyMessage:
       if (!g_exit_hotkey_sink.exit_hotkey().enabled ||
           !g_exit_hotkey_sink.listener.consume(wparam) ||
@@ -1294,8 +1344,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           g_creation_work.hotkey_exit_pending.store(false);
           if (result == 1) {
             // Synchronous dispatch closes before any queued page mutation.
-            ::SendMessageW(window, WM_CLOSE, 0, 0);
+            ::SendMessageW(window, kExplicitExitMessage, 0, 0);
           } else {
+            g_tray.restore();
             notify_webview_session_changed();
             show_failure(L"快捷键退出未完成：无法强制卸载当前磁盘。请关闭占用文件后重试。");
           }
@@ -1307,7 +1358,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         }
         if (!g_ui_session) {
           g_creation_work.hotkey_exit_pending.store(false);
-          ::SendMessageW(window, WM_CLOSE, 0, 0);
+          ::SendMessageW(window, kExplicitExitMessage, 0, 0);
           return 0;
         }
         g_creation_work.finish();
@@ -1326,6 +1377,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           g_creation_work.force_exit_running.store(false);
           g_creation_work.running.store(false);
           g_creation_work.hotkey_exit_pending.store(false);
+          g_tray.restore();
           show_failure(L"无法开始快捷键退出，请重试。");
         }
         return 0;
@@ -1390,12 +1442,18 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     }
     case WM_CLOSE:
+    case kExplicitExitMessage:
       if (g_creation_work.hotkey_exit_pending.load()) return 0;
+      if (message == WM_CLOSE && g_close_sink.close_to_tray()) {
+        if (!g_tray.hide(window)) show_failure(L"无法创建托盘图标，窗口已保留，请重试。");
+        return 0;
+      }
       USB_VAULT_TRACE("窗口", "请求关闭窗口",
                       "后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()) +
                           "；卷操作 " + usb_vault::diagnostics::flag_text(g_creation_work.volume_operation.load()));
       if (g_creation_work.running.load()) {
         if (g_creation_work.force_exit_running.load()) return 0;
+        g_tray.restore();
         if (g_creation_work.volume_operation.load()) {
           ::MessageBoxW(window, L"正在处理磁盘操作，请等待处理结果后再关闭。",
                         kWindowTitle, MB_OK | MB_ICONINFORMATION);
@@ -1421,11 +1479,13 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         return 0;
       }
       if (g_creation_work.close_confirmation_pending()) {
+        g_tray.restore();
         if (g_webview && g_webview_startup.current(g_page_generation)) return 0;
         g_creation_work.dismiss_close_confirmation();
       }
       if (g_ui_session != nullptr &&
           !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
+        g_tray.restore();
         USB_VAULT_TRACE("窗口", "关闭前卸载失败，保留窗口", "");
         if (g_webview && g_webview_startup.current(g_page_generation)) {
           g_creation_work.arm_close_confirmation();
@@ -1452,6 +1512,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
+      g_tray.remove();
       g_exit_hotkey_sink.listener.stop();
       if (g_hotkey_cleanup_thread.joinable()) g_hotkey_cleanup_thread.join();
       ++g_window_generation;
@@ -1593,8 +1654,14 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
   g_startup_log.record(StartupStep::window, StartupOutcome::completed);
+  // Explorer may run at lower integrity than an elevated application. These
+  // notifications can only restore the window or rebuild its neutral icon.
+  if (kTaskbarCreatedMessage)
+    ::ChangeWindowMessageFilterEx(window, kTaskbarCreatedMessage, MSGFLT_ALLOW, nullptr);
+  ::ChangeWindowMessageFilterEx(window, kTrayMessage, MSGFLT_ALLOW, nullptr);
 
   g_window_size_sink.restore();
+  g_close_sink.restore_settings();
 
   // Registered before the page exists and disarmed until the maintenance
   // screen names a destination, so the window answers every other drag with a
@@ -1661,6 +1728,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
 
   g_exit_hotkey_sink.listener.stop();
   if (g_hotkey_cleanup_thread.joinable()) g_hotkey_cleanup_thread.join();
+  g_tray.remove();
   clear_application_session();
   g_ui_artifacts.clear();
   g_main_window = nullptr;

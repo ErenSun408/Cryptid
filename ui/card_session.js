@@ -4377,6 +4377,11 @@
   // not saved.
   const storedSettings = [
     {
+      setting: "close-to-tray",
+      read: () => bridge.getCloseToTrayEnabled(),
+      write: (value) => bridge.setCloseToTrayEnabled(value),
+    },
+    {
       setting: "auto-mount",
       read: () => bridge.getAutoMountEnabled(),
       write: (value) => bridge.setAutoMountEnabled(value),

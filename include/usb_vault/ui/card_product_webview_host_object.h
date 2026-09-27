@@ -136,6 +136,8 @@ class IUiCloseRequestSink {
   IUiCloseRequestSink& operator=(IUiCloseRequestSink&&) = delete;
 
   virtual void request_close() noexcept = 0;
+  virtual bool close_to_tray() const noexcept { return false; }
+  virtual bool set_close_to_tray(bool) noexcept { return false; }
   // Deferred transition; the caller blocks further bridge mutations once
   // accepted. Only offered without authentication, mounted volumes or work.
   virtual bool request_configuration() noexcept { return false; }

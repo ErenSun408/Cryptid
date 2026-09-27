@@ -21,10 +21,10 @@ constexpr std::wstring_view kSettingsFileName = L"settings.txt";
 constexpr std::string_view kRememberKey = "remember-container-paths=";
 constexpr std::string_view kMountImportedKey = "mount-imported-containers=";
 constexpr std::size_t kMaximumSettingsSize = 4096;
-constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size=", "auto-mount="};
+constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size=", "auto-mount=", "close-to-tray="};
 unsigned int preference_index(ProductPreference key) {
   const auto index = static_cast<unsigned int>(key);
-  if (index > 3) throw std::invalid_argument("unknown preference");
+  if (index > 4) throw std::invalid_argument("unknown preference");
   return index;
 }
 
@@ -51,7 +51,7 @@ unsigned int preference_index(ProductPreference key) {
   text += kMountImportedKey;
   text += mount_imported ? '1' : '0';
   text += "\r\n";
-  for (unsigned int i = 0; i < 4; ++i) {
+  for (unsigned int i = 0; i < 5; ++i) {
     text += kPreferenceKeys[i];
     text += static_cast<char>('0' + product_preference_v1(path, static_cast<ProductPreference>(i)));
     text += "\r\n";
@@ -243,7 +243,7 @@ void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings sett
 
 unsigned int product_preference_v1(std::wstring_view path, ProductPreference key) {
   const auto index = preference_index(key);
-  const auto fallback = index == 0 || index == 3 ? 0U : 1U;
+  const auto fallback = index == 0 || index == 3 || index == 4 ? 0U : 1U;
   const auto content = read_settings(std::wstring(path));
   if (!content) return fallback;
   const auto prefix = kPreferenceKeys[index];

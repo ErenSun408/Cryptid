@@ -944,6 +944,11 @@ usb_vault_configure_target(ui_close_guard_tests)
 
 add_test(NAME ui_close_guard_tests COMMAND ui_close_guard_tests)
 
+add_executable(window_tray_tests window_tray_tests.cpp)
+target_link_libraries(window_tray_tests PRIVATE user32 shell32)
+usb_vault_configure_target(window_tray_tests)
+add_test(NAME window_tray_tests COMMAND window_tray_tests)
+
 add_executable(card_product_ui_page_contract_tests
   card_product_ui_page_contract_tests.cpp
 )

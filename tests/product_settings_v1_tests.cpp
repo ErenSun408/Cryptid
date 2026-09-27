@@ -274,6 +274,22 @@ void test_exit_hotkey_settings() {
 }
 
 int main() {
+  {
+    using namespace usb_vault::application;
+    const TemporaryDirectory directory;
+    const auto path = directory.settings_path();
+    expect(product_preference_v1(path, ProductPreference::close_to_tray) == 0, "tray default not off");
+    set_product_preference_v1(path, ProductPreference::close_to_tray, 1);
+    set_exit_hotkey_settings_v1(path, {true, 123, 3});
+    set_remember_container_paths_v1(path, false);
+    expect(product_preference_v1(path, ProductPreference::close_to_tray) == 1, "neighbour lost tray choice");
+    set_product_preference_v1(path, ProductPreference::close_to_tray, 0);
+    expect(exit_hotkey_settings_v1(path).enabled && !remember_container_paths_v1(path), "tray update lost neighbours");
+    for (const auto text : {"close-to-tray=1\nclose-to-tray=0\n", "close-to-tray=10\n", "xclose-to-tray=1\n", "close-to-tray=yes\n"}) {
+      write_raw(path, text);
+      expect(product_preference_v1(path, ProductPreference::close_to_tray) == 0, "damaged settings retained mounted session");
+    }
+  }
   test_exit_hotkey_settings();
   test_neutral_preferences_round_trip_and_reject_malformed_force();
   test_the_default_path_sits_under_local_app_data();
