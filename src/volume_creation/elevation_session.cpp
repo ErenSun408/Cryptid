@@ -118,34 +118,40 @@ HANDLE detail::launch_session_helper(const std::filesystem::path& helper,std::ws
   return process;
 }
 int detail::run_elevation_session(DWORD parent,std::wstring_view nonce) noexcept {
+ // Each numbered exit names the step the host stopped at, with its Win32 error.
+ const auto session_failed=[](int step) noexcept {
+   const DWORD error=::GetLastError();
+   USB_VAULT_TRACE("管理员会话进程","失败","步骤 "+std::to_string(step)+"；Win32 "+std::to_string(error));
+   return 3;
+ };
  try {
   if(!parent||!nonce_valid(nonce))return 2;
-  Handle token; if(!::OpenProcessToken(::GetCurrentProcess(),TOKEN_QUERY,&token.value))return 3;
+  Handle token; if(!::OpenProcessToken(::GetCurrentProcess(),TOKEN_QUERY,&token.value))return session_failed(1);
   TOKEN_ELEVATION elevated{};DWORD returned{};
-  if(!::GetTokenInformation(token.value,TokenElevation,&elevated,sizeof(elevated),&returned)||!elevated.TokenIsElevated)return 3;
+  if(!::GetTokenInformation(token.value,TokenElevation,&elevated,sizeof(elevated),&returned)||!elevated.TokenIsElevated)return session_failed(2);
   Handle owner(::OpenProcess(SYNCHRONIZE|PROCESS_DUP_HANDLE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,parent));
-  if(!owner.value)return 3;
-  auto descriptor=current_user_pipe_security_descriptor();if(!descriptor.get())return 3;
+  if(!owner.value)return session_failed(3);
+  auto descriptor=current_user_pipe_security_descriptor();if(!descriptor.get())return session_failed(4);
   SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES),descriptor.get(),FALSE};
   const auto name=pipe_name(nonce);
   Handle pipe(::CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_NOWAIT|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,&security));
-  if(pipe.value==INVALID_HANDLE_VALUE)return 3;
+  if(pipe.value==INVALID_HANDLE_VALUE)return session_failed(5);
   const auto start=::GetTickCount64();bool connected=false;
   while(::WaitForSingleObject(owner.value,0)==WAIT_TIMEOUT && ::GetTickCount64()-start<60000){
     if(::ConnectNamedPipe(pipe.value,nullptr)||::GetLastError()==ERROR_PIPE_CONNECTED){connected=true;break;}
-    if(::GetLastError()!=ERROR_PIPE_LISTENING)return 3;::Sleep(20);
+    if(::GetLastError()!=ERROR_PIPE_LISTENING)return session_failed(6);::Sleep(20);
   }
-  ULONG client{};if(!connected||!::GetNamedPipeClientProcessId(pipe.value,&client)||client!=parent)return 3;
-  DWORD mode=PIPE_READMODE_BYTE|PIPE_WAIT;if(!::SetNamedPipeHandleState(pipe.value,&mode,nullptr,nullptr))return 3;
+  ULONG client{};if(!connected||!::GetNamedPipeClientProcessId(pipe.value,&client)||client!=parent)return session_failed(7);
+  DWORD mode=PIPE_READMODE_BYTE|PIPE_WAIT;if(!::SetNamedPipeHandleState(pipe.value,&mode,nullptr,nullptr))return session_failed(8);
   std::vector<wchar_t> image(32768);const auto count=::GetModuleFileNameW(nullptr,image.data(),static_cast<DWORD>(image.size()));
-  if(!count||count>=image.size())return 3;
-  Reply ready;if(!write_packet(pipe.value,&ready,sizeof(ready)))return 3;
+  if(!count||count>=image.size())return session_failed(9);
+  Reply ready;if(!write_packet(pipe.value,&ready,sizeof(ready)))return session_failed(10);
   HANDLE child{};
   struct ChildClose { HANDLE& value; ~ChildClose(){if(value)::CloseHandle(value);} } close_child{child};
   for(;;){
     Request request;if(!read_packet(pipe.value,&request,sizeof(request),owner.value,0))return 0;
-    if(request.tag!=magic||!nonce_valid(std::wstring_view(request.nonce.data(),request.nonce.size())))return 3;
+    if(request.tag!=magic||!nonce_valid(std::wstring_view(request.nonce.data(),request.nonce.size())))return session_failed(11);
     Reply reply;
     if(child&&::WaitForSingleObject(child,0)!=WAIT_OBJECT_0){reply.error=ERROR_BUSY;}
     else {
@@ -155,16 +161,26 @@ int detail::run_elevation_session(DWORD parent,std::wstring_view nonce) noexcept
       STARTUPINFOW startup{};startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESHOWWINDOW;startup.wShowWindow=SW_HIDE;
       PROCESS_INFORMATION process{};
       // The only executable and arguments are fixed here; no shell or page command.
-      if(!::CreateProcessW(image.data(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process))reply.error=::GetLastError();
+      if(!::CreateProcessW(image.data(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process)){
+        reply.error=::GetLastError();
+        USB_VAULT_TRACE("管理员会话进程","启动助手失败","Win32 "+std::to_string(reply.error));
+      }
       else {
         ::CloseHandle(process.hThread);child=process.hProcess;HANDLE remote{};
         if(!::DuplicateHandle(::GetCurrentProcess(),child,owner.value,&remote,SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,0)){
           reply.error=::GetLastError();::TerminateProcess(child,3); // Child has not received any operation or secret.
-        }else reply.handle=static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(remote));
+          USB_VAULT_TRACE("管理员会话进程","移交助手句柄失败","Win32 "+std::to_string(reply.error));
+        }else {
+          reply.handle=static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(remote));
+          USB_VAULT_TRACE("管理员会话进程","已启动助手","进程号 "+std::to_string(process.dwProcessId));
+        }
       }
     }
     if(!write_packet(pipe.value,&reply,sizeof(reply)))return 0;
   }
- }catch(...){return 3;}
+ }catch(...){
+   USB_VAULT_TRACE_FAILURE("管理员会话进程","未处理的异常","");
+   return 3;
+ }
 }
 }

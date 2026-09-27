@@ -39,7 +39,10 @@ class DebugLogFile final {
   DebugLogFile(const DebugLogFile&) = delete;
   DebugLogFile& operator=(const DebugLogFile&) = delete;
 
-  bool open(const std::filesystem::path& directory, const SYSTEMTIME& time) noexcept {
+  // The prefix names the writer: the application keeps "runtime-log"; a helper
+  // process uses its own so its file sits beside the application's.
+  bool open(const std::filesystem::path& directory, const SYSTEMTIME& time,
+            const std::wstring_view prefix = L"runtime-log") noexcept {
     std::lock_guard lock(mutex_);
     close_locked();
     error_ = 0;
@@ -53,12 +56,17 @@ class DebugLogFile final {
         return false;
       }
       directory_ = directory;
+      const std::wstring name_prefix(prefix);
+      if (name_prefix.empty() || name_prefix.size() > 32) {
+        error_ = ERROR_INVALID_NAME;
+        return false;
+      }
       for (unsigned int collision = 0; collision < 100; ++collision) {
         if (collision == 0)
-          swprintf_s(stem_, L"runtime-log-%04u%02u%02u-%02u%02u%02u",
+          swprintf_s(stem_, L"%s-%04u%02u%02u-%02u%02u%02u", name_prefix.c_str(),
               time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
         else
-          swprintf_s(stem_, L"runtime-log-%04u%02u%02u-%02u%02u%02u-%02u",
+          swprintf_s(stem_, L"%s-%04u%02u%02u-%02u%02u%02u-%02u", name_prefix.c_str(),
               time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, collision);
         const DWORD created = create_locked(std::wstring(stem_) + L".txt");
         if (created == ERROR_SUCCESS) return write_header_locked();

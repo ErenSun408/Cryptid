@@ -475,7 +475,8 @@ class Handle final {
       continue;
     }
     USB_VAULT_TRACE("创建助手", "助手返回结果",
-                    "错误码 " + std::to_string(response.error) + "；返回值 " +
+                    "错误码 " + std::to_string(response.error) + "；原生码 " +
+                        std::to_string(response.native_error) + "；返回值 " +
                         std::to_string(response.value) + "；已发取消 " +
                         diagnostics::flag_text(cancel_sent) + "；已发暂停 " +
                         diagnostics::flag_text(pause_sent));
@@ -573,7 +574,8 @@ std::uint64_t VolumeImportSession::protected_space(std::wstring_view container_p
       const auto response = detail::read_response(impl_->pipe.get());
       if (response.type == detail::MessageType::progress) continue;
       USB_VAULT_TRACE("创建助手", "维护测量结果",
-                      "错误码 " + std::to_string(response.error) + "；返回值 " +
+                      "错误码 " + std::to_string(response.error) + "；原生码 " +
+                          std::to_string(response.native_error) + "；返回值 " +
                           std::to_string(response.value) + "；盘符 " + diagnostics::drive_text(letter));
       if (response.error == 0) return response.value;
       if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid maintenance measurement result");
@@ -633,7 +635,8 @@ void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, 
       if (!sent && cancelled && cancelled()) {detail::write_cancel_request(pipe.get(), header.nonce);sent=true;}
       continue;
     }
-    USB_VAULT_TRACE("创建助手", "受保护导入结果", "错误码 " + std::to_string(response.error));
+    USB_VAULT_TRACE("创建助手", "受保护导入结果", "错误码 " + std::to_string(response.error) +
+                                                      "；原生码 " + std::to_string(response.native_error));
     if (response.error == 0) return;
     if (!known_error(response.error)) throw_creation(CreationError::protocol_error, "invalid protected import result");
     throw_creation(static_cast<CreationError>(response.error), "protected import failed; maintenance recovery required");
@@ -762,7 +765,8 @@ std::uint64_t VolumeMeasurementSession::measure(
     throw;
   }
   USB_VAULT_TRACE("创建助手", "空间测量结果",
-                  "错误码 " + std::to_string(answer.error) + "；返回值 " + std::to_string(answer.value));
+                  "错误码 " + std::to_string(answer.error) + "；原生码 " +
+                      std::to_string(answer.native_error) + "；返回值 " + std::to_string(answer.value));
   if (answer.error == 0) return answer.value;
   if (!known_error(answer.error)) {
     close();

@@ -127,6 +127,13 @@ usb_vault_configure_target(creator_protocol_tests)
 
 add_test(NAME creator_protocol_tests COMMAND creator_protocol_tests)
 
+add_executable(creator_helper_log_tests creator_helper_log_tests.cpp)
+target_include_directories(creator_helper_log_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+add_dependencies(creator_helper_log_tests usb_vault_volume_creator)
+usb_vault_configure_target(creator_helper_log_tests)
+add_test(NAME creator_helper_log_tests
+         COMMAND creator_helper_log_tests $<TARGET_FILE:usb_vault_volume_creator>)
+
 add_executable(card_store_contract_tests
   card_store_contract_tests.cpp
 )

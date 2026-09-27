@@ -2,6 +2,7 @@
 #include "volume_creation/creator_pipe_security.h"
 #include "volume_creation/creator_protocol.h"
 #include "volume_creation/elevation_session.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
 #include <sddl.h>
@@ -9,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -117,6 +119,10 @@ struct Arguments final {
 
 void send_failure(const HANDLE pipe, const CreationError error,
                   const DWORD native_error = 0) noexcept {
+  USB_VAULT_TRACE("创建助手进程", "回传失败",
+                  "错误码 " + std::to_string(static_cast<int>(error)) + "；原生码 " +
+                      std::to_string(native_error) + "（" +
+                      usb_vault::diagnostics::hex_text(native_error) + "）");
   try {
     usb_vault::volume_creation::detail::write_response(
         pipe, Response{
@@ -128,42 +134,97 @@ void send_failure(const HANDLE pipe, const CreationError error,
   }
 }
 
+// The step each early exit stood at, with the Win32 error that ended it.
+[[nodiscard]] int stopped(const int code, const char* const step) noexcept {
+  const DWORD error = ::GetLastError();
+  USB_VAULT_TRACE("创建助手进程", "提前退出",
+                  std::string(step) + "；退出码 " + std::to_string(code) + "；Win32 " +
+                      std::to_string(error));
+  return code;
+}
+
+[[nodiscard]] std::filesystem::path helper_directory() {
+  std::wstring buffer(32768, L'\0');
+  const DWORD length = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (length == 0 || length >= buffer.size()) return {};
+  buffer.resize(length);
+  return std::filesystem::path(buffer).parent_path();
+}
+
+int run_helper();
+
 }  // namespace
 
+// The helper keeps a log file of its own beside the application's, named by
+// its process id, so the codes the protocol reduces to one number survive.
 int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                      _In_ int) {
+  usb_vault::diagnostics::DebugLogFile log;
+  if constexpr (USB_VAULT_DEBUG_LOG) {
+    try {
+      const auto directory = helper_directory();
+      SYSTEMTIME time{};
+      ::GetLocalTime(&time);
+      if (!directory.empty() &&
+          log.open(directory, time, L"creator-log-" + std::to_wstring(::GetCurrentProcessId()))) {
+        usb_vault::diagnostics::set_runtime_log(&log);
+      }
+    } catch (...) {
+    }
+  }
+  USB_VAULT_TRACE("创建助手进程", "启动",
+                  "进程号 " + std::to_string(::GetCurrentProcessId()) + "；命令行 " +
+                      usb_vault::diagnostics::utf8(::GetCommandLineW()));
+  int code = 5;
+  try {
+    code = run_helper();
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手进程", "未处理的异常", "");
+  }
+  USB_VAULT_TRACE("创建助手进程", "退出", "退出码 " + std::to_string(code));
+  usb_vault::diagnostics::set_runtime_log(nullptr);
+  return code;
+}
+
+namespace {
+
+int run_helper() {
   int count = 0;
   const LocalMemory arguments_memory(
       reinterpret_cast<HLOCAL>(::CommandLineToArgvW(::GetCommandLineW(),
                                                      &count)));
-  if (arguments_memory.get() == nullptr) return 2;
+  if (arguments_memory.get() == nullptr) return stopped(2, "解析命令行");
   auto** values = reinterpret_cast<wchar_t**>(arguments_memory.get());
   DWORD owner_pid{};
   if (count == 7 && (std::wstring_view(values[1]) == L"--session" || std::wstring_view(values[1]) == L"--owner")) {
     DWORD parent{};
     const std::wstring_view text(values[2]);
-    if (text.empty() || text.size() > 10) return 2;
+    if (text.empty() || text.size() > 10) return stopped(2, "父进程号格式");
     for (auto c : text) {
-      if (c < L'0' || c > L'9' || parent > (MAXDWORD - static_cast<DWORD>(c-L'0')) / 10) return 2;
+      if (c < L'0' || c > L'9' || parent > (MAXDWORD - static_cast<DWORD>(c-L'0')) / 10) return stopped(2, "父进程号格式");
       parent = parent * 10 + static_cast<DWORD>(c-L'0');
     }
-    if (!parent) return 2;
+    if (!parent) return stopped(2, "父进程号为 0");
     Arguments session;
-    if (!parse_arguments(count-2, values+2, session)) return 2;
-    if (std::wstring_view(values[1]) == L"--session")
+    if (!parse_arguments(count-2, values+2, session)) return stopped(2, "会话参数");
+    if (std::wstring_view(values[1]) == L"--session") {
+      USB_VAULT_TRACE("创建助手进程", "作为管理员会话宿主运行", "父进程 " + std::to_string(parent));
       return usb_vault::volume_creation::detail::run_elevation_session(parent, session.pipe_suffix);
+    }
     owner_pid=parent; count-=2; values+=2;
   }
   Arguments arguments;
-  if (!parse_arguments(count, values, arguments)) return 2;
+  if (!parse_arguments(count, values, arguments)) return stopped(2, "管道参数");
+  USB_VAULT_TRACE("创建助手进程", owner_pid ? "由管理员会话启动" : "由 UAC 直接启动",
+                  "所属进程 " + std::to_string(owner_pid));
 
   const Handle owner(owner_pid ? ::OpenProcess(SYNCHRONIZE, FALSE, owner_pid) : nullptr);
-  if (owner_pid && !owner.get()) return 3;
+  if (owner_pid && !owner.get()) return stopped(3, "打开所属进程");
   const std::wstring pipe_name =
       L"\\\\.\\pipe\\usb-vault-create-" + arguments.pipe_suffix;
   auto descriptor = usb_vault::volume_creation::detail::
       current_user_pipe_security_descriptor();
-  if (descriptor.get() == nullptr) return 3;
+  if (descriptor.get() == nullptr) return stopped(3, "构造管道安全描述符");
   SECURITY_ATTRIBUTES security{
       .nLength = sizeof(SECURITY_ATTRIBUTES),
       .lpSecurityDescriptor = descriptor.get(),
@@ -174,30 +235,43 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | (owner_pid ? PIPE_NOWAIT : PIPE_WAIT) |
           PIPE_REJECT_REMOTE_CLIENTS,
       1, 4096, 4096, 0, &security));
-  if (pipe.get() == INVALID_HANDLE_VALUE) return 3;
+  if (pipe.get() == INVALID_HANDLE_VALUE) return stopped(3, "创建管道");
   if (owner_pid) {
     const auto start=::GetTickCount64(); bool connected=false;
     while (::WaitForSingleObject(owner.get(),0)==WAIT_TIMEOUT && ::GetTickCount64()-start<60000) {
       if (::ConnectNamedPipe(pipe.get(),nullptr) || ::GetLastError()==ERROR_PIPE_CONNECTED) {connected=true;break;}
-      if (::GetLastError()!=ERROR_PIPE_LISTENING) return 3;
+      if (::GetLastError()!=ERROR_PIPE_LISTENING) return stopped(3, "等待调用方连接");
       ::Sleep(20);
     }
     ULONG client{}; DWORD mode=PIPE_READMODE_BYTE|PIPE_WAIT;
     if (!connected || !::GetNamedPipeClientProcessId(pipe.get(),&client) || client!=owner_pid ||
-        !::SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr)) return 3;
+        !::SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr))
+      return stopped(3, connected ? "核对调用方进程" : "调用方未在期限内连接");
   } else if (::ConnectNamedPipe(pipe.get(), nullptr) == FALSE &&
       ::GetLastError() != ERROR_PIPE_CONNECTED) {
-    return 3;
+    return stopped(3, "等待调用方连接");
   }
+  USB_VAULT_TRACE("创建助手进程", "调用方已连接", "");
 
   if (!is_elevated()) {
     send_failure(pipe.get(), CreationError::helper_not_elevated);
-    return 4;
+    return stopped(4, "进程未提权");
   }
 
   try {
     Request request = usb_vault::volume_creation::detail::read_request(
         pipe.get(), arguments.nonce);
+    USB_VAULT_TRACE("创建助手进程", "收到请求",
+                    "操作 " + std::to_string(static_cast<int>(request.operation)) + "；路径 " +
+                        usb_vault::diagnostics::utf8(request.target_path) + "；外层 " +
+                        std::to_string(request.outer_size_bytes) + " 字节；隐藏卷 " +
+                        std::to_string(request.hidden_size_bytes) + " 字节；盘符序号 " +
+                        std::to_string(request.mounted_drive) + "；挂载号 " +
+                        std::to_string(request.mount_id) + "；来源 " +
+                        usb_vault::diagnostics::utf8(request.source_path) + "；目标 " +
+                        usb_vault::diagnostics::utf8(request.destination_relative) +
+                        "；第一口令长度 " + std::to_string(request.first_password.size()) +
+                        "；第二口令长度 " + std::to_string(request.second_password.size()));
     if (request.operation ==
         usb_vault::volume_creation::detail::Operation::scan_tail_space ||
         request.operation == usb_vault::volume_creation::detail::Operation::scan_protected_space) {
@@ -223,6 +297,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                                                             request);
     request.first_password.clear();
     request.second_password.clear();
+    USB_VAULT_TRACE("创建助手进程", "请求完成", "返回值 " + std::to_string(value));
     usb_vault::volume_creation::detail::write_response(
         pipe.get(),
         Response{.type =
@@ -231,6 +306,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
     static_cast<void>(::FlushFileBuffers(pipe.get()));
     return 0;
   } catch (const std::system_error& error) {
+    USB_VAULT_TRACE_FAILURE("创建助手进程", "请求失败", "");
     if (error.code().category() == creation_error_category()) {
       send_failure(pipe.get(),
                    static_cast<CreationError>(error.code().value()));
@@ -239,7 +315,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                    static_cast<DWORD>(error.code().value()));
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手进程", "请求失败", "");
     send_failure(pipe.get(), CreationError::io_error);
   }
   return 5;
 }
+
+}  // namespace

@@ -13,6 +13,7 @@
 #include "usb_vault/volume/fat32_file_transfer.h"
 #include "usb_vault/volume/volume_entry_path.h"
 #include "volume_creation/veracrypt_format_abi.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
 #include <winioctl.h>
@@ -53,7 +54,13 @@ class Failure final : public std::system_error {
       : std::system_error(make_error_code(error), context) {}
 };
 
+// Every refusal in the helper passes through here, so this is where its
+// context is kept: the protocol carries only the error number.
 [[noreturn]] void fail(const CreationError error, const char* const context) {
+  const DWORD last_error = ::GetLastError();
+  USB_VAULT_TRACE("创建助手进程", "拒绝",
+                  std::string(context) + "；错误码 " + std::to_string(static_cast<int>(error)) +
+                      "；最近 Win32 " + std::to_string(last_error));
   throw Failure(error, context);
 }
 
@@ -160,6 +167,7 @@ class FormatBackend final {
             (executable_directory() / L"VeraCryptFormat.dll").c_str(), nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)) {
     if (module_.get() == nullptr) {
+      USB_VAULT_TRACE("创建助手进程", "加载格式化 DLL 失败", "Win32 " + std::to_string(::GetLastError()));
       fail(CreationError::format_backend_unavailable,
            "load patched VeraCrypt FormatDLL");
     }
@@ -168,6 +176,7 @@ class FormatBackend final {
     format_binary_ =
         symbol<format_abi::FormatBinary>("VeraCryptFormatBinary");
     const int result = initialize_();
+    USB_VAULT_TRACE("创建助手进程", "初始化格式化 DLL", "返回码 " + std::to_string(result));
     if (result != format_abi::kSuccess) {
       fail(CreationError::format_initialization_failed,
            "initialize VeraCrypt FormatDLL");
@@ -191,11 +200,14 @@ class FormatBackend final {
       const security::SecureBuffer& second) {
     const auto query = symbol<format_abi::ReadHiddenGeometry>("VeraCryptReadHiddenGeometry");
     security::SecureBuffer result(format_abi::kGeometryOutputBytes);
-    if (query(outer.data(), 512, hidden.data(), 512,
+    const int code = query(outer.data(), 512, hidden.data(), 512,
               reinterpret_cast<const unsigned char*>(first.data()), static_cast<std::uint32_t>(first.size()),
               reinterpret_cast<const unsigned char*>(second.data()), static_cast<std::uint32_t>(second.size()),
               host_bytes, reinterpret_cast<std::uint64_t*>(result.data()),
-              format_abi::kGeometryOutputBytes) != format_abi::kSuccess)
+              format_abi::kGeometryOutputBytes);
+    USB_VAULT_TRACE("创建助手进程", "读取隐藏卷几何", "返回码 " + std::to_string(code) +
+                                                       "；宿主 " + std::to_string(host_bytes) + " 字节");
+    if (code != format_abi::kSuccess)
       fail(CreationError::format_rejected, "protected geometry unavailable");
     return result;
   }
@@ -227,8 +239,16 @@ class FormatBackend final {
         .hidden_volume = hidden_volume ? TRUE : FALSE,
         .hidden_volume_host_size = hidden_volume_host_size,
     };
+    USB_VAULT_TRACE("创建助手进程", "调用格式化",
+                    "路径 " + usb_vault::diagnostics::utf8(path) + "；容量 " + std::to_string(size) +
+                        " 字节；隐藏卷 " + usb_vault::diagnostics::flag_text(hidden_volume) +
+                        "；宿主 " + std::to_string(hidden_volume_host_size) + " 字节；阶段 " +
+                        std::to_string(static_cast<int>(stage)));
     const int result = format_binary_(
         &options, static_cast<std::uint32_t>(password.size()));
+    USB_VAULT_TRACE("创建助手进程", "格式化返回",
+                    "返回码 " + std::to_string(result) + "；映射错误码 " +
+                        std::to_string(result == format_abi::kSuccess ? 0 : static_cast<int>(format_abi::map_error(result))));
     if (result == format_abi::kUserAbort) {
       fail(CreationError::operation_cancelled,
            "VeraCrypt format callback aborted");
@@ -257,6 +277,9 @@ class FormatBackend final {
           if (p.percent!=reported) { reported=p.percent; write_response(pipe_,Response{.type=MessageType::progress,.stage=CreationStage::formatting,.percent=p.percent}); }
         }, target.partition_id);
     const auto result=volume::detail::run_partition_inplace(backend);
+    USB_VAULT_TRACE("创建助手进程", "原地加密返回",
+                    "结果 " + std::to_string(static_cast<int>(result)) + "；控制 " + std::to_string(control) +
+                        "；开始新转换 " + usb_vault::diagnostics::flag_text(begin));
     if (result==volume::detail::InplaceResult::paused) return true;
     if (result==volume::detail::InplaceResult::completed) return false;
     fail(result==volume::detail::InplaceResult::revoked || control==2 ? CreationError::operation_cancelled : CreationError::io_error,"partition conversion incomplete");
@@ -277,6 +300,8 @@ class FormatBackend final {
         reinterpret_cast<const unsigned char*>(outer.data()), 64,
         reinterpret_cast<const unsigned char*>(inner.data()), 64, hidden, &FormatBackend::progress, this,
         target.layout == 2 ? target.partition_id.data() : nullptr, target.layout == 2 ? 16u : 0u);
+    USB_VAULT_TRACE("创建助手进程", "分区外层与隐藏卷格式化返回",
+                    "返回码 " + std::to_string(code) + "；隐藏卷 " + std::to_string(hidden) + " 字节");
     if (code != format_abi::kSuccess) fail(format_abi::map_error(code), "partition pair format failed");
   }
   void format_partition(HANDLE handle, const PartitionTarget& target, const security::SecureBuffer& password) {
@@ -288,6 +313,8 @@ class FormatBackend final {
         &FormatBackend::progress, this, target.partition_id.data(), 16) : partition_binary_(handle, target.offset_bytes, target.length_bytes,
         reinterpret_cast<const unsigned char*>(password.data()), static_cast<std::uint32_t>(password.size()),
         &FormatBackend::progress, this);
+    USB_VAULT_TRACE("创建助手进程", "分区格式化返回",
+                    "返回码 " + std::to_string(code) + "；布局 " + std::to_string(target.layout));
     if (code == format_abi::kUserAbort) fail(CreationError::operation_cancelled, "partition format cancelled");
     if (code != format_abi::kSuccess) fail(format_abi::map_error(code), "partition format failed");
   }
@@ -297,6 +324,7 @@ class FormatBackend final {
   [[nodiscard]] Function symbol(const char* const name) {
     const FARPROC address = ::GetProcAddress(module_.get(), name);
     if (address == nullptr) {
+      USB_VAULT_TRACE("创建助手进程", "格式化 DLL 缺少导出", name);
       fail(CreationError::format_backend_unavailable,
            "patched VeraCrypt FormatDLL export is missing");
     }
@@ -453,11 +481,15 @@ void create_new_target_as_caller(const HANDLE pipe,
   try {
     const Impersonation caller(pipe);
     if (::DeleteFileW(path.c_str()) != FALSE) {
+      USB_VAULT_TRACE("创建助手进程", "已删除未完成的容器", usb_vault::diagnostics::utf8(path));
       return true;
     }
     const DWORD error = ::GetLastError();
+    USB_VAULT_TRACE("创建助手进程", "删除未完成的容器失败",
+                    usb_vault::diagnostics::utf8(path) + "；Win32 " + std::to_string(error));
     return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手进程", "以调用方身份删除失败", usb_vault::diagnostics::utf8(path));
     return false;
   }
 }
@@ -893,6 +925,7 @@ void create_with_hidden(const HANDLE pipe, Request& request,
     });
 
     drive_letter = choose_temporary_drive(provider);
+    USB_VAULT_TRACE("创建助手进程", "临时挂载外层卷", "盘符 " + usb_vault::diagnostics::drive_text(drive_letter));
     as_caller(pipe, [&] {
       static_cast<void>(provider.mount_file(
           request.target_path, request.first_password,
@@ -908,11 +941,17 @@ void create_with_hidden(const HANDLE pipe, Request& request,
     send_stage(pipe, CreationStage::scanning_tail_space, 100);
     const std::uint64_t hidden_size = safe_hidden_size(
         tail, request.outer_size_bytes, request.hidden_size_bytes);
+    USB_VAULT_TRACE("创建助手进程", "隐藏卷尺寸",
+                    "尾部空闲 " + std::to_string(tail.bytes) + " 字节；簇 " +
+                        std::to_string(tail.cluster_size) + " 字节；请求 " +
+                        std::to_string(request.hidden_size_bytes) + " 字节；采用 " +
+                        std::to_string(hidden_size) + " 字节");
 
     try {
       static_cast<void>(volume::unmount_with_retry(
           provider, drive_letter, {.notify_shell = false}));
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("创建助手进程", "卸下临时外层卷失败，改为强制", "");
       static_cast<void>(provider.unmount(
           drive_letter, {.force = true, .notify_shell = false}));
     }
@@ -925,12 +964,15 @@ void create_with_hidden(const HANDLE pipe, Request& request,
                      CreationStage::formatting_hidden);
     });
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("创建助手进程", "创建含隐藏卷的容器失败",
+                            "临时挂载中 " + usb_vault::diagnostics::flag_text(mounted));
     if (mounted) {
       try {
         static_cast<void>(provider.unmount(
             drive_letter, {.force = true, .notify_shell = false}));
         mounted = false;
       } catch (...) {
+        USB_VAULT_TRACE_FAILURE("创建助手进程", "强制卸下临时外层卷失败", "");
         throw Failure(CreationError::cleanup_failed,
                       "failed to remove temporary outer-volume mount");
       }
@@ -996,17 +1038,25 @@ static void serve_session(const HANDLE pipe,
       break;
     }
     Response response{.type = MessageType::result};
+    USB_VAULT_TRACE("创建助手进程", "会话请求",
+                    "操作 " + std::to_string(static_cast<int>(request.operation)) + "；盘符序号 " +
+                        std::to_string(request.mounted_drive) + "；挂载号 " + std::to_string(request.mount_id) +
+                        "；来源 " + usb_vault::diagnostics::utf8(request.source_path));
     try {
       validate_request(request);
       response.value = request.operation == Operation::import_protected_file ? import_protected(pipe, request) : (request.operation == Operation::scan_protected_space || request.operation == Operation::scan_maintenance_space)
           ? scan_protected_space(pipe, request) : scan_tail_space(request.target_path[0]).bytes;
     } catch (const std::system_error& error) {
+      USB_VAULT_TRACE_FAILURE("创建助手进程", "会话请求失败", "");
       response.error = error.code().category() == creation_error_category()
                            ? error.code().value()
                            : static_cast<std::int32_t>(CreationError::io_error);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("创建助手进程", "会话请求失败", "");
       response.error = static_cast<std::int32_t>(CreationError::io_error);
     }
+    USB_VAULT_TRACE("创建助手进程", "会话请求结果",
+                    "错误码 " + std::to_string(response.error) + "；返回值 " + std::to_string(response.value));
     request.first_password.clear();
     request.second_password.clear();
     write_response(pipe, response);
@@ -1044,6 +1094,15 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
   validate_request(request);
   if (partition_operation(request.operation)) {
     const auto& target = *request.partition_target;
+    USB_VAULT_TRACE("创建助手进程", "分区请求",
+                    "卷路径 " + usb_vault::diagnostics::utf8(request.target_path) + "；磁盘 " +
+                        std::to_string(target.disk_number) + "；分区 " +
+                        std::to_string(target.partition_number) + "；偏移 " +
+                        std::to_string(target.offset_bytes) + "；长度 " +
+                        std::to_string(target.length_bytes) + "；扇区 " +
+                        std::to_string(target.sector_bytes) + "；布局 " +
+                        std::to_string(target.layout) + "；文件系统序列号 " +
+                        std::to_string(target.filesystem_serial));
     volume::PartitionCandidate expected{};
     expected.volume_path = request.target_path;
     expected.disk_number = target.disk_number;
@@ -1075,6 +1134,9 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
     const bool formatting = request.operation != Operation::check_partition && request.operation != Operation::inspect_partition_bitlocker && request.operation != Operation::decrypt_partition_bitlocker;
     const Handle handle(::CreateFileW(path.c_str(), GENERIC_READ | (formatting ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING, 0, nullptr));
+    if (handle.get() == INVALID_HANDLE_VALUE) {
+      USB_VAULT_TRACE("创建助手进程", "打开分区失败", "Win32 " + std::to_string(::GetLastError()));
+    }
     if (handle.get() == INVALID_HANDLE_VALUE || (resume ? !volume::detail::matches_partition_location_handle(handle.get(),location) : !volume::detail::matches_partition_handle_identity(handle.get(), expected)))
       fail(CreationError::target_access_denied, "partition handle identity mismatch");
     if (request.operation == Operation::decrypt_partition_bitlocker) {
@@ -1100,6 +1162,7 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
       write_response(pipe, Response{.type = MessageType::progress, .stage = CreationStage::partition_ready});
       if (!read_partition_confirmation(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition erase not confirmed");
+      USB_VAULT_TRACE("创建助手进程", "调用方已确认写入分区", "");
       // Confirmation can take time. Re-run every policy gate on the retained
       // handle; the DLL then locks, rechecks geometry and formats that handle.
       if (!policy())
@@ -1107,6 +1170,7 @@ std::uint64_t execute_request(const HANDLE pipe, Request& request) {
       if (!converting && cancel_requested(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition format cancelled before write");
       remove_partition_access_paths(handle.get(), expected, resume ? &location : nullptr);
+      USB_VAULT_TRACE("创建助手进程", "已移除分区访问路径", "");
       if (!converting && cancel_requested(pipe, request.nonce))
         fail(CreationError::operation_cancelled, "partition cancelled after access removal");
       if (converting) return backend.convert_partition(handle.get(),target,request.first_password, !resume) ? 1u : 0u;

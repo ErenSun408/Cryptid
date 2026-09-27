@@ -195,6 +195,22 @@ void verify_runtime_log(const fs::path& root) {
   }
   require(survived == 200, "rolling dropped lines");
 
+  // A helper names its own file; an empty prefix is refused.
+  {
+    const SYSTEMTIME named{2026, 9, 0, 26, 9, 32, 0, 0};
+    diagnostics::DebugLogFile helper_file;
+    require(helper_file.open(root, named, L"creator-log-42"), "cannot open a prefixed log");
+    helper_file.close();
+    const auto helper_path = root / L"creator-log-42-20260926-093200.txt";
+    require(fs::exists(helper_path) &&
+                read(helper_path) == "\xEF\xBB\xBFUSB Vault 运行日志\r\n",
+            "the prefix did not name the file or changed its header");
+    fs::remove(helper_path);
+    diagnostics::DebugLogFile unnamed;
+    require(!unnamed.open(root, named, L"") && unnamed.error() == ERROR_INVALID_NAME,
+            "an empty prefix was accepted");
+  }
+
   require(diagnostics::flag_text(true) == "是" && diagnostics::flag_text(false) == "否" &&
               diagnostics::hex_text(0x80070005u) == "0x80070005" &&
               diagnostics::drive_text(L'x') == "X:" && diagnostics::drive_text(wchar_t{}) == "无",
