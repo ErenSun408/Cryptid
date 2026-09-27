@@ -1,5 +1,6 @@
 #include "usb_vault/ui/card_configuration_webview_host_object.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "usb_vault/ui/page_event_report.h"
 
 #include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/ui/webview_password_array.h"
@@ -17,6 +18,7 @@ constexpr DISPID kGetStartupViewId = 1;
 constexpr DISPID kGetCredentialStatusId = 2;
 constexpr DISPID kSaveCredentialBytesId = 3;
 constexpr DISPID kContinueToSessionId = 4;
+constexpr DISPID kReportPageEventId = 5;
 
 constexpr wchar_t kConfigurationView[] = L"configuration";
 
@@ -92,6 +94,7 @@ class CardConfigurationWebViewHostObject final : public IDispatch {
       if (name_count > 0) ids[0] = DISPID_UNKNOWN;
       return DISP_E_UNKNOWNNAME;
     }
+    if (matches(names[0], L"reportPageEvent")) { ids[0] = kReportPageEventId; return S_OK; }
     if (matches(names[0], L"getStartupView")) {
       ids[0] = kGetStartupViewId;
       return S_OK;
@@ -116,6 +119,8 @@ class CardConfigurationWebViewHostObject final : public IDispatch {
                                    DISPPARAMS* parameters, VARIANT* result,
                                    EXCEPINFO*, UINT* argument_error) noexcept
       override {
+    if (member == kReportPageEventId)
+      return report_page_event(iid, flags, parameters, result, argument_error);
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     // A credential is expected as a byte array, but one that arrives as a
     // string was marshalled into this process all the same, and the caller

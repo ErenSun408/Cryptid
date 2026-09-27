@@ -1,4 +1,5 @@
 #include "usb_vault/ui/card_configuration_webview_host_object.h"
+#include "page_event_test_support.h"
 
 #include <Windows.h>
 #include <OleAuto.h>
@@ -215,6 +216,7 @@ void test_credential_status_is_reported_verbatim() {
                             ConfigurationCredentialStatus::missing,
                             ConfigurationCredentialStatus::unreadable}) {
     host.status = status;
+    require(page_event_tests::send(*object.Get()) == S_OK, "credential state blocked page reporting");
     DISPPARAMS parameters{};
     VARIANT result{};
     require(SUCCEEDED(call(*object.Get(), L"getCredentialStatus", parameters, &result)),
@@ -388,11 +390,13 @@ void test_retired_page_cannot_store_credentials() {
   require(call(*object.Get(), L"getCredentialStatus", status_parameters,
                &status_result) == E_PENDING,
           "a retired setup page kept answering queries");
+  require(page_event_tests::send(*object.Get()) == S_OK, "retired configuration page blocked reporting");
 }
 
 void test_product_members_are_absent() {
   FakeConfigurationHost host;
   auto object = make_bridge(host);
+  page_event_tests::verify_contract(*object.Get());
   for (const wchar_t* const name :
        {L"submitLoginPasswordBytes", L"getSessionState", L"beginMountBatch",
         L"createContainerMib", L"unmount", L"openConfiguration",

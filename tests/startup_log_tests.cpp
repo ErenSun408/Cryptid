@@ -237,6 +237,62 @@ void verify_runtime_log(const fs::path& root) {
   }
 }
 
+void verify_page_quota(const fs::path& root) {
+  using usb_vault::diagnostics::DebugLogFile;
+  const SYSTEMTIME time{2026, 9, 0, 27, 15, 0, 0, 0};
+  {
+    // Force rotation and concurrent callers. Neither may bypass the quota.
+    DebugLogFile file(512);
+    require(file.open(root, time, L"page-quota"), "page quota fixture open failed");
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 4; ++i) workers.emplace_back([&] {
+      for (int j = 0; j < 60; ++j) file.write_page_event("[页面] quota-event\r\n", 100);
+    });
+    for (auto& worker : workers) worker.join();
+    file.write_page_event("[页面] before-boundary\r\n", 60099);
+    file.write_page_event("[页面] stale-clock\r\n", 99);
+    file.write_page_event("[页面] at-boundary\r\n", 60100);
+    file.flush_page_events();
+    file.flush_page_events();
+  }
+  std::string all;
+  std::vector<fs::path> quota_files;
+  for (const auto& entry : fs::directory_iterator(root)) {
+    if (!entry.path().filename().wstring().starts_with(L"page-quota-")) continue;
+    all += read(entry.path());
+    quota_files.push_back(entry.path());
+  }
+#if USB_VAULT_DEBUG_LOG
+  std::size_t count = 0;
+  for (std::size_t at = 0; (at = all.find("quota-event", at)) != std::string::npos; ++at) ++count;
+  require(count == 200 && all.find("before-boundary") == std::string::npos &&
+          all.find("at-boundary") != std::string::npos && all.find("stale-clock") == std::string::npos,
+          "page rate limit failed across threads, rotation or window boundary");
+  const auto summary = all.find("[页面] 限流；已丢弃 42 条\r\n");
+  require(summary != std::string::npos && all.find("已丢弃") == all.rfind("已丢弃"),
+          "page quota summary was missing or duplicated");
+#else
+  require(all.find("[页面]") == std::string::npos, "disabled quota wrote page events");
+#endif
+  const auto final_path = root / L"runtime-log-20260927-150000.txt";
+  {
+    StartupLog log;
+    require(log.open(root, time), "page shutdown fixture open failed");
+    log.continue_as_runtime_log();
+    auto* file = usb_vault::diagnostics::runtime_log_slot().load();
+    for (int i = 0; i < 202; ++i) file->write_page_event("[页面] shutdown-event\r\n", 100);
+    log.finish();
+  }
+  const auto final = read(final_path);
+  require(final.ends_with("[完成] 日志结束\r\n"), "page quota summary followed the end marker");
+#if USB_VAULT_DEBUG_LOG
+  require(final.find("[页面] 限流；已丢弃 2 条\r\n") != std::string::npos,
+          "normal shutdown lost the pending page drop count");
+#endif
+  for (const auto& path : quota_files) fs::remove(path);
+  fs::remove(final_path);
+}
+
 int main() {
   const auto root = fs::current_path() / (L"startup-log-tests-" + std::to_wstring(::GetCurrentProcessId()) +
       L"-" + std::to_wstring(::GetTickCount64()));
@@ -244,6 +300,7 @@ int main() {
     require(fs::create_directory(root), "fixture already exists");
     verify_card_snapshots(root);
     verify_runtime_log(root);
+    verify_page_quota(root);
     const SYSTEMTIME time{2026, 9, 0, 20, 17, 12, 34, 0};
     const auto first = root / L"runtime-log-20260920-171234.txt";
     const auto second = root / L"runtime-log-20260920-171234-01.txt";

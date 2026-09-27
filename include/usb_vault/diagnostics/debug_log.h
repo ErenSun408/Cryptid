@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <new>
 #include <string>
@@ -44,7 +45,10 @@ class DebugLogFile final {
   bool open(const std::filesystem::path& directory, const SYSTEMTIME& time,
             const std::wstring_view prefix = L"runtime-log") noexcept {
     std::lock_guard lock(mutex_);
+    flush_page_events_locked();
     close_locked();
+    page_count_ = 0;
+    page_window_ = 0;
     error_ = 0;
     part_ = 1;
     written_ = 0;
@@ -89,6 +93,40 @@ class DebugLogFile final {
   // its size moves the log to the next part file instead of being dropped.
   void write(const std::string_view line) noexcept {
     std::lock_guard lock(mutex_);
+    append_locked(line);
+  }
+
+  // Both page bridges share this file and quota. Rotation does not reset it.
+  // The explicit monotonic time also permits boundary tests without sleeping.
+  void write_page_event(const std::string_view line,
+                        const std::uint64_t now = ::GetTickCount64()) noexcept {
+#if USB_VAULT_DEBUG_LOG
+    std::lock_guard lock(mutex_);
+    if (file_ == INVALID_HANDLE_VALUE || error_ || line.empty()) return;
+    if (page_count_ == 0 || (now >= page_window_ && now - page_window_ >= 60000)) {
+      flush_page_events_locked();
+      page_window_ = now;
+      page_count_ = 0;
+    }
+    if (page_count_ >= 200) {
+      if (page_dropped_ != (std::numeric_limits<std::uint64_t>::max)()) ++page_dropped_;
+      return;
+    }
+    ++page_count_;
+    append_locked(line);
+#else
+    static_cast<void>(line);
+    static_cast<void>(now);
+#endif
+  }
+
+  void flush_page_events() noexcept {
+    std::lock_guard lock(mutex_);
+    flush_page_events_locked();
+  }
+
+ private:
+  void append_locked(const std::string_view line) noexcept {
     if (file_ == INVALID_HANDLE_VALUE || error_ || line.empty()) return;
     if (written_ + line.size() > part_bytes_ && written_ > header_bytes_) {
       if (!next_part_locked()) return;
@@ -96,8 +134,10 @@ class DebugLogFile final {
     write_locked(line);
   }
 
+ public:
   void close() noexcept {
     std::lock_guard lock(mutex_);
+    flush_page_events_locked();
     close_locked();
   }
   [[nodiscard]] bool is_open() const noexcept {
@@ -110,6 +150,14 @@ class DebugLogFile final {
   }
 
  private:
+  void flush_page_events_locked() noexcept {
+    if (!page_dropped_) return;
+    char line[160]{};
+    std::snprintf(line, sizeof(line), "[页面] 限流；已丢弃 %llu 条\r\n",
+                  static_cast<unsigned long long>(page_dropped_));
+    page_dropped_ = 0;
+    append_locked(line);
+  }
   DWORD create_locked(const std::wstring& name) noexcept {
     try {
       file_ = ::CreateFileW((directory_ / name).c_str(), GENERIC_WRITE, FILE_SHARE_READ,
@@ -164,6 +212,9 @@ class DebugLogFile final {
   unsigned int part_{1};
   std::uint64_t written_{};
   std::uint64_t header_bytes_{};
+  std::uint64_t page_window_{};
+  unsigned int page_count_{};
+  std::uint64_t page_dropped_{};
 };
 
 // The file every runtime event goes to. The owner publishes it once the file

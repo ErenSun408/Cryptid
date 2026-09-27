@@ -3,6 +3,8 @@
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "page_event_test_support.h"
+#include "usb_vault/ui/card_configuration_webview_host_object.h"
 #include "usb_vault/security/offline_card_password_policy.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -1320,11 +1322,13 @@ void test_background_creation_reports_progress_and_excludes_concurrent_calls() {
   ::VariantClear(&snapshot);
   const HRESULT blocked = host->Invoke(member_id(*host.Get(), L"getSessionState"), IID_NULL,
       LOCALE_INVARIANT, DISPATCH_METHOD, &no_arguments, &snapshot, nullptr, nullptr);
+  const HRESULT reported = page_event_tests::send(*host.Get());
   fixture.volume.pause_creation.store(false);
   for (int i = 0; work.running.load() && i < 2000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   require(SUCCEEDED(begun) && live && blocked == E_PENDING && !work.running.load(),
       "background operation did not report live progress or exclude concurrent access");
   require(fixture.volume.create_calls == 1, "background creation ran more than once");
+  require(reported == S_OK, "background creation blocked page reporting");
   require(invoke_state(*host.Get()) == 3, "completed job did not release the session");
   fixture.authentication.clear_authentication();
   require(host->Invoke(member_id(*host.Get(), L"getCreationProgress"), IID_NULL,
@@ -1605,12 +1609,14 @@ void test_surface_and_state_projection_are_fixed() {
                          CardEntryRoute::unavailable},
                      4L}}) {
     fixture.entry.route = route;
+    require(page_event_tests::send(*host.Get()) == S_OK, "unauthenticated state blocked page reporting");
     require(invoke_state(*host.Get()) == expected,
             "product route mapped to the wrong wire state");
   }
   fixture.authentication.establish(root_secret());
   require(invoke_state(*host.Get()) == 3L,
           "authenticated state mapped to the wrong wire value");
+  page_event_tests::verify_contract(*host.Get());
 
   for (const wchar_t* const forbidden : {
            L"submitPasswordBytes", L"hardwareId", L"credentialRole",
@@ -1628,6 +1634,42 @@ void test_surface_and_state_projection_are_fixed() {
 // Page calls reach the runtime log with their name, arguments and result. A
 // password array is recorded by size alone, and a successful poll is not
 // recorded at all.
+void test_page_reports_share_quota() {
+  class ConfigurationHost final : public usb_vault::ui::IConfigurationHost {
+   public:
+    usb_vault::ui::ConfigurationCredentialStatus credential_status() noexcept override {
+      throw_if_called = true;
+      return usb_vault::ui::ConfigurationCredentialStatus::missing;
+    }
+    usb_vault::ui::ConfigurationOutcome save_credentials(std::span<const std::byte>,
+        std::span<const std::byte>, std::span<const std::byte>) noexcept override {
+      throw_if_called = true;
+      return usb_vault::ui::ConfigurationOutcome::storage_failure;
+    }
+    bool continue_to_session() noexcept override { throw_if_called = true; return false; }
+    bool throw_if_called = false;
+  } configuration;
+  Fixture fixture;
+  auto product = make_host(fixture.controller);
+  ComPtr<IDispatch> setup;
+  require(SUCCEEDED(usb_vault::ui::create_card_configuration_webview_host_object(configuration, &setup)),
+          "shared quota configuration host failed");
+  page_event_tests::Log log;
+  const auto initial = log.read();
+  for (int i = 0; i < 204; ++i)
+    require(page_event_tests::send(i % 2 ? *product.Get() : *setup.Get()) == S_OK,
+            "shared page quota changed reporting result");
+  log.file.close();
+#if USB_VAULT_DEBUG_LOG
+  const auto text = log.read();
+  require(std::count(text.begin(), text.end(), '\n') == 202 &&
+          text.ends_with("[页面] 限流；已丢弃 4 条\r\n"), "bridges did not share their page quota");
+#else
+  require(log.read() == initial, "disabled bridges wrote page reports");
+#endif
+  require(!configuration.throw_if_called, "page report touched configuration state");
+}
+
 void test_runtime_log_records_page_calls() {
 #if USB_VAULT_DEBUG_LOG
   namespace diagnostics = usb_vault::diagnostics;
@@ -3873,6 +3915,7 @@ void test_configuration_transition() {
   g_close_sink.allow_configuration = true;
   require(SUCCEEDED(invoke()), "unauthenticated configuration failed");
   require(invoke() == E_PENDING, "pending transition accepted another request");
+  require(page_event_tests::send(*host.Get()) == S_OK, "configuration transition blocked page reporting");
   DISPPARAMS args{};
   require(host->Invoke(member_id(*host.Get(), L"getSessionState"), IID_NULL,
       LOCALE_INVARIANT, DISPATCH_METHOD, &args, nullptr, nullptr, nullptr) == E_PENDING,
@@ -3953,6 +3996,7 @@ int main() {
     test_creation_finalization_rejects_late_cancellation();
     test_login_consumes_and_wipes_one_array();
     test_runtime_log_records_page_calls();
+    test_page_reports_share_quota();
     test_initialization_preserves_com_order_and_wipes_both_arrays();
     test_initialization_failure_wipes_every_supported_argument();
     test_bad_arity_still_wipes_supplied_password_array();

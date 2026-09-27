@@ -1,5 +1,6 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "usb_vault/ui/page_event_report.h"
 
 #include <chrono>
 
@@ -39,6 +40,7 @@ constexpr DISPID kPartitionCreateId = 109;
 constexpr DISPID kGetContainerPartitionId = 110;
 constexpr DISPID kGetContainerConversionId = 111;
 constexpr DISPID kGetContainerVolumeUnavailableId = 121;
+constexpr DISPID kReportPageEventId = 122;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
@@ -659,6 +661,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       if (name_count > 0) ids[0] = DISPID_UNKNOWN;
       return DISP_E_UNKNOWNNAME;
     }
+    if (matches(names[0], L"reportPageEvent")) { ids[0] = kReportPageEventId; return S_OK; }
     if (matches(names[0], L"setWindowSize")) {
       ids[0] = kSetWindowSizeId;
       return S_OK;
@@ -911,6 +914,8 @@ class CardProductWebViewHostObject final : public IDispatch {
                                    DISPPARAMS* parameters, VARIANT* result,
                                    EXCEPINFO* exception,
                                    UINT* argument_error) noexcept override {
+    if (member == kReportPageEventId)
+      return report_page_event(iid, flags, parameters, result, argument_error);
     if constexpr (!USB_VAULT_DEBUG_LOG) {
       return invoke_unlogged(member, iid, locale, flags, parameters, result, exception,
                              argument_error);

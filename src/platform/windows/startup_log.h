@@ -170,6 +170,7 @@ class StartupLog final {
   }
   void end_log() noexcept {
     if (!file_.is_open() || ended_) return;
+    file_.flush_page_events();
     record(StartupStep::end, StartupOutcome::completed);
     ended_ = true;
     file_.close();
