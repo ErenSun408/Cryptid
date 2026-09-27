@@ -264,6 +264,8 @@
     await protectionTick();
     check(!$("#decoy-protection-status").hidden && $("#decoy-protection-warning").hidden,
       "Invalid protection results are unknown rather than safe or triggered");
+    check(window.navigationFixture.pageEvents.some(event => event.category === 2 &&
+      event.content.includes("invalid protection status")), "Invalid bridge data reaches the page validation log");
     window.navigationFixture.protectionBlocked = true;
     await protectionTick();
     check(!$("#decoy-protection-warning").hidden && $("#decoy-protection-status").hidden &&
@@ -311,6 +313,8 @@
       $("#management-files").closest("#dashboard-section-files") !== null &&
       $("#decoy-maintenance-writable").textContent === "—",
       "A session change during fact refresh restores placement and discards the stale result");
+    check(window.navigationFixture.pageEvents.some(event => event.category === 4 &&
+      event.source === "refreshDecoyMaintenanceFacts"), "Discarded asynchronous results report abandoned waiting");
     check($("#decoy-protection-warning").hidden, "A late protection result from the previous card cannot restore the warning");
     window.navigationFixture.delayVolume = false;
 
@@ -558,6 +562,10 @@
     window.navigationFixture.bitlockerProgress = '0,0,0';
     window.navigationFixture.pendingCreation.reject();
     await wait(() => $('#create-volume-status').dataset.tone === 'error');
+    await tick();
+    check(window.navigationFixture.pageEvents.some(event => event.category === 1 &&
+      event.source === "create-volume-status" && event.content.includes($('#create-volume-status').textContent) &&
+      event.content.includes("原生错误码 17")), "Creation reporting preserves the displayed code and native mapping");
     $('#create-volume-close').click();
     check(!$('#partition-review-facts').children.length && !$('#partition-selection'),
       "Closing creation clears review and footer identity");
@@ -1194,6 +1202,10 @@
     await wait(() => !$("#batch-result-dialog").hidden);
     check(failedRows().length === 3 && resultRows().length === 3,
       "Every mount failure gets its own marked row");
+    check(failedRows().every(row => window.navigationFixture.pageEvents.some(event =>
+      event.category === 1 && event.source === `batch-result/${row.dataset.id}` &&
+      event.content.includes(row.querySelector(".batch-result-name").textContent) &&
+      event.content.includes("原生状态码 4"))), "Every failed batch item reaches the runtime report with its status");
     window.navigationFixture.failMount = false;
     $("#batch-result-list input[data-id='1']").click();
     check($("#batch-result-all").indeterminate, "Partial result selection marks select-all indeterminate");

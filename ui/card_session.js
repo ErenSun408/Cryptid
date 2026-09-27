@@ -2,12 +2,190 @@
   "use strict";
   // Fixed, non-secret readiness result polled by the native startup watchdog.
   window.usbVaultPageStartupStatus = 0;
-  // Do not inspect event messages, stacks, filenames, or rejected values.
+  // Diagnostics never read input values or serialize rejected objects. The
+  // native bridge enforces the same bounds again at the trust boundary.
+  const pageEventQueue = [];
+  let pageEventBridge = null;
+  let pageEventRetryTimer = null;
+  let pageEventsClosed = false;
+  const retryPageEventBridge = () => {
+    if (pageEventsClosed || pageEventRetryTimer !== null || !pageEventQueue.length) return;
+    pageEventRetryTimer = setTimeout(() => {
+      pageEventRetryTimer = null;
+      try {
+        const host = window.chrome?.webview?.hostObjects?.nativeBridge;
+        if (host) connectPageEventBridge(host);
+      } catch (_) { /* diagnostics only */ }
+      if (pageEventBridge === null) retryPageEventBridge();
+    }, 250);
+  };
+  const cleanPageEventText = (text, limit) => {
+    if (typeof text !== "string") return "";
+    return text.slice(0, limit).replace(/[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, " ");
+  };
+  const sendPageEvent = (event) => {
+    try {
+      // Reporting failures must never report themselves or change UI state.
+      void Promise.resolve(pageEventBridge.reportPageEvent(...event)).catch(() => {});
+    } catch (_) { /* diagnostics only */ }
+  };
+  const logPageEvent = (category, source, content) => {
+    try {
+      if (pageEventsClosed || ![1, 2, 3, 4].includes(category) || typeof source !== "string" || typeof content !== "string") return;
+      const event = [category, cleanPageEventText(source, 64), cleanPageEventText(content, 2000)];
+      if (pageEventBridge === null) {
+        if (pageEventQueue.length < 50) pageEventQueue.push(event);
+        retryPageEventBridge();
+      } else sendPageEvent(event);
+    } catch (_) { /* diagnostics only */ }
+  };
+  const connectPageEventBridge = (host) => {
+    if (!host || pageEventsClosed) return;
+    pageEventBridge = host;
+    if (pageEventRetryTimer !== null) clearTimeout(pageEventRetryTimer);
+    pageEventRetryTimer = null;
+    for (const event of pageEventQueue.splice(0)) sendPageEvent(event);
+  };
+  window.addEventListener("pagehide", () => {
+    pageEventsClosed = true;
+    if (pageEventRetryTimer !== null) clearTimeout(pageEventRetryTimer);
+    pageEventQueue.length = 0;
+    pageEventBridge = null;
+  });
+  // Only messages authored by this page are safe to persist verbatim. A
+  // bridge rejection or arbitrary Error.message may contain a wiped secret.
+  const safePageErrorMessages = new Set([
+    "invalid BitLocker progress", "invalid BitLocker percentage", "consent rejected", "cancel rejected",
+    "invalid creation progress", "invalid creation progress range", "unexpected pause result",
+    "creation-cancelled", "creation-cleanup-failed", "native creation failed",
+    "invalid directory listing", "invalid directory listing header", "invalid directory entry",
+    "invalid protection status", "invalid progress", "invalid result", "survey failed", "invalid status",
+    "invalid file progress", "invalid capacity facts", "invalid partition list", "partition list too large",
+    "invalid partition row", "invalid partition facts", "scan rejected", "scan did not complete",
+    "invalid partition display", "selection rejected", "invalid force preference", "invalid stored setting",
+    "invalid native session state", "invalid reset availability", "invalid card reset availability",
+    "invalid container count", "invalid container status", "invalid operation count", "invalid operation event",
+    "session changed during refresh", "invalid preference", "session changed", "batch failed", "session ended",
+    "invalid reset status", "card changed", "preparation failed", "invalid reset preparation", "reset incomplete",
+    "creation rejected", "conversion rejected", "partition creation rejected", "invalid credential status",
+    "invalid startup view", "invalid window preference", "invalid creation failure code", "invalid volume operation status",
+  ]);
+  const pageErrorProperty = (error, key) => {
+    try {
+      if (error === null || (typeof error !== "object" && typeof error !== "function")) return undefined;
+      // Data properties only: do not execute message/stack/reason getters.
+      return Object.getOwnPropertyDescriptor(error, key)?.value;
+    } catch (_) { return undefined; /* diagnostics only */ }
+  };
+  const pageErrorMessage = (error) => {
+    const message = typeof error === "string" ? error : pageErrorProperty(error, "message");
+    return safePageErrorMessages.has(message) ? message : "异常原文未列入安全白名单，已省略";
+  };
+  const pageErrorDetail = (error) => {
+    let type = "未知异常";
+    try {
+      const name = pageErrorProperty(error, "name") ??
+        (error && typeof error === "object" ? pageErrorProperty(Object.getPrototypeOf(error), "name") : undefined);
+      if (["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError"].includes(name)) type = name;
+    } catch (_) { /* diagnostics only */ }
+    let detail = `${type}；${pageErrorMessage(error)}`;
+    const code = pageErrorProperty(error, "number") ?? pageErrorProperty(error, "code");
+    if (Number.isInteger(code) && code >= -2147483648 && code <= 4294967295) detail += `；异常数值码 ${code}`;
+    const stack = pageErrorProperty(error, "stack");
+    if (typeof stack === "string") {
+      // Keep only our script's frame coordinates, never the message header,
+      // arbitrary function names, URLs, query strings or filesystem paths.
+      const frames = stack.slice(0, 8000).match(/\bcard_session\.js:\d{1,8}:\d{1,8}\b/g);
+      if (frames) detail += `；调用栈 ${frames.slice(0, 6).join(" ← ")}`;
+    }
+    return detail;
+  };
+  const reportedPageErrors = new WeakSet();
+  const logCaughtPageError = (source, error, category = 2) => {
+    try {
+      const message = pageErrorMessage(error);
+      if (message === "creation-cancelled") return; // Normal requested cancellation.
+      if (error && typeof error === "object") {
+        if (reportedPageErrors.has(error)) return;
+        reportedPageErrors.add(error);
+      }
+      if (/^(session changed|session ended|card changed)/.test(message)) category = 4;
+      else if (/^(invalid |unexpected |partition list too large)/.test(message)) category = 2;
+      logPageEvent(category, source, pageErrorDetail(error));
+    } catch (_) { /* diagnostics only */ }
+  };
   const markStartupScriptFailure = () => {
     if (window.usbVaultPageStartupStatus === 0) window.usbVaultPageStartupStatus = 1408;
   };
-  window.addEventListener("error", markStartupScriptFailure);
-  window.addEventListener("unhandledrejection", markStartupScriptFailure);
+  const reportUnhandledPageError = (source, error, file, line, column) => {
+    markStartupScriptFailure();
+    const script = typeof file === "string" && /(?:^|\/)card_session\.js(?:[?#]|$)/.test(file)
+      ? "card_session.js" : "未知脚本";
+    const position = (value) => Number.isInteger(value) && value >= 0 && value <= 100000000 ? value : 0;
+    logPageEvent(3, source, `${pageErrorDetail(error)}；文件 ${script}；行 ${position(line)}；列 ${position(column)}`);
+  };
+  window.addEventListener("error", (event) => {
+    reportUnhandledPageError("window.error", event.error ?? event.message, event.filename, event.lineno, event.colno);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    reportUnhandledPageError("window.unhandledrejection", event.reason);
+  });
+
+  // Register mappings without logging: calculating a message is not evidence
+  // that it was displayed. The display observer joins it to the final text.
+  const pageErrorMappings = new Map();
+  const mappedPageError = (text, code, origin) => {
+    if (pageErrorMappings.size >= 50) pageErrorMappings.delete(pageErrorMappings.keys().next().value);
+    pageErrorMappings.set(text, `${origin} ${Number.isInteger(code) ? code : "无效"} → ${text}`);
+    return text;
+  };
+  const logShownPageError = (source, text, mapping) => {
+    if (mapping === undefined) mapping = [...pageErrorMappings].reverse().find(([message]) => text.startsWith(message))?.[1] || "";
+    const code = text.match(/错误码[：:\s（(]*([0-9]+)/)?.[1];
+    logPageEvent(1, source, `显示错误码 ${code || "无"}；${mapping ? mapping + "；" : ""}提示 ${text}`);
+  };
+  // Explicit text-only surfaces. Never observe a form, input, credential
+  // preview, whole dialog or whole document for its textContent.
+  const pageErrorSurfaces = [
+    "dashboard-status", "card-session-status", "card-session-error", "setup-status",
+    "create-volume-status", "partition-status", "forgot-password-status", "reset-card-status",
+    "export-confirm-status", "forget-container-status", "file-name-status", "file-list-status",
+    "backup-export-status", "backup-migrate-status", "settings-window-size-status",
+    "decoy-verify-status", "decoy-results-status", "decoy-maintenance-status", "decoy-drop-status",
+    "decoy-protection-status", "batch-result-setting-status",
+    "create-container-name-error", "create-container-directory-error", "create-container-error",
+    "create-container-b-name-error", "create-container-b-directory-error", "create-container-b-error",
+  ];
+  const pageErrorAlwaysMarked = new Set([
+    "card-session-error", "settings-window-size-status", "decoy-protection-status", "batch-result-setting-status",
+    ...pageErrorSurfaces.filter((id) => id.startsWith("create-container") && id.endsWith("-error")),
+  ]);
+  const lastShownPageErrors = new Map();
+  const pageErrorVisible = (element) => element && !element.closest("[hidden]") &&
+    !element.closest(".dashboard-section:not(.active)");
+  const capturePageErrors = () => {
+    try {
+      for (const id of pageErrorSurfaces) {
+        const element = document.getElementById(id);
+        const text = element && pageErrorVisible(element) &&
+          (element.dataset.tone === "error" || pageErrorAlwaysMarked.has(id)) ? element.textContent.trim() : "";
+        if (text && lastShownPageErrors.get(id) !== text) {
+          if (id.startsWith("create-container") && id.endsWith("-error")) logPageEvent(2, id, `输入校验失败；${text}`);
+          logShownPageError(id, text);
+        }
+        lastShownPageErrors.set(id, text);
+      }
+      const dialog = document.getElementById("volume-operation-dialog");
+      const text = pageErrorVisible(dialog) && dialog.dataset.result === "error"
+        ? document.getElementById("volume-operation-title").textContent + "；" +
+          document.getElementById("volume-operation-note").textContent : "";
+      if (text && lastShownPageErrors.get("volume-operation") !== text) logShownPageError("volume-operation", text);
+      lastShownPageErrors.set("volume-operation", text);
+    } catch (_) { /* diagnostics only */ }
+  };
+  const pageErrorObserver = new MutationObserver(capturePageErrors);
+  pageErrorObserver.observe(document.body, {subtree: true, childList: true, characterData: true,
+    attributes: true, attributeFilter: ["data-tone", "data-result", "hidden", "class"]});
 
   const nativeState = Object.freeze({
     noCard: 0,
@@ -103,7 +281,7 @@
     try {
       await bridge.setWindowSize(Number(value));
       appliedWindowSize = value;
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("windowSizeSelect.change/1", pageError);
       windowSizeSelect.value = appliedWindowSize;
       windowSizeStatus.textContent = "无法调整窗口尺寸，请重试。";
     } finally {
@@ -360,18 +538,18 @@
   bitlockerConsent.addEventListener("change", () => {
     bitlockerContinue.disabled = !bitlockerConsent.checked || bitlockerPhase !== 1 || bitlockerSubmitted || bitlockerCancelled;
   });
-  bitlockerHelp.addEventListener("click", () => { if (bitlockerPhase === 1) void bridge.openBitLockerHelp().catch(() => {}); });
+  bitlockerHelp.addEventListener("click", () => { if (bitlockerPhase === 1) void bridge.openBitLockerHelp().catch((error) => { logCaughtPageError("bitlockerHelp.click/1", error); }); });
   bitlockerContinue.addEventListener("click", async () => {
     if (!creationRunning || bitlockerPhase !== 1 || !bitlockerConsent.checked || bitlockerSubmitted || bitlockerCancelled) return;
     bitlockerSubmitted = true; bitlockerContinue.disabled = true; bitlockerConsent.disabled = true;
     try { if (await bridge.confirmPartitionBitLocker() !== true) throw new Error("consent rejected"); }
-    catch (_) { creationStatus.textContent = "未能确认关闭 BitLocker，请取消后重试。"; }
+    catch (pageError) { logCaughtPageError("bitlockerContinue.click/1", pageError); creationStatus.textContent = "未能确认关闭 BitLocker，请取消后重试。"; creationStatus.dataset.tone = "error"; }
   });
   bitlockerCancel.addEventListener("click", async () => {
     if (!creationRunning || !bitlockerPhase || bitlockerCancelled) return;
     bitlockerCancelled = true; bitlockerCancel.disabled = true; bitlockerContinue.disabled = true;
     try { if (await requestCreationCancellation() !== true) throw new Error("cancel rejected"); }
-    catch (_) { bitlockerCancelled = false; bitlockerCancel.disabled = false; }
+    catch (pageError) { logCaughtPageError("bitlockerCancel.click/1", pageError); bitlockerCancelled = false; bitlockerCancel.disabled = false; }
   });
   let creationInplace = false;
   let creationDrive = "";
@@ -484,7 +662,9 @@
   });
   const waitForCreation = async () => {
     for (;;) {
-      const packed = await bridge.getCreationProgress();
+      let packed;
+      try { packed = await bridge.getCreationProgress(); }
+      catch (error) { logCaughtPageError("waitForCreation/progress", error, 4); throw error; }
       if (typeof packed !== "string" || !/^\d+,\d+,\d+,\d+,\d+$/.test(packed)) throw new Error("invalid creation progress");
       const [status, stage, percent, drive, flags] = packed.split(",").map(Number);
       if (status < 1 || status > 6 || stage > 5 || percent > 100 || flags > 3 ||
@@ -824,7 +1004,7 @@
   const normalizedPasswordLength = () => {
     try {
       return Array.from(passwordInput.value.normalize("NFC")).length;
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("normalizedPasswordLength/1", pageError);
       return null;
     }
   };
@@ -834,7 +1014,7 @@
   const initializationInputsMatch = (password, confirmation) => {
     try {
       return password.normalize("NFC") === confirmation.normalize("NFC");
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("initializationInputsMatch/1", pageError);
       return password === confirmation;
     }
   };
@@ -1031,7 +1211,7 @@
   const normalizedLength = (value) => {
     try {
       return Array.from(value.normalize("NFC")).length;
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("normalizedLength/1", pageError);
       return null;
     }
   };
@@ -1570,11 +1750,11 @@
     try {
       await action();
       await refreshNativeState();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runFileAction/1", pageError);
       failed = true;
       try {
         await refreshNativeState();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("runFileAction/2", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
@@ -1954,9 +2134,9 @@
     try {
       await bridge.reorderContainers(ids.join(","));
       saved = true;
-      if (revision !== batchSessionRevision) return;
+      if (revision !== batchSessionRevision) { logPageEvent(4, "rememberContainerOrder", "会话或页面状态变化，已放弃等待结果。"); return; }
       await refreshNativeState();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("rememberContainerOrder/1", pageError);
       if (revision === batchSessionRevision) setDashboardStatus(saved
         ? "排序已保存，但列表刷新失败，请刷新后查看。"
         : "排序保存失败，已保留原顺序，请重试。", "error");
@@ -2047,7 +2227,7 @@
     row.classList.add("xrow-ghost");
     try {
       event.target.setPointerCapture(event.pointerId);
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("beginContainerReorder/1", pageError);
       // A pointer that cannot be captured still moves; the listeners below are
       // on the document, so the drag keeps working without it.
     }
@@ -2330,7 +2510,7 @@
     try {
       return parseDirectoryListing(
         await bridge.listContainerDirectory(id, ""));
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("readContainerRoot/1", pageError);
       return null;
     }
   };
@@ -2506,13 +2686,13 @@
           request.id, request.directory, request.name, location);
         exportSelection.delete(
           exportKey(request.id, request.directory, request.name));
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("runExport/1", pageError);
         failed.push(request);
       }
     }
     try {
       await refreshNativeState();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runExport/2", pageError);
       currentState = nativeState.unavailable;
       activeVolumes = true;
     }
@@ -2551,12 +2731,12 @@
     let failed = false;
     try {
       await bridge.exportContainerFile(id, location);
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runMigration/1", pageError);
       failed = true;
     }
     try {
       await refreshNativeState();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runMigration/2", pageError);
       currentState = nativeState.unavailable;
       activeVolumes = true;
     }
@@ -2597,7 +2777,7 @@
       if (Number.isInteger(reason) && directoryFailureMessages[reason]) {
         return directoryFailureMessages[reason];
       }
-    } catch (_) {}
+    } catch (pageError) { logCaughtPageError("readDirectoryFailure/1", pageError);}
     return kDirectoryFailureUnknown;
   };
 
@@ -2622,14 +2802,14 @@
       const packed = await bridge.listContainerDirectory(
         container.id, filePath.join("/"));
       if (revision !== fileListingRevision || fileContainerId !== requestedId || filePath.join("/") !== requestedPath ||
-          currentState !== nativeState.authenticated) return;
+          currentState !== nativeState.authenticated) { logPageEvent(4, "refreshFileManager", "会话或页面状态变化，已放弃等待结果。"); return; }
       const listing = parseDirectoryListing(packed);
       fileEntries = listing.entries;
       setFileStatus(listing.truncated
         ? "这个文件夹里的条目太多，只显示了其中一部分。"
         : "");
-    } catch (_) {
-      if (revision !== fileListingRevision || fileContainerId !== requestedId || filePath.join("/") !== requestedPath) return;
+    } catch (pageError) { logCaughtPageError("refreshFileManager/1", pageError);
+      if (revision !== fileListingRevision || fileContainerId !== requestedId || filePath.join("/") !== requestedPath) { logPageEvent(4, "refreshFileManager", "会话或页面状态变化，已放弃等待结果。"); return; }
       // The root is the one place that always has somewhere to land, so a
       // folder that cannot be read does not strand the page inside it.
       fileEntries = [];
@@ -2726,7 +2906,7 @@
         decoyMaintenanceTotal.textContent = "";
         disarmDecoyDrop();
       }
-    } catch (_) {
+    } catch (pageError) {
       if (!current()) return;
       // A drop can start between the progress read and the protection query.
       try {
@@ -2737,8 +2917,9 @@
           }
           return;
         }
-      } catch (_) {}
+      } catch (pageError) { logCaughtPageError("pollDecoyProtection/2", pageError);}
       if (!current() || busy) return;
+      logCaughtPageError("pollDecoyProtection/1", pageError);
       decoyProtectionStatus.textContent = "暂时无法确认写入保护状态，请暂停修改并稍后重试；无法确认不代表可以继续写入。";
       decoyProtectionStatus.hidden = false;
     } finally {
@@ -2765,7 +2946,7 @@
   const disarmDecoyDrop = () => {
     if (bridge === null || decoyDropTarget === "") return;
     decoyDropTarget = "";
-    void Promise.resolve(bridge.clearExternalDropTarget()).catch(() => {});
+    void Promise.resolve(bridge.clearExternalDropTarget()).catch((error) => { logCaughtPageError("disarmDecoyDrop/1", error); });
   };
 
   // 🔴 The page names a container and a directory and nothing else. Arming
@@ -2790,7 +2971,7 @@
           Math.max(0, Math.round(button.left * scale)), Math.max(0, Math.round(button.top * scale)),
           Math.max(0, Math.round(button.width * scale)), Math.max(0, Math.round(button.height * scale)));
       }
-    } catch (_) {}
+    } catch (pageError) { logCaughtPageError("syncDecoyDropBounds/1", pageError);}
   };
 
   const armDecoyDrop = async () => {
@@ -2816,7 +2997,7 @@
       // Without this a second drop with the same outcome would read as the
       // first one and go unreported.
       decoyDropReported = "0,0,0,0";
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("armDecoyDrop/1", pageError);
       decoyDropTarget = "";
     }
   };
@@ -3073,7 +3254,7 @@
       }
       for (;;) {
         const raw = String(await bridge.getDecoySurveyProgress());
-        if (revision !== batchSessionRevision) return;
+        if (revision !== batchSessionRevision) { logPageEvent(4, "runDecoySurvey", "会话或页面状态变化，已放弃等待结果。"); return; }
         if (!/^\d+,\d+,\d+,\d+,\d+,[01]$/.test(raw)) throw new Error("invalid progress");
         const [state, total, done, found, unreachable, cancelled] =
           raw.split(",").map(Number);
@@ -3083,7 +3264,7 @@
           decoyFound = [];
           for (let index = 0; index < found; ++index) {
             const id = await bridge.getDecoySurveyId(index);
-            if (revision !== batchSessionRevision) return;
+            if (revision !== batchSessionRevision) { logPageEvent(4, "runDecoySurvey", "会话或页面状态变化，已放弃等待结果。"); return; }
             if (!Number.isInteger(id) || id <= 0) throw new Error("invalid result");
             decoyFound.push(id);
           }
@@ -3106,7 +3287,7 @@
         decoyProgressCopy.textContent = "正在验证...";
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runDecoySurvey/1", pageError);
       decoyStage = "verify";
       setDecoyStatus(decoyVerifyStatus, "无法完成验证，请稍后重试。", "error");
     } finally {
@@ -3153,7 +3334,7 @@
     let packed = "";
     try {
       packed = String(await bridge.getExternalDropStatus());
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("watchDecoyDrop/1", pageError);
       return;
     }
     if (!/^[0-4],\d+,\d+,\d+$/.test(packed) || packed === decoyDropReported) {
@@ -3179,7 +3360,7 @@
     try {
       for (;;) {
         const raw = String(await bridge.getExternalDropStatus());
-        if (revision !== batchSessionRevision) return;
+        if (revision !== batchSessionRevision) { logPageEvent(4, "watchDecoyDrop", "会话或页面状态变化，已放弃等待结果。"); return; }
         if (!/^[0-4],\d+,\d+,\d+$/.test(raw)) throw new Error("invalid status");
         const [state, total, done, failed] = raw.split(",").map(Number);
         if (done + failed > total) throw new Error("invalid status");
@@ -3189,14 +3370,14 @@
           break;
         }
         const percent = Number(await bridge.getExternalFileProgress());
-        if (revision !== batchSessionRevision) return;
+        if (revision !== batchSessionRevision) { logPageEvent(4, "watchDecoyDrop", "会话或页面状态变化，已放弃等待结果。"); return; }
         if (!Number.isInteger(percent) || percent < 0 || percent > 99) throw new Error("invalid file progress");
         decoyDropBar.style.width = total === 0
           ? "0%" : `${Math.min(99, Math.round(((done + percent / 100) / total) * 100))}%`;
         decoyDropCopy.textContent = `正在放入（${done}/${total}），当前文件 ${percent}%…`;
         await new Promise((resolve) => setTimeout(resolve, 150));
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("watchDecoyDrop/2", pageError, 4);
       outcome = [3, 0, 0, 0];
     } finally {
       decoyDropWatching = false;
@@ -3204,7 +3385,7 @@
       decoyDropCopy.textContent = "正在放入…";
       busy = false;
     }
-    if (revision !== batchSessionRevision) return;
+    if (revision !== batchSessionRevision) { logPageEvent(4, "watchDecoyDrop", "会话或页面状态变化，已放弃等待结果。"); return; }
     await reportDecoyDrop(outcome);
   };
 
@@ -3230,7 +3411,7 @@
           throw new Error("invalid capacity facts");
         }
         if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
-            decoyStage !== "maintenance") return;
+            decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
         const used = total - free;
         const capacityUnit = total >= 1073741824 ? 1073741824 : 1048576;
         const capacityLabel = capacityUnit === 1073741824 ? "GiB" : "MiB";
@@ -3242,9 +3423,9 @@
             `当前安全空闲 ${safeFree.toLocaleString("zh-CN")} 字节，已排除保护区域。目录及文件系统元数据也会占用空间，不保证同等大小文件均可放入。`);
         decoyMaintenanceSpaceBar.style.width = total === 0
           ? "0%" : `${Math.min(100, Math.round((used / total) * 100))}%`;
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("refreshDecoyMaintenanceFacts/1", pageError);
         if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
-            decoyStage !== "maintenance") return;
+            decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
         capacityFailed = true;
         decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "无法读取";
         decoyMaintenanceSpaceDetail.textContent = "容量事实暂不可用，请稍后刷新。";
@@ -3254,10 +3435,10 @@
       }
 
       if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
-          decoyStage !== "maintenance") return;
+          decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
       const listing = await readContainerRoot(id);
       if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
-          decoyStage !== "maintenance") return;
+          decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
       if (listing === null) {
         freshnessFailed = true;
         decoyMaintenanceFreshness.textContent = "无法读取";
@@ -3293,7 +3474,7 @@
     renderDecoySection();
     try {
       await waitForVolumeOperation(() => bridge.beginOpenDecoyMaintenance(id));
-      if (revision !== batchSessionRevision) return;
+      if (revision !== batchSessionRevision) { logPageEvent(4, "openDecoyMaintenance", "会话或页面状态变化，已放弃等待结果。"); return; }
       opened = true;
       decoyUploadRecovery = false;
       decoyStage = "maintenance";
@@ -3304,7 +3485,7 @@
       filePath = [];
       fileEntries = [];
       clearDecoyMaintenanceFacts();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("openDecoyMaintenance/1", pageError);
       setDecoyStatus(wasMaintenance ? decoyMaintenanceStatus : decoyResultsStatus,
         "无法打开该容器的外层卷。", "error");
     } finally {
@@ -3331,7 +3512,7 @@
     renderDecoySection();
     try {
       await waitForVolumeOperation(() => bridge.beginEndDecoyMaintenance(id));
-      if (revision !== batchSessionRevision) return;
+      if (revision !== batchSessionRevision) { logPageEvent(4, "endDecoyMaintenance", "会话或页面状态变化，已放弃等待结果。"); return; }
       ++decoyMaintenanceRevision;
       decoyStage = "results";
       decoyListVisible = false;
@@ -3341,7 +3522,7 @@
       filePath = [];
       fileEntries = [];
       clearDecoyMaintenanceFacts();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("endDecoyMaintenance/1", pageError);
       setDecoyStatus(decoyMaintenanceStatus,
         "无法结束维护，请关闭可能占用文件的程序后重试。", "error");
     } finally {
@@ -3385,7 +3566,7 @@
     if (decoyCancelRequested) return;
     decoyCancelRequested = true;
     decoyProgressCancel.disabled = true;
-    try { await bridge.cancelDecoySurvey(); } catch (_) {}
+    try { await bridge.cancelDecoySurvey(); } catch (pageError) { logCaughtPageError("decoyProgressCancel.click/1", pageError);}
     decoyProgressCancel.disabled = false;
   });
   decoyMaintenanceContainer.addEventListener("change", () => {
@@ -3400,7 +3581,7 @@
     if (busy || decoyUploadRecovery || decoyWriteBlocked || decoyStage !== "maintenance") return;
     await armDecoyDrop();
     try { if (await bridge.selectExternalFiles()) await watchDecoyDrop(); }
-    catch (_) { setDecoyStatus(decoyDropStatus, "无法选择文件，请稍后重试。", "error"); }
+    catch (pageError) { logCaughtPageError("decoySelectFiles.click/1", pageError); setDecoyStatus(decoyDropStatus, "无法选择文件，请稍后重试。", "error"); }
   });
   decoyDropZone.addEventListener("dblclick", (event) => {
     if (!(event.target instanceof Element) || event.target.closest("button")) return;
@@ -3421,13 +3602,13 @@
   if (typeof ResizeObserver === "function") new ResizeObserver(() => { void syncDecoyDropBounds(); }).observe(decoyDropZone);
   decoyDropCancel.addEventListener("click", async () => {
     decoyDropCancel.disabled = true;
-    try { await bridge.cancelExternalDrop(); } catch (_) {}
+    try { await bridge.cancelExternalDrop(); } catch (pageError) { logCaughtPageError("decoyDropCancel.click/1", pageError);}
   });
 
   const partitionPickerVisible = () => !creationDialog.hidden && creationStorage === "disk";
   const clearCreationPartitions = () => {
     discardPartitions();
-    if (bridge !== null) void bridge.clearPartitions().catch(() => {});
+    if (bridge !== null) void bridge.clearPartitions().catch((error) => { logCaughtPageError("clearCreationPartitions/1", error); });
   };
   const partitionBody = document.getElementById("partition-list-body");
   const partitionStatus = document.getElementById("partition-status");
@@ -3532,7 +3713,7 @@
     document.getElementById("partition-review-facts").replaceChildren();
     document.getElementById("partition-unavailable").open = false;
     ++partitionRevision; partitionRows = []; partitionSelected = 0; partitionErase.checked = false;
-    partitionStatus.textContent = "";
+    partitionStatus.textContent = ""; partitionStatus.dataset.tone = "";
     renderPartitions();
   };
   const parsePartitionRows = packed => {
@@ -3556,7 +3737,7 @@
       document.getElementById("partition-review-facts").replaceChildren();
     } else discardPartitions();
     const revision = partitionRevision;
-    busy = true; renderPartitions(); creationContinueButton.disabled = true; partitionStatus.textContent = "正在读取分区…";
+    busy = true; renderPartitions(); creationContinueButton.disabled = true; partitionStatus.textContent = "正在读取分区…"; partitionStatus.dataset.tone = "";
     try {
       if (await bridge.beginPartitionRefresh() !== true) throw new Error("scan rejected");
       let status;
@@ -3571,13 +3752,13 @@
         if (typeof display !== "string" || display.length > 512) throw new Error("invalid partition display");
         row.display = display;
       }
-      if (revision !== partitionRevision || !partitionPickerVisible()) return;
+      if (revision !== partitionRevision || !partitionPickerVisible()) { logPageEvent(4, "refreshPartitions", "会话或页面状态变化，已放弃等待结果。"); return; }
       partitionRows = rows;
-      partitionStatus.textContent = "";
-    } catch (_) {
+      partitionStatus.textContent = ""; partitionStatus.dataset.tone = "";
+    } catch (pageError) { logCaughtPageError("refreshPartitions/1", pageError);
       if (revision === partitionRevision) {
         discardPartitions();
-        partitionStatus.textContent = "无法读取分区，请稍后刷新重试。";
+        partitionStatus.textContent = "无法读取分区，请稍后刷新重试。"; partitionStatus.dataset.tone = "error";
       }
     } finally {
       busy = false; renderPartitions(); updateCreationAvailability();
@@ -3593,12 +3774,12 @@
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) {
         partitionSelected = id;
-        partitionStatus.textContent = "";
+        partitionStatus.textContent = ""; partitionStatus.dataset.tone = "";
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("selectPartitionRow/1", pageError);
       if (revision === partitionRevision) {
         discardPartitions();
-        partitionStatus.textContent = "分区选择已失效，请刷新后重新选择。";
+        partitionStatus.textContent = "分区选择已失效，请刷新后重新选择。"; partitionStatus.dataset.tone = "error";
       }
     } finally {
       busy = false; renderPartitions(); updateCreationAvailability();
@@ -3613,7 +3794,7 @@
     busy = true; renderPartitions(); creationContinueButton.disabled = true;
     let opened = false;
     try { opened = await bridge.openDiskManagement() === true; }
-    catch (_) { /* The native call may already have invalidated its snapshot. */ }
+    catch (pageError) { logCaughtPageError("partitionManagement.click/1", pageError); /* The native call may already have invalidated its snapshot. */ }
     finally {
       busy = false;
       if (revision === partitionRevision && partitionPickerVisible() && currentState === nativeState.authenticated && !externalRefreshPending) {
@@ -3728,6 +3909,7 @@
   const setDashboardStatus = (message, tone = "") => {
     dashboardStatus.textContent = message;
     dashboardStatus.dataset.tone = tone;
+    capturePageErrors();
   };
 
   const lockIcon = () => {
@@ -4122,10 +4304,11 @@
           : "正在一键卸载";
     }
     statusOutput.textContent = message;
-    statusOutput.dataset.tone = /^错误码：\d{4}$/.test(message) ? "error" : "";
+    statusOutput.dataset.tone = /^(错误码：\d{4}$|无法|安全操作未完成|需要管理员身份)/.test(message) ? "error" : "";
     errorOutput.textContent = error;
     errorOutput.hidden = error.length === 0;
     updateProductSurface();
+    capturePageErrors();
   };
 
   const clearError = () => {
@@ -4236,7 +4419,7 @@
           }
           if (!value && activeSection === "history") showDashboardSection("settings");
         }
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("refreshStoredSwitches/1", pageError);
         // An unreadable setting is not a licence to invent one. The switch
         // keeps the position it already had.
       }
@@ -4354,7 +4537,8 @@
 
   const startupFailureMessage = () => {
     const code = window.usbVaultStartupFailure?.code;
-    return `错误码：${Number.isInteger(code) && code >= 1000 && code <= 9999 ? code : 9001}`;
+    const native = Number.isInteger(code) && code >= 1000 && code <= 9999;
+    return mappedPageError(`错误码：${native ? code : 9001}`, native ? code : 9001, native ? "原生启动码" : "页面兜底码");
   };
   const messageForCurrentState = () => {
     switch (currentState) {
@@ -4398,7 +4582,7 @@
         renderDecoySection();
         updateStrength();
         focusCurrentInput();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("refreshAfterExternalChange/1", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
         busy = false;
@@ -4472,7 +4656,7 @@
       let autoMount = false;
       if (currentState === nativeState.authenticated && loginRevision === batchSessionRevision && !externalRefreshPending) {
         try { autoMount = (await bridge.getAutoMountEnabled()) === true; }
-        catch (_) { setDashboardStatus("无法读取自动挂载设置，本次请手动挂载。", "error"); }
+        catch (pageError) { logCaughtPageError("submitLogin/1", pageError); setDashboardStatus("无法读取自动挂载设置，本次请手动挂载。", "error"); }
       }
       busy = false;
       render(messageForCurrentState());
@@ -4480,10 +4664,10 @@
         const targets = orderedContainers().filter((container) => !container.mounted && !container.conversion).map((container) => container.id);
         await runSelectedBatch(batchControls[0], null, targets);
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("submitLogin/2", pageError);
       try {
         await refreshNativeState();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("submitLogin/3", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
@@ -4541,10 +4725,10 @@
       busy = false;
       render(messageForCurrentState());
       updateStrength();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("submitInitialization/1", pageError);
       try {
         await refreshNativeState();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("submitInitialization/2", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
@@ -4650,6 +4834,8 @@
     volumeOperationNote.textContent = succeeded
       ? (volumeOperationTarget ? ` ${volumeOperationTarget} 已${volumeOperationVerb}。` : "磁盘状态已更新。")
       : reason;
+    if (!succeeded && Number.isInteger(failureCode) && failureCode > 0)
+      mappedPageError(`${volumeOperationTitle.textContent}；${volumeOperationNote.textContent}`, failureCode, "原生状态码");
     volumeOperationMark.removeAttribute("role");
     volumeOperationMark.setAttribute("aria-hidden", "true");
     // The tick and the exclamation are drawn by the stylesheet from
@@ -4869,10 +5055,13 @@
       name.className = "batch-result-name";
       name.textContent = item.name;
       name.title = item.name;
-      row.append(name, batchResultMark(item, verb, batchItemFailed(item)
+      const failure = batchItemFailed(item)
         ? `${verb}失败：${volumeFailureMessages[item.outcome] || volumeFailureMessages[3]}` +
           (eligible.has(item.id) ? "" : "当前状态无需重试，或容器已不在本会话中。")
-        : ""));
+        : "";
+      row.append(name, batchResultMark(item, verb, failure));
+      if (failure) logShownPageError(`batch-result/${item.id}`, `${item.name}；${failure}`,
+        `原生状态码 ${item.outcome} → ${failure}`);
       if (eligible.has(item.id)) row.append(input);
       batchResultList.append(row);
     }
@@ -4912,7 +5101,7 @@
           batchResultForce.checked = value;
         }
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("saveForcePreference/1", pageError);
       if (revision === batchSessionRevision) {
         source.checked = previous;
         setDashboardStatus("无法保存强制卸载设置，请重试。", "error");
@@ -4979,12 +5168,14 @@
     // Give the overlay a paint before dispatching native work.
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
     try { await start(); }
-    catch (_) { throw new VolumeOperationFailure("操作未能开始。请检查安全卡及磁盘状态后重试。"); }
+    catch (pageError) { logCaughtPageError("waitForVolumeOperation/1", pageError); throw new VolumeOperationFailure("操作未能开始。请检查安全卡及磁盘状态后重试。"); }
     for (;;) {
       let status;
       try { status = await bridge.getVolumeOperationStatus(); }
-      catch (_) { throw new VolumeOperationFailure("无法获取操作结果，请检查当前磁盘状态后重试。"); }
+      catch (pageError) { logCaughtPageError("waitForVolumeOperation/2", pageError, 4); throw new VolumeOperationFailure("无法获取操作结果，请检查当前磁盘状态后重试。"); }
       if (status === 2) return;
+      if (!Number.isInteger(status) || status < 1 || status > 10)
+        logCaughtPageError("waitForVolumeOperation/status", new Error("invalid volume operation status"));
       if (status !== 1) throw new VolumeOperationFailure(
         Number.isInteger(status) && status >= 3 && status <= 10 ? volumeFailureMessages[status] : volumeFailureMessages[3], status);
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -5007,8 +5198,8 @@
       busy = false;
       render(messageForCurrentState());
       setDashboardStatus("");
-    } catch (_) {
-      try { await refreshNativeState(); } catch (_) {}
+    } catch (pageError) { logCaughtPageError("leaveApplication/1", pageError);
+      try { await refreshNativeState(); } catch (pageError) { logCaughtPageError("leaveApplication/2", pageError);}
       busy = false;
       render(messageForCurrentState());
       setDashboardStatus("未能离开，请等待当前操作结束，并关闭占用磁盘的文件后重试。", "error");
@@ -5032,10 +5223,10 @@
       render(messageForCurrentState());
       setDashboardStatus("一键卸载已完成。");
       finishVolumeOperation(true);
-    } catch (error) {
+    } catch (error) { logCaughtPageError("unmount/1", error);
       try {
         await refreshNativeState();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("unmount/2", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
@@ -5075,10 +5266,10 @@
         setDashboardStatus(`${progress.verb}成功。`);
         finishVolumeOperation(true);
       }
-    } catch (error) {
+    } catch (error) { logCaughtPageError("runContainerAction/1", error);
       try {
         await refreshNativeState();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("runContainerAction/2", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
@@ -5179,10 +5370,10 @@
         results.find((result) => result.id === item.id) || item) : results;
       showBatchResults({ mounting: control.mounting, force, items, selected: new Set(), focus: originFocus });
       if (activeSection === "files") void refreshFileManager();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runSelectedBatch/1", pageError);
       clearBatchResults();
       try { await refreshNativeState(); }
-      catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
+      catch (pageError) { logCaughtPageError("runSelectedBatch/2", pageError); currentState = nativeState.unavailable; activeVolumes = true; }
       busy = false;
       render(messageForCurrentState());
       finishVolumeOperation(false, externalRefreshPending || revision !== batchSessionRevision
@@ -5202,7 +5393,7 @@
     const ticket = forgotTicket;
     forgotTicket = 0; ++forgotRevision;
     forgotDialog.hidden = true; forgotAcknowledge.checked = false;
-    if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (_) {} }
+    if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (pageError) { logCaughtPageError("closeForgotPassword/1", pageError);} }
     busy = false; render(messageForCurrentState());
     if (!sessionTools.hidden) sessionToolsToggle.focus();
   };
@@ -5257,9 +5448,9 @@
       forgotTicket = 0;
       forgotStatus.textContent = "已重新初始化，正在关闭应用。";
       forgotStatus.dataset.tone = "success";
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runForgotPassword/1", pageError);
       const ticket = forgotTicket; forgotTicket = 0;
-      if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (_) {} }
+      if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (pageError) { logCaughtPageError("runForgotPassword/2", pageError);} }
       forgotRunning = false; forgotAcknowledge.checked = false;
       forgotConfirm.hidden = true; forgotForce.hidden = true; forgotSkip.hidden = true;
       forgotStatus.textContent = writing ? "无法确认重置结果。请拔出安全卡重新插入，按实际状态继续；请勿重复执行旧确认。" : "无法准备重置。请重新插入安全卡，确认凭据配置后再试。";
@@ -5311,10 +5502,10 @@
       // describes a card this session can no longer act on.
       resetStatus.textContent = "已重新初始化，正在关闭应用。";
       resetStatus.dataset.tone = "success";
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("resetCardRecord/1", pageError);
       try {
         await refreshNativeState();
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("resetCardRecord/2", pageError);
         currentState = nativeState.unavailable;
         activeVolumes = true;
       }
@@ -5409,7 +5600,7 @@
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
-    } catch (error) {
+    } catch (error) { logCaughtPageError("createContainerB/1", error);
       await showFileCreationFailure(error, creationAccepted,
         "名称、路径与诱饵密码", disk, previousIds);
     } finally {
@@ -5448,23 +5639,29 @@
     18: "安全组件意外结束，请重新打开应用后重试。",
     19: "保存位置的剩余空间不足，装不下这个容量的容器。请换个位置，或调小容量。",
   };
+  let creationFailureOrigin = "来源未知";
   const describeCreationFailure = (code) => {
     const known = creationFailureMessages[code];
-    return known ? `${known}（错误码${code}）`
-                 : `创建失败，原因无法确定。（错误码${code}）`;
+    const text = known ? `${known}（错误码${code}）` : `创建失败，原因无法确定。（错误码${code}）`;
+    return mappedPageError(text, code, creationFailureOrigin);
   };
   const readCreationFailureCode = async (accepted) => {
+    creationFailureOrigin = "页面兜底码";
     try {
       const code = accepted ? await bridge.getCreationError() : 0;
-      if (Number.isInteger(code) && code > 0 && code <= 4294967295) return code;
-    } catch (_) {}
+      if (Number.isInteger(code) && code > 0 && code <= 4294967295) {
+        creationFailureOrigin = "原生错误码";
+        return code;
+      }
+      if (accepted) logCaughtPageError("readCreationFailureCode/value", new Error("invalid creation failure code"));
+    } catch (pageError) { logCaughtPageError("readCreationFailureCode/1", pageError);}
     return 2147500037; // E_FAIL when no native result is available.
   };
 
   const showFileCreationFailure = async (error, accepted, fields, disk = false, previousIds = null) => {
     try {
       await refreshNativeState();
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("showFileCreationFailure/1", pageError);
       currentState = nativeState.unavailable;
       activeVolumes = true;
     }
@@ -5512,9 +5709,9 @@
       creationCompleted = true;
       creationStatus.textContent = result === 6 ? "进度已保存，可以安全退出应用。下次用原安全卡登录后继续加密。" : "分区加密已完成，可以挂载使用。";
       creationStatus.dataset.tone = result === 6 ? "paused" : "success";
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("runPartitionConversion/1", pageError);
       const failureCode = await readCreationFailureCode(creationAccepted);
-      try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; }
+      try { await refreshNativeState(); } catch (pageError) { logCaughtPageError("runPartitionConversion/2", pageError); currentState = nativeState.unavailable; }
       busy = false; render(messageForCurrentState());
       creationStatus.textContent = describeCreationFailure(failureCode);
       creationStatus.dataset.tone = "error";
@@ -5551,9 +5748,9 @@
       setCreationDescription("加密盘已经创建并挂载。");
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("createPartition/1", pageError);
       const failureCode = await readCreationFailureCode(creationAccepted);
-      try { await refreshNativeState(); } catch (_) { currentState = nativeState.unavailable; activeVolumes = true; }
+      try { await refreshNativeState(); } catch (pageError) { logCaughtPageError("createPartition/2", pageError); currentState = nativeState.unavailable; activeVolumes = true; }
       busy = false;
       render(messageForCurrentState());
       if (!creationDialog.hidden && currentState === nativeState.authenticated) {
@@ -5612,7 +5809,7 @@
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
-    } catch (error) {
+    } catch (error) { logCaughtPageError("createContainer/1", error);
       await showFileCreationFailure(error, creationAccepted, "名称与路径", false, previousIds);
     } finally {
       finishCreationProgress();
@@ -5930,7 +6127,7 @@
       control.setAttribute("aria-disabled", "true");
       try {
         await stored.write(!enabled);
-      } catch (_) {
+      } catch (pageError) { logCaughtPageError("control.click/1", pageError);
         setDashboardStatus(
           "无法更改该设置，请稍后重试。", "error");
       }
@@ -6007,10 +6204,11 @@
         creationCancelWork.textContent = "正在完成创建";
         creationCancelWork.dataset.finalizing = "true";
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("creationCancelWork.click/1", pageError);
       if (creationRunning && !creationFinalizing) {
         creationCancelWork.disabled = false;
         creationCancelWork.textContent = creationInplace ? "暂停请求未确认，点击重试" : "取消请求未确认，点击重试";
+        logShownPageError("creation-cancel", creationCancelWork.textContent);
       }
     }
   });
@@ -6032,7 +6230,7 @@
       if (typeof directory === "string" && directory !== "") {
         input.value = directory;
       }
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("browseForDirectory/1", pageError);
       creationStatus.textContent = "无法打开选择框，请直接填写路径。";
       creationStatus.dataset.tone = "error";
     } finally {
@@ -6232,7 +6430,7 @@
     try {
       await bridge.openConfiguration();
       // The native host retires this page and builds a new session afterwards.
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("configurationButton.click/1", pageError);
       busy = false;
       render(messageForCurrentState(), "无法打开配置，请稍后重试。");
     }
@@ -6404,7 +6602,7 @@
         // stored set may already be gone. Saying it did not take effect would
         // send the user away believing the old configuration still works.
         : "保存后无法复读确认，原有配置可能已被覆盖。请重新保存全部三项。", "error");
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("submitSetup/1", pageError);
       setupBusy = false;
       setSetupEnabled(true);
       setSetupStatus("保存失败，请稍后重新保存全部三项。", "error");
@@ -6433,7 +6631,7 @@
     try {
       await bridge.continueToSession();
       // The native host retires this page and builds the product session.
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("setupBack.click/1", pageError);
       setupBusy = false;
       setupBack.disabled = false;
       setSetupStatus("无法返回，请稍后重试。", "error");
@@ -6450,7 +6648,7 @@
     try {
       status = Number(await bridge.getCredentialStatus());
       if (!Object.values(setupCredentialStatus).includes(status)) throw new Error("invalid credential status");
-    } catch (_) {
+    } catch (pageError) { logCaughtPageError("startConfiguration/1", pageError);
       status = setupCredentialStatus.unreadable;
       queryFailed = true;
     }
@@ -6494,6 +6692,7 @@
     let failureCode = 1401;
     try {
       bridge = chrome.webview.hostObjects.nativeBridge;
+      connectPageEventBridge(bridge);
       // The host decides which surface this page opened for. Setup has no
       // session state to read, so it must be answered before anything asks
       // the bridge for one.
@@ -6524,14 +6723,14 @@
       if (externalRefreshPending) {
         void refreshAfterExternalChange();
       }
-    } catch (error) {
+    } catch (error) { logCaughtPageError("startup/1", error);
       if (error && error.startupCode === 1404) failureCode = 1404;
       window.usbVaultPageStartupStatus = failureCode;
       bridge = null;
       currentState = nativeState.unavailable;
       activeVolumes = false;
       busy = false;
-      render(`错误码：${failureCode}`);
+      render(mappedPageError(`错误码：${failureCode}`, failureCode, "页面启动阶段码"));
     }
   })();
 })();

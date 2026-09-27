@@ -1465,10 +1465,37 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
           "the page kept the migration location afterwards");
 }
 
+void test_page_event_reporting_is_bounded_and_credential_free() {
+  const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  const auto end = script.find("  const nativeState = Object.freeze");
+  require(end != std::string::npos, "page diagnostics boundary missing");
+  const auto diagnostics = script.substr(0, end);
+  require(diagnostics.find("pageEventBridge.reportPageEvent(...event)") != std::string::npos &&
+              diagnostics.find("pageEventQueue.length < 50") != std::string::npos &&
+              diagnostics.find("cleanPageEventText(source, 64)") != std::string::npos &&
+              diagnostics.find("cleanPageEventText(content, 2000)") != std::string::npos,
+          "page event transport or its bounds missing");
+  require(diagnostics.find("window.addEventListener(\"error\"") != std::string::npos &&
+              diagnostics.find("window.addEventListener(\"unhandledrejection\"") != std::string::npos &&
+              diagnostics.find("Object.getOwnPropertyDescriptor(error, key)") != std::string::npos,
+          "global failures must use safe exception properties");
+  for (const auto forbidden : {".value.trim()", "input.value", "password.value", "JSON.stringify",
+                               "document.body.textContent", "document.documentElement.textContent",
+                               "card-password", "setup-api-key", "hidden-create-review-password"}) {
+    require(diagnostics.find(forbidden) == std::string::npos,
+            "page diagnostics must not collect credential or whole-document content");
+  }
+  require(diagnostics.find("new MutationObserver(capturePageErrors)") != std::string::npos &&
+              diagnostics.find("pageErrorSurfaces") != std::string::npos &&
+              diagnostics.find("lastShownPageErrors") != std::string::npos,
+          "displayed failures must use explicit deduplicated text surfaces");
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_page_event_reporting_is_bounded_and_credential_free();
     test_the_maintenance_column_is_visible_the_same_way_for_everyone();
     test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral();
     test_a_shell_drop_is_never_read_by_the_page();

@@ -2,6 +2,7 @@
 window.navigationFixture = {
   state: 3,
   calls: [],
+  pageEvents: [],
   pending: null,
   delayListing: false,
   listingSuffix: "",
@@ -55,6 +56,10 @@ window.navigationFixture = {
       ...ids.map((id) => fixture.containers.find((item) => item.id === id)).filter(Boolean)];
   };
   const bridge = {
+    reportPageEvent: (category, source, content) => {
+      fixture.pageEvents.push({ category, source, content });
+      return true;
+    },
     beginPartitionRefresh: () => { fixture.partitionScans = (fixture.partitionScans || 0) + 1; return true; },
     getPartitionRefreshStatus: () => fixture.partitionPending ? 1 : 2,
     getPartitionDisplay: id => id === 1 ? "T: · 测试数据 <img src=x>" : "C: · 系统",
