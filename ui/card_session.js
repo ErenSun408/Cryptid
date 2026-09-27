@@ -4401,6 +4401,7 @@
     (candidate) => candidate.setting === control.dataset.setting);
 
   const refreshStoredSwitches = async () => {
+    await refreshExitHotkey();
     const force = await bridge.getForceUnmountEnabled();
     if (typeof force !== "boolean") throw new Error("invalid force preference");
     savedForceUnmount = force;
@@ -4428,6 +4429,70 @@
       }
     }
   };
+
+  const exitHotkeyEnabled = document.getElementById("exit-hotkey-enabled");
+  const exitHotkeyOptions = document.getElementById("exit-hotkey-options");
+  const exitHotkeyKey = document.getElementById("exit-hotkey-key");
+  const exitHotkeyCount = document.getElementById("exit-hotkey-count");
+  const exitHotkeySave = document.getElementById("exit-hotkey-save");
+  const exitHotkeyStatus = document.getElementById("exit-hotkey-status");
+  const exitHotkeySaved = document.getElementById("exit-hotkey-saved");
+  let savedExitHotkey = { enabled: false, key: 123, count: 3 };
+  let exitHotkeySaving = false;
+  const exitHotkeyKeys = new Map([[123, "F12"]]);
+  for (let key = 112; key < 123; key++) exitHotkeyKeys.set(key, `F${key - 111}`);
+  exitHotkeyKeys.set(27, "Esc"); exitHotkeyKeys.set(32, "空格");
+  for (let key = 65; key <= 90; key++) exitHotkeyKeys.set(key, String.fromCharCode(key));
+  for (let key = 48; key <= 57; key++) exitHotkeyKeys.set(key, String.fromCharCode(key));
+  const renderExitHotkey = () => {
+    if (!exitHotkeyEnabled) return;
+    exitHotkeyEnabled.setAttribute("aria-checked", String(savedExitHotkey.enabled));
+    exitHotkeyEnabled.disabled = exitHotkeySaving;
+    exitHotkeyOptions.hidden = !savedExitHotkey.enabled;
+    exitHotkeyKey.value = String(savedExitHotkey.key);
+    exitHotkeyCount.value = String(savedExitHotkey.count);
+    exitHotkeyKey.disabled = exitHotkeyCount.disabled = exitHotkeySave.disabled = exitHotkeySaving;
+  };
+  const refreshExitHotkey = async (afterSave = false) => {
+    if (!exitHotkeyEnabled || (exitHotkeySaving && !afterSave)) return;
+    try {
+      const packed = await bridge.getExitHotkey();
+      if (!Number.isInteger(packed) || packed < 0 || packed > 0x1ffff) throw new Error("invalid exit shortcut");
+      const value = { enabled: Boolean(packed & 65536), key: packed & 255, count: (packed >> 8) & 255 };
+      if (!exitHotkeyKeys.has(value.key) || value.count < 1 || value.count > 10) throw new Error("invalid exit shortcut");
+      savedExitHotkey = value;
+      renderExitHotkey();
+    } catch (error) { logCaughtPageError("refreshExitHotkey", error); }
+  };
+  const saveExitHotkey = async (enabled, key, count, showSaved = false) => {
+    if (busy || exitHotkeySaving || currentState !== nativeState.authenticated) return;
+    if (!exitHotkeyKeys.has(key) || !Number.isInteger(count) || count < 1 || count > 10) return;
+    exitHotkeySaving = true; renderExitHotkey(); exitHotkeyStatus.textContent = ""; exitHotkeySaved.textContent = "";
+    try {
+      await bridge.setExitHotkey(enabled, key, count);
+      savedExitHotkey = { enabled, key, count };
+      exitHotkeySaved.textContent = showSaved ? "已保存" : "";
+    } catch (error) {
+      logCaughtPageError("saveExitHotkey", error);
+      exitHotkeyStatus.textContent = "无法保存或启用退出快捷键，请重试。";
+    } finally {
+      await refreshExitHotkey(true); exitHotkeySaving = false; renderExitHotkey();
+    }
+  };
+  if (exitHotkeyEnabled) {
+    for (const [key, label] of exitHotkeyKeys) {
+      const option = document.createElement("option"); option.value = String(key); option.textContent = label; exitHotkeyKey.append(option);
+    }
+    for (let count = 1; count <= 10; count++) {
+      const option = document.createElement("option"); option.value = String(count); option.textContent = `${count} 次`; exitHotkeyCount.append(option);
+    }
+    renderExitHotkey();
+    for (const control of [exitHotkeyKey, exitHotkeyCount]) {
+      control.addEventListener("change", () => { exitHotkeySaved.textContent = ""; });
+    }
+    exitHotkeyEnabled.addEventListener("click", () => void saveExitHotkey(!savedExitHotkey.enabled, savedExitHotkey.key, savedExitHotkey.count));
+    exitHotkeySave.addEventListener("click", () => void saveExitHotkey(true, Number(exitHotkeyKey.value), Number(exitHotkeyCount.value), true));
+  }
 
   const refreshNativeState = async () => {
     const revision = batchSessionRevision;

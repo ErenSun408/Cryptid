@@ -4,6 +4,7 @@
 #include <ShlObj.h>
 
 #include <cstddef>
+#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -55,6 +56,9 @@ unsigned int preference_index(ProductPreference key) {
     text += static_cast<char>('0' + product_preference_v1(path, static_cast<ProductPreference>(i)));
     text += "\r\n";
   }
+  const auto hotkey = exit_hotkey_settings_v1(path);
+  text += "exit-hotkey=" + std::to_string(hotkey.enabled ? 1 : 0) + "," +
+      std::to_string(hotkey.key) + "," + std::to_string(hotkey.count) + "\r\n";
   return text;
 }
 
@@ -187,6 +191,55 @@ void write_settings(const std::wstring &path, const std::string_view content) {
 }
 
 } // namespace
+
+bool valid_exit_hotkey(ExitHotkeySettings s) noexcept {
+  return s.count >= 1 && s.count <= 10 &&
+      ((s.key >= 0x30 && s.key <= 0x39) || (s.key >= 0x41 && s.key <= 0x5A) ||
+       (s.key >= 0x70 && s.key <= 0x7B) || s.key == 0x1B || s.key == 0x20);
+}
+
+ExitHotkeySettings exit_hotkey_settings_v1(std::wstring_view path) {
+  const auto content = read_settings(std::wstring(path));
+  if (!content) return {};
+  constexpr std::string_view prefix = "exit-hotkey=";
+  ExitHotkeySettings result;
+  bool found = false;
+  for (std::size_t start = 0; start < content->size();) {
+    const auto end = content->find('\n', start);
+    auto line = std::string_view(*content).substr(start, end == std::string::npos ? content->size() - start : end - start);
+    if (line.ends_with('\r')) line.remove_suffix(1);
+    if (line.starts_with(prefix)) {
+      if (found) return {};
+      found = true;
+      auto value = line.substr(prefix.size());
+      unsigned int fields[3]{};
+      for (unsigned int i = 0; i < 3; ++i) {
+        const auto comma = value.find(',');
+        const auto part = value.substr(0, comma);
+        if (part.empty() || (part.size() > 1 && part.front() == '0')) return {};
+        const auto parsed = std::from_chars(part.data(), part.data() + part.size(), fields[i]);
+        if (parsed.ec != std::errc{} || parsed.ptr != part.data() + part.size() ||
+            (i < 2 ? comma == std::string_view::npos : comma != std::string_view::npos)) return {};
+        if (i < 2) value.remove_prefix(comma + 1);
+      }
+      result = {fields[0] == 1, fields[1], fields[2]};
+      if (fields[0] > 1 || !valid_exit_hotkey(result)) return {};
+    }
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  return result;
+}
+
+void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings settings) {
+  if (!valid_exit_hotkey(settings)) throw std::invalid_argument("invalid exit hotkey");
+  auto text = settings_text(remember_container_paths_v1(path), mount_imported_containers_v1(path), path);
+  const auto at = text.find("exit-hotkey=");
+  text.replace(at, text.find('\n', at) - at + 1,
+      "exit-hotkey=" + std::to_string(settings.enabled ? 1 : 0) + "," +
+      std::to_string(settings.key) + "," + std::to_string(settings.count) + "\r\n");
+  write_settings(std::wstring(path), text);
+}
 
 unsigned int product_preference_v1(std::wstring_view path, ProductPreference key) {
   const auto index = preference_index(key);

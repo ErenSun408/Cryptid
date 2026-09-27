@@ -7,6 +7,7 @@
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/verified_local_artifact.h"
 #include "p2_deployment.h"
+#include "global_exit_hotkey.h"
 #include "usb_vault/application/product_settings_v1.h"
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
@@ -80,6 +81,7 @@ StartupView g_view{StartupView::session};
 bool g_view_switch_pending{};
 constexpr UINT kShowConfigurationMessage = WM_APP + 1;
 constexpr UINT kShowSessionMessage = WM_APP + 2;
+constexpr UINT kExitHotkeyMessage = WM_APP + 3;
 std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
 // The page and its script are verified once and then held open for as long as
 // this window exists. The start check closes its own handles when it returns,
@@ -150,6 +152,42 @@ class MainWindowSizeSink final : public usb_vault::ui::IUiWindowSizeSink {
   unsigned int preset_{1};
 };
 MainWindowSizeSink g_window_size_sink;
+
+class MainExitHotkeySink final : public usb_vault::ui::IUiExitHotkeySink {
+ public:
+  usb_vault::application::ExitHotkeySettings exit_hotkey() const noexcept override { return settings_; }
+  bool set_exit_hotkey(usb_vault::application::ExitHotkeySettings settings) noexcept override {
+    if (!usb_vault::application::valid_exit_hotkey(settings)) return false;
+    if (!listener.configure(g_main_window, kExitHotkeyMessage, settings)) {
+      restore_runtime();
+      return false;
+    }
+    try {
+      usb_vault::application::set_exit_hotkey_settings_v1(
+          usb_vault::application::product_settings_v1_default_path(), settings);
+      settings_ = settings;
+      return true;
+    } catch (...) { restore_runtime(); return false; }
+  }
+  bool restore() noexcept {
+    try {
+      settings_ = usb_vault::application::exit_hotkey_settings_v1(
+          usb_vault::application::product_settings_v1_default_path());
+      return restore_runtime();
+    } catch (...) { settings_ = {}; return false; }
+  }
+  GlobalExitHotkey listener;
+ private:
+  bool restore_runtime() noexcept {
+    if (listener.configure(g_main_window, kExitHotkeyMessage, settings_)) return true;
+    settings_.enabled = false;
+    return false;
+  }
+  usb_vault::application::ExitHotkeySettings settings_;
+};
+MainExitHotkeySink g_exit_hotkey_sink;
+std::thread g_hotkey_cleanup_thread;
+std::atomic<unsigned int> g_hotkey_cleanup_result{};
 
 // Posted rather than sent: the reset returns through the WebView2 dispatch
 // first, so the window is destroyed after the call that asked for it has
@@ -704,7 +742,7 @@ class PermissionRequiredHost final : public IDispatch {
             g_configuration_host, &host_object)
       : usb_vault::ui::create_card_product_webview_host_object(
             *g_ui_session, &g_close_sink, &host_object, &g_window_size_sink,
-            &g_creation_work, g_drop_target, g_partition_services.get());
+            &g_creation_work, g_drop_target, g_partition_services.get(), &g_exit_hotkey_sink);
   if (FAILED(result)) return result;
   if (!host_object) return E_OUTOFMEMORY;
   VARIANT host_value{};
@@ -1175,6 +1213,16 @@ void show_session(const HWND window) noexcept {
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) try {
   switch (message) {
+    case kExitHotkeyMessage:
+      if (!g_exit_hotkey_sink.exit_hotkey().enabled ||
+          !g_exit_hotkey_sink.listener.consume(wparam) ||
+          g_creation_work.hotkey_exit_pending.exchange(true)) return 0;
+      g_creation_work.dismiss_close_confirmation();
+      disarm_external_drops();
+      if (g_drop_target) static_cast<void>(g_drop_target->request_cancel());
+      if (g_creation_work.running.load()) static_cast<void>(g_creation_work.request_cancel());
+      USB_VAULT_TRACE("窗口", "快捷键请求强制卸载退出", "");
+      return 0;
     case kShowConfigurationMessage:
       show_configuration(window);
       return 0;
@@ -1236,6 +1284,52 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_TIMER:
       if (g_view_switch_pending) return 0;
+      if (wparam == 1 && g_creation_work.hotkey_exit_pending.load()) {
+        if (g_hotkey_cleanup_thread.joinable()) {
+          const auto result = g_hotkey_cleanup_result.load();
+          if (!result) return 0;
+          g_hotkey_cleanup_thread.join();
+          g_creation_work.force_exit_running.store(false);
+          g_creation_work.running.store(false);
+          g_creation_work.hotkey_exit_pending.store(false);
+          if (result == 1) {
+            // Synchronous dispatch closes before any queued page mutation.
+            ::SendMessageW(window, WM_CLOSE, 0, 0);
+          } else {
+            notify_webview_session_changed();
+            show_failure(L"快捷键退出未完成：无法强制卸载当前磁盘。请关闭占用文件后重试。");
+          }
+          return 0;
+        }
+        if (g_creation_work.running.load()) {
+          static_cast<void>(g_creation_work.request_cancel());
+          return 0;
+        }
+        if (!g_ui_session) {
+          g_creation_work.hotkey_exit_pending.store(false);
+          ::SendMessageW(window, WM_CLOSE, 0, 0);
+          return 0;
+        }
+        g_creation_work.finish();
+        g_creation_work.volume_operation.store(true);
+        g_creation_work.force_exit_running.store(true);
+        g_creation_work.running.store(true);
+        g_hotkey_cleanup_result.store(0);
+        try {
+          g_hotkey_cleanup_thread = std::thread([] {
+            const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+            const bool closed = SUCCEEDED(com) && usb_vault::ui::force_ui_session_for_close(*g_ui_session);
+            if (SUCCEEDED(com)) ::CoUninitialize();
+            g_hotkey_cleanup_result.store(closed ? 1U : 2U);
+          });
+        } catch (...) {
+          g_creation_work.force_exit_running.store(false);
+          g_creation_work.running.store(false);
+          g_creation_work.hotkey_exit_pending.store(false);
+          show_failure(L"无法开始快捷键退出，请重试。");
+        }
+        return 0;
+      }
       if (wparam == 2) { poll_webview_ready(); return 0; }
       if (wparam == 1 && g_drop_target != nullptr) {
         notify_webview_external_drop(g_drop_target->status().state);
@@ -1296,6 +1390,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     }
     case WM_CLOSE:
+      if (g_creation_work.hotkey_exit_pending.load()) return 0;
       USB_VAULT_TRACE("窗口", "请求关闭窗口",
                       "后台任务 " + usb_vault::diagnostics::flag_text(g_creation_work.running.load()) +
                           "；卷操作 " + usb_vault::diagnostics::flag_text(g_creation_work.volume_operation.load()));
@@ -1357,6 +1452,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       static_cast<void>(::DestroyWindow(window));
       return 0;
     case WM_DESTROY:
+      g_exit_hotkey_sink.listener.stop();
+      if (g_hotkey_cleanup_thread.joinable()) g_hotkey_cleanup_thread.join();
       ++g_window_generation;
       g_webview_startup.stop();
       ::KillTimer(window, 1);
@@ -1535,8 +1632,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
       g_startup_log.record_card_state(failure, true);
     }
     initialize_webview(window);
-    if (g_view == StartupView::session && !g_administrator_required &&
-        ::SetTimer(window, 1, 100, nullptr) == 0)
+    if (::SetTimer(window, 1, 100, nullptr) == 0)
       usb_vault::card::throw_startup_failure(1209, 1, ::GetLastError());
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
@@ -1547,6 +1643,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     return 1;
   }
 
+  if (!g_exit_hotkey_sink.restore())
+    show_failure(L"退出快捷键未能启用，请在设置页重新保存后重试。");
   ::ShowWindow(window,
                g_window_size_sink.window_size() == 2 ? SW_MAXIMIZE
                                                      : show_command);
@@ -1561,6 +1659,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     show_numeric_failure(L"窗口消息循环失败。", 1211, 1, ::GetLastError());
   }
 
+  g_exit_hotkey_sink.listener.stop();
+  if (g_hotkey_cleanup_thread.joinable()) g_hotkey_cleanup_thread.join();
   clear_application_session();
   g_ui_artifacts.clear();
   g_main_window = nullptr;

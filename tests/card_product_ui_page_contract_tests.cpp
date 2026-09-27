@@ -404,11 +404,11 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
               settings.find("系统设置") != std::string::npos,
           "settings is not a reachable dashboard section like the others");
 
-  // Four switches, of which only the card-removal unmount is a real product
+  // The card-removal unmount remains a mandatory product
   // guarantee: it is locked on because 8.4 treats the unmount as part of
   // deniability, so it must never be presented as something a user can turn
-  // off. The four editable switches include the user-requested logging toggle.
-  require(count_occurrences(settings, "role=\"switch\"") == 5 &&
+  // off. The opt-in shortcut is independent of the four existing switches.
+  require(count_occurrences(settings, "role=\"switch\"") == 6 &&
               count_occurrences(settings, "data-setting=\"") == 4 &&
               settings.find("data-setting=\"operation-logging\" "
                             "aria-label=\"开启操作日志\"") != std::string::npos &&
@@ -420,7 +420,11 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
               settings.find("data-setting=\"mount-imported\" "
                             "aria-label=\"自动尝试挂载导入的容器\"") !=
                   std::string::npos,
-          "settings switches do not match the four defined settings");
+          "settings switches do not match the existing settings plus shortcut");
+  require(settings.find("id=\"exit-hotkey-enabled\"") != std::string::npos &&
+              settings.find("id=\"exit-hotkey-options\" hidden") != std::string::npos &&
+              settings.find("1 秒内连续按下指定键") != std::string::npos,
+          "exit shortcut lacks its opt-in controls or timing explanation");
   require(settings.find("<span class=\"settings-switch\" role=\"switch\" "
                         "aria-checked=\"true\" aria-disabled=\"true\"") !=
               std::string::npos &&

@@ -1550,6 +1550,52 @@ void test_operation_logging_setting_is_authenticated_and_boolean() {
       "non-boolean logging setting accepted");
 }
 
+void test_exit_hotkey_settings_bridge() {
+  class Sink final : public usb_vault::ui::IUiExitHotkeySink {
+   public:
+    usb_vault::application::ExitHotkeySettings exit_hotkey() const noexcept override { return value; }
+    bool set_exit_hotkey(usb_vault::application::ExitHotkeySettings next) noexcept override {
+      ++calls; if (!succeeds) return false; value = next; return true;
+    }
+    usb_vault::application::ExitHotkeySettings value;
+    unsigned int calls{};
+    bool succeeds{true};
+  } sink;
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host,
+      nullptr, &work, nullptr, nullptr, &sink)), "shortcut host failed");
+  VARIANTARG args[3]{};
+  args[0].vt = VT_UI4; args[0].ulVal = 3;
+  args[1].vt = VT_UI4; args[1].ulVal = 123;
+  args[2].vt = VT_BOOL; args[2].boolVal = VARIANT_TRUE;
+  DISPPARAMS params{args, nullptr, 3, 0};
+  auto set = [&] { return host->Invoke(member_id(*host.Get(), L"setExitHotkey"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &params, nullptr, nullptr, nullptr); };
+  require(set() == E_ACCESSDENIED && sink.calls == 0, "unauthenticated shortcut change accepted");
+  fixture.authentication.establish(root_secret());
+  require(set() == S_OK && sink.value.enabled, "valid shortcut rejected");
+  args[0].ulVal = 0; require(set() == E_INVALIDARG, "zero count accepted");
+  args[0].ulVal = 11; require(set() == E_INVALIDARG, "excess count accepted");
+  args[0].ulVal = 3; args[1].ulVal = 17; require(set() == E_INVALIDARG, "modifier accepted");
+  args[1].ulVal = 123; args[2].vt = VT_I4; require(set() == DISP_E_TYPEMISMATCH, "nonboolean enable accepted");
+  args[2].vt = VT_BOOL;
+  work.running.store(true); require(set() == E_PENDING, "busy shortcut change accepted");
+  work.running.store(false); work.hotkey_exit_pending.store(true);
+  DISPPARAMS query{};
+  require(set() == E_PENDING && host->Invoke(member_id(*host.Get(), L"getSessionState"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &query, nullptr, nullptr, nullptr) == E_PENDING,
+      "exit did not exclude session access");
+  work.hotkey_exit_pending.store(false);
+  sink.succeeds = false; require(set() == E_FAIL, "runtime shortcut failure hidden");
+  DISPPARAMS none{}; VARIANT result{};
+  require(SUCCEEDED(host->Invoke(member_id(*host.Get(), L"getExitHotkey"), IID_NULL, LOCALE_INVARIANT,
+      DISPATCH_METHOD, &none, &result, nullptr, nullptr)) && result.vt == VT_UI4 && result.ulVal == 66427,
+      "shortcut readback incorrect");
+  ::VariantClear(&result);
+}
+
 void test_window_size_presets_are_bounded() {
   class SizeSink final : public usb_vault::ui::IUiWindowSizeSink {
    public:
@@ -4022,6 +4068,7 @@ void test_login_reset_bridge_lifecycle() {
 
 int main() {
   try {
+    test_exit_hotkey_settings_bridge();
     test_partition_pair_bridge();
     test_bitlocker_creation_gate();
     test_partition_selection_lifecycle();

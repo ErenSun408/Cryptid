@@ -53,7 +53,7 @@ option(USB_VAULT_BUILD_UI "Build the minimal WebView2 application" ON)
 # Test-phase debug events in the runtime log. They record paths, container
 # names and volume kinds, which a release build must not keep: turn this off
 # before shipping. Defined for every target so all translation units agree.
-option(USB_VAULT_DEBUG_LOG "Record detailed test-phase debug events in the runtime log" ON)
+include("${CMAKE_CURRENT_SOURCE_DIR}/tools/debug-log-policy.cmake")
 if(USB_VAULT_DEBUG_LOG)
   add_compile_definitions(USB_VAULT_DEBUG_LOG=1)
 else()

@@ -26,4 +26,11 @@ bool prepare_ui_session_for_close(
   return prepare_for_close(controller);
 }
 
+bool force_ui_session_for_close(CardProductUiSessionController& controller) noexcept {
+  try {
+    if (controller.mounted()) controller.force_unmount_user_active();
+    return !controller.mounted();
+  } catch (...) { return false; }
+}
+
 }  // namespace usb_vault::ui

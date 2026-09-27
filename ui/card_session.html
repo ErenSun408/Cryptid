@@ -757,7 +757,13 @@
     #hidden-create-review .password-visibility { border: 0; background: transparent; }
     #settings-window-size { color-scheme: dark; }
     #settings-window-size option { background-color: var(--ink-800); color: var(--text); }
+    #exit-hotkey-key, #exit-hotkey-count { color-scheme: dark; }
+    #exit-hotkey-key option, #exit-hotkey-count option { background-color: var(--ink-800); color: var(--text); }
+    #settings-exit-hotkey small { display: block; margin-top: .35rem; color: var(--text-3); font-size: .75rem; line-height: 1.6; }
     .settings-group + .settings-group { margin-top: 1.5rem; }
+    #dashboard-section-settings .creation-status:empty { display: none; }
+    #exit-hotkey-saved { color: var(--ok); font-size: .8rem; white-space: nowrap; }
+    #exit-hotkey-saved:empty { display: none; }
     .settings-group h3 { margin: 0 0 .7rem; font-size: .85rem; font-weight: 600; }
     .settings-card { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
     .settings-row { display: flex; align-items: center; gap: 1rem; padding: .9rem 1rem; border-top: 1px solid var(--line); }
@@ -1641,6 +1647,27 @@
               </div>
             </div>
             <output id="settings-window-size-status" class="creation-status" aria-live="polite"></output>
+          </div>
+          <div id="settings-exit-hotkey" class="settings-group">
+            <h3>快捷键退出</h3>
+            <div class="settings-card">
+              <div class="settings-row">
+                <span class="settings-copy"><b>启用全局退出快捷键</b><small>1 秒内连续按下指定键，强制卸载全部已挂载容器并退出。未保存的写入可能丢失。</small></span>
+                <button id="exit-hotkey-enabled" class="settings-switch" type="button" role="switch" aria-checked="false" aria-label="启用全局退出快捷键"></button>
+              </div>
+              <div id="exit-hotkey-options" hidden>
+                <div class="settings-row">
+                  <label class="settings-copy" for="exit-hotkey-key"><b>单个按键</b></label>
+                  <select id="exit-hotkey-key" class="shell-button" aria-label="退出快捷键"></select>
+                </div>
+                <div class="settings-row">
+                  <label class="settings-copy" for="exit-hotkey-count"><b>触发次数</b><small>长按不计入次数；按下其他键会重新计数。</small></label>
+                  <select id="exit-hotkey-count" class="shell-button" aria-label="快捷键触发次数"></select>
+                </div>
+                <div class="settings-row"><span class="settings-copy"><small>切换到其他应用后同样生效，组合键不触发。</small></span><output id="exit-hotkey-saved" aria-live="polite"></output><button id="exit-hotkey-save" class="shell-button" type="button">保存</button></div>
+              </div>
+            </div>
+            <output id="exit-hotkey-status" class="creation-status" aria-live="polite"></output>
           </div>
           <div class="settings-group danger">
             <h3>安全卡</h3>

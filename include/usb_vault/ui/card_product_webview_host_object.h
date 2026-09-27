@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/ui/card_product_ui_session_controller.h"
+#include "usb_vault/ui/exit_hotkey.h"
 
 #include "usb_vault/volume/partition_catalog.h"
 
@@ -24,6 +25,7 @@ struct CreationWorkState final {
   // Shares the session exclusion and deferred card-event gate with creation.
   std::atomic<bool> volume_operation{false};
   std::atomic<bool> force_exit_running{false};
+  std::atomic<bool> hotkey_exit_pending{false};
   std::atomic<bool> inplace_operation{false};
   std::atomic<std::uint64_t> card_epoch{0};
   // Window/bridge thread only. A prompt authorizes one cleanup of this insertion.
@@ -186,6 +188,7 @@ HRESULT create_card_product_webview_host_object(
     IUiWindowSizeSink* window_size_sink = nullptr,
     CreationWorkState* creation_work = nullptr,
     IUiExternalDropTargetSink* external_drop_sink = nullptr,
-    IUiPartitionServices* partition_services = nullptr) noexcept;
+    IUiPartitionServices* partition_services = nullptr,
+    IUiExitHotkeySink* exit_hotkey_sink = nullptr) noexcept;
 
 }  // namespace usb_vault::ui

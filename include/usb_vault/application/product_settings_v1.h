@@ -5,6 +5,16 @@
 
 namespace usb_vault::application {
 
+struct ExitHotkeySettings final {
+  bool enabled{false};
+  unsigned int key{0x7B}; // F12
+  unsigned int count{3};
+  bool operator==(const ExitHotkeySettings&) const = default;
+};
+[[nodiscard]] bool valid_exit_hotkey(ExitHotkeySettings settings) noexcept;
+[[nodiscard]] ExitHotkeySettings exit_hotkey_settings_v1(std::wstring_view path);
+void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings settings);
+
 enum class ProductPreference { force_unmount, operation_logging, window_size, auto_mount };
 // Neutral user preferences only. Defaults: force/auto-mount off, logging on,
 // spacious. Malformed force/auto-mount values read as off. Window presets: 0..3.

@@ -74,6 +74,8 @@
       "displayName": "P2 Development Package (static MSVC runtime)",
       "inherits": "base",
       "cacheVariables": {
+        "USB_VAULT_PRODUCTION_RELEASE": "OFF",
+        "USB_VAULT_DEBUG_LOG": "ON",
         "BUILD_TESTING": "OFF",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
@@ -81,9 +83,23 @@
         "USB_VAULT_ENABLE_CODE_ANALYSIS": "OFF",
         "USB_VAULT_ENABLE_INTEGRATION_TESTS": "OFF"
       }
+    },
+    {
+      "name": "package-production",
+      "displayName": "Public release package (debug logging forbidden)",
+      "inherits": "package-release",
+      "cacheVariables": {
+        "USB_VAULT_PRODUCTION_RELEASE": "ON",
+        "USB_VAULT_DEBUG_LOG": "OFF"
+      }
     }
   ],
   "buildPresets": [
+    {
+      "name": "package-production",
+      "configurePreset": "package-production",
+      "targets": ["usb_vault_p2_development_package_binaries"]
+    },
     {
       "name": "dev",
       "configurePreset": "dev"

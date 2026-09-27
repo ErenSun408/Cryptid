@@ -1,3 +1,6 @@
+add_test(NAME release_log_policy_tests
+  COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/release_log_policy_tests.cmake")
+
 add_executable(secure_buffer_tests
   secure_buffer_tests.cpp
 )

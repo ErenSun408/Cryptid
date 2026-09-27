@@ -244,7 +244,37 @@ void test_neutral_preferences_round_trip_and_reject_malformed_force() {
   expect(product_preference_v1(path, ProductPreference::auto_mount) == 0, "automatic mounting could not be disabled");
 }
 
+void test_exit_hotkey_settings() {
+  using namespace usb_vault::application;
+  const TemporaryDirectory directory;
+  const auto path = directory.settings_path();
+  expect(exit_hotkey_settings_v1(path) == ExitHotkeySettings{}, "missing settings enabled hotkey");
+  const ExitHotkeySettings configured{true, 65, 5};
+  set_exit_hotkey_settings_v1(path, configured);
+  set_product_preference_v1(path, ProductPreference::window_size, 2);
+  set_remember_container_paths_v1(path, false);
+  set_mount_imported_containers_v1(path, true);
+  expect(exit_hotkey_settings_v1(path) == configured, "other settings lost hotkey");
+  set_exit_hotkey_settings_v1(path, {false, 65, 5});
+  expect(exit_hotkey_settings_v1(path) == ExitHotkeySettings{false, 65, 5} &&
+         product_preference_v1(path, ProductPreference::window_size) == 2 &&
+         !remember_container_paths_v1(path) && mount_imported_containers_v1(path), "hotkey lost neighbours");
+  for (auto invalid : {"exit-hotkey=1,123,0\n", "exit-hotkey=1,123,11\n", "exit-hotkey=1,17,3\n",
+                       "exit-hotkey=1,123,03\n", "exit-hotkey=1,123,3,x\n", "exit-hotkey=2,123,3\n",
+                       "exit-hotkey=1,123,3\nexit-hotkey=0,123,3\n", "exit-hotkey=1,123\n",
+                       "exit-hotkey=1,123,42949672960\n", "exit-hotkey=1,123, 3\n"}) {
+    write_raw(path, invalid);
+    expect(exit_hotkey_settings_v1(path) == ExitHotkeySettings{}, "malformed config activated hotkey");
+  }
+  bool rejected = false;
+  try { set_exit_hotkey_settings_v1(path, {true, 17, 2}); } catch (...) { rejected = true; }
+  expect(rejected, "modifier admitted as single key");
+  write_raw(path, "exit-hotkey=1,123,3\r\n");
+  expect(exit_hotkey_settings_v1(path).enabled, "valid CRLF failed");
+}
+
 int main() {
+  test_exit_hotkey_settings();
   test_neutral_preferences_round_trip_and_reject_malformed_force();
   test_the_default_path_sits_under_local_app_data();
   test_a_first_run_remembers_by_default();

@@ -11,5 +11,8 @@ namespace usb_vault::ui {
 // procedure.
 [[nodiscard]] bool prepare_ui_session_for_close(
     CardProductUiSessionController& controller) noexcept;
+// Explicit opt-in shortcut only; the caller owns session exclusion.
+[[nodiscard]] bool force_ui_session_for_close(
+    CardProductUiSessionController& controller) noexcept;
 
 }  // namespace usb_vault::ui

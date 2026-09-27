@@ -43,6 +43,8 @@ constexpr DISPID kGetContainerVolumeUnavailableId = 121;
 constexpr DISPID kReportPageEventId = 122;
 constexpr DISPID kBeginForceUnmountForExitId = 123;
 constexpr DISPID kDismissCloseConfirmationId = 124;
+constexpr DISPID kGetExitHotkeyId = 125;
+constexpr DISPID kSetExitHotkeyId = 126;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
@@ -465,6 +467,8 @@ class PasswordArgumentsWiper final {
     case kExitApplicationId: return "exitApplication";
     case kBeginForceUnmountForExitId: return "beginForceUnmountForExit";
     case kDismissCloseConfirmationId: return "dismissCloseConfirmation";
+    case kGetExitHotkeyId: return "getExitHotkey";
+    case kSetExitHotkeyId: return "setExitHotkey";
     case kExportContainerEntryId: return "exportContainerEntry";
     case kExportContainerFileId: return "exportContainerFile";
     case kForgetContainerId: return "forgetContainer";
@@ -613,9 +617,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       IUiWindowSizeSink* const window_size_sink,
       CreationWorkState* const creation_work,
       IUiExternalDropTargetSink* const external_drop_sink,
-      IUiPartitionServices* const partition_services) noexcept
+      IUiPartitionServices* const partition_services,
+      IUiExitHotkeySink* const exit_hotkey_sink) noexcept
       : controller_(controller), close_sink_(close_sink),
         window_size_sink_(window_size_sink),
+        exit_hotkey_sink_(exit_hotkey_sink),
         creation_work_(creation_work ? creation_work : &local_creation_work_),
         external_drop_sink_(external_drop_sink),
         partition_services_(partition_services ? *partition_services : native_partition_services()) {}
@@ -692,6 +698,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountForExit")) { ids[0] = kBeginForceUnmountForExitId; return S_OK; }
     if (matches(names[0], L"dismissCloseConfirmation")) { ids[0] = kDismissCloseConfirmationId; return S_OK; }
+    if (matches(names[0], L"getExitHotkey")) { ids[0] = kGetExitHotkeyId; return S_OK; }
+    if (matches(names[0], L"setExitHotkey")) { ids[0] = kSetExitHotkeyId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -961,7 +969,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                           EXCEPINFO*, UINT* argument_error) noexcept {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
-    if (configuration_pending_) {
+    if (configuration_pending_ || creation_work_->hotkey_exit_pending.load()) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
@@ -1030,6 +1038,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kGetForcePreferenceId: case kGetWindowSizeId:
+      case kGetExitHotkeyId:
       case kGetStartupViewId:
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
@@ -1050,6 +1059,25 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         creation_work_->dismiss_close_confirmation();
         return S_OK;
+      case kGetExitHotkeyId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        const auto settings = exit_hotkey_sink_ ? exit_hotkey_sink_->exit_hotkey() : application::ExitHotkeySettings{};
+        if (result) {
+          ::VariantInit(result); result->vt = VT_UI4;
+          result->ulVal = (settings.enabled ? 65536U : 0U) | (settings.count << 8) | settings.key;
+        }
+        return S_OK;
+      }
+      case kSetExitHotkeyId: {
+        if (!parameters || parameters->cArgs != 3 || parameters->cNamedArgs || !parameters->rgvarg) return DISP_E_BADPARAMCOUNT;
+        std::uint32_t key{}, count{};
+        if (parameters->rgvarg[2].vt != VT_BOOL ||
+            !exact_uint32(parameters->rgvarg[1], key) || !exact_uint32(parameters->rgvarg[0], count)) return DISP_E_TYPEMISMATCH;
+        const application::ExitHotkeySettings settings{parameters->rgvarg[2].boolVal != VARIANT_FALSE, key, count};
+        if (!application::valid_exit_hotkey(settings)) return E_INVALIDARG;
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        return exit_hotkey_sink_ && exit_hotkey_sink_->set_exit_hotkey(settings) ? S_OK : E_FAIL;
+      }
       case kBeginForceUnmountForExitId:
         return begin_volume_operation(member, parameters, result, argument_error);
       case kBeginMountBatchId: case kBeginUnmountBatchId:
@@ -3273,6 +3301,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   LoginResetPreparation reset_result_;
   bool configuration_pending_{};
   IUiWindowSizeSink* window_size_sink_{};
+  IUiExitHotkeySink* exit_hotkey_sink_{};
   IUiExternalDropTargetSink* external_drop_sink_{};
   CreationWorkState local_creation_work_;
   CreationWorkState* creation_work_;
@@ -3328,12 +3357,13 @@ HRESULT create_card_product_webview_host_object(
     IUiWindowSizeSink* const window_size_sink,
     CreationWorkState* const creation_work,
     IUiExternalDropTargetSink* const external_drop_sink,
-      IUiPartitionServices* const partition_services) noexcept {
+      IUiPartitionServices* const partition_services,
+    IUiExitHotkeySink* const exit_hotkey_sink) noexcept {
   if (result == nullptr) return E_POINTER;
   *result = nullptr;
   auto* const object =
       new (std::nothrow) CardProductWebViewHostObject(controller, close_sink,
-          window_size_sink, creation_work, external_drop_sink, partition_services);
+          window_size_sink, creation_work, external_drop_sink, partition_services, exit_hotkey_sink);
   if (object == nullptr) return E_OUTOFMEMORY;
   *result = object;
   return S_OK;
