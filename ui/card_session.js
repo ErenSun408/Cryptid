@@ -2125,27 +2125,66 @@
     return ordered;
   };
 
+  // Move complete existing groups, including expanded details and selections.
+  // Sorting changes order only; it does not invalidate any container facts.
+  const moveContainerNodes = (ids) => {
+    containers = orderedContainers();
+    for (const control of batchControls) {
+      const rows = new Map([...control.items.querySelectorAll("input[data-id]")]
+        .map(input => [Number(input.dataset.id), input.parentElement]));
+      for (const id of ids) {
+        const row = rows.get(id);
+        if (row) control.items.append(row);
+      }
+    }
+    const scroll = new Map();
+    for (const list of new Set([...containerLists, exportContainerList, migrateContainerList])) {
+      for (let parent = list; parent; parent = parent.parentElement) {
+        if (!scroll.has(parent)) scroll.set(parent, [parent.scrollLeft, parent.scrollTop]);
+      }
+      const groups = new Map(rowsAround(list).map(row => [Number(row.dataset.rowContainer),
+        row.parentElement === list ? row : row.parentElement]));
+      let anchor = list.firstElementChild;
+      for (const id of ids) {
+        const group = groups.get(id);
+        if (!group) continue;
+        if (group !== anchor) list.insertBefore(group, anchor);
+        anchor = group.nextElementSibling;
+      }
+    }
+    for (const [element, [left, top]] of scroll) {
+      element.scrollLeft = left; element.scrollTop = top;
+    }
+  };
+
   const rememberContainerOrder = async (ordered) => {
-    if (busy || bridge === null || currentState !== nativeState.authenticated) return;
+    if (busy || externalRefreshPending || bridge === null || currentState !== nativeState.authenticated) return;
     const ids = ordered.map((container) => container.id);
-    if (ids.join(",") === orderedContainers().map((container) => container.id).join(",")) return;
+    const previous = orderedContainers().map(container => container.id);
+    if (ids.join(",") === previous.join(",")) return;
     const revision = batchSessionRevision;
-    let saved = false;
+    const focused = document.activeElement;
+    const wasInert = dashboard.hasAttribute("inert");
     busy = true;
+    // Exclude concurrent actions without disabling/rebuilding every control.
+    dashboard.setAttribute("inert", "");
     setDashboardStatus("");
-    render(messageForCurrentState());
     try {
+      containerOrder = ids;
+      moveContainerNodes(ids);
       await bridge.reorderContainers(ids.join(","));
-      saved = true;
       if (revision !== batchSessionRevision) { logPageEvent(4, "rememberContainerOrder", "会话或页面状态变化，已放弃等待结果。"); return; }
-      await refreshNativeState();
     } catch (pageError) { logCaughtPageError("rememberContainerOrder/1", pageError);
-      if (revision === batchSessionRevision) setDashboardStatus(saved
-        ? "排序已保存，但列表刷新失败，请刷新后查看。"
-        : "排序保存失败，已保留原顺序，请重试。", "error");
+      if (revision === batchSessionRevision) {
+        containerOrder = previous;
+        moveContainerNodes(previous);
+        setDashboardStatus("排序保存失败，已保留原顺序，请重试。", "error");
+      }
     } finally {
       busy = false;
-      render(messageForCurrentState());
+      if (!wasInert) dashboard.removeAttribute("inert");
+      if (revision === batchSessionRevision && !externalRefreshPending && focused?.isConnected)
+        focused.focus({ preventScroll: true });
       if (externalRefreshPending) void refreshAfterExternalChange();
     }
   };
@@ -2226,7 +2265,25 @@
     event.preventDefault();
     const marker = document.createElement("div");
     marker.className = "xins";
-    reorderState = { list, row, id, marker, index: null, pointerId: event.pointerId };
+    const bounds = row.getBoundingClientRect();
+    const preview = row.cloneNode(true);
+    // Visual snapshot only: no duplicate IDs, action targets or focusable copy.
+    for (const node of [preview, ...preview.querySelectorAll("*")]) {
+      for (const attribute of [...node.attributes]) {
+        if (attribute.name === "id" || attribute.name === "tabindex" || attribute.name.startsWith("data-")) node.removeAttribute(attribute.name);
+      }
+    }
+    preview.classList.remove("container-new", "xrow-ghost");
+    preview.classList.add("container-reorder-preview");
+    preview.setAttribute("aria-hidden", "true");
+    preview.setAttribute("inert", "");
+    preview.style.width = `${bounds.width}px`;
+    preview.style.height = `${bounds.height}px`;
+    preview.style.transform = `translate3d(${bounds.left}px, ${bounds.top}px, 0)`;
+    document.body.appendChild(preview);
+    document.body.classList.add("container-reordering");
+    reorderState = { list, row, id, marker, preview, offsetX: event.clientX - bounds.left,
+      offsetY: event.clientY - bounds.top, index: null, pointerId: event.pointerId };
     row.classList.add("xrow-ghost");
     try {
       event.target.setPointerCapture(event.pointerId);
@@ -2237,10 +2294,13 @@
     document.addEventListener("pointermove", moveContainerReorder);
     document.addEventListener("pointerup", endContainerReorder);
     document.addEventListener("pointercancel", cancelContainerReorder);
+    window.addEventListener("blur", cancelContainerReorderOnBlur);
+    document.addEventListener("keydown", cancelContainerReorderOnKey);
   };
 
   const moveContainerReorder = (event) => {
     if (reorderState === null || event.pointerId !== reorderState.pointerId) return;
+    reorderState.preview.style.transform = `translate3d(${event.clientX - reorderState.offsetX}px, ${event.clientY - reorderState.offsetY}px, 0)`;
     const rows = rowsAround(reorderState.list);
     let index = rows.length;
     for (let at = 0; at < rows.length; at += 1) {
@@ -2266,9 +2326,13 @@
     document.removeEventListener("pointermove", moveContainerReorder);
     document.removeEventListener("pointerup", endContainerReorder);
     document.removeEventListener("pointercancel", cancelContainerReorder);
+    window.removeEventListener("blur", cancelContainerReorderOnBlur);
+    document.removeEventListener("keydown", cancelContainerReorderOnKey);
+    document.body.classList.remove("container-reordering");
     if (reorderState !== null) {
       reorderState.row.classList.remove("xrow-ghost");
       reorderState.marker.remove();
+      reorderState.preview.remove();
     }
   };
 
@@ -2276,8 +2340,10 @@
     if (event && reorderState !== null && event.pointerId !== reorderState.pointerId) return;
     finishContainerReorder();
     reorderState = null;
-    renderContainers();
-    renderBackupCentre();
+  };
+  const cancelContainerReorderOnBlur = () => cancelContainerReorder();
+  const cancelContainerReorderOnKey = event => {
+    if (event.key === "Escape") { event.preventDefault(); cancelContainerReorder(); }
   };
 
   const endContainerReorder = async (event) => {
@@ -2295,8 +2361,6 @@
         await rememberContainerOrder(ordered);
       }
     }
-    renderContainers();
-    renderBackupCentre();
   };
 
 
@@ -4006,9 +4070,7 @@
       const list = row.closest("[data-container-list]");
       [ordered[from], ordered[to]] = [ordered[to], ordered[from]];
       await rememberContainerOrder(ordered);
-      renderContainers();
-      renderBackupCentre();
-      list.querySelector(`[data-row-container="${container.id}"] .container-grab`)?.focus();
+      list.querySelector(`[data-row-container="${container.id}"] .container-grab`)?.focus({ preventScroll: true });
     });
 
     const mark = document.createElement("span");

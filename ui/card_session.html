@@ -590,6 +590,15 @@
     .container-grab { border: 0; background: none; touch-action: none; }
     .container-grab svg { fill: currentColor; stroke: none; }
     .container-grab:disabled { cursor: default; opacity: .4; }
+    .container-reorder-preview {
+      position: fixed; top: 0; left: 0; z-index: 80; box-sizing: border-box;
+      margin: 0; border: 1px solid var(--line); border-radius: .65rem;
+      background: var(--ink-750); opacity: .8; pointer-events: none;
+      box-shadow: 0 .8rem 1.6rem -.7rem rgba(0, 0, 0, .75);
+      animation: none; transition: none; will-change: transform;
+    }
+    .container-reorder-preview .grab { color: var(--gold); }
+    body.container-reordering, body.container-reordering * { cursor: grabbing !important; user-select: none !important; }
     .decoy-gate { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - 15rem); padding: 2rem 1rem; }
     .decoy-gate-card { width: min(23rem, 100%); display: flex; flex-direction: column; gap: .75rem;
       align-items: stretch; text-align: center; }
