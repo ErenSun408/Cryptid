@@ -1,6 +1,7 @@
 #pragma once
 
 #include "card/diagnostic_error.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "card/process_security_failure.h"
 #include "usb_vault/card/failure_diagnostic.h"
 
@@ -40,10 +41,13 @@ class CapturedFailureError final : public std::system_error {
   try {
     std::rethrow_exception(failure);
   } catch (const LocalFailureError& error) {
+    USB_VAULT_TRACE_FAILURE("card/capture_failure", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return error.failure();
   } catch (const CapturedFailureError& error) {
+    USB_VAULT_TRACE_FAILURE("card/capture_failure", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return error.failure();
   } catch (const std::system_error& error) {
+    USB_VAULT_TRACE_FAILURE("card/capture_failure", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     FailureDetail detail{.code = 9001};
     if (error.code().category() == card_error_category() &&
         error.code().value() >= 1 && error.code().value() <= 18) {
@@ -67,8 +71,10 @@ class CapturedFailureError final : public std::system_error {
     }
     return {.primary = detail};
   } catch (const std::bad_alloc&) {
+    USB_VAULT_TRACE_FAILURE("card/capture_failure", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return {.primary = {.code = 9002}};
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/capture_failure", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return {.primary = {.code = 9001}};
   }
 }

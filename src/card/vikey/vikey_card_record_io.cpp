@@ -1,4 +1,5 @@
 #include "card/vikey/vikey_card_record_io.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "card/card_record_journal_v1.h"
 #include "card/vikey/vikey_session.h"
@@ -70,6 +71,7 @@ void write_verified_zeros(ICardRecordJournalStorage& storage,
   try {
     storage.write(offset, zeros.bytes());
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_card_record_io", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     // A vendor-reported failure is indeterminate until readback. Accept it
     // only when every intended zero is nevertheless present.
   }

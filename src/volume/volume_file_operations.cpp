@@ -1,4 +1,5 @@
 #include "usb_vault/volume/volume_file_operations.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "volume/volume_containment.h"
 
@@ -266,6 +267,7 @@ DWORD CALLBACK on_copy_progress(LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER,
   try {
     return wants_stop(*cancelled) ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume/volume_file_operations", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return PROGRESS_CANCEL;
   }
 }
@@ -277,6 +279,7 @@ void discard_partial_destination(const std::wstring& path) noexcept {
   try {
     delete_volume_entry(path);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume/volume_file_operations", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   }
 }
 

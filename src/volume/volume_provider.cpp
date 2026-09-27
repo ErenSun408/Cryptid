@@ -309,8 +309,9 @@ MountResult VolumeProvider::mount_partition(
   auto path = located->volume_path; path.pop_back();
   const DriverHandle retained(::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
       nullptr, OPEN_EXISTING, 0, nullptr));
-  if (retained.get() == INVALID_HANDLE_VALUE ||
-      !detail::matches_partition_location_handle(retained.get(), *located))
+  if (retained.get() == INVALID_HANDLE_VALUE)
+    throw_windows_error(::GetLastError(), "partition identity changed before mount");
+  if (!detail::matches_partition_location_handle(retained.get(), *located))
     throw std::runtime_error("partition identity changed before mount");
   const std::wstring native = L"\\Device\\Harddisk" + std::to_wstring(located->disk_number) +
       L"\\Partition" + std::to_wstring(located->partition_number);

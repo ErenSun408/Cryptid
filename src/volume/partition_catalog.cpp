@@ -247,6 +247,7 @@ bool detail::matches_partition_handle_identity(const HANDLE handle,
     facts.volume_path.clear();
     return current == facts;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume/partition_catalog", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return false;
   }
 }
@@ -383,6 +384,6 @@ bool detail::matches_partition_location_handle(const HANDLE handle,
     // The path is a discovery label, never evidence supplied by this handle.
     actual.volume_path = expected.volume_path;
     return actual == expected;
-  } catch (...) { return false; }
+  } catch (...) { USB_VAULT_TRACE_FAILURE("volume/partition_catalog", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
 }
 }  // namespace usb_vault::volume

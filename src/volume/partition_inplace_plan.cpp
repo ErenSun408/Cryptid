@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <stdexcept>
+#include <system_error>
 #include <winioctl.h>
 
 namespace usb_vault::volume {
@@ -67,11 +68,15 @@ PartitionInplacePlan detail::inspect_partition_inplace(HANDLE handle,
     throw std::invalid_argument("in-place target identity rejected");
   DWORD returned{}, dirty{};
   NTFS_VOLUME_DATA_BUFFER ntfs{};
-  if (!::DeviceIoControl(handle, FSCTL_IS_VOLUME_DIRTY, nullptr, 0, &dirty, sizeof(dirty), &returned, nullptr) ||
-      returned != sizeof(dirty) || dirty != 0)
+  if (!::DeviceIoControl(handle, FSCTL_IS_VOLUME_DIRTY, nullptr, 0, &dirty, sizeof(dirty), &returned, nullptr))
+    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(),
+                            "NTFS dirty status unknown or requires repair");
+  if (returned != sizeof(dirty) || dirty != 0)
     throw std::runtime_error("NTFS dirty status unknown or requires repair");
-  if (!::DeviceIoControl(handle, FSCTL_GET_NTFS_VOLUME_DATA, nullptr, 0, &ntfs, sizeof(ntfs), &returned, nullptr) ||
-      returned < sizeof(ntfs))
+  if (!::DeviceIoControl(handle, FSCTL_GET_NTFS_VOLUME_DATA, nullptr, 0, &ntfs, sizeof(ntfs), &returned, nullptr))
+    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(),
+                            "NTFS geometry unavailable");
+  if (returned < sizeof(ntfs))
     throw std::runtime_error("NTFS geometry unavailable");
   const auto plan = plan_partition_inplace(expected.length_bytes,
       {.sectors = ntfs.NumberSectors.QuadPart, .clusters = ntfs.TotalClusters.QuadPart,

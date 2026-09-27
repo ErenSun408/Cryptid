@@ -1,4 +1,5 @@
 #include "usb_vault/ui/external_drop_target.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -76,6 +77,7 @@ std::vector<std::wstring> shell_drop_paths(IDataObject* const data) noexcept {
       paths.push_back(std::move(path));
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     paths.clear();
   }
   return paths;
@@ -211,7 +213,7 @@ bool ExternalDropTarget::attach_window(HWND parent) noexcept {
 void ExternalDropTarget::hover(unsigned state) noexcept {
   if (state == hover_state_) return;
   hover_state_ = state;
-  try { if (hover_callback_) hover_callback_(state); } catch (...) {}
+  try { if (hover_callback_) hover_callback_(state); } catch (...) { USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));}
 }
 
 bool ExternalDropTarget::over_button(POINT screen) const noexcept {
@@ -269,7 +271,7 @@ bool ExternalDropTarget::select_files() noexcept {
     }
     if(work_.card_epoch.load()!=epoch) return false;
     return start_sources(std::move(sources));
-  } catch(...) { return false; }
+  } catch(...) { USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
 }
 
 bool ExternalDropTarget::start_sources(std::vector<std::wstring> sources) noexcept {
@@ -301,12 +303,13 @@ bool ExternalDropTarget::start_sources(std::vector<std::wstring> sources) noexce
     worker_ = std::thread(&ExternalDropTarget::run, this, id,
                           std::move(directory), std::move(sources));
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     state_.store(kFailed);
     work_.running.store(false);
     return false;
   }
   return true;
-  } catch (...) { return false; }
+  } catch (...) { USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
 }
 
 void ExternalDropTarget::run(const std::uint32_t id,
@@ -329,6 +332,7 @@ void ExternalDropTarget::run(const std::uint32_t id,
           [this](unsigned int percent) { file_percent_.store((std::min)(percent,99U)); });
       ++completed;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       // A failed protected write may leave metadata awaiting recovery.
       // Never advance to another source on the same maintenance mount.
       ++failed;
@@ -365,6 +369,7 @@ bool ExternalDropTarget::set_target(
     target_id_ = id;
     target_directory_.assign(relative_directory);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     clear_target();
     return false;
   }
@@ -382,6 +387,7 @@ void ExternalDropTarget::clear_target() noexcept {
     target_id_ = 0;
     target_directory_.clear();
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     // The window is disarmed either way, which is what refusing a drop needs.
   }
 }

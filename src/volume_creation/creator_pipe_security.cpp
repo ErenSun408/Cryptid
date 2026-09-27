@@ -1,4 +1,5 @@
 #include "volume_creation/creator_pipe_security.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include <sddl.h>
 
@@ -120,6 +121,7 @@ LocalSecurityDescriptor current_user_pipe_security_descriptor() noexcept {
     }
     return LocalSecurityDescriptor(descriptor);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume_creation/creator_pipe_security", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return {};
   }
 }

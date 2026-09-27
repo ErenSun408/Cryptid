@@ -1,4 +1,5 @@
 #include "usb_vault/volume/fat32_file_transfer.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include <string>
 #include <system_error>
 #include <utility>
@@ -36,6 +37,7 @@ Fat32TransferResult transfer_fat32_file(HANDLE source, Fat32TransferTarget& targ
     prepare_fat32_file(target.file_, expected, boundary, plan, cancelled);
     write_prepared_fat32_file(source, target.file_, expected, boundary, plan, cancelled, progress);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume/fat32_file_transfer", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     result.failure = std::current_exception();
     FILE_DISPOSITION_INFO disposition{TRUE};
     if (::SetFileInformationByHandle(target.file_, FileDispositionInfo, &disposition, sizeof(disposition)))

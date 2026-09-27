@@ -382,6 +382,7 @@ void note_call(const char* const event, const char* const phase,
   try {
     diagnostics::debug_log(kInterfaceArea, std::string(event) + "：" + phase, detail);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   }
 }
 
@@ -392,13 +393,16 @@ void note_call_failure(const char* const event, const std::string& detail) noexc
     try {
       throw;
     } catch (const ContainerCreationCleanupError& error) {
+      USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       diagnostics::debug_log(kInterfaceArea, std::string(event) + "：原操作失败",
                              diagnostics::describe_exception(error.operation_failure()));
       diagnostics::debug_log(kInterfaceArea, std::string(event) + "：清理失败",
                              diagnostics::describe_exception(error.cleanup_failure()));
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   }
 }
 
@@ -436,6 +440,7 @@ auto traced_call(const char* const event, Detail&& detail, Operation&& operation
     try {
       text = detail();
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     }
     note_call(event, "开始", text);
   }
@@ -451,6 +456,7 @@ auto traced_call(const char* const event, Detail&& detail, Operation&& operation
           const std::string extra = call_result_text(result);
           if (!extra.empty()) finished += (finished.empty() ? "" : "；") + extra;
         } catch (...) {
+          USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
         }
         note_call(event, "完成", finished);
       }
@@ -912,25 +918,9 @@ namespace {
 // The detail strings are built only when the switch is on, and a failure to
 // build or write one never changes what the session does. Passwords and keys
 // are never part of a detail.
-#define SESSION_TRACE(event, detail)                                       \
-  do {                                                                     \
-    if constexpr (USB_VAULT_DEBUG_LOG) {                                   \
-      try {                                                                \
-        diagnostics::debug_log("会话", (event), (detail));                 \
-      } catch (...) {                                                      \
-      }                                                                    \
-    }                                                                      \
-  } while (false)
+#define SESSION_TRACE(event, detail) USB_VAULT_TRACE("会话", (event), (detail))
 // Inside a catch block only: adds the exception being handled.
-#define SESSION_TRACE_FAILURE(event, detail)                               \
-  do {                                                                     \
-    if constexpr (USB_VAULT_DEBUG_LOG) {                                   \
-      try {                                                                \
-        diagnostics::debug_log_exception("会话", (event), (detail));       \
-      } catch (...) {                                                      \
-      }                                                                    \
-    }                                                                      \
-  } while (false)
+#define SESSION_TRACE_FAILURE(event, detail) USB_VAULT_TRACE_FAILURE("会话", (event), (detail))
 
 [[nodiscard]] std::string wide_text(const std::wstring_view text) {
   return diagnostics::utf8(text);
@@ -1207,6 +1197,7 @@ void CardLoginMountSessionCore::record_operation(
     }
     ++state_.next_operation_sequence;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     // History is informational. Allocation or clock failure must never change
     // the result of the security or volume operation being recorded.
   }
@@ -1445,6 +1436,7 @@ void CardLoginMountSessionCore::reorder_containers(
       for (const auto id : ids) order += (order.empty() ? "#" : "，#") + std::to_string(id);
       SESSION_TRACE("容器顺序已更新", order);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     }
   }
 }
@@ -2289,6 +2281,7 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
           survey.maintainable.push_back(entry.id);
           SESSION_TRACE("搜索：可维护", container_text(entry));
         } catch (const DecoyMaintenanceRefused&) {
+          USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
           // Not one this password maintains, which is all anyone learns.
           SESSION_TRACE("搜索：不可维护", container_text(entry));
         } catch (...) {
@@ -2508,6 +2501,7 @@ bool CardLoginMountSessionCore::verify_decoy_maintenance(
     drive_letter = mount_outer_for_maintenance(entry, outer_password,
                                                MaintenanceMount::trial);
   } catch (const DecoyMaintenanceRefused&) {
+    USB_VAULT_TRACE_FAILURE("application/card_login_mount_session", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     SESSION_TRACE("验证诱饵口令：不匹配", container_text(entry));
     outer_password.clear();
     return false;

@@ -1,4 +1,5 @@
 #include "usb_vault/ui/ui_close_guard.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 namespace usb_vault::ui {
 namespace {
@@ -12,6 +13,7 @@ template <typename Controller>
     controller.unmount();
     return !controller.mounted();
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/ui_close_guard", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return false;
   }
 }

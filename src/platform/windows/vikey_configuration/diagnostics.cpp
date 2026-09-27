@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include "usb_vault/diagnostics/debug_log.h"
 #include <objbase.h>
 #include <WebView2.h>
 #include "diagnostics.h"
@@ -68,10 +69,11 @@ bool diagnose(const Report& report, const bool include_card) {
         artifacts.push_back(check( L"card_session.js", p2_deployment::js));
         return pass(L"运行组件完整，版本一致。");
       } catch (const std::system_error&) {
+        USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
         auto result = caught(L"运行组件检查失败，请使用完整安装包修复。", 1102);
         result.detail = std::wstring(component) + L"：" + result.detail;
         return result;
-      } catch (...) { return caught(L"组件检查异常，请重新解压完整包。", 1102); }
+      } catch (...) { USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return caught(L"组件检查异常，请重新解压完整包。", 1102); }
     },
     [] {
       LPWSTR version{};
@@ -87,11 +89,12 @@ bool diagnose(const Report& report, const bool include_card) {
         return usb_vault::volume::VolumeProvider{}.driver_version() == 0x126
             ? pass(L"VeraCrypt 驱动可访问，接口版本兼容。")
             : fail(L"VeraCrypt 驱动接口不兼容。请重新运行 USB Vault 安装程序修复依赖。", 1105);
-      } catch (...) { return caught(L"VeraCrypt 驱动未加载或不可访问。请重启 Windows，或重新运行 USB Vault 安装程序。", 1104); }
+      } catch (...) { USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return caught(L"VeraCrypt 驱动未加载或不可访问。请重启 Windows，或重新运行 USB Vault 安装程序。", 1104); }
     },
     [&] {
       try { static_cast<void>(credentials.load_credentials()); return pass(L"当前用户已保存格式有效的凭据；有效性由安全卡检查确认。"); }
       catch (...) {
+        USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
         auto result = caught(L"凭据读取失败，请检查配置。", 1108);
         if (result.failure.primary.native_kind == 1 && result.failure.primary.native_code == ERROR_NOT_FOUND)
           result.failure.primary.code = 1107;
@@ -117,8 +120,9 @@ bool diagnose(const Report& report, const bool include_card) {
           default: return fail(L"[CARD-STATE] 卡状态检查未通过。请联系供应方检查卡兼容性或状态；本次未改写卡，不要直接重新初始化。");
         }
       } catch (const std::system_error& error) {
+        USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
         return card_failure(error);
-      } catch (...) { return fail(L"[CARD-UNKNOWN] 卡检查发生未分类异常。请提供此编号及软件版本；不要据此修改 PIN 或重新初始化。"); }
+      } catch (...) { USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return fail(L"[CARD-UNKNOWN] 卡检查发生未分类异常。请提供此编号及软件版本；不要据此修改 PIN 或重新初始化。"); }
     }
   };
   return run_checks(probes, report, include_card);
@@ -147,6 +151,7 @@ StartupInspection inspect_startup(const Report& observer) {
     inspection.credential_failure = results[static_cast<unsigned int>(Check::credentials)].failure;
     return inspection;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/diagnostics", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     // A start check that cannot run is not a passing one.
     return {false, false, L"启动检查无法完成。请重新运行 USB Vault 安装程序，或重新解压完整测试包。",
             usb_vault::card::capture_startup_failure(1106)};

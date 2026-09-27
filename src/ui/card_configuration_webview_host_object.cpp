@@ -1,4 +1,5 @@
 #include "usb_vault/ui/card_configuration_webview_host_object.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/security/secure_buffer.h"
 #include "usb_vault/ui/webview_password_array.h"
@@ -245,12 +246,15 @@ class CardConfigurationWebViewHostObject final : public IDispatch {
       value = consume_webview_password_array(argument);
       return S_OK;
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_configuration_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = position;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_configuration_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = position;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_configuration_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }

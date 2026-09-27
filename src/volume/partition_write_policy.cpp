@@ -1,4 +1,5 @@
 #include "volume/partition_write_policy.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "volume/partition_catalog_detail.h"
 #include <wbemidl.h>
 #include <wrl/client.h>
@@ -185,7 +186,7 @@ bool check_partition_write_policy(HANDLE handle, const PartitionCandidate& expec
     if (!permits_partition_write(read_facts(expected.volume_path))) return false;
     return matches_partition_handle_identity(handle, expected) &&
         matches_partition_snapshot(expected, enumerate_partition_candidates());
-  } catch (...) { return false; }
+  } catch (...) { USB_VAULT_TRACE_FAILURE("volume/partition_write_policy", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
 }
 bool check_partition_resume_policy(HANDLE handle, const PartitionLocation& expected) noexcept {
   try {
@@ -203,6 +204,6 @@ bool check_partition_resume_policy(HANDLE handle, const PartitionLocation& expec
         ::CompareStringOrdinal(filesystem,-1,L"RAW",-1,TRUE)!=CSTR_EQUAL) return false;
     const auto after=resolve_partition_location(expected.identity,enumerate_partition_locations());
     return after && *after==expected && matches_partition_location_handle(handle,expected);
-  } catch (...) { return false; }
+  } catch (...) { USB_VAULT_TRACE_FAILURE("volume/partition_write_policy", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
 }
 }  // namespace usb_vault::volume::detail

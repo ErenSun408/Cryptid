@@ -1,4 +1,5 @@
 #include "card/vikey/vikey_helper_blob_backend.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "card/vikey/vikey_helper_client.h"
 #include "usb_vault/card/card_error.h"
@@ -15,6 +16,7 @@ namespace {
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) throw;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_blob_backend", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   }
   throw std::system_error(
       make_error_code(CardError::backend_unavailable),
@@ -39,6 +41,7 @@ security::SecureBuffer VikeyHelperBlobBackend::get_blob() {
         credentials.user_sn, credentials.api_key, credentials.user_pin,
         config_.timeout);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_blob_backend", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_backend_failure();
   }
 }
@@ -54,6 +57,7 @@ void VikeyHelperBlobBackend::put_blob(
         credentials.user_sn, credentials.api_key, credentials.user_pin,
         blob, config_.timeout);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_blob_backend", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_backend_failure();
   }
 }

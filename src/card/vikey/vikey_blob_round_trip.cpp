@@ -1,4 +1,5 @@
 #include "card/vikey/vikey_blob_round_trip.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/card/card_error.h"
 
@@ -46,6 +47,7 @@ void verify_development_blob_round_trip(
            "development ViKey test blob did not verify");
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_blob_round_trip", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     test_failure = std::current_exception();
   }
 
@@ -57,6 +59,7 @@ void verify_development_blob_round_trip(
            "development ViKey original blob did not verify after restore");
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_blob_round_trip", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     fail(CardError::device_failure,
          "development ViKey original blob restoration is unverified");
   }

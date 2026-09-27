@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -114,7 +115,11 @@ HANDLE detail::launch_session_helper(const std::filesystem::path& helper,std::ws
     throw std::runtime_error("administrator session launch rejected");
   }
   const auto process=reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(reply.handle));
-  if(!::GetProcessId(process)){::CloseHandle(process);throw std::runtime_error("invalid session child handle");}
+  if(!::GetProcessId(process)){
+    const DWORD error=::GetLastError();
+    ::CloseHandle(process);
+    throw std::system_error(static_cast<int>(error),std::system_category(),"invalid session child handle");
+  }
   return process;
 }
 int detail::run_elevation_session(DWORD parent,std::wstring_view nonce) noexcept {

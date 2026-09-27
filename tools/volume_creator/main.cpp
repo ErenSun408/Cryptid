@@ -131,6 +131,7 @@ void send_failure(const HANDLE pipe, const CreationError error,
                   .native_error = native_error,
               });
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume_creator/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   }
 }
 
@@ -170,6 +171,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
         usb_vault::diagnostics::set_runtime_log(&log);
       }
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("volume_creator/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     }
   }
   USB_VAULT_TRACE("创建助手进程", "启动",

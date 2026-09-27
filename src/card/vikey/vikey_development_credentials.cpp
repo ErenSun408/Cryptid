@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "card/vikey/vikey_development_credentials.h"
 
 #include "card/vikey/vikey_session.h"
@@ -213,9 +214,11 @@ VikeyCredentialSet load_credentials(ICredentialStorage& storage) {
   std::optional<security::SecureBuffer> bundle;
   try { bundle = storage.read(CredentialEntry::bundle); }
   catch (const std::system_error& e) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_development_credentials", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::credential_sn,
         "read saved credentials", static_cast<std::uint32_t>(e.code().value()), NativeCodeKind::win32);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_development_credentials", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     throw DiagnosticError(make_error_code(CardError::invalid_configuration), DiagnosticStage::credential_sn,
         "invalid credential bundle");
   }
@@ -241,9 +244,11 @@ VikeyCredentialSet load_credentials(ICredentialStorage& storage) {
         throw std::invalid_argument("credential format invalid");
       return value;
     } catch (const std::system_error& e) {
+      USB_VAULT_TRACE_FAILURE("card/vikey/vikey_development_credentials", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       throw DiagnosticError(make_error_code(CardError::backend_unavailable), stage,
           "read saved credential", static_cast<std::uint32_t>(e.code().value()), NativeCodeKind::win32);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("card/vikey/vikey_development_credentials", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       throw DiagnosticError(make_error_code(CardError::invalid_configuration), stage,
           "saved credential format invalid");
     }

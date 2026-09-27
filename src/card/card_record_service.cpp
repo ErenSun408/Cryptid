@@ -1,4 +1,5 @@
 #include "usb_vault/card/card_record_service.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/card/card_error.h"
 
@@ -84,6 +85,7 @@ security::SecureBuffer CardRecordService::initialize_and_authenticate(
   try {
     store_.put_blob(initialized.record);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_service", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     write_failure = std::current_exception();
   }
 
@@ -91,6 +93,7 @@ security::SecureBuffer CardRecordService::initialize_and_authenticate(
   try {
     observed = store_.get_blob();
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_service", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     initialized.root_secret.clear();
     fail_unverified_write();
   }
@@ -132,6 +135,7 @@ void CardRecordService::set_second_password(
   try {
     store_.put_blob(updated);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_service", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     write_failure = std::current_exception();
   }
 
@@ -139,6 +143,7 @@ void CardRecordService::set_second_password(
   try {
     observed = store_.get_blob();
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_service", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     fail_unverified_write();
   }
   if (!equal_bytes(observed.bytes(), updated.bytes())) {
@@ -164,6 +169,7 @@ void CardRecordService::reset_to_provisioning() {
   try {
     store_.put_blob(marker);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_service", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     write_failure = std::current_exception();
   }
 
@@ -171,6 +177,7 @@ void CardRecordService::reset_to_provisioning() {
   try {
     observed = store_.get_blob();
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_service", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     fail_unverified_write();
   }
   if (!equal_bytes(observed.bytes(), marker.bytes())) {

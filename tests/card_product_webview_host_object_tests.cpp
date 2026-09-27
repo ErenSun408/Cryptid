@@ -1653,6 +1653,10 @@ void test_runtime_log_records_page_calls() {
     ByteArray argument(password);
     require(invoke_login(*host.Get(), argument.value()) == S_OK, "the logged login failed");
     static_cast<void>(invoke_state(*host.Get()));
+    // Already authenticated: the controller refuses and the bridge swallows
+    // the exception into a failed HRESULT. The log keeps the exception.
+    ByteArray again(password);
+    require(FAILED(invoke_login(*host.Get(), again.value())), "a second login was accepted");
   }
   std::string text;
   {
@@ -1668,6 +1672,12 @@ void test_runtime_log_records_page_calls() {
           "the controller did not record the login");
   require(text.find("页面调用 getSessionState") == std::string::npos,
           "a successful poll was recorded");
+  const auto refused = text.find("[登录] 当前状态不能登录；状态 ");
+  const auto handled = text.find("[ui/card_product_webview_host_object] 异常已处理；行 ", refused);
+  const auto failed = text.find("页面调用 submitLoginPasswordBytes；参数 字节数组 6 项；HRESULT 0x8", handled);
+  require(refused != std::string::npos && handled != std::string::npos && failed != std::string::npos &&
+              text.find("异常类型：", handled) < failed,
+          "a swallowed bridge exception was not recorded before its failed HRESULT");
   require(text.find("sekrit") == std::string::npos, "a password reached the bridge log");
   std::filesystem::remove(path);
   std::filesystem::remove(root);

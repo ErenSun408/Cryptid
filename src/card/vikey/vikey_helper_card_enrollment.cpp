@@ -1,4 +1,5 @@
 #include "card/diagnostic_error.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "card/vikey/card_operation_lease.h"
 #include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
@@ -18,6 +19,7 @@ namespace {
   } catch (const std::system_error& error) {
     if (error.code().category() == card_error_category()) throw;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   }
   throw CapturedFailureError(capture_failure(original));
 }
@@ -73,7 +75,7 @@ class VikeyHelperCardResetTarget final : public ICardResetTarget {
           config_.helper_path, config_.helper_digest, config_.vendor_directory,
           config_.vendor_digest, hardware_id_, credentials.user_sn,
           credentials.api_key, credentials.user_pin, config_.timeout, true);
-    } catch (...) { rethrow_enrollment_failure(); }
+    } catch (...) { USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); rethrow_enrollment_failure(); }
   }
   void reset(const security::SecureBuffer& expected) override {
     try {
@@ -82,7 +84,7 @@ class VikeyHelperCardResetTarget final : public ICardResetTarget {
           config_.helper_path, config_.helper_digest, config_.vendor_directory,
           config_.vendor_digest, hardware_id_, credentials.user_sn,
           credentials.api_key, credentials.user_pin, expected, config_.timeout, true);
-    } catch (...) { rethrow_enrollment_failure(); }
+    } catch (...) { USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); rethrow_enrollment_failure(); }
   }
  private:
   VikeyHelperBackendConfig config_;
@@ -108,6 +110,7 @@ VikeyCardMediaProbe VikeyHelperCardEnrollment::probe() {
         credentials.user_sn, credentials.api_key, credentials.user_pin,
         config_.timeout);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_enrollment_failure();
   }
 }
@@ -195,6 +198,7 @@ void VikeyHelperCardEnrollment::bootstrap(
         context.hardware_id, context.media_state, credentials.user_sn,
         credentials.api_key, credentials.user_pin, config_.timeout);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_enrollment_failure();
   }
 }

@@ -1,4 +1,5 @@
 #include "usb_vault/application/card_entry_router.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "card/capture_failure.h"
 
 namespace usb_vault::application {
@@ -38,6 +39,7 @@ CardEntryRoute CardEntryRouter::route(
         return unavailable(4005);
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/card_entry_router", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     if (failure) *failure = card::capture_failure(std::current_exception());
     return CardEntryRoute::unavailable;
   }

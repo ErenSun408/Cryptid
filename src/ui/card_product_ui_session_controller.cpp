@@ -189,11 +189,13 @@ CardProductUiSessionController::CardProductUiSessionController(
   try {
     throw;
   } catch (const card::DiagnosticError& error) {
+    USB_VAULT_TRACE_FAILURE("ui/card_product_ui_session_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return "诊断阶段 " + std::to_string(static_cast<std::uint32_t>(error.stage())) + "；原生码 " +
            std::to_string(error.native()) + "（" + diagnostics::hex_text(error.native()) +
            "）；原生码类型 " + std::to_string(static_cast<std::uint32_t>(error.kind())) +
            "；安全步骤 " + std::to_string(error.step());
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/card_product_ui_session_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return {};
   }
 }
@@ -930,6 +932,7 @@ LoginResetPreparation CardProductUiSessionController::prepare_login_reset() {
     }
     result.mounts_known = reset_mounts_known_ = true;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("ui/card_product_ui_session_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     reset_mounts_.clear(); result.drives.clear(); reset_mounts_known_ = false;
   }
   return result;

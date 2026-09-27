@@ -1,3 +1,4 @@
+#include "usb_vault/diagnostics/debug_log.h"
 #include "card/vikey/vikey_hid_probe.h"
 
 #include <Windows.h>
@@ -96,9 +97,15 @@ class PreparsedData final {
 void require_target_identity(const HANDLE handle) {
   HIDD_ATTRIBUTES attributes{};
   attributes.Size = sizeof(attributes);
-  if (::HidD_GetAttributes(handle, &attributes) == FALSE ||
+  const BOOLEAN read = ::HidD_GetAttributes(handle, &attributes);
+  if (read == FALSE ||
       attributes.VendorID != kVendorId ||
       attributes.ProductID != kProductId) {
+    USB_VAULT_TRACE("安全卡设备", "HID 身份核对失败",
+                    "读取成功 " + usb_vault::diagnostics::flag_text(read != FALSE) + "；Win32 " +
+                        std::to_string(read == FALSE ? ::GetLastError() : 0) + "；厂商 " +
+                        usb_vault::diagnostics::hex_text(attributes.VendorID) + "；产品 " +
+                        usb_vault::diagnostics::hex_text(attributes.ProductID));
     throw std::runtime_error("ViKey HID identity did not match its path");
   }
 

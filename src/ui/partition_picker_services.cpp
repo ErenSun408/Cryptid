@@ -1,4 +1,5 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include <Windows.h>
 #include <stdexcept>
@@ -50,7 +51,7 @@ class NativePartitionServices final : public IUiPartitionServices {
       info.lpDirectory = base.c_str();
       info.nShow = SW_SHOWNORMAL;
       return ::ShellExecuteExW(&info) != FALSE;
-    } catch (...) { return false; }
+    } catch (...) { USB_VAULT_TRACE_FAILURE("ui/partition_picker_services", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
   }
  private:
   std::unique_ptr<volume_creation::VolumeCreator> creator_;

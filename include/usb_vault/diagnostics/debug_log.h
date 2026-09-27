@@ -298,24 +298,30 @@ inline void debug_log_exception(std::string_view, std::string_view, std::string_
 }  // namespace usb_vault::diagnostics
 
 // Records one runtime event. The detail expression is evaluated only when the
-// switch is on, and nothing it throws can leave the statement.
+// switch is on, and nothing it throws can leave the statement. The calling
+// thread's last Win32 error is kept, so a trace placed before code that reads
+// it changes nothing.
 #define USB_VAULT_TRACE(area, event, detail)                                  \
   do {                                                                        \
     if constexpr (USB_VAULT_DEBUG_LOG) {                                      \
+      const DWORD usb_vault_trace_last_error = ::GetLastError();              \
       try {                                                                   \
         ::usb_vault::diagnostics::debug_log((area), (event), (detail));       \
       } catch (...) {                                                         \
       }                                                                       \
+      ::SetLastError(usb_vault_trace_last_error);                             \
     }                                                                         \
   } while (false)
 // The same inside a catch block, adding the exception being handled.
 #define USB_VAULT_TRACE_FAILURE(area, event, detail)                          \
   do {                                                                        \
     if constexpr (USB_VAULT_DEBUG_LOG) {                                      \
+      const DWORD usb_vault_trace_last_error = ::GetLastError();              \
       try {                                                                   \
         ::usb_vault::diagnostics::debug_log_exception((area), (event), (detail)); \
       } catch (...) {                                                         \
       }                                                                       \
+      ::SetLastError(usb_vault_trace_last_error);                             \
     }                                                                         \
   } while (false)
 

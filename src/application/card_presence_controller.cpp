@@ -1,4 +1,5 @@
 #include "usb_vault/application/card_presence_controller.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 namespace usb_vault::application {
 
@@ -26,6 +27,7 @@ CardPresenceTransition CardPresenceController::handle_removal() noexcept {
   try {
     forced = session_.force_unmount_active();
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/card_presence_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return CardPresenceTransition::active_session_remains;
   }
   if (session_.mounted()) {

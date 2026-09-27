@@ -1,4 +1,5 @@
 #include "usb_vault/application/mount_orchestrator.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "application/mount_orchestrator_internal.h"
 #include "usb_vault/application/container_layout_v1.h"
@@ -92,9 +93,11 @@ void validate_layout(const ContainerLayout& layout) {
   try {
     static_cast<void>(runtime.rollback_normal(drive_letter));
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/mount_orchestrator", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     try {
       static_cast<void>(runtime.rollback_force(drive_letter));
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("application/mount_orchestrator", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       throw MountRollbackError(drive_letter, operation_failure,
                                std::current_exception());
     }
@@ -221,6 +224,7 @@ MountSessionResult mount_session_with_runtime(
         fixed_input.clear();
       }
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("application/mount_orchestrator", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       rollback_container_b(runtime, layout.container_b.drive_letter,
                            std::current_exception());
     }

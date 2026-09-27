@@ -1,4 +1,5 @@
 #include "volume/partition_inplace_runner.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/security/secure_buffer.h"
 #include <stdexcept>
 
@@ -72,6 +73,7 @@ InplaceResult run_partition_inplace(InplaceBackend& backend) noexcept {
       chunk = next_partition_inplace_chunk(range.partition_bytes, range.start, range.length);
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("volume/partition_inplace_runner", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return revoked ? InplaceResult::revoked : InplaceResult::failed;
   }
 }

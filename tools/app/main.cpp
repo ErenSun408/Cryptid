@@ -132,6 +132,7 @@ class MainWindowSizeSink final : public usb_vault::ui::IUiWindowSizeSink {
       preset_ = preset;
       return true;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       static_cast<void>(apply_window_size(g_main_window, preset_));
       return false;
     }
@@ -142,7 +143,7 @@ class MainWindowSizeSink final : public usb_vault::ui::IUiWindowSizeSink {
       preset_ = usb_vault::application::product_preference_v1(
           usb_vault::application::product_settings_v1_default_path(),
           usb_vault::application::ProductPreference::window_size);
-    } catch (...) { preset_ = 1; }
+    } catch (...) { USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); preset_ = 1; }
     static_cast<void>(apply_window_size(g_main_window, preset_));
   }
  private:
@@ -175,6 +176,7 @@ stored_credential_status() noexcept {
             .load_credentials());
     return ConfigurationCredentialStatus::ready;
   } catch (const std::system_error& error) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     // A set that was never written reports the Windows "not found" code.
     // Anything else is a storage or format problem, and saying "missing"
     // there would send the user to retype values that are already stored.
@@ -185,6 +187,7 @@ stored_credential_status() noexcept {
                ? ConfigurationCredentialStatus::missing
                : ConfigurationCredentialStatus::unreadable;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return ConfigurationCredentialStatus::unreadable;
   }
 }
@@ -222,6 +225,7 @@ class ConfigurationHost final : public usb_vault::ui::IConfigurationHost {
       });
       return ConfigurationOutcome::saved;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       // store_credentials reads the entry back; a failure here means the
       // stored set could not be confirmed, which is never a success.
       return ConfigurationOutcome::storage_failure;
@@ -421,6 +425,7 @@ void pin_user_interface(const std::wstring& directory) {
     pin(L"card_session.html", p2_deployment::html);
     pin(L"card_session.js", p2_deployment::js);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     g_ui_artifacts.clear();
     throw usb_vault::card::LocalFailureError(usb_vault::card::capture_startup_failure(1207));
   }
@@ -451,6 +456,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
           ? development::packaged_app_config(directory, p2_deployment::helper, p2_deployment::vendor)
           : development::parse_app_config(views);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       throw usb_vault::card::LocalFailureError(
           usb_vault::card::capture_startup_failure(views.size() == 1 ? 1205 : 1006));
     }
@@ -469,6 +475,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
       pin(L"card_session.html", p2_deployment::html);
       pin(L"card_session.js", p2_deployment::js);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       g_deployment_artifacts.clear();
       throw usb_vault::card::LocalFailureError(usb_vault::card::capture_startup_failure(1207));
     }
@@ -633,6 +640,7 @@ void notify_webview_session_changed() noexcept {
         L",cleanupCode:" + std::to_wstring(failure.cleanup.code) + L"};" +
         usb_vault::ui::kWebviewSessionChangedScript;
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     show_failure(L"无法准备界面诊断信息。错误码：9002。请重新打开应用。");
     return;
   }
@@ -846,6 +854,7 @@ void initialize_webview(const HWND window) {
   if (!g_webview_startup.current(g_page_generation)) return;
   try { g_page_uri = local_page_uri(); }
   catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     const auto failure = usb_vault::card::capture_startup_failure(1301).primary;
     report_webview_failure(failure.code, failure.native_kind == 2 ? static_cast<HRESULT>(failure.native_code) : S_OK);
     return;
@@ -1383,6 +1392,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
       return 1;
     }
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     show_numeric_failure(L"无法确认 USB Vault 的安装状态，请检查安装位置和访问权限。",
         usb_vault::card::capture_startup_failure(1004));
     return 1;
@@ -1430,7 +1440,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
     g_deployment_artifacts.push_back(usb_vault::card::verify_local_artifact(helper,
         usb_vault::card::vikey::development::parse_deployment_digest(p2_deployment::creator), 128ULL*1024*1024));
     g_administrator_required = !usb_vault::volume_creation::begin_elevation_session(helper);
-  } catch (...) { g_administrator_required = true; }
+  } catch (...) { USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); g_administrator_required = true; }
   struct ElevationScope final { ~ElevationScope(){usb_vault::volume_creation::end_elevation_session();} } elevation_scope;
   if (g_administrator_required) {
     g_view = StartupView::session;
@@ -1506,6 +1516,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
         ::SetTimer(window, 1, 100, nullptr) == 0)
       usb_vault::card::throw_startup_failure(1209, 1, ::GetLastError());
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     show_numeric_failure(L"本地界面或安全会话初始化失败。",
         usb_vault::card::capture_startup_failure(1206));
     ::DestroyWindow(window);
@@ -1532,6 +1543,7 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   g_main_window = nullptr;
   return message_result == -1 ? 1 : 0;
 } catch (...) {
+  USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
   show_numeric_failure(L"应用启动发生未处理的异常。",
       usb_vault::card::capture_startup_failure(9001));
   finish_startup_log();

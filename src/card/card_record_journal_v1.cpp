@@ -1,4 +1,5 @@
 #include "card/card_record_journal_v1.h"
+#include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
@@ -379,6 +380,7 @@ void write_verified(ICardRecordJournalStorage &storage,
   try {
     storage.write(offset, intended);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_journal_v1", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     write_failure = std::current_exception();
   }
 
@@ -386,6 +388,7 @@ void write_verified(ICardRecordJournalStorage &storage,
   try {
     observed = read_exact(storage, offset, intended.size());
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/card_record_journal_v1", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     fail(CardError::device_failure,
          "card journal write outcome could not be verified");
   }
@@ -587,7 +590,7 @@ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
   const auto marker = provision_uninitialized_card_record_v1();
   std::exception_ptr write_failure;
   try { commit_card_record_journal_v1(storage, marker.bytes()); }
-  catch (...) { write_failure = std::current_exception(); }
+  catch (...) { USB_VAULT_TRACE_FAILURE("card/card_record_journal_v1", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); write_failure = std::current_exception(); }
   // A read completes cleanup if commit became authoritative before interruption.
   const auto observed = read_card_record_journal_v1(storage);
   if (!equal_bytes(observed.bytes(), marker.bytes())) {

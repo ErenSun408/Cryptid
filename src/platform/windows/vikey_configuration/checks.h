@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include "usb_vault/diagnostics/debug_log.h"
 #include <functional>
 #include <string>
 #include "card/capture_failure.h"
@@ -33,7 +34,7 @@ inline bool run_checks(const Probes& probes, const Report& report,
     } else {
       report(index, {State::running, L"正在检测…"});
       try { result = probes[index](); }
-      catch (...) { result = {State::failed, L"检测失败，请检查环境后重试。",
+      catch (...) { USB_VAULT_TRACE_FAILURE("platform/windows/vikey_configuration/checks", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); result = {State::failed, L"检测失败，请检查环境后重试。",
           usb_vault::card::capture_startup_failure(1106)}; }
       if (result.state != State::passed && result.state != State::failed)
         result = {State::failed, L"检测未返回有效结果。", {.primary = {.code = 1106}}};

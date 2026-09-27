@@ -920,6 +920,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       try {
         arguments = arguments_text(parameters);
       } catch (...) {
+        USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       }
       const auto started = std::chrono::steady_clock::now();
       const HRESULT hr = invoke_unlogged(member, iid, locale, flags, parameters, result,
@@ -930,6 +931,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         try {
           if (SUCCEEDED(hr) && result != nullptr) returned = "；返回 " + variant_text(*result);
         } catch (...) {
+          USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
         }
         USB_VAULT_TRACE("页面桥", "页面调用 " + member_text(member),
                         arguments + "；HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(hr)) +
@@ -1086,7 +1088,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
         if (creation_work_->interrupted.load()) return E_ACCESSDENIED;
         try { return complete_selection(controller_.decoy_maintenance_write_blocked(id), result); }
-        catch (...) { return E_FAIL; }
+        catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
       }
       case kDecoySpaceId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -1166,7 +1168,7 @@ class CardProductWebViewHostObject final : public IDispatch {
           ::VariantInit(result); result->vt = VT_BSTR;
           result->bstrVal = ::SysAllocStringLen(packed.data(), static_cast<UINT>(packed.size()));
           return result->bstrVal ? S_OK : E_OUTOFMEMORY;
-        } catch (...) { return E_FAIL; }
+        } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
       }
       case kGetOperationLoggingEnabledId:
       case kGetAutoMountId:
@@ -1200,7 +1202,7 @@ class CardProductWebViewHostObject final : public IDispatch {
             }
           }
           return S_OK;
-        } catch (...) { return E_FAIL; }
+        } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
       }
       case kSetWindowSizeId: {
         if (parameters == nullptr || parameters->cArgs != 1 ||
@@ -1291,7 +1293,7 @@ class CardProductWebViewHostObject final : public IDispatch {
               std::to_wstring(status.failed);
           return complete_string(packed.c_str(),
                                  static_cast<UINT>(packed.size()), result);
-        } catch (...) { return E_FAIL; }
+        } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
       }
       case kGetSessionStateId:
         return invoke_state(parameters, result);
@@ -1513,6 +1515,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       });
       return complete_selection(true, result);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       creation_work_->running.store(false);
       clear_batch();
       return E_FAIL;
@@ -1721,6 +1724,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (member == kPartitionBeginId || member == kPartitionCheckId) creation_work_->running.store(false);
       clear_partitions();
       return E_FAIL;
@@ -1752,14 +1756,17 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       password = consume_webview_password_array(parameters->rgvarg[0]);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       wipe_available_arguments(parameters, 1);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       wipe_available_arguments(parameters, 1);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       wipe_available_arguments(parameters, 1);
       return E_FAIL;
     }
@@ -1795,7 +1802,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         };
         unsigned int state = 3;
         try {
-          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed: HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(com)));
           const auto survey = controller_.survey_decoy_maintenance(
               password.bytes(),
               [this](const std::uint32_t done, const std::uint32_t total) {
@@ -1828,6 +1835,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       });
       return complete_selection(true, result);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       password.clear();
       creation_work_->running.store(false);
       clear_survey();
@@ -1869,7 +1877,7 @@ class CardProductWebViewHostObject final : public IDispatch {
           std::to_wstring(survey_found_.size()) + L"," +
           std::to_wstring(survey_unreachable_) + L"," + (survey_cancelled_ ? L"1" : L"0");
       return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
-    } catch (...) { return E_FAIL; }
+    } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
   }
 
   HRESULT invoke_batch_query(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
@@ -1901,7 +1909,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       ::VariantInit(result); result->vt = VT_UI4;
       result->ulVal = member == kBatchItemIdId ? entry.target.id : entry.outcome;
       return S_OK;
-    } catch (...) { return E_FAIL; }
+    } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
   }
 
   HRESULT begin_volume_operation(DISPID member, DISPPARAMS* parameters,
@@ -1954,7 +1962,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         unsigned int status = 3;
         try {
-          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed: HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(com)));
           if (!creation_work_->interrupted.load()) {
             if (force && member == kBeginUnmountContainerId) controller_.force_unmount_container(id);
             else if (force) controller_.force_unmount_user_active();
@@ -2002,6 +2010,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       });
       return complete_selection(true, result);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       volume_status_.store(3);
       creation_work_->running.store(false);
       return E_FAIL;
@@ -2060,7 +2069,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         unsigned int status = 3;
         try {
-          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed");
+          if (FAILED(com)) throw std::runtime_error("worker COM initialization failed: HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(com)));
           controller_.set_creation_revocation([this,epoch=creation_work_->card_epoch.load()]{
             return creation_work_->interrupted.load() || creation_work_->card_epoch.load()!=epoch;
           });
@@ -2103,9 +2112,9 @@ class CardProductWebViewHostObject final : public IDispatch {
         } catch (...) {
           USB_VAULT_TRACE_FAILURE("页面桥", "创建后台任务失败", "");
         }
-        try { controller_.set_creation_feedback({}); } catch (...) {}
-        try { controller_.set_creation_cancellation({}); } catch (...) {}
-        try { controller_.set_creation_revocation({}); } catch (...) {}
+        try { controller_.set_creation_feedback({}); } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));}
+        try { controller_.set_creation_cancellation({}); } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));}
+        try { controller_.set_creation_revocation({}); } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));}
         if (SUCCEEDED(com)) ::CoUninitialize();
         if (status >= 3 && status <= 5 && !creation_error_.load()) creation_error_.store(static_cast<unsigned int>(E_FAIL));
         USB_VAULT_TRACE("页面桥", "创建后台任务结束",
@@ -2119,6 +2128,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         creation_work_->running.store(false);
       });
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       creation_error_.store(static_cast<unsigned int>(E_FAIL));
       creation_status_.store(3);
       creation_work_->finish();
@@ -2177,6 +2187,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.unmount();
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2214,6 +2225,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       directory = controller_.browse_for_container_directory();
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
     LocationStringWiper wiper(directory);
@@ -2269,9 +2281,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.create_container(name, directory, size_mib);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2315,14 +2329,17 @@ class CardProductWebViewHostObject final : public IDispatch {
       second = consume_webview_password_array(second_argument);
       confirmation = consume_webview_password_array(confirmation_argument);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       wipe_available_arguments(parameters, 6);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       wipe_available_arguments(parameters, 6);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       wipe_available_arguments(parameters, 6);
       return E_FAIL;
     }
@@ -2340,9 +2357,11 @@ class CardProductWebViewHostObject final : public IDispatch {
                                      confirmation.bytes());
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2353,6 +2372,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       return complete_selection(controller_.mount_container(), result);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2373,9 +2393,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.mount_container(identifier);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2395,9 +2417,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.unmount_container(identifier);
       return S_OK;
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2417,6 +2441,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2437,6 +2462,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                                                   VARIANT_FALSE);
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2456,6 +2482,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2476,6 +2503,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                                                    VARIANT_FALSE);
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2501,6 +2529,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
       }
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     }
     return false;
   }
@@ -2554,23 +2583,28 @@ class CardProductWebViewHostObject final : public IDispatch {
       packed = pack_directory_listing(
           controller_.list_container_directory(id, relative_directory));
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       // The page only ever sends an adopted identifier and a directory it was
       // given, so in practice this is a container the session no longer holds.
       record_directory_failure(DirectoryFailure::unknown_container);
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::logic_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       record_directory_failure(DirectoryFailure::not_mounted);
       return E_FAIL;
     } catch (const std::system_error& error) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       record_directory_failure(classify_listing_error(id, error));
       return E_FAIL;
     } catch (const std::runtime_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       // The containment gate and the entry-name check both land here: the
       // volume answered, and what it answered with was refused.
       record_directory_failure(DirectoryFailure::contents_refused);
       return E_FAIL;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       record_directory_failure(DirectoryFailure::unknown);
       return E_FAIL;
     }
@@ -2611,9 +2645,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2644,9 +2680,11 @@ class CardProductWebViewHostObject final : public IDispatch {
                                          new_name);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2688,9 +2726,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2722,9 +2762,11 @@ class CardProductWebViewHostObject final : public IDispatch {
                                          destination_directory);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2751,9 +2793,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.export_container_file(id, destination_directory);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2773,9 +2817,11 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.forget_container(identifier);
       return S_OK;
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2792,6 +2838,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       result->ulVal = static_cast<ULONG>(statuses.size());
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2855,6 +2902,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         }
       }
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2871,6 +2919,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       result->ulVal = static_cast<ULONG>(events.size());
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -2920,6 +2969,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         }
       }
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -3020,6 +3070,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       });
       return complete_selection(true, result);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       creation_work_->running.store(false); controller_.cancel_login_reset(); reset_status_.store(3); return E_FAIL;
     }
   }
@@ -3031,6 +3082,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       available = controller_.can_reset_card_record();
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
     return complete_selection(available, result);
@@ -3041,6 +3093,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       controller_.reset_card_record();
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
     // Only a committed reset asks for the close, and it asks after the card
@@ -3056,6 +3109,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       controller_.clear_operation_history();
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -3091,18 +3145,22 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       password = consume_webview_password_array(parameters->rgvarg[0]);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
     try {
       controller_.submit_login(password.bytes());
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }
@@ -3126,12 +3184,15 @@ class CardProductWebViewHostObject final : public IDispatch {
     try {
       password = consume_webview_password_array(password_argument);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 1;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 1;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
 
@@ -3140,12 +3201,15 @@ class CardProductWebViewHostObject final : public IDispatch {
       confirmation =
           consume_webview_password_array(confirmation_argument);
     } catch (const std::invalid_argument&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (const std::length_error&) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
 
@@ -3154,6 +3218,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                                         confirmation.bytes());
       return S_OK;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
   }

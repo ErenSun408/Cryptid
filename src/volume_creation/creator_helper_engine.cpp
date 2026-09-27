@@ -367,6 +367,7 @@ class FormatBackend final {
                                  });
       return TRUE;
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("volume_creation/creator_helper_engine", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return FALSE;
     }
   }
@@ -519,6 +520,7 @@ void as_caller(const HANDLE pipe, Action&& action) {
   try {
     return volume::scan_volume_tail_space(drive_letter);
   } catch (const std::exception&) {
+    USB_VAULT_TRACE_FAILURE("volume_creation/creator_helper_engine", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     fail(CreationError::bitmap_scan_failed, "scan outer-volume free tail");
   }
 }
@@ -1067,6 +1069,7 @@ static void serve_session(const HANDLE pipe,
       request = read_request(pipe, nonce);
       idle_wait.store(false);
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("volume_creation/creator_helper_engine", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       // The caller closed the pipe, which is how a session ends.
       break;
     }

@@ -1,4 +1,5 @@
 #include "usb_vault/application/card_entry_context_controller.h"
+#include "usb_vault/diagnostics/debug_log.h"
 #include "card/capture_failure.h"
 
 #include "usb_vault/card/card_error.h"
@@ -57,6 +58,7 @@ CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
     route_ = CardEntryRouter::route(*candidate, &startup_failure_);
     context_ = std::move(candidate);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("application/card_entry_context_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     startup_failure_ = card::capture_failure(std::current_exception());
   }
   return *route_;

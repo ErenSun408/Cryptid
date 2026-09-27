@@ -197,8 +197,14 @@ class AttributeList final {
   LPPROC_THREAD_ATTRIBUTE_LIST list_{};
 };
 
+// Many of these follow a failed system call whose code the card error does not
+// carry; the runtime log keeps it beside the context and stage.
 [[noreturn]] void throw_card(const CardError error, const char* const context,
     const DiagnosticStage stage = DiagnosticStage::none) {
+  USB_VAULT_TRACE("卡助手", "卡助手客户端失败",
+                  std::string(context) + "；卡错误 " + std::to_string(static_cast<int>(error)) +
+                      "；诊断阶段 " + std::to_string(static_cast<std::uint32_t>(stage)) +
+                      "；最近 Win32 " + std::to_string(::GetLastError()));
   throw DiagnosticError(make_error_code(error), stage, context);
 }
 
@@ -570,6 +576,7 @@ void filter_development_process_privileges(const HANDLE token) {
       nullptr, reinterpret_cast<PUCHAR>(nonce.data()),
       static_cast<ULONG>(nonce.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
   if (status < 0) {
+    USB_VAULT_TRACE("卡助手", "生成随机数失败", "NTSTATUS " + diagnostics::hex_text(static_cast<std::uint32_t>(status)));
     throw_card(CardError::backend_unavailable,
                "generate ViKey helper IPC nonce");
   }
@@ -669,6 +676,7 @@ struct HelperLaunchContext final {
       ::GetAppContainerFolderPath(sid_string, &folder);
   static_cast<void>(::LocalFree(sid_string));
   if (FAILED(folder_result) || folder == nullptr) {
+    USB_VAULT_TRACE("卡助手", "取隔离环境目录失败", "HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(folder_result)));
     if (folder != nullptr) ::CoTaskMemFree(folder);
     throw_card(CardError::backend_unavailable, "resolve ViKey helper AppContainer folder", DiagnosticStage::work_directory);
   }
@@ -680,6 +688,7 @@ struct HelperLaunchContext final {
       FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, nullptr,
       &raw_virtual_local_app_data);
   if (FAILED(local_result) || raw_virtual_local_app_data == nullptr) {
+    USB_VAULT_TRACE("卡助手", "取隔离环境本地数据目录失败", "HRESULT " + diagnostics::hex_text(static_cast<std::uint32_t>(local_result)));
     if (raw_virtual_local_app_data != nullptr) {
       ::CoTaskMemFree(raw_virtual_local_app_data);
     }
@@ -858,6 +867,7 @@ void cleanup_app_container(
   try {
     remove_staged_vendor(staged_vendor, staged_path);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_client", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     staged_failure = std::current_exception();
   }
   cleanup_preserving_failure(staged_failure,
@@ -872,6 +882,7 @@ void cleanup_development_directory(
   try {
     remove_staged_vendor(staged_vendor, staged_path);
   } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_client", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     staged_failure = std::current_exception();
   }
   // Directory cleanup is observable because a leftover development staging
@@ -1057,12 +1068,14 @@ namespace {
     try {
       throw;
     } catch (const DiagnosticError& error) {
+      USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_client", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       codes = "诊断阶段 " + std::to_string(static_cast<std::uint32_t>(error.stage())) +
               "；原生码 " + std::to_string(error.native()) + "（" +
               diagnostics::hex_text(error.native()) + "）；原生码类型 " +
               std::to_string(static_cast<std::uint32_t>(error.kind())) + "；安全步骤 " +
               std::to_string(error.step());
     } catch (...) {
+      USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_client", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     }
     USB_VAULT_TRACE_FAILURE("卡助手", "卡助手操作失败", request_text + (codes.empty() ? "" : "；" + codes));
     throw;
