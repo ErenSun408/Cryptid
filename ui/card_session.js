@@ -4013,7 +4013,7 @@
     button.type = "button";
     button.className = action === "unmount" ? "shell-button danger" : "shell-button";
     button.textContent = label;
-    button.disabled = busy || disabled || isMaintenanceContainer(container.id) || (Boolean(container.conversion) && ["mount", "forget", "browse", "export"].includes(action));
+    button.disabled = busy || disabled || isMaintenanceContainer(container.id) || (Boolean(container.conversion) && ["mount", "browse", "export"].includes(action));
     button.dataset.containerId = String(container.id);
     button.dataset.containerName = container.name;
     button.dataset.containerAction = action;
@@ -4085,7 +4085,7 @@
     name.title = container.name;
     const state = document.createElement("div");
     state.className = "container-state";
-    state.textContent = container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成，请保留记录并检查磁盘" : maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.unavailable ? "无法读取卷状态" : container.mounted ? "已挂载" : "未挂载";
+    state.textContent = container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成，请检查磁盘" : maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.unavailable ? "无法读取卷状态" : container.mounted ? "已挂载" : "未挂载";
     identity.append(name, state);
 
     const facts = document.createElement("div");

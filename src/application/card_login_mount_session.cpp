@@ -2823,7 +2823,6 @@ void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
   for (auto entry = state_.containers.begin();
        entry != state_.containers.end(); ++entry) {
     if (entry->id != id) continue;
-    if (entry->conversion_state) throw std::logic_error("incomplete conversion record cannot be forgotten");
     if (entry->mounted) {
       throw std::logic_error(
           "a mounted container cannot be dropped from the session");

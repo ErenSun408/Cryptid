@@ -3981,9 +3981,24 @@ void test_partition_conversion_lifecycle() {
     require(records.size()==1 && records[0].order.has_value() && records[0].sequence!=0,
             "a converted partition was recorded without a position or a number");
     require_throws<std::logic_error>([&]{session.mount_adopted_container(rows[0].id);},"incomplete conversion mounted");
-    require_throws<std::logic_error>([&]{session.forget_container(rows[0].id);},"incomplete conversion record removed");
     if(scenario!=0) {
-      require_throws<std::logic_error>([&]{session.resume_partition_conversion(rows[0].id);},"uncertain conversion resumed");continue;
+      require_throws<std::logic_error>([&]{session.resume_partition_conversion(rows[0].id);},"uncertain conversion resumed");
+      if (scenario == 4) {
+        require_throws<std::runtime_error>([&]{session.forget_container(rows[0].id);},"failed index write accepted removal");
+        require(session.container_statuses().size()==1 &&
+                    list_container_index_partition_entries(key.bytes(),runtime.container_index).size()==1,
+                "failed removal lost the conversion record");
+      }
+      runtime.fail_index_write=false;
+      runtime.events.clear();
+      session.forget_container(rows[0].id);
+      require(session.container_statuses().empty() &&
+                  list_container_index_partition_entries(key.bytes(),runtime.container_index).empty(),
+              "incomplete conversion record survived removal");
+      require(std::ranges::none_of(runtime.events, [](const auto& event) {
+                return event.starts_with("cleanup:") || event.starts_with("create:") || event.starts_with("mount:");
+              }), "forgetting conversion touched the container");
+      continue;
     }
     auth.clear_authentication();
     require_throws<std::logic_error>([&]{session.resume_partition_conversion(rows[0].id);},"resume bypassed authentication");
