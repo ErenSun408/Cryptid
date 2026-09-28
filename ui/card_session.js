@@ -4007,6 +4007,142 @@
   // The name comes from a file the user picked, so it is only ever written as
   // text. Nothing on this row is built from markup.
   let expandedContainerId = 0;
+  let containerRename = null;
+  let containerListPersistence = null;
+
+  const cancelContainerRename = () => {
+    if (!containerRename) return;
+    const editor = containerRename;
+    containerRename = null;
+    editor.input.value = "";
+    editor.host.replaceChildren();
+    editor.host.textContent = containers.find(item => item.id === editor.id)?.name ?? editor.original;
+    editor.host.removeAttribute("data-editing");
+    editor.host.setAttribute("role", "button");
+    editor.host.tabIndex = 0;
+    editor.status.remove();
+  };
+
+  const validContainerAlias = (value) => {
+    if (value.length > 100 || (value.length && !value.trim().length) || /[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\]/u.test(value)) return false;
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const low = value.charCodeAt(++i);
+        if (!(low >= 0xdc00 && low <= 0xdfff)) return false;
+      } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+    }
+    return true;
+  };
+
+  const saveContainerRename = async () => {
+    const editor = containerRename;
+    if (!editor || editor.saving || editor.composing || busy) return;
+    if (editor.revision !== batchSessionRevision || externalRefreshPending || currentState !== nativeState.authenticated) {
+      cancelContainerRename(); return;
+    }
+    const value = editor.input.value;
+    if (value === editor.original) { cancelContainerRename(); renderContainers(); return; }
+    if (!validContainerAlias(value)) {
+      editor.status.textContent = "名称最多100个字符，不能仅含空白，或包含控制字符、斜杠及反斜杠。";
+      editor.input.setAttribute("aria-invalid", "true");
+      editor.input.focus(); return;
+    }
+    if (containerListPersistence !== true || isMaintenanceContainer(editor.id)) {
+      cancelContainerRename(); renderContainers(); return;
+    }
+    editor.saving = true;
+    editor.input.readOnly = true;
+    editor.status.textContent = "";
+    busy = true;
+    const wasInert = dashboard.hasAttribute("inert");
+    dashboard.setAttribute("inert", "");
+    let written = false;
+    try {
+      await bridge.renameContainer(editor.id, value);
+      written = true;
+      if (editor.revision !== batchSessionRevision || externalRefreshPending) return;
+      await refreshNativeState();
+      if (editor.revision !== batchSessionRevision || externalRefreshPending) return;
+      cancelContainerRename();
+      setDashboardStatus("名称已保存。");
+    } catch (pageError) {
+      logCaughtPageError("saveContainerRename", pageError);
+      if (editor.revision === batchSessionRevision && !externalRefreshPending && containerRename === editor) {
+        if (written) {
+          cancelContainerRename();
+          setDashboardStatus("名称已保存，但列表刷新失败，请重新登录确认。", "error");
+        } else {
+          editor.status.textContent = "名称保存失败，原名称未更改。请重试或按 Esc 取消。";
+          editor.input.setAttribute("aria-invalid", "true");
+        }
+      }
+    } finally {
+      busy = false;
+      if (!wasInert) dashboard.removeAttribute("inert");
+      if (containerRename === editor) {
+        editor.saving = false;
+        editor.input.readOnly = false;
+        editor.input.focus({ preventScroll: true });
+      }
+      if (externalRefreshPending) void refreshAfterExternalChange();
+      else if (editor.revision === batchSessionRevision) updateProductSurface();
+    }
+  };
+
+  const beginContainerRename = (container, host) => {
+    if (busy || externalRefreshPending || bridge === null || reorderState !== null ||
+        currentState !== nativeState.authenticated || isMaintenanceContainer(container.id)) return;
+    if (containerListPersistence !== true) {
+      setDashboardStatus(containerListPersistence === false
+        ? "请先在系统设置开启“持久化容器列表”，再修改名称。"
+        : "无法读取“持久化容器列表”设置，请稍后重试。", "error");
+      return;
+    }
+    if (containerRename) { containerRename.input.focus(); return; }
+    const input = document.createElement("input");
+    input.className = "container-name-input";
+    input.type = "text";
+    input.maxLength = 100;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.value = container.name;
+    input.placeholder = "清空恢复默认名称";
+    input.setAttribute("aria-label", "容器显示名称");
+    const status = document.createElement("span");
+    status.className = "container-name-status";
+    status.setAttribute("role", "status");
+    status.id = `container-name-status-${container.id}`;
+    input.setAttribute("aria-describedby", status.id);
+    const editor = { id: container.id, original: container.name, host, input, status,
+      revision: batchSessionRevision, section: activeSection, saving: false, composing: false };
+    containerRename = editor;
+    host.setAttribute("data-editing", "true");
+    host.removeAttribute("role");
+    host.tabIndex = -1;
+    host.replaceChildren(input);
+    host.after(status);
+    input.addEventListener("compositionstart", () => { editor.composing = true; });
+    input.addEventListener("compositionend", () => {
+      editor.composing = false;
+      if (containerRename === editor && document.activeElement !== input) void saveContainerRename();
+    });
+    input.addEventListener("input", () => {
+      status.textContent = "";
+      input.removeAttribute("aria-invalid");
+    });
+    input.addEventListener("keydown", event => {
+      event.stopPropagation();
+      if (event.isComposing || editor.composing || event.keyCode === 229 || editor.saving) return;
+      if (event.key === "Enter") { event.preventDefault(); void saveContainerRename(); }
+      if (event.key === "Escape") { event.preventDefault(); cancelContainerRename(); renderContainers(); }
+    });
+    input.addEventListener("blur", () => {
+      if (containerRename === editor && !editor.saving) void saveContainerRename();
+    });
+    input.focus();
+    input.select();
+  };
 
   const containerActionButton = (container, action, label, disabled = false) => {
     const button = document.createElement("button");
@@ -4082,7 +4218,19 @@
     const name = document.createElement("div");
     name.className = "container-name";
     name.textContent = container.name;
-    name.title = container.name;
+    name.tabIndex = busy || maintaining ? -1 : 0;
+    name.setAttribute("role", "button");
+    name.setAttribute("aria-label", `${container.name}，双击或按 F2 修改名称`);
+    name.addEventListener("click", event => event.stopPropagation());
+    name.addEventListener("dblclick", event => {
+      event.stopPropagation();
+      if (event.target === name) beginContainerRename(container, name);
+    });
+    name.addEventListener("keydown", event => {
+      if (event.target !== name || !["F2", "Enter"].includes(event.key)) return;
+      event.preventDefault(); event.stopPropagation();
+      beginContainerRename(container, name);
+    });
     const state = document.createElement("div");
     state.className = "container-state";
     state.textContent = container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成，请检查磁盘" : maintaining ? "正在进行高级更新，请卸载后重新挂载" : container.unavailable ? "无法读取卷状态" : container.mounted ? "已挂载" : "未挂载";
@@ -4148,6 +4296,15 @@
   };
 
   const renderContainers = () => {
+    if (containerRename) {
+      const editor = containerRename;
+      const exists = containers.some(item => item.id === editor.id);
+      if (currentState === nativeState.authenticated && editor.revision === batchSessionRevision &&
+          !externalRefreshPending && exists && !isMaintenanceContainer(editor.id) &&
+          containerListPersistence === true && activeSection === editor.section &&
+          (!busy || editor.saving) && editor.host.isConnected) return;
+      cancelContainerRename();
+    }
     if (reorderState !== null) {
       finishContainerReorder();
       reorderState = null;
@@ -4483,6 +4640,7 @@
           throw new Error("invalid stored setting");
         }
         control.setAttribute("aria-checked", value ? "true" : "false");
+        if (stored.setting === "remember-containers") containerListPersistence = value;
         if (stored.setting === "operation-logging") {
           operationLoggingEnabled = value;
           for (const item of dashboardNavigation) {
@@ -4491,6 +4649,7 @@
           if (!value && activeSection === "history") showDashboardSection("settings");
         }
       } catch (pageError) { logCaughtPageError("refreshStoredSwitches/1", pageError);
+        if (stored.setting === "remember-containers") containerListPersistence = null;
         // An unreadable setting is not a licence to invent one. The switch
         // keeps the position it already had.
       }
@@ -4740,6 +4899,7 @@
 
   window.addEventListener("usb-vault-session-changed", () => {
     ++batchSessionRevision;
+    cancelContainerRename();
     // A walk's findings belong to the session that made them.
     resetDecoySection();
     pendingNewContainers.clear();

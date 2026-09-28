@@ -358,6 +358,8 @@
     check(firstContainerRow.lastElementChild === action(home, 1, "details") &&
       !action(home, 1, "details").classList.contains("shell-button"), "Disclosure is an unframed arrow at the end of the row");
     firstContainerRow.querySelector(".container-name").click();
+    check(!$(home + " .container-details"), "Name click is reserved for inline renaming");
+    firstContainerRow.querySelector(".container-state").click();
     check(all(`${home} .container-details`).length === 1, "Details expand inline");
     $(home + " .container-row .container-facts").click();
     check(!$(home + " .container-details"), "Clicking row facts collapses details");
@@ -799,7 +801,7 @@
       "Migration location uses the picker and stays separate from plain export");
     $("[data-section=files]").click();
     check(!$(manager).hidden && $("#management-files").hidden, "Management navigation starts at containers");
-    $(manager + ' [data-row-container="1"] .container-name').click();
+    $(manager + ' [data-row-container="1"] .container-state').click();
     await wait(() => $("[data-file-enter]"));
     check($(manager).hidden && !$("#management-files").hidden, "Open enters the file level");
     check($("#file-breadcrumb").closest(".section-header") &&
