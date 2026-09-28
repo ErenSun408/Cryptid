@@ -39,15 +39,22 @@ inline constexpr std::uint32_t kContainerIndexEntryV1Version = 1;
 // also fits here.
 inline constexpr std::size_t kContainerIndexV1PathMaximumLength = 259;
 
+// Optional display alias, stored only inside the authenticated payload.
+// Empty means use the original file name or partition sequence. UTF-16 units.
+inline constexpr std::size_t kContainerIndexNameMaximumLength = 100;
+[[nodiscard]] bool valid_container_index_name(std::wstring_view name) noexcept;
+
 // Seals one path into exactly one slot. Entries of different path lengths
 // produce the same size and the same shape: the unused remainder is random,
 // not zero, so slot contents never say how long the path is.
 //
 // With no order this writes the original version 1 path-only payload; with an
-// order it writes version 2. Both versions have exactly the same slot size.
+// order it writes version 2. A nonempty alias writes version 7, including an
+// optional order. All versions have exactly the same slot size.
 [[nodiscard]] security::SecureBuffer seal_container_index_entry_v1(
     std::span<const std::byte> key, std::wstring_view path,
-    std::optional<std::uint32_t> order = std::nullopt);
+    std::optional<std::uint32_t> order = std::nullopt,
+    std::wstring_view name = {});
 
 // Stable identity of one supported MBR/GPT 512-byte partition. No drive letter, disk
 // number, discovery path, preformat filesystem serial, password or role is
@@ -64,12 +71,14 @@ enum class PartitionConversionState : std::uint32_t { normal = 0, uncertain = 1,
 // the layout from its own field instead of from the version number, always
 // carries the conversion state, and adds the creation sequence. A non-zero
 // sequence is what makes it a v6 record; passing zero writes the legacy shape
-// so existing records can be re-sealed unchanged.
+// so existing records can be re-sealed unchanged. A nonempty alias writes v8;
+// v8 also permits zero sequence until legacy numbering assigns one. Versions
+// 7/8 must not be edited with older clients that cannot recognize them.
 [[nodiscard]] security::SecureBuffer seal_container_index_partition(
     std::span<const std::byte> key, const ContainerIndexPartition& partition,
     std::optional<std::uint32_t> order = std::nullopt,
     PartitionConversionState conversion = PartitionConversionState::normal,
-    std::uint32_t sequence = 0);
+    std::uint32_t sequence = 0, std::wstring_view name = {});
 
 // Version 2 adds an authenticated order at offset 524, inside the same sealed
 // slot. Version 1 remains readable and has no order. Physical slot placement
@@ -85,13 +94,15 @@ struct ContainerIndexEntry {
   // rearranges the list: `order` is the position, this is the identity.
   // Zero means a record written before v6, which recorded no such thing.
   std::uint32_t sequence{};
+  // v7 file / v8 partition alias; earlier versions have no alias.
+  std::wstring name;
 };
 
 // Opens supported file and partition payloads; callers must inspect partition.
 [[nodiscard]] std::optional<ContainerIndexEntry> try_open_container_index_entry(
     std::span<const std::byte> key, std::span<const std::byte> slot);
 
-// Returns the path when this key authenticates a supported v1/v2 slot.
+// Returns the path when this key authenticates a supported file slot.
 //
 // Random filler, a slot sealed under a different key, and a damaged slot are
 // one answer: nothing. The caller cannot tell them apart, and neither can

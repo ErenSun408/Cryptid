@@ -281,8 +281,8 @@ void reorder_entries(const std::span<const std::byte> key,
     if (item.entry.order == position) continue;
     const auto sealed = item.entry.partition
         ? seal_container_index_partition(key, *item.entry.partition, position,
-                                         item.entry.conversion, item.entry.sequence)
-        : seal_container_index_entry_v1(key, item.entry.path, position);
+                                         item.entry.conversion, item.entry.sequence, item.entry.name)
+        : seal_container_index_entry_v1(key, item.entry.path, position, item.entry.name);
     std::ranges::copy(sealed.bytes(),
         container_index_v1_mutable_slot(updated, item.slot).begin());
   }
@@ -357,15 +357,16 @@ bool set_container_index_partition_state(const std::span<const std::byte> key,
   std::optional<std::size_t> found;
   std::optional<std::uint32_t> order;
   std::uint32_t sequence = 0;
+  std::wstring name;
   for (std::size_t i=0;i<kContainerIndexV1SlotCount;++i) {
     const auto entry=try_open_container_index_entry(key,container_index_v1_slot(file,i));
     if (entry && entry->partition==partition) {
       if (found) throw std::invalid_argument("ambiguous partition record");
-      found=i; order=entry->order; sequence=entry->sequence;
+      found=i; order=entry->order; sequence=entry->sequence; name=entry->name;
     }
   }
   if (!found) return false;
-  const auto sealed=seal_container_index_partition(key,partition,order,state,sequence);
+  const auto sealed=seal_container_index_partition(key,partition,order,state,sequence,name);
   std::ranges::copy(sealed.bytes(),container_index_v1_mutable_slot(file,*found).begin());
   if (assigned_sequence) *assigned_sequence = sequence;
   return true;
@@ -388,6 +389,30 @@ std::vector<ContainerIndexRef> list_container_index_refs_v1(
                       .partition = located.entry.partition});
   }
   return result;
+}
+
+bool set_container_index_name(const std::span<const std::byte> key,
+    const std::span<std::byte> file, const ContainerIndexRef& reference,
+    const std::wstring_view name) {
+  if (reference.path.empty() == !reference.partition.has_value() ||
+      (reference.partition && !valid_container_index_partition(*reference.partition)) ||
+      !valid_container_index_name(name))
+    throw std::invalid_argument("invalid container rename");
+  std::optional<LocatedEntry> found;
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i) {
+    auto entry = try_open_container_index_entry(key, container_index_v1_slot(file, i));
+    if (!entry || !container_index_ref_matches_v1(reference, entry->path, entry->partition)) continue;
+    if (found) throw std::invalid_argument("ambiguous container record");
+    found = LocatedEntry{i, std::move(*entry)};
+  }
+  if (!found) return false;
+  const auto& entry = found->entry;
+  if (entry.name == name) return true;
+  const auto sealed = entry.partition
+      ? seal_container_index_partition(key, *entry.partition, entry.order, entry.conversion, entry.sequence, name)
+      : seal_container_index_entry_v1(key, entry.path, entry.order, name);
+  std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(file, found->slot).begin());
+  return true;
 }
 
 ContainerIndexWriteV1 add_container_index_partition(
@@ -441,7 +466,7 @@ PreparedContainerIndexV1 prepare_container_index_v1(
     if (!item->entry.partition || item->entry.sequence != 0) continue;
     const auto sequence = numbers.take();
     const auto sealed = seal_container_index_partition(
-        key, *item->entry.partition, item->entry.order, item->entry.conversion, sequence);
+        key, *item->entry.partition, item->entry.order, item->entry.conversion, sequence, item->entry.name);
     std::ranges::copy(sealed.bytes(), container_index_v1_mutable_slot(updated, item->slot).begin());
     item->entry.sequence = sequence;
   }

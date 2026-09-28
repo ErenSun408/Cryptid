@@ -29,7 +29,9 @@ constexpr std::size_t kPlaintextSize =
 //   [6, 524)   path, padded to its full capacity with random bytes
 //   [524, 528) v2: display order; v1: random
 //   [528, 532) v6: creation sequence; earlier versions: random
-//   [532, 740) reserved, random
+//   [532, 534) v7/v8: alias UTF-16 length
+//   [534, 734) v7/v8: alias, random padding; earlier versions: random
+//   [734, 740) reserved, random
 //
 // The reserved tail is what lets a later version carry more than a path
 // without changing the size of a slot, and so without changing the size of the
@@ -46,6 +48,11 @@ constexpr std::uint32_t kPartitionEntryVersion = 3;
 // every partition record written from now on uses.
 constexpr std::uint32_t kSequencedPartitionVersion = 6;
 constexpr std::size_t kSequenceOffset = 528;
+constexpr std::uint32_t kNamedFileVersion = 7;
+constexpr std::uint32_t kNamedPartitionVersion = 8;
+constexpr std::size_t kNameLengthOffset = 532;
+constexpr std::size_t kNameOffset = 534;
+static_assert(kNameOffset + kContainerIndexNameMaximumLength * sizeof(wchar_t) <= kPlaintextSize);
 constexpr std::size_t kConversionOffset = 48;
 constexpr std::size_t kPartitionIdOffset = 52;
 // v3: device ID [4,20), flags [20,24), layout [24,28), sector [28,32),
@@ -251,8 +258,10 @@ static security::SecureBuffer seal_index_entry(
     const std::optional<std::uint32_t> order,
     const ContainerIndexPartition* const partition,
     PartitionConversionState conversion = PartitionConversionState::normal,
-    std::uint32_t sequence = 0) {
+    std::uint32_t sequence = 0, std::wstring_view name = {}) {
   require_key(key);
+  if (!valid_container_index_name(name))
+    throw std::invalid_argument("invalid container display name");
   if (static_cast<std::uint32_t>(conversion)>2 || (!partition && conversion!=PartitionConversionState::normal))
     throw std::invalid_argument("invalid partition conversion state");
   if (order && *order >= kContainerIndexV1SlotCount) {
@@ -279,10 +288,10 @@ static security::SecureBuffer seal_index_entry(
   fill_random(plaintext.bytes());
   if (partition) {
     const bool gpt = partition->layout == 2;
-    write_u32(plaintext.bytes(), kVersionOffset, sequence ? kSequencedPartitionVersion
+    write_u32(plaintext.bytes(), kVersionOffset, !name.empty() ? kNamedPartitionVersion : sequence ? kSequencedPartitionVersion
         : (gpt ? 5 : (conversion == PartitionConversionState::normal
                           ? kPartitionEntryVersion : 4)));
-    if (sequence) {
+    if (sequence || !name.empty()) {
       write_u32(plaintext.bytes(), kConversionOffset, static_cast<std::uint32_t>(conversion));
       write_u32(plaintext.bytes(), kSequenceOffset, sequence);
     } else if (gpt || conversion != PartitionConversionState::normal) {
@@ -302,14 +311,20 @@ static security::SecureBuffer seal_index_entry(
     write_u32(plaintext.bytes(), kOrderOffset, order.value_or(UINT32_MAX));
   } else {
     write_u32(plaintext.bytes(), kVersionOffset,
-              order ? kOrderedEntryVersion : kContainerIndexEntryV1Version);
-    if (order) write_u32(plaintext.bytes(), kOrderOffset, *order);
+              !name.empty() ? kNamedFileVersion : order ? kOrderedEntryVersion : kContainerIndexEntryV1Version);
+    if (order || !name.empty()) write_u32(plaintext.bytes(), kOrderOffset, order.value_or(UINT32_MAX));
     write_u16(plaintext.bytes(), kPathLengthOffset,
               static_cast<std::uint16_t>(path.size()));
     for (std::size_t index = 0; index < path.size(); ++index) {
       write_u16(plaintext.bytes(), kPathOffset + (index * sizeof(wchar_t)),
                 static_cast<std::uint16_t>(path[index]));
     }
+  }
+
+  if (!name.empty()) {
+    write_u16(plaintext.bytes(), kNameLengthOffset, static_cast<std::uint16_t>(name.size()));
+    for (std::size_t i = 0; i < name.size(); ++i)
+      write_u16(plaintext.bytes(), kNameOffset + i * sizeof(wchar_t), static_cast<std::uint16_t>(name[i]));
   }
 
   security::SecureBuffer slot(kContainerIndexV1SlotSize);
@@ -348,17 +363,32 @@ static security::SecureBuffer seal_index_entry(
   return slot;
 }
 
+bool valid_container_index_name(const std::wstring_view name) noexcept {
+  if (name.size() > kContainerIndexNameMaximumLength) return false;
+  bool visible = name.empty();
+  for (std::size_t i = 0; i < name.size(); ++i) {
+    const auto c = static_cast<std::uint16_t>(name[i]);
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == 0x2028 || c == 0x2029) return false;
+    if (c >= 0xd800 && c <= 0xdbff) {
+      if (++i == name.size() || name[i] < 0xdc00 || name[i] > 0xdfff) return false;
+    } else if (c >= 0xdc00 && c <= 0xdfff) return false;
+    if (c != 0x20 && c != 0xa0 && c != 0x3000 && !(c >= 0x2000 && c <= 0x200a) &&
+        c != 0x1680 && c != 0x202f && c != 0x205f) visible = true;
+  }
+  return visible;
+}
+
 security::SecureBuffer seal_container_index_entry_v1(
     const std::span<const std::byte> key, const std::wstring_view path,
-    const std::optional<std::uint32_t> order) {
-  return seal_index_entry(key, path, order, nullptr);
+    const std::optional<std::uint32_t> order, const std::wstring_view name) {
+  return seal_index_entry(key, path, order, nullptr, PartitionConversionState::normal, 0, name);
 }
 
 security::SecureBuffer seal_container_index_partition(
     const std::span<const std::byte> key, const ContainerIndexPartition& partition,
     const std::optional<std::uint32_t> order, const PartitionConversionState conversion,
-    const std::uint32_t sequence) {
-  return seal_index_entry(key, {}, order, &partition, conversion, sequence);
+    const std::uint32_t sequence, const std::wstring_view name) {
+  return seal_index_entry(key, {}, order, &partition, conversion, sequence, name);
 }
 
 std::optional<ContainerIndexEntry>
@@ -403,14 +433,23 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   // which it was would hand out the distinction this format exists to deny.
   const auto contents = plaintext.bytes();
   const std::uint32_t version = read_u32(contents, kVersionOffset);
-  const bool sequenced = version == kSequencedPartitionVersion;
+  std::wstring name;
+  if (version == kNamedFileVersion || version == kNamedPartitionVersion) {
+    const auto count = read_u16(contents, kNameLengthOffset);
+    if (count == 0 || count > kContainerIndexNameMaximumLength) return std::nullopt;
+    name.resize(count);
+    for (std::size_t i = 0; i < count; ++i)
+      name[i] = static_cast<wchar_t>(read_u16(contents, kNameOffset + i * sizeof(wchar_t)));
+    if (!valid_container_index_name(name)) return std::nullopt;
+  }
+  const bool sequenced = version == kSequencedPartitionVersion || version == kNamedPartitionVersion;
   if (sequenced || version == kPartitionEntryVersion || version == 4 || version == 5) {
     const auto state = version >= 4 ? read_u32(contents, kConversionOffset) : 0u;
     if (state > 2 || (version == 4 && state == 0)) return std::nullopt;
     // A v6 record must carry a sequence; zero there is not a legacy record but
     // a malformed one, and reads as filler like any other unsupported slot.
     const auto sequence = sequenced ? read_u32(contents, kSequenceOffset) : 0u;
-    if (sequenced && sequence == 0) return std::nullopt;
+    if (version == kSequencedPartitionVersion && sequence == 0) return std::nullopt;
     ContainerIndexPartition partition;
     for (std::size_t i = 0; i < partition.device_id.size(); ++i)
       partition.device_id[i] = std::to_integer<std::uint8_t>(contents[4 + i]);
@@ -432,19 +471,22 @@ try_open_container_index_entry(const std::span<const std::byte> key,
         (rank != UINT32_MAX && rank >= kContainerIndexV1SlotCount)) return std::nullopt;
     return ContainerIndexEntry{{}, rank == UINT32_MAX ? std::nullopt :
         std::optional<std::uint32_t>(rank), partition,
-        static_cast<PartitionConversionState>(state), sequence};
+        static_cast<PartitionConversionState>(state), sequence, std::move(name)};
   }
   const std::size_t length = read_u16(contents, kPathLengthOffset);
-  if ((version != kContainerIndexEntryV1Version && version != kOrderedEntryVersion) || length == 0 ||
+  if ((version != kContainerIndexEntryV1Version && version != kOrderedEntryVersion && version != kNamedFileVersion) || length == 0 ||
       length > kContainerIndexV1PathMaximumLength) {
     plaintext.clear();
     return std::nullopt;
   }
 
   std::optional<std::uint32_t> order;
-  if (version == kOrderedEntryVersion) {
-    order = read_u32(contents, kOrderOffset);
-    if (*order >= kContainerIndexV1SlotCount) return std::nullopt;
+  if (version == kOrderedEntryVersion || version == kNamedFileVersion) {
+    const auto rank = read_u32(contents, kOrderOffset);
+    if (version != kNamedFileVersion || rank != UINT32_MAX) {
+      if (rank >= kContainerIndexV1SlotCount) return std::nullopt;
+      order = rank;
+    }
   }
   std::wstring path(length, L'\0');
   for (std::size_t index = 0; index < length; ++index) {
@@ -455,7 +497,8 @@ try_open_container_index_entry(const std::span<const std::byte> key,
   if (path.find(L'\0') != std::wstring::npos) {
     return std::nullopt;
   }
-  return ContainerIndexEntry{std::move(path), order, std::nullopt};
+  return ContainerIndexEntry{std::move(path), order, std::nullopt,
+      PartitionConversionState::normal, 0, std::move(name)};
 }
 
 std::optional<std::wstring>

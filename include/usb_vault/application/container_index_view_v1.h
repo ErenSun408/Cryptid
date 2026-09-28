@@ -101,6 +101,13 @@ struct ContainerIndexRef final {
   std::optional<ContainerIndexPartition> partition;
 };
 
+// Updates exactly one existing record; returns false if absent. Empty resets
+// the alias. Duplicate identity or invalid input throws without mutation.
+// Identical names leave every byte unchanged. No filesystem operations.
+[[nodiscard]] bool set_container_index_name(
+    std::span<const std::byte> key, std::span<std::byte> file,
+    const ContainerIndexRef& reference, std::wstring_view name);
+
 // Shared identity rule for index ordering and session restoration. A partition
 // is matched by its complete identity, ignoring its session display path;
 // files use case-insensitive ordinal paths. Different kinds never match.

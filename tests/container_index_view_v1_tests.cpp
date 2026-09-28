@@ -705,7 +705,60 @@ void test_one_order_covers_both_kinds_and_survives_reload() {
 
 } // namespace
 
+void test_rename_preserves_records_through_index_updates() {
+  using namespace usb_vault::application;
+  const auto key = derive_shared_container_index_key_v1(test_root(0xD1));
+  auto file = fresh_file();
+  ContainerIndexPartition partition;
+  partition.device_id.fill(0x33); partition.offset_bytes = 1048576;
+  partition.length_bytes = 64ULL * 1024 * 1024;
+  const auto legacy = seal_container_index_partition(key.bytes(), partition, 2, PartitionConversionState::paused);
+  std::ranges::copy(legacy.bytes(), container_index_v1_mutable_slot(file, 9).begin());
+  const auto path = seal_container_index_entry_v1(key.bytes(), L"D:\\a.hc", 1);
+  std::ranges::copy(path.bytes(), container_index_v1_mutable_slot(file, 4).begin());
+  const auto before = file;
+  expect(set_container_index_name(key.bytes(), file, {.path=L"d:\\A.hc"}, L"文件资料"), "file rename failed");
+  for (std::size_t i = 0; i < kContainerIndexV1SlotCount; ++i)
+    if (i != 4) expect(std::ranges::equal(container_index_v1_slot(before, i), container_index_v1_slot(file, i)),
+                       "rename modified an unrelated slot");
+  const auto same = file;
+  expect(set_container_index_name(key.bytes(), file, {.path=L"D:\\a.hc"}, L"文件资料") && file == same,
+         "same-name update changed ciphertext");
+  expect(!set_container_index_name(key.bytes(), file, {.path=L"D:\\missing.hc"}, L"missing") && file == same,
+         "missing record rename mutated index");
+  expect_invalid_argument([&] { static_cast<void>(set_container_index_name(key.bytes(), file, {}, L"bad")); },
+                          "empty identity accepted");
+  expect_invalid_argument([&] { static_cast<void>(set_container_index_name(key.bytes(), file, {.path=L"D:\\a.hc"}, L"\n")); },
+                          "invalid name accepted");
+  expect(file == same, "invalid rename mutated index");
+  expect(set_container_index_name(key.bytes(), file, {.partition=partition}, L"磁盘资料"), "partition rename failed");
+  const auto prepared = prepare_container_index_v1(key.bytes(), file);
+  expect(prepared.numbered, "legacy partition was not numbered");
+  expect(set_container_index_partition_state(key.bytes(), file, partition, PartitionConversionState::uncertain),
+         "state update failed");
+  const std::vector<ContainerIndexRef> order{{.partition=partition}, {.path=L"D:\\a.hc"}};
+  reorder_container_index_v1(key.bytes(), file, order);
+  const auto reload = file;
+  const auto entries = list_container_index_entries_v1(key.bytes(), reload);
+  expect(entries.size()==2 && entries[0].name==L"磁盘资料" && entries[0].sequence!=0 &&
+             entries[0].partition==partition && entries[0].conversion==PartitionConversionState::uncertain &&
+             entries[1].name==L"文件资料" && entries[1].path==L"D:\\a.hc",
+         "numbering, conversion or reorder lost name or identity");
+  const auto duplicate = seal_container_index_entry_v1(key.bytes(), L"d:\\A.hc", 3);
+  std::ranges::copy(duplicate.bytes(), container_index_v1_mutable_slot(file, 15).begin());
+  const auto ambiguous = file;
+  expect_invalid_argument([&] { static_cast<void>(set_container_index_name(key.bytes(), file, {.path=L"D:\\a.hc"}, L"new")); },
+                          "duplicate identity accepted");
+  expect(file == ambiguous, "ambiguous rename partially updated index");
+  file = reload;
+  expect(set_container_index_name(key.bytes(), file, {.partition=partition}, {}), "reset alias failed");
+  expect(list_container_index_partition_entries(key.bytes(), file)[0].name.empty(), "reset alias persisted");
+  expect(remove_container_index_path_v1(key.bytes(), file, L"D:\\a.hc"), "named file removal failed");
+  expect(list_container_index_entries_v1(key.bytes(), file).size()==1, "named file removal damaged index");
+}
+
 int main() {
+  test_rename_preserves_records_through_index_updates();
   test_preparation_and_number_outputs_preserve_existing_records();
   test_reference_matching_keeps_file_and_partition_identity_distinct();
   test_reordering_changes_only_modified_records();

@@ -637,7 +637,71 @@ void test_gpt_partition_payload() {
 
 } // namespace
 
+void test_named_payloads_preserve_identity_and_reject_malformed_names() {
+  using namespace usb_vault::application;
+  const auto key = test_key(0xB1);
+  ContainerIndexPartition partition;
+  partition.device_id.fill(0x21);
+  partition.offset_bytes = 1048576;
+  partition.length_bytes = 64ULL * 1024 * 1024;
+  const std::wstring name = L"资料 \U0001F512";
+  for (const bool disk : {false, true}) {
+    for (const auto order : {std::optional<std::uint32_t>{}, std::optional<std::uint32_t>{7}}) {
+      const auto sealed = disk
+          ? seal_container_index_partition(key, partition, order, PartitionConversionState::paused, 0, name)
+          : seal_container_index_entry_v1(key, std::wstring(259, L'x'), order, name);
+      const auto entry = try_open_container_index_entry(key, sealed.bytes());
+      expect(entry && entry->name == name && entry->order == order,
+             "named payload lost alias or ordering");
+      expect(disk ? entry->partition == partition && entry->sequence == 0 &&
+                         entry->conversion == PartitionConversionState::paused
+                  : entry->path == std::wstring(259, L'x') && !entry->partition,
+             "named payload changed identity or conversion state");
+      const auto plain = hand_opened_contents(key, sealed.bytes());
+      expect(take_u32(plain, 0) == (disk ? 8u : 7u), "wrong named payload version");
+      for (const auto count : {0u, 101u, 65535u}) {
+        auto bad = plain;
+        put_u16(bad, 532, static_cast<std::uint16_t>(count));
+        expect(!try_open_container_index_entry(key, hand_sealed_slot(key, bad)), "invalid name length accepted");
+      }
+      for (const auto code : {0u, 10u, 0x7fu, 0xd800u, 0xdc00u}) {
+        auto bad = plain;
+        put_u16(bad, 532, 1);
+        put_u16(bad, 534, static_cast<std::uint16_t>(code));
+        expect(!try_open_container_index_entry(key, hand_sealed_slot(key, bad)), "malformed name accepted");
+      }
+      for (std::size_t i = 0; i < sealed.size(); ++i) {
+        auto bad = copy_of(sealed); bad[i] ^= std::byte{1};
+        expect(!try_open_container_index_entry(key, bad), "named payload tampering accepted");
+      }
+      expect(!try_open_container_index_entry(test_key(0xB2), sealed.bytes()), "foreign key opened a name");
+    }
+  }
+  const auto limit = seal_container_index_entry_v1(key, L"D:\\test.hc", {}, std::wstring(100, L'名'));
+  expect(try_open_container_index_entry(key, limit.bytes())->name.size() == 100, "maximum name lost");
+  for (const auto& invalid : {std::wstring(101, L'x'), std::wstring(L" 　"),
+                             std::wstring(1, L'\n'), std::wstring(1, static_cast<wchar_t>(0xd800))}) {
+    expect_invalid_argument([&] { static_cast<void>(seal_container_index_entry_v1(key, L"D:\\a.hc", {}, invalid)); },
+                            "invalid alias sealed");
+  }
+  const auto legacy = seal_container_index_entry_v1(key, L"D:\\a.hc");
+  expect(try_open_container_index_entry(key, legacy.bytes())->name.empty(), "legacy padding became an alias");
+  partition.layout = 2;
+  partition.partition_id.fill(0x44);
+  for (const auto state : {PartitionConversionState::normal, PartitionConversionState::uncertain,
+                          PartitionConversionState::paused}) {
+    const auto sealed = seal_container_index_partition(key, partition, 3, state, 11, name);
+    const auto entry = try_open_container_index_entry(key, sealed.bytes());
+    expect(entry && entry->partition==partition && entry->conversion==state && entry->sequence==11 && entry->name==name,
+           "named GPT partition lost authenticated fields");
+    auto bad = hand_opened_contents(key, sealed.bytes());
+    put_u32(bad, 48, 3);
+    expect(!try_open_container_index_entry(key, hand_sealed_slot(key, bad)), "named GPT accepted invalid conversion");
+  }
+}
+
 int main() {
+  test_named_payloads_preserve_identity_and_reject_malformed_names();
   test_gpt_partition_payload();
   test_partition_payload_roundtrip_and_rejection();
   test_order_is_authenticated_and_legacy_entries_still_open();
