@@ -1209,29 +1209,20 @@ void show_session(const HWND window) noexcept {
   if (FAILED(navigated)) report_webview_failure(1312, navigated);
 }
 
-// Card removal has already revoked the entry and the root secret and forced
-// every volume out. Once nothing is left mounted the old session has nothing
-// to keep, so the window starts over on the login page without a prompt. A
-// volume that refused even forced release keeps the current page, because
-// dropping the session would lose the only record of that mount.
-[[nodiscard]] bool restart_after_card_removal(
-    const HWND window,
+// Lifecycle removal has revoked authentication and attempted every mounted
+// volume. The requested policy is to terminate even if a driver refused release.
+// Do not enter window-close guards, navigate, or wait on WebView teardown.
+[[nodiscard]] bool exit_after_card_removal(
     const usb_vault::application::CardPresenceTransition presence) noexcept {
   using Transition = usb_vault::application::CardPresenceTransition;
   if (presence != Transition::card_unavailable &&
       presence != Transition::active_session_unmounted &&
-      presence != Transition::active_session_force_unmounted) return false;
-  if (g_ui_session == nullptr || g_ui_session->mounted()) {
-    USB_VAULT_TRACE("窗口", "拔卡后仍有卷挂着，不重建会话", "");
-    return false;
-  }
-  if (!::PostMessageW(window, kShowSessionMessage, 0, 0)) {
-    USB_VAULT_TRACE("窗口", "拔卡后重建消息投递失败", "Win32 " + std::to_string(::GetLastError()));
-    return false;
-  }
-  USB_VAULT_TRACE("窗口", "拔卡清理完成，回到登录页", "迁移 " + std::to_string(static_cast<int>(presence)));
-  disarm_external_drops();
-  g_view_switch_pending = true;
+      presence != Transition::active_session_force_unmounted &&
+      presence != Transition::active_session_remains) return false;
+  g_tray.remove();
+  // Only terminate our own process. Child helpers retain their existing job
+  // lifetime policy; do not kill unrelated processes by executable name.
+  if (!::TerminateProcess(::GetCurrentProcess(), 0)) ::ExitProcess(0);
   return true;
 }
 
@@ -1321,14 +1312,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           // The page re-arms from the maintenance screen it rebuilds; until
           // then a drag onto this window has nowhere it is allowed to land.
           disarm_external_drops();
-          if (restart_after_card_removal(window, transition.presence)) return 0;
+          if (exit_after_card_removal(transition.presence)) return 0;
           notify_webview_session_changed();
-        }
-        if (transition.presence == Transition::active_session_remains) {
-          USB_VAULT_TRACE("窗口", "拔卡后强制卸载仍失败，保留当前页面", "");
-          show_failure(
-              L"安全卡已拔出，强制卸载当前磁盘仍然失败。"
-              L"请立即关闭占用该磁盘的程序并重试安全卸载。");
         }
       }
       return 0;
@@ -1393,16 +1378,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
           USB_VAULT_TRACE("窗口", "处理延后的拔卡",
                           "迁移 " + std::to_string(static_cast<int>(transition.presence)) +
                               "；入口变化 " + usb_vault::diagnostics::flag_text(transition.entry_changed));
-          using Transition = usb_vault::application::CardPresenceTransition;
-          if (transition.presence == Transition::active_session_remains) {
-            show_failure(L"安全卡已拔出，强制卸载仍然失败。请关闭占用磁盘的程序并重试安全卸载。");
-          }
           g_startup_log.record_card_state(g_card_entry ? g_card_entry->startup_failure()
               : usb_vault::card::FailureDiagnostic{});
           g_deferred_removal = false;
-          // A card put back during the deferred work is probed again by the
-          // fresh session, so the pending arrival is dropped with the old one.
-          if (restart_after_card_removal(window, transition.presence)) {
+          // A quick reinsertion must not revive a session being retired.
+          if (exit_after_card_removal(transition.presence)) {
             g_deferred_arrival = false;
             g_creation_work.interrupted.store(false);
             return 0;
