@@ -901,6 +901,11 @@ void CardProductUiSessionController::reorder_containers(std::span<const std::uin
   volume_session_.reorder_containers(ids);
 }
 
+void CardProductUiSessionController::rename_container(std::uint32_t id, std::wstring_view name) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("renaming requires authentication");
+  volume_session_.rename_container(id, name);
+}
+
 void CardProductUiSessionController::set_operation_logging_enabled(bool enabled) {
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("operation logging preference requires authentication");

@@ -5903,7 +5903,7 @@
   const runPartitionConversion = async (id, resume) => {
     if (busy || currentState !== nativeState.authenticated) return;
     if (!resume && await bridge.getRememberContainerPaths() !== true) {
-      creationStatus.textContent = "请先在系统设置开启“记住容器”，再开始分区加密。";
+      creationStatus.textContent = "请先在系统设置开启“持久化容器列表”，再开始分区加密。";
       creationStatus.dataset.tone = "error"; return;
     }
     if (resume) openCreationFlow(false);

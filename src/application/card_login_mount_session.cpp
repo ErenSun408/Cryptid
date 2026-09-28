@@ -676,6 +676,12 @@ void CardLoginMountSession::forget_container(const std::uint32_t id) {
               [&] { impl_->core.forget_container(id); });
 }
 
+void CardLoginMountSession::rename_container(const std::uint32_t id, const std::wstring_view name) {
+  // Do not add the user-provided alias to diagnostic arguments.
+  traced_call("修改容器显示名称", [&] { return "容器 #" + std::to_string(id); },
+              [&] { impl_->core.rename_container(id, name); });
+}
+
 std::uint32_t CardLoginMountSession::adopt_container(
     const std::wstring_view path) {
   return traced_call("导入容器", [&] { return "路径 " + call_text(path); },
@@ -1049,6 +1055,10 @@ void throw_if_creation_cancelled(
   return nullptr;
 }
 
+[[nodiscard]] const std::wstring& display_name(const SessionContainer& entry) noexcept {
+  return entry.display_alias.empty() ? entry.name : entry.display_alias;
+}
+
 // A successful provider result always identifies the mounted driver device.
 // Keep the range check as a runtime-contract guard; production completion
 // must not return zero after a successful mount or query inventory afterward.
@@ -1351,6 +1361,15 @@ void CardLoginMountSessionCore::remember_container_path(
     std::vector<std::byte> file = runtime_.read_container_index();
     const ContainerIndexWriteV1 written =
         prepend_container_index_path_v1(key.bytes(), file, path);
+    if (written == ContainerIndexWriteV1::already_present) {
+      const ContainerIndexRef reference{.path = std::wstring(path)};
+      for (const auto& saved : list_container_index_entries_v1(key.bytes(), file)) {
+        if (container_index_ref_matches_v1(reference, saved.path, saved.partition)) {
+          if (auto* entry = find_by_path(state_, path)) entry->display_alias = saved.name;
+          break;
+        }
+      }
+    }
     key.clear();
     SESSION_TRACE("写入容器索引", "路径 " + wide_text(path) + "；结果 " +
                                       std::to_string(static_cast<int>(written)) +
@@ -1523,8 +1542,10 @@ void CardLoginMountSessionCore::adopt_remembered_containers() noexcept {
     // moved from, including their mount ownership and maintenance state.
     std::vector<SessionContainer> ordered;
     ordered.reserve(positions.size());
-    for (const auto& item : positions)
+    for (const auto& item : positions) {
       ordered.push_back(state_.containers[item.position]);
+      if (item.rank < prepared.entries.size()) ordered.back().display_alias = prepared.entries[item.rank].name;
+    }
     state_.containers.swap(ordered);
   } catch (...) {
     SESSION_TRACE_FAILURE("从容器索引恢复列表失败", "");
@@ -2125,7 +2146,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
     if (mode == MaintenanceMount::open) {
       record_operation(OperationKind::container_mounted,
                        OperationOutcome::failed,
-                       entry.name);
+                       display_name(entry));
     }
     return DecoyMaintenanceRefused();
   };
@@ -2208,7 +2229,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   if (mode == MaintenanceMount::open) {
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
-                     entry.name,
+                     display_name(entry),
                      drive_letter);
     runtime_.notify_mounted(drive_letter);
   }
@@ -2612,12 +2633,12 @@ void CardLoginMountSessionCore::mount_adopted_container(
     entry->mounted = true;
     entry->release_first = login_derived;
     entry->derivation_known = true;
-    record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, entry->name, settled);
+    record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, display_name(*entry), settled);
     runtime_.notify_mounted(settled);
     SESSION_TRACE("分区已挂载", container_text(*entry));
     return;
   }
-  const std::wstring container_name = entry->name;
+  const std::wstring container_name = display_name(*entry);
   security::SecureBuffer standard_password;
   bool mounted = false;
   try {
@@ -2688,7 +2709,8 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
     throw std::logic_error(
         "mounting a container requires an authenticated card session");
   }
-  const std::wstring container_name = file_name_of(path);
+  const auto* existing = find_by_path(state_, path);
+  const std::wstring container_name = existing ? display_name(*existing) : file_name_of(path);
   if (const SessionContainer* const adopted = find_by_path(state_, path);
       adopted != nullptr && adopted->mounted) {
     throw std::logic_error("container is already mounted");
@@ -2703,14 +2725,15 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
     SESSION_TRACE("按路径挂载容器", "路径 " + wide_text(path));
     const ProbedMount probed = mount_with_either_derivation(path);
     mounted = true;
-    record_operation(OperationKind::container_mounted,
-                     OperationOutcome::succeeded,
-                     container_name,
-                     probed.drive_letter);
     const std::uint32_t id = adopt(state_, path, probed.drive_letter, true,
                                    probed.hidden_volume, true, true)
                                  .id;
     remember_container_path(path);
+    const auto* named = find_by_id(state_, id);
+    record_operation(OperationKind::container_mounted,
+                     OperationOutcome::succeeded,
+                     named ? display_name(*named) : container_name,
+                     probed.drive_letter);
     runtime_.notify_mounted(probed.drive_letter);
     if (const auto* entry = find_by_id(state_, id)) SESSION_TRACE("按路径挂载完成", container_text(*entry));
     return id;
@@ -2802,7 +2825,7 @@ void CardLoginMountSessionCore::unmount_container_impl(
       if (ended_maintenance && end_measurements) runtime_.end_measurements();
       record_operation(OperationKind::container_unmounted,
                        OperationOutcome::succeeded,
-                       container.name,
+                       display_name(container),
                        drive_letter);
       SESSION_TRACE("容器已卸载", container_text(container) + "；原盘符 " + drive_text(drive_letter) +
                                     "；结束维护任务 " + yes_no(ended_maintenance));
@@ -2811,12 +2834,48 @@ void CardLoginMountSessionCore::unmount_container_impl(
       SESSION_TRACE_FAILURE(allow_force ? "强制卸载容器失败" : "卸载容器失败", container_text(container));
       record_operation(OperationKind::container_unmounted,
                        OperationOutcome::failed,
-                       container.name,
+                       display_name(container),
                        drive_letter);
       throw;
     }
   }
   throw std::invalid_argument("no container is adopted under that identifier");
+}
+
+void CardLoginMountSessionCore::rename_container(const std::uint32_t id, const std::wstring_view name) {
+  if (!authentication_.authenticated() || partition_format_active_)
+    throw std::logic_error("renaming requires an idle authenticated session");
+  if (!runtime_.remember_container_paths())
+    throw std::logic_error("container list persistence is disabled");
+  auto* entry = find_by_id(state_, id);
+  if (!entry) throw std::invalid_argument("unknown container");
+  if (entry->maintenance) throw std::logic_error("maintenance container cannot be renamed");
+  if (!valid_container_index_name(name)) throw std::invalid_argument("invalid container display name");
+  // Allocate before publishing the index; updating the live alias then cannot fail.
+  std::wstring alias(name);
+  const auto generation = authentication_.generation_;
+  const ContainerIndexRef reference = entry->partition
+      ? ContainerIndexRef{.partition = entry->partition}
+      : ContainerIndexRef{.path = entry->path};
+  auto key = container_index_key();
+  auto file = runtime_.read_container_index();
+  const auto before = file;
+  if (!set_container_index_name(key.bytes(), file, reference, alias)) {
+    // An earlier best-effort path write may have failed; this explicit save
+    // must either persist the file record and alias together or report failure.
+    if (reference.partition || add_container_index_path_v1(key.bytes(), file, reference.path) == ContainerIndexWriteV1::full ||
+        !set_container_index_name(key.bytes(), file, reference, alias))
+      throw std::runtime_error("container record unavailable");
+  }
+  key.clear();
+  if (!authentication_.authenticated() || authentication_.generation_ != generation)
+    throw std::logic_error("rename session changed");
+  if (file != before) runtime_.write_container_index(file);
+  if (!authentication_.authenticated() || authentication_.generation_ != generation)
+    throw std::logic_error("rename session changed");
+  entry = find_by_id(state_, id);
+  if (!entry) throw std::logic_error("renamed container left the session");
+  entry->display_alias.swap(alias);
 }
 
 void CardLoginMountSessionCore::forget_container(const std::uint32_t id) {
@@ -3013,7 +3072,7 @@ void CardLoginMountSessionCore::export_container_file(
   // went in. No `record_operation` here either -- a migration is an export,
   // and Q-04 says an export leaves no trace of itself behind.
   const std::wstring destination = volume::resolve_exported_entry_path(
-      absolute_destination_directory, entry->name);
+      absolute_destination_directory, file_name_of(entry->path));
   SESSION_TRACE("导出容器文件", container_text(*entry) + "；目标 " + wide_text(destination));
   runtime_.copy_entry(entry->path, destination, {});
 }
@@ -3053,7 +3112,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
       // size is not a volume size, and for a container holding two volumes
       // which of them would appear is not decided until it is mounted.
       result.push_back({.id = container.id,
-                        .name = container.name,
+                        .name = display_name(container),
                         .mounted = false,
                         .size_bytes = 0,
                         .drive_letter = wchar_t{},
@@ -3065,7 +3124,7 @@ std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {
     const bool unavailable = !size.has_value() || *size == 0;
     if (unavailable && answered) SESSION_TRACE("已挂载卷报告容量为 0", container_text(container));
     result.push_back({.id = container.id,
-                      .name = container.name,
+                      .name = display_name(container),
                       .mounted = true,
                       .size_bytes = unavailable ? 0 : *size,
                       .drive_letter = container.drive_letter,
@@ -3079,7 +3138,7 @@ std::vector<ContainerOperationTarget> CardLoginMountSessionCore::container_opera
   std::vector<ContainerOperationTarget> result;
   if (!authentication_.authenticated()) return result;
   for (const auto& entry : state_.containers)
-    result.push_back({entry.id, entry.name, entry.mounted});
+    result.push_back({entry.id, display_name(entry), entry.mounted});
   return result;
 }
 
@@ -3120,13 +3179,13 @@ void CardLoginMountSessionCore::unmount_active() {
         if (ended_maintenance) { runtime_.end_imports(); runtime_.end_measurements(); }
         record_operation(OperationKind::container_unmounted,
                          OperationOutcome::succeeded,
-                         container.name,
+                         display_name(container),
                          drive_letter);
       } catch (...) {
         SESSION_TRACE_FAILURE("全部卸载：卸载容器失败", container_text(container));
         record_operation(OperationKind::container_unmounted,
                          OperationOutcome::failed,
-                         container.name,
+                         display_name(container),
                          drive_letter);
         throw;
       }

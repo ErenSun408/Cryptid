@@ -3945,6 +3945,119 @@ void test_no_export_leaves_a_single_local_trace() {
           "nothing");
 }
 
+void test_display_alias_persistence_and_export_identity() {
+  using namespace usb_vault::application;
+  CardAuthenticationSession auth;
+  FakeRuntime runtime;
+  runtime.remember_paths = true;
+  CardLoginMountSessionCore session(auth, runtime, layout());
+  require_throws<std::logic_error>([&] { session.rename_container(1, L"资料"); }, "unauthenticated rename accepted");
+  session.consume_authenticated_login(root_secret(), bytes("login"));
+  const auto id = session.create_container(L"C:\\vault\\original.hc", 64ULL*1024*1024);
+  runtime.events.clear();
+  session.rename_container(id, L"工作:资料 \U0001F512");
+  require(runtime.events.empty(), "renaming performed a volume operation");
+  auto rows = session.container_statuses();
+  require(rows.size()==1 && rows[0].mounted && rows[0].name==L"工作:资料 \U0001F512", "mounted rename lost volume or alias");
+  const auto saved = runtime.container_index;
+  const auto writes = runtime.index_writes;
+  session.rename_container(id, L"工作:资料 \U0001F512");
+  require(runtime.index_writes==writes && runtime.container_index==saved, "same alias rewrote index");
+  runtime.fail_index_write = true;
+  require_throws<std::runtime_error>([&] { session.rename_container(id, L"未保存"); }, "failed rename reported success");
+  require(session.container_statuses()[0].name==rows[0].name && runtime.container_index==saved,
+          "failed rename changed name or index");
+  runtime.fail_index_write = false;
+  runtime.remember_paths = false;
+  require_throws<std::logic_error>([&] { session.rename_container(id, L"关闭"); }, "disabled persistence accepted rename");
+  runtime.remember_paths = true;
+  for (const auto& invalid : {std::wstring(L"  "), std::wstring(L"a/b"), std::wstring(L"a\\b"),
+                             std::wstring(L"a\0b",3), std::wstring(101,L'x')})
+    require_throws<std::invalid_argument>([&] { session.rename_container(id, invalid); }, "invalid alias accepted");
+  require_throws<std::invalid_argument>([&] { session.rename_container(99999, L"missing"); }, "unknown rename accepted");
+  require(runtime.container_index==saved, "rejected rename mutated index");
+  session.unmount_container(id);
+  require(session.operation_history().back().container_name==rows[0].name, "operation did not use display name");
+  session.export_container_file(id, L"D:\\Out");
+  require(runtime.copied.back()==std::pair<std::wstring,std::wstring>{L"C:\\vault\\original.hc",L"D:\\Out\\original.hc"},
+          "alias changed export filename or source");
+  CardAuthenticationSession next_auth;
+  CardLoginMountSessionCore next(next_auth, runtime, layout());
+  next.consume_authenticated_login(root_secret(), bytes("other-login"));
+  auto restored = next.container_statuses();
+  require(restored.size()==1 && restored[0].name==rows[0].name, "alias did not survive another valid login");
+  require(next.container_operation_targets()[0].name==rows[0].name, "batch target lost alias");
+  next.rename_container(restored[0].id, {});
+  require(next.container_statuses()[0].name==L"original.hc", "empty alias did not restore default");
+  next_auth.clear_authentication();
+  require_throws<std::logic_error>([&] { next.rename_container(restored[0].id,L"revoked"); }, "revoked rename accepted");
+}
+
+void test_alias_save_repairs_missing_file_records_and_restores_imports() {
+  using namespace usb_vault::application;
+  CardAuthenticationSession auth;
+  FakeRuntime runtime;
+  runtime.remember_paths=false;
+  runtime.other_existing.emplace_back(L"D:\\offline.hc");
+  CardLoginMountSessionCore session(auth,runtime,layout());
+  session.consume_authenticated_login(root_secret(),bytes("login"));
+  const auto id=session.adopt_container(L"D:\\offline.hc");
+  runtime.remember_paths=true;
+  session.rename_container(id,L"移动资料");
+  require(remembers(runtime,L"D:\\offline.hc"), "rename did not persist a previously unremembered file");
+  const auto saved=runtime.container_index;
+  runtime.other_existing.clear();
+  CardAuthenticationSession next_auth;
+  CardLoginMountSessionCore next(next_auth,runtime,layout());
+  next.consume_authenticated_login(root_secret(),bytes("other-login"));
+  require(next.container_statuses().empty() && runtime.container_index==saved, "absent file lost record");
+  runtime.other_existing.emplace_back(L"D:\\offline.hc");
+  const auto restored=next.adopt_container(L"D:\\offline.hc");
+  require(next.container_statuses()[0].name==L"移动资料" && runtime.container_index==saved,
+          "reimport lost alias or rewrote index");
+  next.set_remembering_container_paths(false);
+  require_throws<std::logic_error>([&]{next.rename_container(restored,L"禁止");}, "disabled persistence saved alias");
+  require(runtime.container_index==saved, "disabling persistence deleted aliases");
+  next.set_remembering_container_paths(true);
+  next.rename_container(restored,L"恢复保存");
+  require(next.container_statuses()[0].name==L"恢复保存", "reenabled persistence cannot save alias");
+  runtime.other_size_bytes=64ULL*1024*1024;
+  require(next.mount_container(L"D:\\offline.hc")==restored &&
+          next.operation_history().back().container_name==L"恢复保存", "path-based mount lost display alias");
+  next.unmount_container(restored);
+}
+
+void test_partition_alias_survives_conversion_and_restart() {
+  using namespace usb_vault::application;
+  CardAuthenticationSession auth;
+  FakeRuntime runtime;
+  runtime.remember_paths=true; runtime.partition_password_64=true;
+  runtime.creation_cancelled=[]{return false;}; runtime.creation_revoked=[]{return false;};
+  CardLoginMountSessionCore session(auth,runtime,layout());
+  session.consume_authenticated_login(root_secret(),bytes("login"));
+  usb_vault::volume::PartitionCandidate target;
+  target.device_id[0]=7; target.layout=usb_vault::volume::PartitionLayout::mbr;
+  target.logical_sector_bytes=512; target.offset_bytes=1048576; target.length_bytes=64ULL*1024*1024;
+  runtime.during_conversion=[&] {
+    require_throws<std::logic_error>([&]{session.rename_container(session.container_statuses()[0].id,L"进行中");},
+                                     "active conversion accepted rename");
+  };
+  require(session.begin_partition_conversion(target,[](const auto&){return true;}), "conversion did not pause");
+  runtime.during_conversion={};
+  session.rename_container(session.container_statuses()[0].id,L"备份盘");
+  CardAuthenticationSession next_auth;
+  CardLoginMountSessionCore next(next_auth,runtime,layout());
+  next.consume_authenticated_login(root_secret(),bytes("other-login"));
+  const auto id=next.container_statuses()[0].id;
+  require(next.container_statuses()[0].name==L"备份盘", "paused partition lost alias on login");
+  runtime.conversion_pause=false;
+  require(!next.resume_partition_conversion(id), "resume did not finish");
+  require(next.container_statuses()[0].name==L"备份盘" && next.container_statuses()[0].mounted,
+          "conversion completion overwrote alias");
+  next.rename_container(id,{});
+  require(next.container_statuses()[0].name==L"磁盘容器 1", "partition default number lost");
+}
+
 void test_partition_conversion_lifecycle() {
   using namespace usb_vault::application;
   using usb_vault::volume::PartitionCandidate;
@@ -4522,6 +4635,9 @@ void test_finished_partition_write_is_not_reported_cancelled() {
 
 int main() {
   try {
+    test_display_alias_persistence_and_export_identity();
+    test_alias_save_repairs_missing_file_records_and_restores_imports();
+    test_partition_alias_survives_conversion_and_restart();
     test_partition_conversion_lifecycle();
     test_partition_creation_persistence_and_mounting();
     test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart();

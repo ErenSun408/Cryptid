@@ -183,6 +183,9 @@ class IUiCloseRequestSink {
 // getPartitionCheckStatus: 0 idle, 1 running, 2 verified, 3 failed, 4 expired.
 // Failure clears selection. Card changes invalidate completion; no check result
 // is write authorization and no partition facts are persisted.
+// renameContainer(id, name): saves a display-only alias in the encrypted index.
+// Empty resets the alias. Requires authentication and enabled list persistence;
+// it shares the worker exclusion gate, never renames files or changes mounts.
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,

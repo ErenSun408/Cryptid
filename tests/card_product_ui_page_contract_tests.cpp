@@ -417,7 +417,7 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
                             "aria-label=\"登录后自动挂载全部容器\"") !=
                   std::string::npos &&
               settings.find("data-setting=\"remember-containers\" "
-                            "aria-label=\"记住容器位置\"") != std::string::npos &&
+                            "aria-label=\"持久化容器列表\"") != std::string::npos &&
               settings.find("data-setting=\"mount-imported\" "
                             "aria-label=\"自动尝试挂载导入的容器\"") !=
                   std::string::npos,

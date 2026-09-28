@@ -159,13 +159,14 @@ class CardLoginMountSessionRuntime {
                           const volume::TransferCancellation& cancelled) = 0;
 };
 
-// One container adopted by the session. Nothing here is persisted: a restart
-// leaves the user reselecting the container files, which is what keeps the
-// 8.4 local-state layer free of a container inventory.
+// One live session container. The encrypted index separately persists its
+// identity, order and optional display alias; mount ownership stays in memory.
 struct SessionContainer final {
   std::uint32_t id{};
   std::wstring path;
   std::wstring name;
+  // Display-only alias; name remains the default file name or partition number.
+  std::wstring display_alias;
   wchar_t drive_letter{};
   bool mounted{};
   // Containers with a hidden volume are released before the standard ones,
@@ -335,6 +336,7 @@ class CardLoginMountSessionCore final {
   bool auto_mount_enabled() { return runtime_.auto_mount_enabled(); }
   void set_auto_mount_enabled(bool enabled) { runtime_.set_auto_mount_enabled(enabled); }
   void reorder_containers(std::span<const std::uint32_t> ids);
+  void rename_container(std::uint32_t id, std::wstring_view name);
   void set_force_unmount_enabled(bool enabled) { runtime_.set_force_unmount_enabled(enabled); }
   void release_session_secrets() noexcept;
   void unmount_active();

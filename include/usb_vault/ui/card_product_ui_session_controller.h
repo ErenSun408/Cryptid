@@ -307,6 +307,7 @@ class CardProductUiSessionController final {
   void set_auto_mount_enabled(bool enabled);
   void set_force_unmount_enabled(bool enabled);
   void reorder_containers(std::span<const std::uint32_t> ids);
+  void rename_container(std::uint32_t id, std::wstring_view name);
   void set_operation_logging_enabled(bool enabled);
 
   // Reset is offered only inside an authenticated session. The card entry

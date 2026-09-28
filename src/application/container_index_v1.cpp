@@ -368,7 +368,7 @@ bool valid_container_index_name(const std::wstring_view name) noexcept {
   bool visible = name.empty();
   for (std::size_t i = 0; i < name.size(); ++i) {
     const auto c = static_cast<std::uint16_t>(name[i]);
-    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == 0x2028 || c == 0x2029) return false;
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == 0x2028 || c == 0x2029 || c == L'/' || c == L'\\') return false;
     if (c >= 0xd800 && c <= 0xdbff) {
       if (++i == name.size() || name[i] < 0xdc00 || name[i] > 0xdfff) return false;
     } else if (c >= 0xdc00 && c <= 0xdfff) return false;

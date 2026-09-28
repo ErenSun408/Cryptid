@@ -496,6 +496,7 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void set_auto_mount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void set_force_unmount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void reorder_containers(std::span<const std::uint32_t>) { throw std::logic_error("ordering unavailable"); }
+  virtual void rename_container(std::uint32_t, std::wstring_view) { throw std::logic_error("container naming unavailable"); }
   virtual void set_operation_logging_enabled(bool) {
     throw std::runtime_error("operation logging preference is unavailable");
   }
@@ -622,6 +623,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   bool auto_mount_enabled() override;
   void set_auto_mount_enabled(bool enabled) override;
   void reorder_containers(std::span<const std::uint32_t> ids) override;
+  void rename_container(std::uint32_t id, std::wstring_view name) override;
   void set_operation_logging_enabled(bool enabled) override;
   void release_session_secrets() noexcept override;
 

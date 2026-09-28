@@ -100,6 +100,14 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   bool force_unmount_enabled() override { return force_preference; }
   void set_force_unmount_enabled(bool enabled) override { force_preference = enabled; }
   std::vector<std::uint32_t> saved_order;
+  std::uint32_t renamed_container_id{};
+  std::wstring container_alias;
+  bool fail_container_rename{};
+  void rename_container(std::uint32_t id, std::wstring_view name) override {
+    if (fail_container_rename) throw std::runtime_error("index write failed");
+    renamed_container_id = id;
+    container_alias = name;
+  }
   void reorder_containers(std::span<const std::uint32_t> ids) override {
     if (ids.size() != containers.size()) throw std::invalid_argument("incomplete order");
     for (auto id : ids) {
@@ -4083,8 +4091,46 @@ void test_login_reset_bridge_lifecycle() {
 
 }  // namespace
 
+void test_container_alias_bridge_is_authenticated_bounded_and_exclusive() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, &g_close_sink, &host, nullptr, &work)), "rename host creation failed");
+  const auto rename = [&](const std::wstring& name, std::uint32_t id=1) {
+    std::array<VARIANTARG,2> args{text_argument(name),number_argument(id)};
+    const auto result=invoke_named(*host.Get(),L"renameContainer",args.data(),2,nullptr,nullptr);
+    clear_arguments(args.data(),2);
+    return result;
+  };
+  require(FAILED(rename(L"资料")) && !fixture.volume.renamed_container_id, "unauthenticated bridge rename accepted");
+  fixture.authentication.establish(root_secret());
+  require(rename(L"资料 \U0001F512",7)==S_OK && fixture.volume.renamed_container_id==7 &&
+          fixture.volume.container_alias==L"资料 \U0001F512", "alias bridge changed identity or text");
+  for (const auto& invalid : {std::wstring(L"a/b"),std::wstring(L"a\\b"),std::wstring(L"  "),
+                             std::wstring(L"a\0b",3),std::wstring(101,L'x')})
+    require(rename(invalid)==E_INVALIDARG, "malformed alias crossed bridge");
+  require(rename(L"bad",0)==E_INVALIDARG, "zero ID crossed rename bridge");
+  require(invoke_named(*host.Get(),L"renameContainer",nullptr,0,nullptr,nullptr)==DISP_E_BADPARAMCOUNT,
+          "wrong arity accepted");
+  std::array<VARIANTARG,2> bad{number_argument(1),number_argument(7)};
+  require(invoke_named(*host.Get(),L"renameContainer",bad.data(),2,nullptr,nullptr)==DISP_E_TYPEMISMATCH,
+          "numeric alias coerced to text");
+  work.running.store(true);
+  require(rename(L"busy")==E_PENDING, "rename raced background work");
+  work.running.store(false);
+  work.interrupted.store(true);
+  require(rename(L"revoked")==E_ACCESSDENIED, "interrupted worker accepted rename");
+  work.interrupted.store(false);
+  fixture.volume.fail_container_rename=true;
+  require(rename(L"failed")==E_FAIL && fixture.volume.container_alias==L"资料 \U0001F512", "failed rename reported success");
+  fixture.volume.fail_container_rename=false;
+  require(rename(L"")==S_OK && fixture.volume.container_alias.empty(), "alias reset refused");
+}
+
 int main() {
   try {
+    test_container_alias_bridge_is_authenticated_bounded_and_exclusive();
     test_exit_hotkey_settings_bridge();
     test_partition_pair_bridge();
     test_bitlocker_creation_gate();

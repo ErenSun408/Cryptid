@@ -1,5 +1,6 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/ui/page_event_report.h"
 
 #include <chrono>
@@ -47,6 +48,7 @@ constexpr DISPID kGetExitHotkeyId = 125;
 constexpr DISPID kSetExitHotkeyId = 126;
 constexpr DISPID kGetCloseToTrayId = 127;
 constexpr DISPID kSetCloseToTrayId = 128;
+constexpr DISPID kRenameContainerId = 129;
 constexpr DISPID kPartitionConvertId = 112;
 constexpr DISPID kPartitionResumeId = 113;
 constexpr DISPID kPartitionDisplayId = 114;
@@ -533,6 +535,7 @@ class PasswordArgumentsWiper final {
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
+    case kRenameContainerId: return "renameContainer";
     case kResetCardRecordId: return "resetCardRecord";
     case kReturnToLoginId: return "returnToLogin";
     case kSelectExternalFilesId: return "selectExternalFiles";
@@ -711,6 +714,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
     if (matches(names[0], L"setAutoMountEnabled")) { ids[0] = kSetAutoMountId; return S_OK; }
     if (matches(names[0], L"reorderContainers")) { ids[0] = kReorderContainersId; return S_OK; }
+    if (matches(names[0], L"renameContainer")) { ids[0] = kRenameContainerId; return S_OK; }
     if (matches(names[0], L"getForceUnmountEnabled")) { ids[0] = kGetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"setForceUnmountEnabled")) { ids[0] = kSetForcePreferenceId; return S_OK; }
     if (matches(names[0], L"beginCreateContainerMib")) { ids[0] = kBeginCreateId; return S_OK; }
@@ -1104,6 +1108,8 @@ class CardProductWebViewHostObject final : public IDispatch {
         return begin_batch(member == kBeginMountBatchId, member == kBeginForceUnmountBatchId, parameters, result);
       case kReorderContainersId:
         return begin_batch(false, false, parameters, result, true);
+      case kRenameContainerId:
+        return invoke_rename_container(parameters, argument_error);
       case kGetStartupViewId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (!result) return E_POINTER;
@@ -2875,6 +2881,33 @@ class CardProductWebViewHostObject final : public IDispatch {
       return DISP_E_TYPEMISMATCH;
     } catch (...) {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+      return E_FAIL;
+    }
+  }
+
+  HRESULT invoke_rename_container(DISPPARAMS* const parameters,
+                                  UINT* const argument_error) noexcept {
+    if (!parameters || parameters->cArgs != 2 || parameters->cNamedArgs != 0 || !parameters->rgvarg)
+      return DISP_E_BADPARAMCOUNT;
+    const DispatchTextWiper text_wiper(parameters);
+    std::uint32_t id{};
+    std::wstring_view name;
+    if (!exact_uint32(parameters->rgvarg[1], id)) {
+      if (argument_error) *argument_error = 1;
+      return DISP_E_TYPEMISMATCH;
+    }
+    if (!exact_wstring(parameters->rgvarg[0], name)) {
+      if (argument_error) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    if (!id || !application::valid_container_index_name(name)) return E_INVALIDARG;
+    if (creation_work_->interrupted.load()) return E_ACCESSDENIED;
+    try {
+      controller_.rename_container(id, name);
+      return S_OK;
+    } catch (const std::invalid_argument&) {
+      return E_INVALIDARG;
+    } catch (...) {
       return E_FAIL;
     }
   }
