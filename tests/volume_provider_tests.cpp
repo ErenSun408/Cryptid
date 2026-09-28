@@ -5,6 +5,8 @@
 #include "volume/mount_request.h"
 #include "volume/mount_identity.h"
 #include "volume/mount_completion.h"
+#include "volume/unmount_notifications.h"
+#include "volume/unmount_retry_policy.h"
 #include "volume/veracrypt_driver_abi.h"
 
 #include <cstddef>
@@ -406,10 +408,156 @@ void test_driver_error_codes() {
           "busy driver error message changed");
 }
 
+void test_unmount_notifications() {
+  using namespace usb_vault::volume;
+  using detail::UnmountNotification;
+  // A simulated Explorer handle is released only by the pending notification.
+  // Without that notification the same normal driver operation rejects as busy.
+  for (const bool enabled : {false, true}) {
+    for (const bool busy : {false, true}) {
+      for (const bool present : {false, true}) {
+        int events[4]{};
+        int count = 0;
+        int probes = 0;
+        bool shell_handle = true;
+        bool rejected = false;
+        try {
+          detail::unmount_with_notifications(enabled, [&] {
+            events[count++] = 2;
+            if (busy || shell_handle)
+              throw std::system_error(make_error_code(DriverError::volume_busy));
+          }, [&](UnmountNotification event) noexcept {
+            if (event == UnmountNotification::pending) {
+              events[count++] = 1;
+              shell_handle = false;
+            } else {
+              events[count++] = event == UnmountNotification::complete ? 3 : 4;
+            }
+          }, [&]() noexcept { ++probes; return present; });
+        } catch (const std::system_error& error) {
+          rejected = true;
+          require(error.code() == make_error_code(DriverError::volume_busy),
+                  "notification cleanup replaced driver error");
+        }
+        require(rejected == (busy || !enabled), "normal unmount ignored an open handle");
+        if (!enabled) {
+          require(count == 1 && events[0] == 2 && probes == 0,
+                  "silent cleanup notified Shell or probed drives");
+        } else if (!busy) {
+          require(count == 3 && events[0] == 1 && events[1] == 2 && events[2] == 3 && probes == 0,
+                  "Shell was not released before normal unmount or completion was missing");
+        } else {
+          require(probes == 1 && count == (present ? 3 : 2) && events[0] == 1 && events[1] == 2,
+                  "failed unmount lost notification ordering or drive probe");
+          if (present) require(events[2] == 4, "remaining drive was not restored");
+        }
+      }
+    }
+  }
+  // Transport errors also restore a still-present drive and retain their identity.
+  int restores = 0;
+  bool rejected = false;
+  try {
+    detail::unmount_with_notifications(true, [] {
+      throw std::system_error(std::make_error_code(std::errc::io_error));
+    }, [&](UnmountNotification event) noexcept {
+      if (event == UnmountNotification::restored) ++restores;
+    }, []() noexcept { return true; });
+  } catch (const std::system_error& error) {
+    rejected = error.code() == std::make_error_code(std::errc::io_error);
+  }
+  require(rejected && restores == 1, "transport failure did not restore the remaining drive");
+}
+
+void test_notification_count_across_actual_retry_policy() {
+  using namespace usb_vault::volume;
+  using detail::UnmountNotification;
+  struct Provider {
+    mutable int pending{}, complete{}, restored{}, attempts{}, forced{}, probes{};
+    int failures{3};
+    bool present{true};
+    bool transport_error{false};
+    UnmountResult unmount(wchar_t drive, const UnmountOptions& options) const {
+      require(drive == L'W' && !options.notify_shell,
+              "inner retry changed target or repeated Shell notifications");
+      ++attempts;
+      if (options.force) ++forced;
+      if (transport_error) throw std::system_error(std::make_error_code(std::errc::io_error));
+      if (attempts <= failures) throw std::system_error(make_error_code(DriverError::volume_busy));
+      return {};
+    }
+    void run_unmount_batch(wchar_t drive, bool enabled,
+                           const std::function<void()>& operation) const {
+      require(drive == L'W', "batch changed drive");
+      detail::unmount_with_notifications(enabled, operation,
+          [&](UnmountNotification event) noexcept {
+            if (event == UnmountNotification::pending) ++pending;
+            if (event == UnmountNotification::complete) ++complete;
+            if (event == UnmountNotification::restored) ++restored;
+          }, [&]() noexcept { ++probes; return present; });
+    }
+  };
+  for (bool enabled : {false, true}) {
+    Provider provider;
+    const auto result = detail::retry_unmount(provider, L'W', {.notify_shell = enabled});
+    require(result.attempts == 4 && provider.attempts == 4 && provider.forced == 0,
+            "normal retry changed attempt count or escalated");
+    require(provider.pending == int(enabled) && provider.complete == int(enabled) &&
+            provider.restored == 0 && provider.probes == 0,
+            "retry success repeated or rolled back notifications");
+  }
+  for (bool present : {false, true}) {
+    Provider provider;
+    provider.failures = 1000;
+    provider.present = present;
+    bool rejected = false;
+    try { static_cast<void>(detail::retry_unmount(provider, L'W', {})); }
+    catch (const std::system_error& error) {
+      rejected = error.code() == make_error_code(DriverError::volume_busy);
+    }
+    require(rejected && provider.attempts > 1 && provider.forced == 0 &&
+            provider.pending == 1 && provider.complete == 0 &&
+            provider.restored == int(present) && provider.probes == 1,
+            "exhausted retries repeated notifications or lost final rollback");
+  }
+  for (bool escalation : {false, true}) {
+    Provider provider;
+    provider.transport_error = true;
+    bool rejected = false;
+    try {
+      if (escalation) static_cast<void>(detail::escalate_unmount(provider, L'W', {}));
+      else static_cast<void>(detail::retry_unmount(provider, L'W', {}));
+    } catch (const std::system_error& error) {
+      rejected = error.code() == std::make_error_code(std::errc::io_error);
+    }
+    require(rejected && provider.attempts == 1 && provider.forced == 0 &&
+            provider.pending == 1 && provider.complete == 0 && provider.restored == 1,
+            "transport failure was retried, forced, or notified twice");
+  }
+  for (int failures : {0, 1, 2}) {
+    Provider provider;
+    provider.failures = failures;
+    bool rejected = false;
+    try {
+      const auto result = detail::escalate_unmount(provider, L'W', {});
+      require(result.forced == (failures == 1), "incorrect escalation result");
+    } catch (const std::system_error& error) {
+      rejected = error.code() == make_error_code(DriverError::volume_busy);
+    }
+    require(rejected == (failures == 2) && provider.pending == 1 &&
+            provider.attempts == (failures == 0 ? 1 : 2) &&
+            provider.forced == (failures == 0 ? 0 : 1) &&
+            provider.complete == int(!rejected) && provider.restored == int(rejected),
+            "escalation notified between attempts or lost final state");
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_notification_count_across_actual_retry_policy();
+    test_unmount_notifications();
     test_mount_completion_retains_ownership_and_clears_secrets();
     test_valid_mount_request();
     test_protected_mount_request();

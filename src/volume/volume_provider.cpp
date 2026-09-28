@@ -5,10 +5,12 @@
 #include "volume/mount_request.h"
 #include "volume/mount_identity.h"
 #include "volume/mount_completion.h"
+#include "volume/unmount_notifications.h"
 #include "volume/veracrypt_driver_abi.h"
 #include "usb_vault/diagnostics/debug_log.h"
 
 #include <Windows.h>
+#include <Dbt.h>
 #include <ShlObj_core.h>
 #include <winioctl.h>
 
@@ -175,6 +177,28 @@ void notify_shell(const LONG event, const std::int32_t drive_number) noexcept {
   const wchar_t root[] = {
       static_cast<wchar_t>(L'A' + drive_number), L':', L'\\', L'\0'};
   ::SHChangeNotify(event, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, root, nullptr);
+}
+
+void notify_unmount(const detail::UnmountNotification notification,
+                    const std::int32_t drive_number) noexcept {
+  const bool restored = notification == detail::UnmountNotification::restored;
+  // Explorer can hold background drive handles without an open folder. Like
+  // VeraCrypt's client, notify Shell BEFORE asking the driver to lock the volume.
+  notify_shell(restored ? SHCNE_DRIVEADD : SHCNE_DRIVEREMOVED, drive_number);
+  // Only undo the Shell hint on failure; no device actually arrived.
+  if (restored) return;
+  DEV_BROADCAST_VOLUME volume{};
+  volume.dbcv_size = sizeof(volume);
+  volume.dbcv_devicetype = DBT_DEVTYP_VOLUME;
+  volume.dbcv_unitmask = DWORD{1} << drive_number;
+  const WPARAM event = notification == detail::UnmountNotification::pending
+      ? DBT_DEVICEREMOVEPENDING : DBT_DEVICEREMOVECOMPLETE;
+  DWORD_PTR ignored{};
+  // Bound each recipient's wait; a hung shell/app must not block indefinitely.
+  // This is a volume notification, not a request to close applications/windows.
+  ::SendMessageTimeoutW(HWND_BROADCAST, WM_DEVICECHANGE, event,
+                        reinterpret_cast<LPARAM>(&volume),
+                        SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &ignored);
 }
 
 [[nodiscard]] VolumeType to_volume_type(const std::int32_t value) noexcept {
@@ -355,20 +379,29 @@ UnmountResult VolumeProvider::unmount(
   detail::LockedDriverBuffer<detail::abi::UnmountRequest> locked_request;
   detail::abi::UnmountRequest& request = locked_request.get();
   request.drive_number = detail::drive_number(drive_letter);
+  const std::int32_t target_drive = request.drive_number;
   request.ignore_open_files = options.force ? 1 : 0;
 
   const auto start = std::chrono::steady_clock::now();
   const DriverHandle driver = open_driver();
   require_supported_version(driver.get());
-  transact(driver.get(), kUnmountVolume, request, "unmount VeraCrypt volume");
+  detail::unmount_with_notifications(options.notify_shell, [&] {
+    transact(driver.get(), kUnmountVolume, request, "unmount VeraCrypt volume");
 
-  USB_VAULT_TRACE("驱动", "卸载返回码",
+    USB_VAULT_TRACE("驱动", "卸载返回码",
                   requested + "；返回码 " + std::to_string(request.return_code) +
                       "；隐藏卷保护已触发 " +
                       diagnostics::flag_text(request.hidden_volume_protection_triggered != 0));
-  if (request.return_code != 0) {
-    throw_driver_error(request.return_code, "VeraCrypt unmount rejected");
-  }
+    if (request.return_code != 0) {
+      throw_driver_error(request.return_code, "VeraCrypt unmount rejected");
+    }
+  }, [&](detail::UnmountNotification notification) noexcept {
+    notify_unmount(notification, target_drive);
+  }, [&]() noexcept {
+    // Never invent a drive after an ambiguous transport failure. Restore only
+    // if Windows still reports it; query failure (zero) leaves it unchanged.
+    return (::GetLogicalDrives() & (DWORD{1} << target_drive)) != 0;
+  });
 
   const UnmountResult result{
       .hidden_volume_protection_triggered =
@@ -377,9 +410,6 @@ UnmountResult VolumeProvider::unmount(
           std::chrono::steady_clock::now() - start),
       .attempts = 1,
   };
-  if (options.notify_shell) {
-    notify_shell(SHCNE_DRIVEREMOVED, request.drive_number);
-  }
   return result;
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("驱动", "卸载卷失败", requested);
@@ -390,6 +420,21 @@ UnmountResult VolumeProvider::unmount(
 void VolumeProvider::notify_mounted(const wchar_t drive_letter) const {
   require_active(impl_);
   notify_shell(SHCNE_DRIVEADD, detail::drive_number(drive_letter));
+}
+
+void VolumeProvider::run_unmount_batch(
+    const wchar_t drive_letter, const bool notifications,
+    const std::function<void()>& operation) const {
+  require_active(impl_);
+  const auto target_drive = detail::drive_number(drive_letter);
+  const DriverHandle driver = open_driver();
+  require_supported_version(driver.get());
+  detail::unmount_with_notifications(notifications, operation,
+      [&](detail::UnmountNotification notification) noexcept {
+        notify_unmount(notification, target_drive);
+      }, [&]() noexcept {
+        return (::GetLogicalDrives() & (DWORD{1} << target_drive)) != 0;
+      });
 }
 
 std::vector<MountedVolume> VolumeProvider::mounted_volumes() const {
