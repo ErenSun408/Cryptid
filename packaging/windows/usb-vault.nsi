@@ -29,7 +29,7 @@ ShowUninstDetails show
 !define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVaultDevelopment"
 !include "${__FILEDIR__}\installer-engine.nsh"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TEXT "该向导将完成 USB Vault、WebView2 Runtime 和VeraCrypt的检测与安装。已兼容的依赖将自动跳过。$\r$\n$\r$\n安装系统依赖时会请求管理员授权。卸载 USB Vault 会保留共享依赖、凭据、设置和容器文件。"
+!define MUI_WELCOMEPAGE_TEXT "该向导将安装 USB Vault。所需的 VeraCrypt 驱动已包含在安装包内，无需另外安装 VeraCrypt 软件；向导会自动检测并按需安装或修复驱动。$\r$\n$\r$\n安装系统组件时会请求管理员授权。卸载 USB Vault 会保留共享组件、凭据、设置和容器文件。"
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageShow
 !insertmacro MUI_PAGE_WELCOME
 
@@ -42,7 +42,7 @@ Page custom DependencyPageCreate DependencyPageLeave
 
 !define MUI_PAGE_CUSTOMFUNCTION_PRE VeraCryptLicensePre
 !define MUI_LICENSEPAGE_CHECKBOX_TEXT "我已阅读并接受 VeraCrypt License 的全部条款"
-!define MUI_LICENSEPAGE_TEXT_TOP "将安装 VeraCrypt 1.26.29。请阅读完整许可；不接受则不能继续安装。"
+!define MUI_LICENSEPAGE_TEXT_TOP "USB Vault 将使用包内的 VeraCrypt 驱动完成安装或修复。请阅读完整许可；不接受则不能继续安装。"
 !insertmacro MUI_PAGE_LICENSE "${PayloadDirectory}\licenses\veracrypt\License.txt"
 
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE ValidateInstallDirectory
@@ -78,9 +78,7 @@ FunctionEnd
 Var WebViewState
 Var VeraCryptState
 Var WebViewCheck
-Var VeraCryptCheck
 Var WebViewSelection
-Var VeraCryptSelection
 Var WelcomeTitleFont
 Var WelcomeTextFont
 
@@ -236,14 +234,14 @@ directory_valid:
 FunctionEnd
 
 Function DependencyPageCreate
-  !insertmacro MUI_HEADER_TEXT "安装组件" "确认 USB Vault 所需的共享依赖"
+  !insertmacro MUI_HEADER_TEXT "运行组件" "检查 USB Vault 所需的组件状态"
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 24u "缺少的依赖已默认勾选，缺少任一必需项将无法继续。已安装的兼容版本不会被覆盖。"
+  ${NSD_CreateLabel} 0 0 100% 24u "VeraCrypt 驱动已内置，将按需自动安装或修复。缺少 WebView2 时请保留勾选；已有兼容组件会直接复用。"
   Pop $0
 
   ${If} $WebViewState == 0
@@ -265,28 +263,19 @@ Function DependencyPageCreate
   ${EndIf}
 
   ${If} $VeraCryptState == 0
-    ${NSD_CreateCheckbox} 8u 56u 94% 14u "VeraCrypt 1.26.29（已安装）"
-    Pop $VeraCryptCheck
-    ${NSD_Check} $VeraCryptCheck
-    EnableWindow $VeraCryptCheck 0
+    ${NSD_CreateLabel} 8u 56u 94% 24u "内置 VeraCrypt 驱动：系统驱动已就绪，将直接复用。"
   ${ElseIf} $VeraCryptState == 10
-    ${NSD_CreateCheckbox} 8u 56u 94% 14u "安装 VeraCrypt 1.26.29"
-    Pop $VeraCryptCheck
-    ${If} $VeraCryptSelection == ""
-      StrCpy $VeraCryptSelection ${BST_CHECKED}
-    ${EndIf}
-    ${NSD_SetState} $VeraCryptCheck $VeraCryptSelection
+    ${NSD_CreateLabel} 8u 56u 94% 24u "内置 VeraCrypt 驱动：系统尚未安装，继续后将自动安装。"
+  ${ElseIf} $VeraCryptState == 13
+    ${NSD_CreateLabel} 8u 56u 94% 24u "内置 VeraCrypt 驱动：系统驱动尚未运行，继续后将自动修复启动。"
   ${ElseIf} $VeraCryptState == 11
-    ${NSD_CreateCheckbox} 8u 56u 94% 14u "VeraCrypt（现有版本与 USB Vault 不兼容）"
-    Pop $VeraCryptCheck
-    EnableWindow $VeraCryptCheck 0
+    ${NSD_CreateLabel} 8u 56u 94% 24u "内置 VeraCrypt 驱动：现有系统驱动配置不兼容，无法继续。"
   ${Else}
-    ${NSD_CreateCheckbox} 8u 56u 94% 14u "VeraCrypt（检测异常，无法继续）"
-    Pop $VeraCryptCheck
-    EnableWindow $VeraCryptCheck 0
+    ${NSD_CreateLabel} 8u 56u 94% 24u "内置 VeraCrypt 驱动：系统状态检测异常，无法继续。"
   ${EndIf}
+  Pop $0
 
-  ${NSD_CreateLabel} 8u 84u 94% 34u "勾选安装即请求以管理员权限安装对应发布者的原版组件。"
+  ${NSD_CreateLabel} 8u 88u 94% 34u "无需勾选驱动安装。需要安装或修复时，后续将展示许可并请求管理员授权；系统驱动不兼容或状态不明时不会覆盖。"
   Pop $0
   nsDialogs::Show
 FunctionEnd
@@ -303,26 +292,20 @@ Function DependencyPageLeave
     Abort
   ${EndIf}
 
-  ${If} $VeraCryptState == 10
-    ${NSD_GetState} $VeraCryptCheck $VeraCryptSelection
-    ${If} $VeraCryptSelection != ${BST_CHECKED}
-      MessageBox MB_ICONEXCLAMATION "VeraCrypt 是 USB Vault 的必需组件。请勾选安装并接受其许可，或取消本次安装。"
-      Abort
-    ${EndIf}
-  ${ElseIf} $VeraCryptState == 11
-    MessageBox MB_ICONSTOP "现有 VeraCrypt 版本与 USB Vault 要求的 1.26.29 驱动不兼容。本安装器不会自动覆盖，请先处理现有版本。"
+  ${If} $VeraCryptState == 11
+    MessageBox MB_ICONSTOP "现有系统驱动配置与 USB Vault 不兼容。安装包虽已包含驱动，但不能直接覆盖，请先处理现有驱动。"
     Abort
   ${ElseIf} $VeraCryptState != 0
-    MessageBox MB_ICONSTOP "无法确认 VeraCrypt 状态。请先处理检测错误后重新运行安装。"
+  ${AndIf} $VeraCryptState != 10
+  ${AndIf} $VeraCryptState != 13
+    MessageBox MB_ICONSTOP "无法确认系统中的 VeraCrypt 驱动状态。请先处理检测错误后重新运行安装。"
     Abort
   ${EndIf}
 FunctionEnd
 
 Function VeraCryptLicensePre
   ${If} $VeraCryptState != 10
-    Abort
-  ${EndIf}
-  ${If} $VeraCryptSelection != ${BST_CHECKED}
+  ${AndIf} $VeraCryptState != 13
     Abort
   ${EndIf}
 FunctionEnd
@@ -353,12 +336,13 @@ FunctionEnd
 Section "USB Vault" Main
   SetOutPath "$PLUGINSDIR\prerequisites"
   File "${PayloadDirectory}\prerequisites\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
-  File "${PayloadDirectory}\prerequisites\VeraCrypt_Setup_x64_1.26.29.msi"
+  File "${PayloadDirectory}\prerequisites\veracrypt-x64.sys"
   ${If} $WebViewState == 10
     !insertmacro EnsureDependency "--webview" "WebView2"
   ${EndIf}
   ${If} $VeraCryptState == 10
-    !insertmacro EnsureDependency "--veracrypt" "VeraCrypt"
+  ${OrIf} $VeraCryptState == 13
+    !insertmacro EnsureDependency "--veracrypt" "VeraCrypt 驱动"
   ${EndIf}
 
   Call InstallPackage

@@ -28,6 +28,19 @@ using usb_vault::card::Sha256Digest;
 void expect(const bool condition, const char* const message) {
   if (!condition) fail(message);
 }
+std::uint32_t expected_development_security_properties() {
+  HANDLE token{};
+  expect(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE,
+      "cannot query parent elevation");
+  TOKEN_ELEVATION elevation{};
+  DWORD bytes{};
+  const auto ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &bytes);
+  CloseHandle(token);
+  expect(ok && bytes == sizeof(elevation), "cannot read parent elevation");
+  using namespace usb_vault::card::vikey::helper;
+  return kDevelopmentCompatibilitySecurityProperties |
+      (elevation.TokenIsElevated ? 0u : property_bit(SecurityProperty::not_elevated));
+}
 
 [[nodiscard]] Sha256Digest file_digest(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -174,20 +187,18 @@ int wmain(const int argc, wchar_t** const argv) {
         usb_vault::card::vikey::
             probe_vikey_development_hid_access_with_network_access(
                 helper, file_digest(helper), 5s);
-    // Development omits only the three AppContainer-specific assertions.
+    // Compatibility mode reports actual parent elevation, while all other
+    // required properties must still match exactly.
     if (development_result.security_properties !=
-        usb_vault::card::vikey::helper::
-            kDevelopmentCompatibilitySecurityProperties) {
+        expected_development_security_properties()) {
       std::cerr << "development HID security properties: actual=0x"
                 << std::hex << development_result.security_properties
                 << " expected=0x"
-                << usb_vault::card::vikey::helper::
-                       kDevelopmentCompatibilitySecurityProperties
+                << expected_development_security_properties()
                 << std::dec << '\n';
     }
     expect(development_result.security_properties ==
-               usb_vault::card::vikey::helper::
-                   kDevelopmentCompatibilitySecurityProperties,
+               expected_development_security_properties(),
            "development HID probe lost a restricted-process property");
     expect(development_helper_directory_count() == directories_before,
            "development HID probe left a staging directory behind");

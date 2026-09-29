@@ -304,7 +304,7 @@ void test_runtime_log_records_helper_calls(const std::filesystem::path& helper) 
        std::to_wstring(::GetTickCount64()));
   expect(std::filesystem::create_directory(root), "the helper log fixture already exists");
   const SYSTEMTIME time{2026, 9, 0, 26, 11, 0, 0, 0};
-  const std::filesystem::path path = root / L"runtime-log-20260926-110000.txt";
+  const std::filesystem::path path = root / L"logs" / L"runtime-log-20260926-110000.txt";
   {
     diagnostics::DebugLogFile file;
     expect(file.open(root, time), "cannot open the helper log fixture");
@@ -336,6 +336,7 @@ void test_runtime_log_records_helper_calls(const std::filesystem::path& helper) 
     }
   }
   std::filesystem::remove(path);
+  std::filesystem::remove(root / L"logs");
   std::filesystem::remove(root);
 #else
   static_cast<void>(helper);

@@ -10,13 +10,14 @@ The application includes the unmodified 20190702 reference implementation
 from the Password Hashing Competition Argon2 project, selected under the
 Apache License 2.0. The license text is included under licenses\argon2.
 
-VeraCrypt 1.26.29 installer and patched FormatDLL
+VeraCrypt 1.26.29 signed driver and patched FormatDLL
 -------------------------------------------------
-The package includes the unmodified upstream VeraCrypt x64 MSI so controlled
-internal testers can install the required Windows kernel driver. USB Vault's
+The package includes the unmodified upstream signed VeraCrypt x64 kernel driver. USB Vault's
 installer displays the complete VeraCrypt license and requires explicit
-acceptance before invoking the official MSI in unattended mode. Its SHA-256
-and Authenticode signature are checked by the packaging script.
+acceptance before requesting elevation to deploy the driver directly. Its SHA-256
+and Authenticode signature are checked during packaging and deployment. The full
+VeraCrypt installer and GUI are not included. Existing compatible drivers are shared
+and retained when USB Vault is removed.
 
 VeraCryptFormat.dll is built from VeraCrypt 1.26.29 commit
 b48e31f5b47da7d41025e3f0e02751675e15005a with the USB Vault, geometry and partition patches, plus the geometry and partition includes

@@ -7,10 +7,10 @@ USB Vault 内部测试包
 --------
 
 1. Windows 11 x64。
-2. 已安装 VeraCrypt 1.26.29，并确保其驱动已加载。官方 x64 MSI 已放在
-   prerequisites\VeraCrypt_Setup_x64_1.26.29.msi；安装前请按“测试须知.txt”核验摘要和签名。
-   统一 USB Vault 安装器会先显示完整许可，再静默调用该 MSI；直接解压运行时也可由配置入口打开官方 MSI。
-   如果挂载时报驱动不可用，可先启动一次 VeraCrypt。
+2. VeraCrypt 1.26.29 驱动已加载，无需安装 VeraCrypt 主程序。
+   prerequisites\veracrypt-x64.sys 是未经修改的官方签名驱动。
+   统一 USB Vault 安装器显示完整许可后请求管理员授权并直接部署驱动，已有兼容驱动自动复用。
+   直接解压运行不会安装驱动；依赖缺失时请使用 USB-Vault-Setup.exe。
 3. 已安装 Microsoft Edge WebView2 Runtime；本包附带 x64 离线安装器，可由配置器启动。
 4. 一张与本版本匹配的 ViKeyPRO 安全卡。
 5. 开发模式允许厂商运行库联网；防火墙不得静默替换或拦截厂商 DLL。
@@ -39,7 +39,7 @@ USB Vault 内部测试包
 --------
 
 - 测试须知.txt：最短安装流程、所需条件及 VeraCrypt/WebView2 验证指令。
-- prerequisites\VeraCrypt_Setup_x64_1.26.29.msi：未经修改的 VeraCrypt 官方 x64 MSI。
+- prerequisites\veracrypt-x64.sys：未经修改的 VeraCrypt 官方签名 x64 驱动。
 - USB Vault.exe：主程序；以 EXE 所在目录定位组件，按构建时嵌入的 SHA-256 校验 helper、建卷后端、厂商 DLL 及页面。仍为允许厂商运行库联网的内部测试版本。
 - usb_vault_vikey_helper.exe：隔离访问 ViKey 的 helper。
 - usb_vault_volume_creator.exe：需要 UAC 的建卷 helper。
@@ -48,6 +48,6 @@ USB Vault 内部测试包
 - SHA256SUMS.txt：本包逐文件摘要。
 - licenses\：第三方许可、补丁和来源说明。
 
-完整包包含主程序、运行组件、VeraCrypt 和 WebView2 两套安装器及说明；独立配置器已并入主程序，不再单独提供。无需另行下载运行组件，但签名验证与开发卡访问仍可能需要联网。供应方提供的凭据不包含在压缩包中，请在主应用的配置页中输入。
+完整包包含主程序、运行组件、VeraCrypt 驱动和 WebView2 安装器及说明；不包含完整 VC 安装器或 VC 主程序。卸载 USB Vault 保留共享驱动。无需另行下载运行组件，但签名验证与开发卡访问仍可能需要联网。供应方提供的凭据不包含在压缩包中，请在主应用的配置页中输入。
 
 若使用统一 `USB-Vault-Setup.exe`，安装向导允许直接选择或输入本机固定磁盘上的最终安装文件夹。默认位置为当前用户的 `%LOCALAPPDATA%\Programs\USB Vault`；点击“浏览”并选择桌面时，标准目录页会保留默认末级文件夹名，得到类似 `D:\Desktop\USB Vault` 的路径。目标文件夹必须尚不存在或为空，且不能直接使用磁盘根目录。为避免兼容问题，选择的路径请不要包含中文。安装仍只注册到当前 Windows 用户，选择其他磁盘不会改变凭据归属或共享依赖的系统级安装方式。

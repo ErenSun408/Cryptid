@@ -45,11 +45,15 @@ foreach ($file in $files) {
 }
 foreach ($name in @('USB Vault.exe', 'usb_vault_vikey_helper.exe',
                    'usb_vault_volume_creator.exe', 'VeraCryptFormat.dll', 'card_session.html', 'card_session.js',
-                   'vendor\ViKey.dll', 'prerequisites\VeraCrypt_Setup_x64_1.26.29.msi',
+                   'vendor\ViKey.dll', 'prerequisites\veracrypt-x64.sys',
                    'prerequisites\MicrosoftEdgeWebView2RuntimeInstallerX64.exe', 'licenses\THIRD-PARTY-NOTICES.txt')) {
     if (!$expected.ContainsKey($name)) { throw "Required package file missing: $name" }
 }
 if ((Split-Path -Leaf $helper) -cne 'usb_vault_setup_helper.exe') { throw 'Unexpected helper name' }
+if ($expected.ContainsKey('prerequisites\VeraCrypt_Setup_x64_1.26.29.msi')) {
+    throw 'Legacy VeraCrypt MSI must not be included in the driver-only installer'
+}
+& (Join-Path $PSScriptRoot 'audit-veracrypt-driver.ps1') -DriverPath (Join-Path $package 'prerequisites\veracrypt-x64.sys') | Out-Null
 $version = (& $compiler /VERSION | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $version -ne 'v3.12') { throw 'NSIS 3.12 is required' }
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null

@@ -66,7 +66,7 @@ void run_case(const fs::path& root, Case fault, unsigned int timing, unsigned in
   CardEntryContextController entry(source);
   StartupLog log;
   const SYSTEMTIME time{2026, 9, 0, 22, 13, 0, 0, 0};
-  const auto path = root / L"runtime-log-20260922-130000.txt";
+  const auto path = root / L"logs" / L"runtime-log-20260922-130000.txt";
   require(log.open(root, time), "cannot open matrix log");
   if (timing) log.record_card_state({}, true);
   require(entry.handle_arrival() == CardEntryRoute::unavailable && !entry.has_context(),
@@ -134,6 +134,7 @@ int main() {
         }
         ++count;
       }
+    fs::remove(root / L"logs");
     fs::remove(root);
     std::cout << "process_security_log_matrix_tests passed: " << cases.size()
         << " diagnostic variants, " << count << " capture-to-log scenarios\n";

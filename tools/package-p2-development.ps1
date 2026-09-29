@@ -11,7 +11,7 @@ param(
     [string] $VeraCryptSourceDirectory,
 
     [Parameter(Mandatory = $true)]
-    [string] $VeraCryptInstaller,
+    [string] $VeraCryptDriver,
 
     [Parameter(Mandatory = $true)]
     [string] $WebViewInstaller,
@@ -26,7 +26,7 @@ Set-StrictMode -Version Latest
 
 $ExpectedVendorSha256 = '735A2347F66F10C649C9B38ED0232B839812277C8E178F0C5084C676CF1DE48E'
 $ExpectedFormatSha256 = 'D911EEE4B02177E3BE82970EAC2B8EA6886DE07D23801D6316E5D9E89C2B4CB0'
-$ExpectedVeraCryptSignerThumbprint = '86E1D426731E79117452F090188A828426B29B5F'
+$ExpectedVeraCryptSignerThumbprint = '3847B761C2846DB72F61149176D09F9BB2D43E8A'
 $ExpectedVeraCryptRevision = 'b48e31f5b47da7d41025e3f0e02751675e15005a'
 
 function Resolve-ExistingFile([string] $Path, [string] $Description) {
@@ -59,7 +59,7 @@ $RepositoryRoot = Resolve-ExistingDirectory (Join-Path $PSScriptRoot '..') 'repo
 $ResolvedBuild = Resolve-ExistingDirectory $BuildDirectory 'package build directory'
 $ResolvedVendorDll = Resolve-ExistingFile $VendorDll 'ViKey vendor DLL'
 $ResolvedVeraCryptSource = Resolve-ExistingDirectory $VeraCryptSourceDirectory 'VeraCrypt source directory'
-$ResolvedVeraCryptInstaller = Resolve-ExistingFile $VeraCryptInstaller 'VeraCrypt installer'
+$ResolvedVeraCryptDriver = Resolve-ExistingFile $VeraCryptDriver 'VeraCrypt driver'
 $ResolvedWebViewInstaller = Resolve-ExistingFile $WebViewInstaller 'WebView2 offline installer'
 
 if ([IO.Path]::GetFileName($ResolvedVendorDll) -cne 'ViKey.dll') {
@@ -89,10 +89,10 @@ foreach ($name in $RequiredBuildFiles) {
 $VendorSha256 = Require-Sha256 $ResolvedVendorDll $ExpectedVendorSha256 'ViKey.dll'
 $FormatSha256 = Require-Sha256 $ResolvedBuildFiles['VeraCryptFormat.dll'] $ExpectedFormatSha256 'VeraCryptFormat.dll'
 $InstallerPolicy = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'src\platform\windows\vikey_configuration\installers.h') -Raw
-if ($InstallerPolicy -notmatch 'kVeraCryptInstallerDigest\[\]\s*=\s*L"([A-F0-9]{64})"') {
-    throw 'Cannot resolve reviewed VeraCrypt MSI digest'
+if ($InstallerPolicy -notmatch 'kVeraCryptDriverDigest\[\]\s*=\s*L"([A-F0-9]{64})"') {
+    throw 'Cannot resolve reviewed VeraCrypt driver digest'
 }
-$VeraCryptInstallerSha256 = Require-Sha256 $ResolvedVeraCryptInstaller $Matches[1] 'VeraCrypt MSI installer'
+$VeraCryptDriverSha256 = Require-Sha256 $ResolvedVeraCryptDriver $Matches[1] 'VeraCrypt signed driver'
 if ($InstallerPolicy -notmatch 'kWebViewInstallerDigest\[\]\s*=\s*L"([A-F0-9]{64})"') {
     throw 'Cannot resolve reviewed WebView2 installer digest'
 }
@@ -104,14 +104,14 @@ if ($WebViewSignature.Status -ne [System.Management.Automation.SignatureStatus]:
 }
 $HelperSha256 = (Get-FileHash -LiteralPath $ResolvedBuildFiles['usb_vault_vikey_helper.exe'] -Algorithm SHA256).Hash
 
-if ([IO.Path]::GetExtension($ResolvedVeraCryptInstaller) -cne '.msi') {
-    throw 'The reviewed VeraCrypt prerequisite must be the x64 MSI package'
+if ([IO.Path]::GetExtension($ResolvedVeraCryptDriver) -cne '.sys') {
+    throw 'The reviewed VeraCrypt prerequisite must be the signed x64 driver'
 }
-$VeraCryptInstallerSignature = Get-AuthenticodeSignature -LiteralPath $ResolvedVeraCryptInstaller
-if ($VeraCryptInstallerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
-    $null -eq $VeraCryptInstallerSignature.SignerCertificate -or
-    $VeraCryptInstallerSignature.SignerCertificate.Thumbprint -ne $ExpectedVeraCryptSignerThumbprint) {
-    throw "The VeraCrypt installer Authenticode identity is not the reviewed release: $($VeraCryptInstallerSignature.Status)"
+$VeraCryptDriverSignature = Get-AuthenticodeSignature -LiteralPath $ResolvedVeraCryptDriver
+if ($VeraCryptDriverSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+    $null -eq $VeraCryptDriverSignature.SignerCertificate -or
+    $VeraCryptDriverSignature.SignerCertificate.Thumbprint -ne $ExpectedVeraCryptSignerThumbprint) {
+    throw "The VeraCrypt driver Authenticode identity is not the reviewed release: $($VeraCryptDriverSignature.Status)"
 }
 
 foreach ($asset in @('card_session.html', 'card_session.js')) {
@@ -179,7 +179,7 @@ foreach ($name in $RequiredBuildFiles) {
     Copy-Item -LiteralPath $ResolvedBuildFiles[$name] -Destination (Join-Path $PackageDirectory $name)
 }
 Copy-Item -LiteralPath $ResolvedVendorDll -Destination (Join-Path $VendorDirectory.FullName 'ViKey.dll')
-Copy-Item -LiteralPath $ResolvedVeraCryptInstaller -Destination (Join-Path $PrerequisitesDirectory.FullName 'VeraCrypt_Setup_x64_1.26.29.msi')
+Copy-Item -LiteralPath $ResolvedVeraCryptDriver -Destination (Join-Path $PrerequisitesDirectory.FullName 'veracrypt-x64.sys')
 Copy-Item -LiteralPath $ResolvedWebViewInstaller -Destination (Join-Path $PrerequisitesDirectory.FullName 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe')
 Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'packaging\p2-development\THIRD-PARTY-NOTICES.txt') -Destination (Join-Path $LicenseDirectory.FullName 'THIRD-PARTY-NOTICES.txt')
 Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'third_party\argon2\LICENSE') -Destination (Join-Path $Argon2LicenseDirectory.FullName 'LICENSE.txt')
@@ -194,9 +194,9 @@ $RevisionText = @(
     "USB Vault source revision: $GitRevision",
     "USB Vault working tree at packaging: $WorkingTreeState",
     "VeraCrypt source revision: $VeraCryptRevision",
-    "VeraCrypt installer SHA-256: $VeraCryptInstallerSha256",
+    "VeraCrypt driver SHA-256: $VeraCryptDriverSha256",
     "WebView2 offline installer SHA-256: $WebViewInstallerSha256",
-    "VeraCrypt installer signer: $($VeraCryptInstallerSignature.SignerCertificate.Subject)",
+    "VeraCrypt driver signer: $($VeraCryptDriverSignature.SignerCertificate.Subject)",
     "ViKey.dll SHA-256: $VendorSha256",
     "VeraCryptFormat.dll SHA-256: $FormatSha256",
     "usb_vault_vikey_helper.exe SHA-256: $HelperSha256"
@@ -216,11 +216,11 @@ Compress-Archive -LiteralPath $PackageDirectory -DestinationPath $ZipPath -Compr
 
 $StagedVendorSha = (Get-FileHash -LiteralPath (Join-Path $VendorDirectory.FullName 'ViKey.dll') -Algorithm SHA256).Hash
 $StagedFormatSha = (Get-FileHash -LiteralPath (Join-Path $PackageDirectory 'VeraCryptFormat.dll') -Algorithm SHA256).Hash
-$StagedVeraCryptInstallerSha = (Get-FileHash -LiteralPath (Join-Path $PrerequisitesDirectory.FullName 'VeraCrypt_Setup_x64_1.26.29.msi') -Algorithm SHA256).Hash
+$StagedVeraCryptDriverSha = (Get-FileHash -LiteralPath (Join-Path $PrerequisitesDirectory.FullName 'veracrypt-x64.sys') -Algorithm SHA256).Hash
 $StagedWebViewInstallerSha = (Get-FileHash -LiteralPath (Join-Path $PrerequisitesDirectory.FullName 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe') -Algorithm SHA256).Hash
 if ($StagedVendorSha -ne $VendorSha256 -or
     $StagedFormatSha -ne $FormatSha256 -or
-    $StagedVeraCryptInstallerSha -ne $VeraCryptInstallerSha256 -or
+    $StagedVeraCryptDriverSha -ne $VeraCryptDriverSha256 -or
     $StagedWebViewInstallerSha -ne $WebViewInstallerSha256) {
     throw 'A staged third-party runtime changed during packaging'
 }

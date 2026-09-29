@@ -24,7 +24,7 @@ sc.exe query veracrypt
 TYPE               : 1  KERNEL_DRIVER
 STATE              : 4  RUNNING
 
-若服务存在但未运行，先启动一次已安装的 VeraCrypt；仍未运行则重启 Windows 后再检查。
+无需安装或启动 VeraCrypt 主程序。若已验证的服务停止，重新运行安装器可选择修复启动；损坏、不兼容、孤立文件或未知状态不会自动覆盖，请保留错误信息并交由管理员检查。
 
 ## WebView2 Runtime 验证（PowerShell）
 
