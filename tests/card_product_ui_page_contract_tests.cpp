@@ -170,7 +170,7 @@ void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
               script.find("await readContainerRoot(id);") !=
                   std::string::npos,
           "capacity, bounded root freshness, or explicit ending is not wired");
-  require(script.find("for (const id of decoyFound)") != std::string::npos &&
+  require(script.find("orderedContainers().filter(item => decoyFound.includes(item.id))") != std::string::npos &&
               script.find("option.value = String(id);") != std::string::npos,
           "the switcher is not restricted to the survey result");
   require(script.find("localStorage") == std::string::npos &&

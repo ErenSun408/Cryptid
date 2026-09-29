@@ -82,12 +82,12 @@
     await wait(() => !$("#decoy-refresh").disabled);
     check(!$("#decoy-container-list [data-decoy-container='2']"),
       "Returning to advanced updates automatically refreshes candidates");
-    check(!$("#decoy-container-list [data-decoy-container='1'] .container-grab") &&
+    check(!!$("#decoy-container-list [data-decoy-container='1'] .container-grab") &&
       $("#decoy-container-list .container-row").textContent.includes("更新") &&
       !$("#decoy-container-list .container-row").textContent.includes("从列表移除"),
-      "Found rows carry neither reordering nor removal");
+      "Found rows support reordering without removal");
 
-    $("#decoy-container-list [data-decoy-container='3'] button").click();
+    $("#decoy-container-list [data-decoy-container='3'] .container-actions button").click();
     await wait(() => window.navigationFixture.openedMaintenance.length === 1);
     check(window.navigationFixture.openedMaintenance[0] === 3,
       "Opening a found container names only that container");
@@ -192,7 +192,7 @@
     check(!$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
       window.navigationFixture.endedMaintenance.length === endsBeforeNavigation,
       "Advanced update heading returns to the list without ending maintenance");
-    all("#decoy-container-list .container-row button")[1].click();
+    all("#decoy-container-list .container-row .container-actions button")[1].click();
     await wait(() => window.navigationFixture.openedMaintenance.length === 2 &&
       !$("#decoy-maintenance-end").disabled);
 
@@ -266,11 +266,11 @@
       $("#decoy-drop-status").textContent.includes("重新进入维护"),
       "A failed upload stays disarmed across refresh until maintenance ends");
     $("#decoy-maintenance-end").click();
-    await wait(() => !$("#decoy-results").hidden && !$("#decoy-container-list [data-decoy-container='1'] button").disabled);
+    await wait(() => !$("#decoy-results").hidden && !$("#decoy-container-list [data-decoy-container='1'] .container-actions button").disabled);
     check($("#decoy-container-list [data-decoy-container='1']").textContent.includes("未挂载") &&
       !$("#decoy-container-list [data-decoy-container='1']").textContent.includes("X:"),
       "Ending maintenance refreshes the result row mount status and drive");
-    $("#decoy-container-list [data-decoy-container='1'] button").click();
+    $("#decoy-container-list [data-decoy-container='1'] .container-actions button").click();
     await wait(() => !$("#decoy-maintenance").hidden && !$("#decoy-maintenance-end").disabled);
     // A small drop can be over before the page is told it began, and two
     // drops can come out identical. Each is reported on its own: the evidence
@@ -357,7 +357,7 @@
     check($("#decoy-protection-warning").hidden && !$("#authenticated-dashboard").hasAttribute("inert"),
       "Successful unmount releases the protection dialog and its background lock");
 
-    $("#decoy-container-list [data-decoy-container='3'] button").click();
+    $("#decoy-container-list [data-decoy-container='3'] .container-actions button").click();
     await wait(() => window.navigationFixture.openedMaintenance.length === 5 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 3);
     check($("#decoy-protection-warning").hidden, "Reopening maintenance clears the old mount warning");

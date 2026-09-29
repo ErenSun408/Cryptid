@@ -338,6 +338,7 @@
   const decoyProgressBar = document.getElementById("decoy-progress-bar");
   const decoyProgressCancel = document.getElementById("decoy-progress-cancel");
   const decoyResults = document.getElementById("decoy-results");
+  const decoyExit = document.getElementById("decoy-exit");
   const decoyRefresh = document.getElementById("decoy-refresh");
   const decoyContainerList = document.getElementById("decoy-container-list");
   const decoyResultsStatus = document.getElementById("decoy-results-status");
@@ -349,6 +350,7 @@
     document.getElementById("decoy-maintenance-files-slot");
   const decoyMaintenanceContainer =
     document.getElementById("decoy-maintenance-container");
+  const decoyMaintenanceDrive = document.getElementById("decoy-maintenance-drive");
   const decoyMaintenanceEnd = document.getElementById("decoy-maintenance-end");
   const decoyMaintenanceStatus =
     document.getElementById("decoy-maintenance-status");
@@ -2141,7 +2143,7 @@
       }
     }
     const scroll = new Map();
-    for (const list of new Set([...containerLists, exportContainerList, migrateContainerList])) {
+    for (const list of new Set([...containerLists, exportContainerList, migrateContainerList, decoyContainerList])) {
       for (let parent = list; parent; parent = parent.parentElement) {
         if (!scroll.has(parent)) scroll.set(parent, [parent.scrollLeft, parent.scrollTop]);
       }
@@ -2155,6 +2157,7 @@
         anchor = group.nextElementSibling;
       }
     }
+    if (decoyStage === "maintenance") renderDecoyMaintenanceChoices();
     for (const [element, [left, top]] of scroll) {
       element.scrollLeft = left; element.scrollTop = top;
     }
@@ -2259,12 +2262,12 @@
   let reorderState = null;
 
   const rowsAround = (list) =>
-    [...list.querySelectorAll(":scope > .xrow, :scope > div > .xrow, :scope > .container-group > .container-swipe > .container-row")];
+    [...list.querySelectorAll(":scope > .container-row, :scope > .xrow, :scope > div > .xrow, :scope > .container-group > .container-swipe > .container-row")];
 
   const beginContainerReorder = (event, row, id) => {
-    if (busy || reorderState !== null || event.button !== 0) return;
+    if (busy || decoyRefreshing || reorderState !== null || event.button !== 0) return;
     closeContainerSwipe();
-    const list = row.closest(".xlist, [data-container-list]");
+    const list = row.closest(".xlist, [data-container-list], #decoy-container-list");
     if (list === null) return;
     event.preventDefault();
     const marker = document.createElement("div");
@@ -2352,17 +2355,20 @@
 
   const endContainerReorder = async (event) => {
     if (reorderState === null || event.pointerId !== reorderState.pointerId) return;
-    const { id, index } = reorderState;
+    const { id, index, list } = reorderState;
     finishContainerReorder();
     reorderState = null;
     if (index !== null) {
       const ordered = orderedContainers();
-      const from = ordered.findIndex((container) => container.id === id);
+      const visible = list === decoyContainerList ? ordered.filter(item => decoyFound.includes(item.id)) : ordered;
+      const from = visible.findIndex((container) => container.id === id);
       if (from !== -1) {
-        const [moved] = ordered.splice(from, 1);
+        const [moved] = visible.splice(from, 1);
         const to = index > from ? index - 1 : index;
-        ordered.splice(Math.max(0, Math.min(to, ordered.length)), 0, moved);
-        await rememberContainerOrder(ordered);
+        visible.splice(Math.max(0, Math.min(to, visible.length)), 0, moved);
+        let at = 0;
+        await rememberContainerOrder(list === decoyContainerList
+          ? ordered.map(item => decoyFound.includes(item.id) ? visible[at++] : item) : ordered);
       }
     }
   };
@@ -3198,8 +3204,8 @@
 
   const renderDecoyMaintenanceChoices = () => {
     decoyMaintenanceContainer.replaceChildren();
-    for (const id of decoyFound) {
-      const known = containers.find((container) => container.id === id);
+    for (const known of orderedContainers().filter(item => decoyFound.includes(item.id))) {
+      const id = known.id;
       if (known === undefined) continue;
       const option = document.createElement("option");
       option.value = String(id);
@@ -3224,7 +3230,11 @@
   };
 
   const renderDecoySection = () => {
+    decoyExit.disabled = busy || decoyRefreshing || currentState !== nativeState.authenticated;
+    decoyRefresh.dataset.refreshing = String(decoyRefreshing && !busy);
     decoyRefresh.disabled = busy || decoyRefreshing || currentState !== nativeState.authenticated;
+    const mounted = containers.find(item => item.id === decoyMaintenanceId && item.mounted);
+    decoyMaintenanceDrive.textContent = `盘符 ${decoyStage === "maintenance" && mounted ? mounted.drive : "—"}`;
     decoyProtectionUnmount.disabled = busy || currentState !== nativeState.authenticated;
     decoyVerify.hidden = decoyStage !== "verify";
     decoyProgress.hidden = decoyStage !== "running";
@@ -3282,7 +3292,7 @@
   };
 
   const refreshDecoyCandidates = async (manual = false) => {
-    if (busy || decoyRefreshing || currentState !== nativeState.authenticated ||
+    if (busy || reorderState !== null || decoyRefreshing || currentState !== nativeState.authenticated ||
         !["results", "maintenance"].includes(decoyStage)) return;
     const revision = ++decoyRefreshRevision;
     const session = batchSessionRevision;
@@ -3314,14 +3324,35 @@
   decoyRefresh.addEventListener("click", () => { void refreshDecoyCandidates(true); });
 
   const renderDecoyList = () => {
+    if (reorderState?.list === decoyContainerList) cancelContainerReorder();
     while (decoyContainerList.firstChild !== null) {
       decoyContainerList.removeChild(decoyContainerList.firstChild);
     }
-    for (const id of decoyFound) {
-      const known = containers.find((container) => container.id === id);
+    for (const known of orderedContainers().filter(item => decoyFound.includes(item.id))) {
+      const id = known.id;
       const row = document.createElement("div");
       row.className = "container-row";
       row.dataset.decoyContainer = String(id);
+      row.dataset.rowContainer = String(id);
+      const grab = document.createElement("button");
+      grab.type = "button";
+      grab.className = "grab container-grab";
+      grab.disabled = busy;
+      grab.setAttribute("aria-label", "调整 " + known.name + " 的顺序");
+      grab.appendChild(gripGlyph());
+      grab.addEventListener("pointerdown", event => beginContainerReorder(event, row, id));
+      grab.addEventListener("keydown", async event => {
+        if (busy || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const ordered = orderedContainers();
+        const visible = ordered.filter(item => decoyFound.includes(item.id));
+        const from = visible.findIndex(item => item.id === id);
+        const to = from + (event.key === "ArrowUp" ? -1 : 1);
+        if (to < 0 || to >= visible.length) return;
+        [visible[from], visible[to]] = [visible[to], visible[from]];
+        let at = 0;
+        await rememberContainerOrder(ordered.map(item => decoyFound.includes(item.id) ? visible[at++] : item));
+      });
 
       const mark = document.createElement("span");
       mark.className = "container-mark";
@@ -3352,7 +3383,7 @@
       open.addEventListener("click", () => { void openDecoyMaintenance(id); });
       actions.appendChild(open);
 
-      row.append(mark, identity, facts, actions);
+      row.append(grab, mark, identity, facts, actions);
       decoyContainerList.appendChild(row);
     }
   };
@@ -3691,6 +3722,21 @@
       await refreshAfterExternalChange();
     }
   };
+
+  decoyExit.addEventListener("click", async () => {
+    if (busy || decoyRefreshing || currentState !== nativeState.authenticated) return;
+    const revision = batchSessionRevision;
+    if (decoyStage === "maintenance") {
+      await endDecoyMaintenance();
+      if (revision !== batchSessionRevision || currentState !== nativeState.authenticated) return;
+      if (decoyStage === "maintenance") {
+        setDecoyStatus(decoyResultsStatus, "无法退出高级更新，请关闭占用该卷的程序后重试。", "error");
+        return;
+      }
+    }
+    resetDecoySection();
+    decoyPassword.focus();
+  });
 
   decoyVerifySubmit.addEventListener("click", openDecoyConfirm);
   decoyPassword.addEventListener("keydown", (event) => {
@@ -6411,7 +6457,7 @@
       fileEntries = [];
       disarmDecoyDrop();
       renderDecoySection();
-      decoyContainerList.querySelector("button")?.focus();
+      decoyContainerList.querySelector(".container-actions button")?.focus();
       return;
     }
     if (event.target instanceof Element && event.target.closest("[data-file-back]")) {
