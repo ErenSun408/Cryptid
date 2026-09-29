@@ -2747,6 +2747,71 @@
     exportConfirmPhrase.focus();
   };
 
+  const exportResultDialog = document.getElementById("export-result-dialog");
+  const exportResultTitle = document.getElementById("export-result-title");
+  const exportResultSummary = document.getElementById("export-result-summary");
+  const exportResultList = document.getElementById("export-result-list");
+  const exportResultConfirm = document.getElementById("export-result-confirm");
+  let exportResultItems = [];
+  let exportResultRunning = false;
+  let exportResultOwnsInert = false;
+  const clearExportResults = () => {
+    exportResultItems = [];
+    exportResultRunning = false;
+    exportResultList.replaceChildren();
+    exportResultTitle.textContent = "";
+    exportResultSummary.textContent = "";
+    exportResultDialog.hidden = true;
+    if (exportResultOwnsInert) dashboard.removeAttribute("inert");
+    exportResultOwnsInert = false;
+  };
+  const renderExportResults = () => {
+    const success = exportResultItems.filter(item => item.state === "success").length;
+    const failed = exportResultItems.filter(item => item.state === "failed").length;
+    exportResultTitle.textContent = exportResultRunning ? "正在导出" : "导出结果";
+    exportResultSummary.textContent = "已完成 " + (success + failed) + "/" + exportResultItems.length + " 项　成功：" + success + "　失败：" + failed;
+    exportResultConfirm.disabled = exportResultRunning;
+    exportResultList.replaceChildren();
+    for (const item of exportResultItems) {
+      const row = document.createElement("div");
+      row.className = "batch-result-row";
+      row.dataset.state = item.state;
+      const name = document.createElement("span");
+      name.className = "batch-result-name";
+      name.textContent = item.name;
+      name.title = item.container + " / " + item.name;
+      const state = document.createElement("span");
+      state.className = "export-result-state";
+      state.dataset.state = item.state;
+      state.textContent = { waiting: "等待导出", running: "导出中", success: "导出成功", failed: "导出失败" }[item.state];
+      row.append(name);
+      if (item.state === "success" || item.state === "failed") {
+        const mark = document.createElement("span");
+        mark.className = "batch-result-sign " + (item.state === "success" ? "batch-result-ok" : "batch-result-why");
+        mark.setAttribute("aria-hidden", "true");
+        row.append(mark);
+      }
+      row.append(state);
+      exportResultList.append(row);
+    }
+  };
+  const dismissExportResults = () => {
+    if (exportResultRunning) return;
+    clearExportResults();
+    if (currentState === nativeState.authenticated) backupExportConfirm.focus();
+  };
+  exportResultConfirm.addEventListener("click", dismissExportResults);
+  exportResultDialog.addEventListener("pointerdown", event => {
+    if (event.button === 0 && event.target === exportResultDialog) dismissExportResults();
+  });
+  exportResultDialog.addEventListener("keydown", event => {
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === "Escape") dismissExportResults();
+      else (exportResultRunning ? exportResultDialog : exportResultConfirm).focus();
+    }
+  });
+
   // 🔴 Every ticked entry is exported by the one entry point that may leave a
   // volume, called once per entry. A directory goes across whole, because the
   // copy underneath it already walks one.
@@ -2756,51 +2821,63 @@
   // asynchronous path and its cancellation are still not built; this panel
   // makes that gap easier to reach, and nothing here hides it.
   const runExport = async () => {
-    if (busy || exportSelection.size === 0 || exportLocation === "") return;
+    if (busy || exportSelection.size === 0 || exportLocation === "" || !exportResultDialog.hidden) return;
     closeExportConfirm();
     const requests = [...exportSelection.values()];
     const location = exportLocation;
+    const revision = batchSessionRevision;
+    const current = () => revision === batchSessionRevision && currentState === nativeState.authenticated;
     busy = true;
     setBackupStatus("");
+    exportResultItems = requests.map(item => ({ name: item.name, container: containers.find(c => c.id === item.id)?.name || "", state: "waiting" }));
+    exportResultRunning = true;
+    exportResultOwnsInert = !dashboard.hasAttribute("inert");
+    dashboard.setAttribute("inert", "");
+    exportResultDialog.hidden = false;
+    renderExportResults();
+    exportResultDialog.focus();
     render(messageForCurrentState());
-    // The same reason as a transfer: the copy runs on the thread that draws
-    // this page, so the disabled state has to reach the screen first.
-    await new Promise((resolve) => { setTimeout(resolve, 0); });
     const failed = [];
-    for (const request of requests) {
-      try {
-        await bridge.exportContainerEntry(
-          request.id, request.directory, request.name, location);
-        exportSelection.delete(
-          exportKey(request.id, request.directory, request.name));
-      } catch (pageError) { logCaughtPageError("runExport/1", pageError);
-        failed.push(request);
-      }
-    }
     try {
-      await refreshNativeState();
-    } catch (pageError) { logCaughtPageError("runExport/2", pageError);
-      currentState = nativeState.unavailable;
-      activeVolumes = true;
-    }
-    busy = false;
-    render(messageForCurrentState());
-    if (failed.length !== 0) {
-      // What succeeded is already gone from the selection, so what stays
-      // ticked is exactly what still has to be dealt with.
-      setBackupStatus("部分文件导出失败，请检查目标位置和可用空间后重试。", "error");
+      for (const [index, request] of requests.entries()) {
+        if (!current()) return;
+        exportResultItems[index].state = "running";
+        renderExportResults();
+        await new Promise((resolve) => { setTimeout(resolve, 0); });
+        if (!current()) return;
+        try {
+          await bridge.exportContainerEntry(request.id, request.directory, request.name, location);
+          if (!current()) return;
+          exportSelection.delete(
+          exportKey(request.id, request.directory, request.name));
+          exportResultItems[index].state = "success";
+        } catch (pageError) {
+          if (!current()) return;
+          logCaughtPageError("runExport/1", pageError);
+          failed.push(request);
+          exportResultItems[index].state = "failed";
+        }
+        renderExportResults();
+      }
+      try { await refreshNativeState(); }
+      catch (pageError) { logCaughtPageError("runExport/2", pageError); currentState = nativeState.unavailable; activeVolumes = true; }
+      if (!current()) return;
+      if (failed.length !== 0) {
+        setBackupStatus("部分文件导出失败，请检查目标位置和可用空间后重试。", "error");
+      } else {
+        exportLocation = "";
+        setBackupStatus("");
+      }
+    } finally {
+      busy = false;
+      exportResultRunning = false;
+      if (current()) { renderExportResults(); exportResultConfirm.focus(); }
+      else { clearExportResults(); exportSelection.clear(); exportLocation = ""; }
+      render(messageForCurrentState());
       renderBackupCentre();
-      return;
+      if (externalRefreshPending) await refreshAfterExternalChange();
     }
-    // 🔴 Nothing about a finished export is kept: not the location, not the
-    // entries, not that it happened. The page clears itself for the same
-    // reason the native side writes nothing.
-    exportLocation = "";
-    setBackupStatus(
-      `已导出 ${requests.length} 项。这些副本不再受本软件保护。`, "success");
-    renderBackupCentre();
   };
-
   const runMigration = async () => {
     if (busy || migrateContainerId === 0 || migrateLocation === "") return;
     const id = migrateContainerId;
@@ -5223,6 +5300,9 @@
 
   window.addEventListener("usb-vault-session-changed", () => {
     ++batchSessionRevision;
+    clearExportResults();
+    exportSelection.clear();
+    exportLocation = "";
     cancelContainerRename();
     // A walk's findings belong to the session that made them.
     resetDecoySection();

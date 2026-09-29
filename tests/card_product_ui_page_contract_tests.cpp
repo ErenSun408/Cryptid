@@ -1373,7 +1373,7 @@ void test_the_backup_centre_owns_the_plaintext_export() {
   require(script.find("exportSelection.delete(\n"
                       "          exportKey(request.id, request.directory, "
                       "request.name));") != std::string::npos &&
-              script.find("exportLocation = \"\";\n    setBackupStatus(") !=
+              script.find("exportLocation = \"\";\n        setBackupStatus(") !=
                   std::string::npos,
           "the page kept the exported entry or its location afterwards");
 
