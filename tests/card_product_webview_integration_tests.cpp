@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <Shlwapi.h>
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
 #include <wrl.h>
 
 #include <cstddef>
@@ -598,6 +599,7 @@ CardProductUiSessionController g_ui_session(
     g_entry, g_authentication, g_volume, g_policy, g_file_chooser);
 std::wstring g_page_uri;
 int g_exit_code = 1;
+bool g_overlay_only = false;
 
 [[nodiscard]] std::wstring page_uri() {
   std::vector<wchar_t> executable_path(32768);
@@ -726,6 +728,10 @@ HRESULT handle_message(const HWND window,
     ::CoTaskMemFree(raw_message);
     return result;
   };
+  if (std::wcscmp(raw_message, L"overlay-layout-passed") == 0) {
+    if (g_overlay_only) { g_exit_code = 0; static_cast<void>(::DestroyWindow(window)); }
+    return finish(S_OK);
+  }
   if (std::wcscmp(raw_message, L"driver-loaded") == 0) {
     return finish(S_OK);
   }
@@ -768,8 +774,13 @@ HRESULT handle_message(const HWND window,
 
 void initialize_webview(const HWND window) {
   g_page_uri = page_uri();
+  const auto environment_options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+  if (!environment_options) throw std::bad_alloc();
+  const HRESULT scrollbar_result = environment_options->put_ScrollBarStyle(
+      COREWEBVIEW2_SCROLLBAR_STYLE_FLUENT_OVERLAY);
+  if (FAILED(scrollbar_result)) throw std::runtime_error("cannot configure overlay scrollbars");
   const HRESULT result = ::CreateCoreWebView2EnvironmentWithOptions(
-      nullptr, nullptr, nullptr,
+      nullptr, nullptr, environment_options.Get(),
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
           [window](const HRESULT environment_result,
                    ICoreWebView2Environment* const environment) -> HRESULT {
@@ -896,6 +907,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
                     _In_ LPWSTR, _In_ int) {
+  g_overlay_only = std::wstring_view(::GetCommandLineW()).find(L"--overlay-only") != std::wstring_view::npos;
   const HRESULT com_result = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   if (FAILED(com_result)) return 1;
 

@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <Shlwapi.h>
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
 #include <wrl.h>
 #include <shellapi.h>
 
@@ -941,8 +942,13 @@ void initialize_webview(const HWND window) {
     report_webview_failure(failure.code, failure.native_kind == 2 ? static_cast<HRESULT>(failure.native_code) : S_OK);
     return;
   }
+  const auto environment_options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+  if (!environment_options) throw std::bad_alloc();
+  const HRESULT scrollbar_result = environment_options->put_ScrollBarStyle(
+      COREWEBVIEW2_SCROLLBAR_STYLE_FLUENT_OVERLAY);
+  if (FAILED(scrollbar_result)) throw std::runtime_error("cannot configure overlay scrollbars");
   const HRESULT result = ::CreateCoreWebView2EnvironmentWithOptions(
-      nullptr, nullptr, nullptr,
+      nullptr, nullptr, environment_options.Get(),
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
           [window, generation](const HRESULT environment_result,
                    ICoreWebView2Environment* const environment) -> HRESULT {

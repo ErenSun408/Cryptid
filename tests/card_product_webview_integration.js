@@ -8,6 +8,20 @@ window.requestAnimationFrame = callback => setTimeout(() => callback(performance
 chrome.webview.postMessage("driver-loaded");
 
 (async () => {
+  const scrollProbe = document.createElement("div");
+  scrollProbe.style.cssText = "position:fixed;left:0;top:0;width:120px;height:80px;overflow:auto;visibility:hidden;";
+  const scrollContent = document.createElement("div");
+  scrollContent.style.cssText = "width:240px;height:160px";
+  scrollProbe.appendChild(scrollContent);
+  document.body.appendChild(scrollProbe);
+  const overlay = scrollProbe.clientWidth === 120 && scrollProbe.clientHeight === 80;
+  scrollProbe.scrollTop = 20;
+  scrollProbe.scrollLeft = 20;
+  const scrollable = scrollProbe.scrollTop === 20 && scrollProbe.scrollLeft === 20;
+  scrollProbe.remove();
+  if (!overlay || !scrollable) throw new Error("overlay scrollbars changed content dimensions or disabled scrolling");
+  chrome.webview.postMessage("overlay-layout-passed");
+
   const surface = document.getElementById("card-session-surface");
   const password = document.getElementById("card-password");
   const passwordVisibility =

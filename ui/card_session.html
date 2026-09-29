@@ -45,9 +45,6 @@
     button:focus-visible, [role="link"]:focus-visible {
       outline: 2px solid var(--gold); outline-offset: 2px;
     }
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .12); border-radius: 99px; }
-    ::-webkit-scrollbar-track { background: transparent; }
     svg {
       display: block; width: 1.15rem; height: 1.15rem; fill: none;
       stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6;
@@ -137,7 +134,7 @@
     #card-session-action.danger:not(:disabled) { color: #fff; background: var(--danger); box-shadow: none; }
     #card-session-action.danger:hover:not(:disabled) { background: #e07b72; }
     #card-session-action:disabled {
-      cursor: not-allowed; color: var(--text-3); box-shadow: none;
+      cursor: default; color: var(--text-3); box-shadow: none;
       background: rgba(255, 255, 255, .05); border: 1px solid var(--line);
     }
     .session-surface[data-busy="true"] #card-session-action:disabled,
@@ -209,7 +206,7 @@
     }
     #setup-save:hover:not(:disabled) { background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     #setup-save:disabled {
-      cursor: not-allowed; color: var(--text-3); box-shadow: none;
+      cursor: default; color: var(--text-3); box-shadow: none;
       background: rgba(255, 255, 255, .05); border: 1px solid var(--line);
     }
     .setup-surface[data-busy="true"] #setup-save:disabled { cursor: wait; }
@@ -298,7 +295,7 @@
     /* Without this a disabled shell button keeps its full colour and reads as
        clickable, while the browser silently swallows every click. */
     .shell-button:disabled, .create-button:disabled {
-      cursor: not-allowed; opacity: .45;
+      cursor: default; opacity: .45;
     }
     .shell-button.danger:disabled { color: var(--text-3); border-color: var(--line); }
     .shell-button svg, .create-button svg, .modal-button svg { width: .95rem; height: .95rem; }
@@ -339,7 +336,7 @@
       border: 1px solid var(--line-2); background: rgba(255, 255, 255, .04);
       color: var(--text-3); font-family: var(--mono); font-size: .68rem;
     }
-    .nav-item-disabled { cursor: not-allowed; color: #4d545d; }
+    .nav-item-disabled { cursor: default; color: #4d545d; }
     .nav-item-disabled::after {
       content: attr(data-tooltip); position: absolute; left: calc(100% + .6rem); top: 50%;
       z-index: 20; width: max-content; max-width: 11rem; padding: .35rem .55rem;
@@ -499,7 +496,7 @@
     /* 🔴 不要叫 .pick —— 顶部模式卡片已经是 .pick，那条规则带 padding: 1rem，
        会把 16px 的勾选框撑成 48px。同一个样式表里的类名是共享命名空间。 */
     .cbx.selectable { cursor: pointer; }
-    .cbx.off { opacity: .3; cursor: not-allowed; }
+    .cbx.off { opacity: .3; cursor: default; }
     .cbx svg { width: .625rem; height: .625rem; stroke-width: 2.6; }
 
     /* 展开后的文件行：比容器行矮得多，这里是勾选清单不是浏览视图。 */
@@ -1018,7 +1015,7 @@
     #create-disk-step .overview-actions { gap: .8rem; }
     #create-disk-step .shell-button, .partition-text-button { border: 0; background: none; padding: 0; color: var(--text-3); font-size: .72rem; cursor: pointer; }
     #create-disk-step .shell-button:hover, .partition-text-button:hover { color: var(--gold); }
-    .partition-scroll-frame { height: 10rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--line-2); border-radius: .7rem; background: var(--ink-850); }
+    .partition-scroll-frame { height: 10rem; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-2); border-radius: .7rem; background: var(--ink-850); }
     .partition-list { border: 0; }
     .partition-row { display: flex; width: 100%; align-items: center; gap: .8rem; padding: .5rem .9rem; text-align: left; color: var(--text); background: var(--ink-850); border: 0; border-bottom: 1px solid var(--line-2); cursor: pointer; }
     .partition-row:last-child { border-bottom: 1px solid var(--line-2); }
@@ -1080,7 +1077,7 @@
       cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease;
     }
     .type-pick:hover:not(:disabled) { border-color: var(--line-3); }
-    .type-pick:disabled { cursor: not-allowed; opacity: .45; }
+    .type-pick:disabled { cursor: default; opacity: .45; }
     .type-pick[aria-checked="true"] {
       border-color: rgba(200, 169, 106, .5); background: rgba(200, 169, 106, .07);
     }
@@ -1112,7 +1109,7 @@
       background: var(--ink-850); color: var(--text-2); font-size: .78rem; cursor: pointer;
     }
     .unit-button:hover:not(:disabled) { border-color: var(--line-3); color: var(--text); }
-    .unit-button:disabled { cursor: not-allowed; opacity: .45; }
+    .unit-button:disabled { cursor: default; opacity: .45; }
     .unit-button svg { width: .85rem; height: .85rem; color: var(--text-3); }
     .unit-list {
       position: absolute; z-index: 5; top: calc(100% + .3rem); left: 0; min-width: 100%;
@@ -1168,7 +1165,7 @@
       outline: none; border-color: rgba(200, 169, 106, .55);
       box-shadow: 0 0 0 3px rgba(200, 169, 106, .1);
     }
-    .creation-text:disabled, .file-name-text:disabled { cursor: not-allowed; opacity: .45; }
+    .creation-text:disabled, .file-name-text:disabled { cursor: default; opacity: .45; }
     .location-field { display: flex; align-items: center; gap: .5rem; }
     .location-field .creation-text { flex: 1 1 auto; min-width: 0; }
     .location-field .modal-button { flex: 0 0 auto; height: 2.4rem; }
@@ -1189,7 +1186,7 @@
        made, so it reads as a caution rather than a failure. */
     .creation-status[data-tone="cancelled"] { color: var(--warn); }
     .modal-footer { justify-content: flex-end; gap: .5rem; border-top: 1px solid var(--line); background: rgba(255, 255, 255, .015); }
-    .modal-button:disabled { cursor: not-allowed; opacity: .45; }
+    .modal-button:disabled { cursor: default; opacity: .45; }
     /* Mounting has begun: the button only reports progress, so it keeps the
        ordinary pointer instead of the refusal cursor of a blocked action. */
     .creation-cancel-work[data-finalizing]:disabled { cursor: default; }
