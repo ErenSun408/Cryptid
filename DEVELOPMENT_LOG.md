@@ -4408,3 +4408,14 @@
 - 证据：out/container-name-ui-build.txt、out/container-name-ui-tests.txt、out/container-name-ui-dom-tests.txt；新增可重复执行脚本 tests/card_product_ui_rename_dom_tests.cjs。
 - 提交：用户已批准第三片提交，并将名称自定义三个切片前缀统一为 [P4.12]；本片随本次提交入库。前文 b504798、a5e287b 为重写前历史哈希，当前哈希以 Git 日志为准；禁止推送。
 - 紧凑布局验证：120px 输入框及取消保存中提示后，19 个重命名 DOM 场景（含异步保存无提示断言）、脚本语法和差异检查通过；确认程序未运行后主程序构建成功，证据 out/container-name-ui-compact-build.txt。此次只调整展示，重复提交保护及安全边界不变，真实 WebView 布局仍待用户验收。
+
+### 2026-09-28 — 运行日志 / 统一 logs 目录
+- 范围与审计：按用户要求调整后续文件日志位置；审计需求启动诊断约定、MILESTONES P4.9 和共享日志实现，新需求取代根目录直接落盘约定。
+- 检查与实现：主程序和 creator 共用 DebugLogFile，统一自动创建应用根目录下 logs；不细分目录，保留类型前缀、时间、进程号、碰撞避让及分段规则。
+- 失败处理：logs 被文件或重解析点占用时拒绝写入，不回退根目录；保留原有非致命日志失败处理并更新主程序提示位置。
+- 数据边界：不搬迁或删除历史日志，不更改日志字段、测试开关或正式发布限制。
+- 验证：构建前确认主程序及 creator 未运行；p46 Release 主程序与日志测试目标构建成功，最终 startup_log_tests、creator_helper_log_tests 2/2 通过，差异检查通过。
+- 覆盖：新目录自动创建、同名文件拒绝且不覆盖、原有轮转／重名／限流、真实助手早退日志位于 logs 且根目录无新日志。
+- 安全与风险：固定子目录不接受用户路径，保留根目录及新增子目录重解析点检查；现有检查后目录被外部进程替换的竞态不在本片消除，未执行权限拒绝实机矩阵或全量回归。
+- 证据：out/logs-directory-build.txt、out/logs-directory-final-build.txt、out/logs-directory-final-tests.txt；未生成安装包。
+- 提交：用户已批准以 [refactor] 提交，本片随本次提交入库；禁止推送。

@@ -45,6 +45,10 @@ void test_helper_logs_its_early_exit(const std::filesystem::path& helper) {
   const std::wstring prefix = L"creator-log-" + std::to_wstring(process.dwProcessId) + L"-";
   std::vector<std::filesystem::path> logs;
   for (const auto& entry : std::filesystem::directory_iterator(helper.parent_path())) {
+    require(!entry.path().filename().native().starts_with(prefix),
+            "the helper wrote a log outside the logs folder");
+  }
+  if (std::filesystem::exists(helper.parent_path() / L"logs")) for (const auto& entry : std::filesystem::directory_iterator(helper.parent_path() / L"logs")) {
     if (entry.path().filename().native().starts_with(prefix)) logs.push_back(entry.path());
   }
 #if USB_VAULT_DEBUG_LOG

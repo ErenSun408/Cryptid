@@ -26,7 +26,7 @@
 
 namespace usb_vault::diagnostics {
 
-// One plain-text UTF-8 file per launch, created beside the executable and
+// One plain-text UTF-8 file per launch, created in the executable's logs folder and
 // shared by the startup record and the runtime events. Every write is flushed.
 // A failure closes the file and is kept in error(); it never reaches the
 // caller, because logging must not change what the application does.
@@ -59,7 +59,18 @@ class DebugLogFile final {
         error_ = ERROR_INVALID_NAME;
         return false;
       }
-      directory_ = directory;
+      const auto logs = directory / L"logs";
+      if (!::CreateDirectoryW(logs.c_str(), nullptr)) {
+        const DWORD error = ::GetLastError();
+        if (error != ERROR_ALREADY_EXISTS) { error_ = error; return false; }
+      }
+      const DWORD log_attributes = ::GetFileAttributesW(logs.c_str());
+      if (log_attributes == INVALID_FILE_ATTRIBUTES) { error_ = ::GetLastError(); return false; }
+      if (!(log_attributes & FILE_ATTRIBUTE_DIRECTORY) || (log_attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        error_ = ERROR_INVALID_NAME;
+        return false;
+      }
+      directory_ = logs;
       const std::wstring name_prefix(prefix);
       if (name_prefix.empty() || name_prefix.size() > 32) {
         error_ = ERROR_INVALID_NAME;

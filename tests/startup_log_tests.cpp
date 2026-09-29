@@ -31,7 +31,7 @@ void verify_card_snapshots(const fs::path& root) {
     SYSTEMTIME time{2026, 9, 0, 22, 12, 0, scenario, 0};
     wchar_t name[80]{};
     swprintf_s(name, L"runtime-log-20260922-1200%02u.txt", static_cast<unsigned int>(scenario));
-    const auto path = root / name;
+    const auto path = root / L"logs" / name;
     StartupLog log;
     require(log.open(root, time), "cannot open snapshot fixture");
     log.record_card_state(scenario == 1 ? failure : FailureDiagnostic{}, true);
@@ -95,7 +95,7 @@ void verify_runtime_log(const fs::path& root) {
     return lines;
   };
   const SYSTEMTIME time{2026, 9, 0, 26, 9, 30, 0, 0};
-  const auto path = root / L"runtime-log-20260926-093000.txt";
+  const auto path = root / L"logs" / L"runtime-log-20260926-093000.txt";
   {
     StartupLog log;
     require(log.open(root, time), "cannot open runtime fixture");
@@ -185,13 +185,13 @@ void verify_runtime_log(const fs::path& root) {
     wchar_t name[80]{};
     if (part == 1) swprintf_s(name, L"runtime-log-20260926-093100.txt");
     else swprintf_s(name, L"runtime-log-20260926-093100-p%02u.txt", part);
-    if (!fs::exists(root / name)) continue;
-    const auto text = read(root / name);
+    if (!fs::exists(root / L"logs" / name)) continue;
+    const auto text = read(root / L"logs" / name);
     require(text.size() <= 4096, "a part exceeded its size");
     require(text.starts_with("\xEF\xBB\xBFUSB Vault 运行日志\r\n"),
             "a part lacks the plain log header");
     for (const auto& line : lines_of(text)) survived += line == std::string(62, 'x') ? 1 : 0;
-    fs::remove(root / name);
+    fs::remove(root / L"logs" / name);
   }
   require(survived == 200, "rolling dropped lines");
 
@@ -201,7 +201,7 @@ void verify_runtime_log(const fs::path& root) {
     diagnostics::DebugLogFile helper_file;
     require(helper_file.open(root, named, L"creator-log-42"), "cannot open a prefixed log");
     helper_file.close();
-    const auto helper_path = root / L"creator-log-42-20260926-093200.txt";
+    const auto helper_path = root / L"logs" / L"creator-log-42-20260926-093200.txt";
     require(fs::exists(helper_path) &&
                 read(helper_path) == "\xEF\xBB\xBFUSB Vault 运行日志\r\n",
             "the prefix did not name the file or changed its header");
@@ -257,7 +257,7 @@ void verify_page_quota(const fs::path& root) {
   }
   std::string all;
   std::vector<fs::path> quota_files;
-  for (const auto& entry : fs::directory_iterator(root)) {
+  for (const auto& entry : fs::directory_iterator(root / L"logs")) {
     if (!entry.path().filename().wstring().starts_with(L"page-quota-")) continue;
     all += read(entry.path());
     quota_files.push_back(entry.path());
@@ -274,7 +274,7 @@ void verify_page_quota(const fs::path& root) {
 #else
   require(all.find("[页面]") == std::string::npos, "disabled quota wrote page events");
 #endif
-  const auto final_path = root / L"runtime-log-20260927-150000.txt";
+  const auto final_path = root / L"logs" / L"runtime-log-20260927-150000.txt";
   {
     StartupLog log;
     require(log.open(root, time), "page shutdown fixture open failed");
@@ -298,12 +298,23 @@ int main() {
       L"-" + std::to_wstring(::GetTickCount64()));
   try {
     require(fs::create_directory(root), "fixture already exists");
+    {
+      std::ofstream blocker(root / L"logs");
+      blocker << "keep";
+      blocker.close();
+      StartupLog blocked;
+      const SYSTEMTIME time{2026, 9, 0, 28, 12, 0, 0, 0};
+      require(!blocked.open(root, time), "regular file accepted as logs folder");
+      require(read(root / L"logs") == "keep", "logs blocker was overwritten");
+      fs::remove(root / L"logs");
+    }
     verify_card_snapshots(root);
+    require(fs::is_directory(root / L"logs"), "logs folder was not created");
     verify_runtime_log(root);
     verify_page_quota(root);
     const SYSTEMTIME time{2026, 9, 0, 20, 17, 12, 34, 0};
-    const auto first = root / L"runtime-log-20260920-171234.txt";
-    const auto second = root / L"runtime-log-20260920-171234-01.txt";
+    const auto first = root / L"logs" / L"runtime-log-20260920-171234.txt";
+    const auto second = root / L"logs" / L"runtime-log-20260920-171234-01.txt";
     StartupLog log;
     require(log.open(root, time), "cannot create startup log");
     StartupLog collision;
@@ -355,7 +366,7 @@ int main() {
     require(bounded.open(root, time), "cannot create bounded log");
     for (int index = 0; index < 1000; ++index) bounded.record(StartupStep::webview, StartupOutcome::begin);
     bounded.finish();
-    const auto third = root / L"runtime-log-20260920-171234-02.txt";
+    const auto third = root / L"logs" / L"runtime-log-20260920-171234-02.txt";
     const auto limited = read(third);
     require(limited.size() < 65536 && std::count(limited.begin(), limited.end(), '\n') <= 129 &&
             limited.find("日志结束") != std::string::npos,
@@ -368,7 +379,7 @@ int main() {
     require(!unavailable.open(first, time), "regular file accepted as log directory");
     require(read(first) == finished, "failed logging overwrote existing file");
     // Remove only exact files owned by this fixture; no recursive deletion.
-    fs::remove(first); fs::remove(second); fs::remove(third); fs::remove(root);
+    fs::remove(first); fs::remove(second); fs::remove(third); fs::remove(root / L"logs"); fs::remove(root);
     std::cout << "startup_log_tests passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

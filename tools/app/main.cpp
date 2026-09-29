@@ -379,7 +379,7 @@ void finish_startup_log() noexcept {
   g_startup_log.finish();
   if (g_startup_log.error() && !g_log_warning_shown) {
     g_log_warning_shown = true;
-    show_warning(L"运行日志未能完整写入应用目录。错误码：9010。请检查目录权限和磁盘空间；应用仍可继续运行。");
+    show_warning(L"运行日志未能完整写入应用目录的 logs 文件夹。错误码：9010。请检查目录权限和磁盘空间；应用仍可继续运行。");
   }
 }
 
