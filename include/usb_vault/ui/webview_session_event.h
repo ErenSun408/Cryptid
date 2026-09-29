@@ -8,6 +8,10 @@ namespace usb_vault::ui {
 inline constexpr wchar_t kWebviewSessionChangedScript[] =
     L"window.dispatchEvent(new Event('usb-vault-session-changed'));";
 
+// Mount inventory changes do not revoke authentication or reset the page.
+inline constexpr wchar_t kWebviewMountsChangedScript[] =
+    L"window.dispatchEvent(new Event('usb-vault-mounts-changed'));";
+
 // Raised when a shell drop the window accepted starts or stops running. Like
 // the event above it carries nothing: the page reads the run's four numbers
 // back through the bridge, and never learns what was dropped.

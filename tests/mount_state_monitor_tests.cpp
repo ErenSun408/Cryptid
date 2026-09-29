@@ -33,6 +33,8 @@ void test_observations() {
   auto values=inspect_mount_states(reader,targets);
   require(values[0].presence==MountPresence::present && values[1].presence==MountPresence::present, "live mounts lost");
   require(reader.queried==std::vector<wchar_t>{L'M',L'N'}, "unrelated mount inspected");
+  auto unresolved=targets; unresolved[0].unique_id=-1; unresolved[0].volume_path.clear(); unresolved[0].disk_length=0;
+  require(inspect_mount_states(reader,unresolved)[0].presence==MountPresence::unknown,"missing baseline adopted a later occupant");
   reader.identities[L'M'].unique_id++;
   require(inspect_mount_states(reader,targets)[0].presence==MountPresence::replaced, "same path remount missed");
   reader.identities[L'M']=identity(targets[0]); reader.identities[L'M'].volume_path=L"other";

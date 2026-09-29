@@ -598,6 +598,9 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
           "wrong password");
     }
     if (fail_created_mount) throw std::runtime_error("mount created failed");
+    identities[options.drive_letter] = {.drive_letter=options.drive_letter,
+        .unique_id=next_mount_id++, .volume_path=std::wstring(path),
+        .disk_length=attached_volume_sizes[options.drive_letter]};
     return {.drive_letter = options.drive_letter};
   }
 
@@ -4709,6 +4712,67 @@ void test_finished_partition_write_is_not_reported_cancelled() {
   }
 }
 
+void test_monitor_reconciliation_preserves_session_and_new_mounts() {
+  using usb_vault::volume::MountObservation;
+  using usb_vault::volume::MountPresence;
+  CardAuthenticationSession auth;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(auth,runtime,layout());
+  session.consume_authenticated_login(root_secret(),bytes("login"));
+  const auto first=session.create_container(L"C:\\vault\\watch-a.hc",64ULL*1024*1024);
+  const auto second=session.create_container(L"C:\\vault\\watch-b.hc",64ULL*1024*1024);
+  const auto targets=session.mount_watch_targets();
+  require(targets.size()==2 && targets[0].unique_id>=0 && targets[1].unique_id>=0,"mount baselines missing");
+  const auto history=session.operation_history().size();
+  const auto writes=runtime.index_writes;
+  std::vector<MountObservation> observations;
+  for(const auto& target:targets) observations.push_back({target.container_id,MountPresence::unknown});
+  require(!session.reconcile_mounts(targets,observations),"unknown query released a volume");
+  require(session.mount_watch_targets()==targets,"unknown query changed ownership");
+  for(auto& observation:observations) if(observation.container_id==first) observation.presence=MountPresence::replaced;
+  runtime.events.clear();
+  require(session.reconcile_mounts(targets,observations),"external replacement not reconciled");
+  require(session.mount_watch_targets().size()==1 && session.mount_watch_targets()[0].container_id==second,"other mount lost");
+  require(runtime.events.empty() && runtime.index_writes==writes && session.operation_history().size()==history,"observation mutated disk or history");
+  require(auth.authenticated(),"external removal revoked authentication");
+  session.mount_adopted_container(first);
+  require(!session.reconcile_mounts(targets,observations),"stale observation removed a remount");
+  require(session.mount_watch_targets().size()==2,"remount lost");
+  observations[0].container_id=999;
+  require(!session.reconcile_mounts(targets,observations),"mismatched observation accepted");
+}
+
+void test_monitor_absence_after_identity_failure() {
+  using usb_vault::volume::MountObservation;
+  using usb_vault::volume::MountPresence;
+  CardAuthenticationSession auth; FakeRuntime runtime;
+  CardLoginMountSessionCore session(auth,runtime,layout());
+  session.consume_authenticated_login(root_secret(),bytes("login"));
+  runtime.fail_identity=true;
+  const auto id=session.create_container(L"C:\\vault\\watch-unknown.hc",64ULL*1024*1024);
+  const auto targets=session.mount_watch_targets();
+  require(targets.size()==1 && targets[0].unique_id==-1,"identity failure lost owned mount");
+  const std::vector<MountObservation> observations{{id,MountPresence::missing}};
+  require(session.reconcile_mounts(targets,observations) && !session.mounted(),"absence-only observation not applied");
+}
+
+void test_monitor_releases_maintenance_facts_without_unmount() {
+  using usb_vault::volume::MountObservation;
+  using usb_vault::volume::MountPresence;
+  CardAuthenticationSession auth; FakeRuntime runtime;
+  CardLoginMountSessionCore session(auth,runtime,layout());
+  const auto id=maintenance_fixture(runtime,session);
+  static_cast<void>(session.open_decoy_maintenance(id,bytes("decoy-password")));
+  const auto targets=session.mount_watch_targets();
+  require(targets.size()==1 && targets[0].container_id==id,"maintenance missing from watch");
+  const std::vector<MountObservation> observations{{id,MountPresence::missing}};
+  const auto history=session.operation_history().size(); runtime.events.clear();
+  require(session.reconcile_mounts(targets,observations),"maintenance disappearance ignored");
+  require(session.mount_watch_targets().empty() && !session.mounted(),"maintenance mount not cleared");
+  for(const auto& event:runtime.events) require(!event.starts_with("force:") && !event.starts_with("unmount:"),"monitor unloaded an external occupant");
+  require(auth.authenticated() && session.operation_history().size()==history,"maintenance observation reset session or recorded history");
+}
+
 }  // namespace
 
 int main() {
@@ -4822,6 +4886,9 @@ int main() {
     test_failed_import_latches_until_maintenance_remount();
     test_import_rechecks_identity_before_and_after_copy();
     test_no_export_leaves_a_single_local_trace();
+    test_monitor_reconciliation_preserves_session_and_new_mounts();
+    test_monitor_absence_after_identity_failure();
+    test_monitor_releases_maintenance_facts_without_unmount();
     std::cout << "card_login_mount_session_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

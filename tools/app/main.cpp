@@ -4,6 +4,7 @@
 #include <WebView2EnvironmentOptions.h>
 #include <wrl.h>
 #include <shellapi.h>
+#include <dbt.h>
 
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/verified_local_artifact.h"
@@ -325,6 +326,13 @@ ComPtr<ICoreWebView2> g_webview;
 ComPtr<IDispatch> g_host_object;
 std::wstring g_page_uri;
 std::unique_ptr<usb_vault::volume::VolumeProvider> g_volume_provider;
+std::unique_ptr<usb_vault::volume::MountStateMonitor> g_mount_monitor;
+std::vector<usb_vault::volume::WatchedMount> g_mount_targets;
+std::uint64_t g_mount_epoch{};
+std::uint64_t g_mount_notice{};
+std::uint64_t g_mount_notice_delivered{};
+bool g_mount_notice_inflight{};
+ULONGLONG g_mount_notice_attempt{};
 std::unique_ptr<usb_vault::card::vikey::VikeyHelperCardEnrollment>
     g_card_enrollment;
 std::unique_ptr<usb_vault::application::CardEntryContextController>
@@ -615,6 +623,9 @@ void disarm_external_drops() noexcept {
 
 void clear_application_session() noexcept {
   disarm_external_drops();
+  g_mount_monitor.reset(); g_mount_targets.clear(); ++g_mount_epoch;
+  g_mount_notice = g_mount_notice_delivered = 0; g_mount_notice_inflight = false;
+  g_mount_notice_attempt = 0;
   g_card_device_notifications.reset();
   g_card_lifecycle_controller.reset();
   g_card_presence_controller.reset();
@@ -704,6 +715,47 @@ void notify_webview_foreground(const HWND window, const bool immediate) noexcept
           }).Get());
   if (FAILED(result)) {
     USB_VAULT_TRACE("窗口", "前台保护补查通知失败", usb_vault::diagnostics::hex_text(static_cast<std::uint32_t>(result)));
+  }
+}
+
+void service_mount_monitor() noexcept {
+  if (!g_card_volume_session || g_view_switch_pending) return;
+  try {
+    if (!g_mount_monitor) g_mount_monitor = std::make_unique<usb_vault::volume::MountStateMonitor>();
+    // The worker keeps polling its frozen targets while a session task runs.
+    // Only this owner may reconcile once that task releases the session.
+    if (!g_creation_work.running.load() && !g_creation_work.hotkey_exit_pending.load() &&
+        !g_deferred_removal && !g_deferred_arrival) {
+      auto targets = g_card_volume_session->mount_watch_targets();
+      if (targets != g_mount_targets) {
+        ++g_mount_epoch; g_mount_monitor->watch(g_mount_epoch, targets);
+        g_mount_targets = std::move(targets);
+      }
+      if (auto update = g_mount_monitor->take_update(); update && update->epoch == g_mount_epoch) {
+        if (g_card_volume_session->reconcile_mounts(g_mount_targets, update->observations)) {
+          ++g_mount_notice;
+          auto remaining = g_card_volume_session->mount_watch_targets();
+          ++g_mount_epoch; g_mount_monitor->watch(g_mount_epoch, remaining);
+          g_mount_targets = std::move(remaining);
+        }
+      }
+    }
+    const auto now = ::GetTickCount64();
+    if (g_mount_notice == g_mount_notice_delivered || g_mount_notice_inflight ||
+        now - g_mount_notice_attempt < 250 || !g_webview || !g_webview_startup.current(g_page_generation)) return;
+    g_mount_notice_attempt = now;
+    const auto notice = g_mount_notice, page = g_page_generation;
+    g_mount_notice_inflight = true;
+    const auto result = g_webview->ExecuteScript(usb_vault::ui::kWebviewMountsChangedScript,
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>([notice, page](HRESULT result, LPCWSTR) -> HRESULT {
+          if (page != g_page_generation) return S_OK;
+          g_mount_notice_inflight = false;
+          if (SUCCEEDED(result)) g_mount_notice_delivered = notice;
+          return S_OK;
+        }).Get());
+    if (FAILED(result)) g_mount_notice_inflight = false;
+  } catch (...) {
+    // Keep the last known mount state. A failed read is never an unmount.
   }
 }
 
@@ -1260,7 +1312,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
   }
   switch (message) {
     case WM_ACTIVATE:
-      if (LOWORD(wparam) != WA_INACTIVE && !HIWORD(wparam)) notify_webview_foreground(window, true);
+      if (LOWORD(wparam) != WA_INACTIVE && !HIWORD(wparam)) {
+        if (g_mount_monitor) g_mount_monitor->request_refresh();
+        notify_webview_foreground(window, true);
+      }
       return ::DefWindowProcW(window, message, wparam, lparam);
     case kTrayMessage:
       if (!g_tray.hidden() || HIWORD(lparam) != 1) return 0;
@@ -1301,6 +1356,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_DEVICECHANGE:
       if (g_view_switch_pending) return 0;
+      if (g_mount_monitor && (wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE || wparam == DBT_DEVNODES_CHANGED))
+        g_mount_monitor->request_refresh();
       if (g_creation_work.running.load() || g_deferred_removal || g_deferred_arrival) {
         const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
             wparam, lparam, kDevelopmentCardIdentity);
@@ -1348,6 +1405,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_TIMER:
       if (g_view_switch_pending) return 0;
+      if (wparam == 1) service_mount_monitor();
       if (wparam == 1 && g_creation_work.hotkey_exit_pending.load()) {
         if (g_hotkey_cleanup_thread.joinable()) {
           const auto result = g_hotkey_cleanup_result.load();

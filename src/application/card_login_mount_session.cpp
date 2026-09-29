@@ -819,6 +819,13 @@ void CardLoginMountSession::export_container_file(
       [&] { impl_->core.export_container_file(id, absolute_destination_directory); });
 }
 
+std::vector<volume::WatchedMount> CardLoginMountSession::mount_watch_targets() const {
+  return impl_->core.mount_watch_targets();
+}
+bool CardLoginMountSession::reconcile_mounts(std::span<const volume::WatchedMount> targets,
+    std::span<const volume::MountObservation> observations) {
+  return impl_->core.reconcile_mounts(targets, observations);
+}
 std::vector<ContainerStatus> CardLoginMountSession::container_statuses() {
   return impl_->core.container_statuses();
 }
@@ -1126,6 +1133,19 @@ SessionContainer& adopt(CardLoginMountSessionState& state,
   return adopt(state, path, wchar_t{}, false, release_first, true, true).id;
 }
 
+void capture_mount_watch(CardLoginMountSessionState& state, SessionContainer& entry,
+    CardLoginMountSessionRuntime& runtime) noexcept {
+  // A diagnostic query cannot revoke ownership after a successful mount.
+  // If it fails, retain an absence-only watch; never adopt a later occupant.
+  entry.watched_mount = volume::WatchedMount{entry.id, entry.drive_letter, -1, {}, 0, state.next_mount_revision++};
+  try {
+    const auto identity = entry.maintenance_identity ? *entry.maintenance_identity : runtime.mount_identity(entry.drive_letter);
+    if (identity.drive_letter != entry.drive_letter || identity.unique_id < 0 || identity.volume_path.empty() || !identity.disk_length) return;
+    volume::WatchedMount complete{entry.id, entry.drive_letter, identity.unique_id, identity.volume_path, identity.disk_length, entry.watched_mount->mount_revision};
+    entry.watched_mount = std::move(complete);
+  } catch (...) { /* The monitor can still confirm removal from inventory. */ }
+}
+
 void record_created_mount(CardLoginMountSessionState& state,
                           const std::uint32_t id, const wchar_t drive_letter) {
   SessionContainer* const entry = find_by_id(state, id);
@@ -1142,6 +1162,7 @@ void mark_released(SessionContainer& container) noexcept {
   container.mounted = false;
   container.maintenance = false;
   container.maintenance_identity.reset();
+  container.watched_mount.reset();
   container.drive_letter = wchar_t{};
 }
 
@@ -1959,6 +1980,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     SESSION_TRACE("新建容器挂载返回", mount_result_text(mount_result));
     const wchar_t drive_letter = settled_drive_letter(mount_result);
     record_created_mount(state_, id, drive_letter);
+    capture_mount_watch(state_, *find_by_id(state_, id), runtime_);
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -2102,6 +2124,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     SESSION_TRACE("新建容器挂载返回", mount_result_text(mount_result));
     const wchar_t drive_letter = settled_drive_letter(mount_result);
     record_created_mount(state_, id, drive_letter);
+    capture_mount_watch(state_, *find_by_id(state_, id), runtime_);
     mounted = true;
     record_operation(OperationKind::container_mounted,
                      OperationOutcome::succeeded,
@@ -2220,6 +2243,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
       // dropped. The derivation flags stay untouched: nothing was established.
       entry.mounted = true;
       entry.drive_letter = drive_letter;
+      capture_mount_watch(state_, entry, runtime_);
       throw refuse();
     }
     throw refuse();
@@ -2238,6 +2262,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
     catch (...) {
       SESSION_TRACE_FAILURE("身份无法确认后强制卸下失败", "盘符 " + drive_text(drive_letter));
       entry.mounted = true; entry.drive_letter = drive_letter;
+      capture_mount_watch(state_, entry, runtime_);
     }
     throw refuse();
   }
@@ -2251,6 +2276,7 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
   entry.release_first = true;
   entry.derivation_known = true;
   entry.maintenance = mode == MaintenanceMount::open;
+  capture_mount_watch(state_, entry, runtime_);
   SESSION_TRACE(std::string("带保护挂载完成（") + mode_text + "）", container_text(entry));
   if (mode == MaintenanceMount::open) {
     record_operation(OperationKind::container_mounted,
@@ -2688,6 +2714,7 @@ void CardLoginMountSessionCore::mount_adopted_container(
     entry->mounted = true;
     entry->release_first = login_derived;
     entry->derivation_known = true;
+    capture_mount_watch(state_, *entry, runtime_);
     record_operation(OperationKind::container_mounted, OperationOutcome::succeeded, display_name(*entry), settled);
     runtime_.notify_mounted(settled);
     SESSION_TRACE("分区已挂载", container_text(*entry));
@@ -2744,6 +2771,7 @@ void CardLoginMountSessionCore::mount_adopted_container(
     entry->mounted = true;
     entry->release_first = hidden_volume;
     entry->derivation_known = true;
+    capture_mount_watch(state_, *entry, runtime_);
     runtime_.notify_mounted(drive_letter);
     SESSION_TRACE("文件容器已挂载", container_text(*entry));
   } catch (...) {
@@ -2783,6 +2811,7 @@ std::uint32_t CardLoginMountSessionCore::mount_container(
     const std::uint32_t id = adopt(state_, path, probed.drive_letter, true,
                                    probed.hidden_volume, true, true)
                                  .id;
+    capture_mount_watch(state_, *find_by_id(state_, id), runtime_);
     remember_container_path(path);
     const auto* named = find_by_id(state_, id);
     record_operation(OperationKind::container_mounted,
@@ -3130,6 +3159,34 @@ void CardLoginMountSessionCore::export_container_file(
       absolute_destination_directory, file_name_of(entry->path));
   SESSION_TRACE("导出容器文件", container_text(*entry) + "；目标 " + wide_text(destination));
   runtime_.copy_entry(entry->path, destination, {});
+}
+
+std::vector<volume::WatchedMount> CardLoginMountSessionCore::mount_watch_targets() const {
+  std::vector<volume::WatchedMount> result;
+  for (const auto& entry : state_.containers)
+    if (entry.mounted && entry.watched_mount) result.push_back(*entry.watched_mount);
+  return result;
+}
+
+bool CardLoginMountSessionCore::reconcile_mounts(std::span<const volume::WatchedMount> targets,
+    std::span<const volume::MountObservation> observations) {
+  if (targets.size() != observations.size()) return false;
+  for (std::size_t i=0; i<targets.size(); ++i)
+    if (targets[i].container_id != observations[i].container_id) return false;
+  bool changed = false;
+  for (std::size_t i=0; i<targets.size(); ++i) {
+    const auto presence = observations[i].presence;
+    if (presence != volume::MountPresence::missing && presence != volume::MountPresence::replaced) continue;
+    auto* entry = find_by_id(state_, targets[i].container_id);
+    if (!entry || !entry->mounted || !entry->watched_mount || *entry->watched_mount != targets[i]) continue;
+    const bool helper = entry->maintenance && maintenance_helper_target_ == entry->id;
+    mark_released(*entry);
+    changed = true;
+    if (helper) {
+      runtime_.end_imports(); runtime_.end_measurements(); maintenance_helper_target_ = 0;
+    }
+  }
+  return changed;
 }
 
 std::vector<ContainerStatus> CardLoginMountSessionCore::container_statuses() {

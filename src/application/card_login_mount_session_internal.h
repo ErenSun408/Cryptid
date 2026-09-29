@@ -172,6 +172,7 @@ struct SessionContainer final {
   std::wstring display_alias;
   wchar_t drive_letter{};
   bool mounted{};
+  std::optional<volume::WatchedMount> watched_mount;
   // Containers with a hidden volume are released before the standard ones,
   // which is the only reason the session distinguishes them. Nothing about
   // this flag crosses the application boundary.
@@ -193,6 +194,7 @@ struct SessionContainer final {
 struct CardLoginMountSessionState final {
   std::vector<SessionContainer> containers;
   std::uint32_t next_container_id{1};
+  std::uint64_t next_mount_revision{1};
   // What to call a disk container whose record carries no creation sequence,
   // which is every record written before that was recorded. It counts disk
   // containers and nothing else, and stays above every sequence already seen
@@ -326,6 +328,8 @@ class CardLoginMountSessionCore final {
       std::uint32_t id, std::wstring_view absolute_destination_directory);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
+  [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;
+  bool reconcile_mounts(std::span<const volume::WatchedMount> targets, std::span<const volume::MountObservation> observations);
   [[nodiscard]] std::vector<ContainerOperationTarget> container_operation_targets();
   [[nodiscard]] ::usb_vault::application::ContainerAStatus container_a_status();
   [[nodiscard]] std::vector<::usb_vault::application::OperationEvent>

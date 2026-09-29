@@ -5151,30 +5151,8 @@
     exitHotkeySave.addEventListener("click", () => void saveExitHotkey(true, Number(exitHotkeyKey.dataset.key), Number(exitHotkeyCount.value), true));
   }
 
-  const refreshNativeState = async () => {
-    const revision = batchSessionRevision;
-    const nextState = await bridge.getSessionState();
-    const nextActiveVolumes = await bridge.hasActiveSession();
-    if (!Number.isInteger(nextState) || nextState < nativeState.noCard ||
-        nextState > nativeState.unavailable ||
-        (nextActiveVolumes !== true && nextActiveVolumes !== false)) {
-      throw Object.assign(new Error("invalid native session state"), { startupCode: 1404 });
-    }
+  const readContainerSnapshot = async (nextActiveVolumes) => {
     const nextContainers = [];
-    const nextOperationEvents = [];
-    let nextResetAvailable = false;
-    let nextForgotAvailable = false;
-    if (nextState !== nativeState.authenticated) {
-      nextForgotAvailable = await bridge.canLoginReset();
-      if (typeof nextForgotAvailable !== "boolean") throw new Error("invalid reset availability");
-    }
-    if (nextState === nativeState.authenticated) {
-      const resetAvailable = await bridge.canResetCardRecord();
-      if (resetAvailable !== true && resetAvailable !== false) {
-        throw new Error("invalid card reset availability");
-      }
-      nextResetAvailable = resetAvailable;
-      await refreshStoredSwitches();
       const count = await bridge.getContainerCount();
       if (!Number.isInteger(count) || count < 0 || count > 4096) {
         throw new Error("invalid container count");
@@ -5203,6 +5181,35 @@
         }
         nextContainers.push({ id, name, mounted, sizeMib, drive, partition, conversion, unavailable });
       }
+
+    return nextContainers;
+  };
+
+  const refreshNativeState = async () => {
+    const revision = batchSessionRevision;
+    const nextState = await bridge.getSessionState();
+    const nextActiveVolumes = await bridge.hasActiveSession();
+    if (!Number.isInteger(nextState) || nextState < nativeState.noCard ||
+        nextState > nativeState.unavailable ||
+        (nextActiveVolumes !== true && nextActiveVolumes !== false)) {
+      throw Object.assign(new Error("invalid native session state"), { startupCode: 1404 });
+    }
+    const nextContainers = [];
+    const nextOperationEvents = [];
+    let nextResetAvailable = false;
+    let nextForgotAvailable = false;
+    if (nextState !== nativeState.authenticated) {
+      nextForgotAvailable = await bridge.canLoginReset();
+      if (typeof nextForgotAvailable !== "boolean") throw new Error("invalid reset availability");
+    }
+    if (nextState === nativeState.authenticated) {
+      const resetAvailable = await bridge.canResetCardRecord();
+      if (resetAvailable !== true && resetAvailable !== false) {
+        throw new Error("invalid card reset availability");
+      }
+      nextResetAvailable = resetAvailable;
+      await refreshStoredSwitches();
+      nextContainers.push(...await readContainerSnapshot(nextActiveVolumes));
 
       const operationCount = await bridge.getOperationCount();
       if (!Number.isInteger(operationCount) || operationCount < 0 ||
@@ -5289,6 +5296,62 @@
     }
   };
 
+  let mountRefreshPending = false;
+  let mountRefreshRunning = false;
+  let mountRefreshTimer = null;
+  let mountRefreshDisposed = false;
+  const scheduleMountRefresh = () => {
+    if (mountRefreshTimer !== null || mountRefreshDisposed || !mountRefreshPending) return;
+    mountRefreshTimer = setTimeout(() => { mountRefreshTimer = null; void refreshMountInventory(); }, 200);
+  };
+  const refreshMountInventory = async () => {
+    if (mountRefreshDisposed || !mountRefreshPending || mountRefreshRunning) return;
+    if (busy || containerRename || reorderState !== null || exitHotkeySaving || externalRefreshPending || !bridge) { scheduleMountRefresh(); return; }
+    if (currentState !== nativeState.authenticated) { mountRefreshPending = false; return; }
+    const revision = batchSessionRevision;
+    mountRefreshPending = false; mountRefreshRunning = true; busy = true;
+    try {
+      // A mount notice never changes authentication, settings drafts or result dialogs.
+      if (await bridge.getSessionState() !== nativeState.authenticated) return;
+      const next = await readContainerSnapshot(true);
+      const active = await bridge.hasActiveSession();
+      if (typeof active !== "boolean" || (next.some(item => item.mounted) && !active)) throw new Error("invalid container status");
+      if (revision !== batchSessionRevision) return;
+      const removed = new Set(containers.filter(item => item.mounted && !next.some(row => row.id === item.id && row.mounted)).map(item => item.id));
+      containers = next; activeVolumes = active;
+      containerOrder = next.map(item => item.id);
+      for (const id of removed) decoyMounted.delete(id);
+      for (const [key, entry] of exportSelection) if (removed.has(entry.id)) exportSelection.delete(key);
+      if (removed.has(openExportContainer)) { openExportListing = null; openExportError = ""; }
+      if (removed.has(fileContainerId)) {
+        ++fileListingRevision; fileRefreshPendingRevision = 0;
+        fileEntries = []; filePath = []; setFileStatus("");
+        renderFileBreadcrumb(); renderFileList(); renderFileDropTargets();
+      }
+      if (removed.has(decoyMaintenanceId) || removed.has(decoyProtectionTarget)) {
+        clearDecoyMaintenanceFacts();
+        if (removed.has(decoyMaintenanceId)) disarmDecoyDrop();
+      }
+    } catch {
+      // Native workers can start between async bridge calls. Retry without
+      // turning contention or a transient driver failure into a login error.
+      if (revision === batchSessionRevision) mountRefreshPending = true;
+    } finally {
+      busy = false; mountRefreshRunning = false;
+      if (revision === batchSessionRevision && currentState === nativeState.authenticated) {
+        render(messageForCurrentState()); renderDecoySection();
+      }
+      if (externalRefreshPending) void refreshAfterExternalChange();
+      scheduleMountRefresh();
+    }
+  };
+  window.addEventListener("usb-vault-mounts-changed", () => {
+    mountRefreshPending = true; void refreshMountInventory();
+  });
+  window.addEventListener("pagehide", () => {
+    mountRefreshDisposed = true; clearTimeout(mountRefreshTimer); mountRefreshTimer = null;
+  });
+
   const refreshAfterExternalChange = async () => {
     discardPartitions();
     closeSessionTools();
@@ -5333,6 +5396,7 @@
   });
 
   window.addEventListener("usb-vault-session-changed", () => {
+    mountRefreshPending = false; clearTimeout(mountRefreshTimer); mountRefreshTimer = null;
     ++batchSessionRevision;
     clearExportResults();
     exportSelection.clear();

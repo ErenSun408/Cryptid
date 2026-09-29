@@ -36,6 +36,7 @@ std::vector<MountObservation> inspect_mount_states(
     try {
       const auto actual = reader.identity(target.drive_letter);
       if (!valid_identity(actual, target.drive_letter)) continue;
+      if (target.unique_id < 0) continue; // No baseline: only absence can be established.
       result[index].presence = actual.unique_id == target.unique_id &&
           actual.volume_path == target.volume_path && actual.disk_length == target.disk_length
           ? MountPresence::present : MountPresence::replaced;
@@ -75,8 +76,8 @@ void MountStateMonitor::watch(std::uint64_t epoch, std::vector<WatchedMount> tar
   if (targets.size() > 26) throw std::invalid_argument("too many watched mounts");
   for (const auto& target : targets) {
     if (!target.container_id || target.drive_letter < L'A' || target.drive_letter > L'Z' ||
-        target.unique_id < 0 || target.volume_path.empty() || target.volume_path.size() > 32767 ||
-        !target.disk_length || !ids.insert(target.container_id).second ||
+        (target.unique_id < -1 || (target.unique_id >= 0 && (target.volume_path.empty() || !target.disk_length))) ||
+        target.volume_path.size() > 32767 || !ids.insert(target.container_id).second ||
         !drives.insert(target.drive_letter).second)
       throw std::invalid_argument("invalid watched mount");
   }

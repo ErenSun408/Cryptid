@@ -20,6 +20,8 @@ struct WatchedMount final {
   std::int32_t unique_id{};
   std::wstring volume_path;
   std::uint64_t disk_length{};
+  std::uint64_t mount_revision{};
+  friend bool operator==(const WatchedMount&, const WatchedMount&) = default;
 };
 enum class MountPresence { present, missing, replaced, unknown };
 struct MountObservation final {

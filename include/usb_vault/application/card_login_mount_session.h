@@ -5,6 +5,7 @@
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/volume/volume_directory_listing.h"
 #include "usb_vault/volume/partition_catalog.h"
+#include "usb_vault/volume/mount_state_monitor.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -614,6 +615,10 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
+  // Native owner only, never concurrent with session workers. No driver IO.
+  [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;
+  bool reconcile_mounts(std::span<const volume::WatchedMount> targets,
+                        std::span<const volume::MountObservation> observations);
   [[nodiscard]] std::vector<ContainerOperationTarget> container_operation_targets() override;
   [[nodiscard]] ContainerAStatus container_a_status() override;
   [[nodiscard]] std::vector<OperationEvent> operation_history() override;
