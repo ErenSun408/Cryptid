@@ -954,7 +954,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       const auto started = std::chrono::steady_clock::now();
       const HRESULT hr = invoke_unlogged(member, iid, locale, flags, parameters, result,
                                          exception, argument_error);
-      const bool polled = polled_member(member);
+      // Keep protection observations in test logs to distinguish missed queries from driver state.
+      const bool polled = polled_member(member) && member != kDecoyWriteBlockedId;
       if (!polled || (FAILED(hr) && hr != E_PENDING)) {
         std::string returned;
         try {

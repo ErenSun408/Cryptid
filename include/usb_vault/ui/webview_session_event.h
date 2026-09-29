@@ -14,4 +14,9 @@ inline constexpr wchar_t kWebviewSessionChangedScript[] =
 inline constexpr wchar_t kWebviewExternalDropChangedScript[] =
     L"window.dispatchEvent(new Event('usb-vault-external-drop-changed'));";
 
+// Native activation is authoritative even when the embedded document keeps
+// focus while another application is foreground. No session data is carried.
+inline constexpr wchar_t kWebviewActivatedScript[] =
+    L"window.dispatchEvent(new Event('usb-vault-window-activated'));";
+
 }  // namespace usb_vault::ui

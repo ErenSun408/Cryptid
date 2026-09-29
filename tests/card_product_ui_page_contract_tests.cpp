@@ -145,7 +145,7 @@ void test_decoy_maintenance_reuses_files_and_keeps_facts_ephemeral() {
               section.find("id=\"decoy-maintenance-freshness\"") != std::string::npos,
           "the maintenance result has no secondary page or its two facts");
   require(section.find("id=\"decoy-protection-warning\"") != std::string::npos &&
-              section.find("role=\"alert\"") != std::string::npos &&
+              section.find("role=\"alertdialog\"") != std::string::npos &&
               section.find("保留源文件") != std::string::npos &&
               script.find("bridge.getDecoyMaintenanceWriteBlocked(id)") != std::string::npos,
           "maintenance protection warning or query is missing");

@@ -2914,6 +2914,23 @@
   let decoyCancelRequested = false;
   let decoyMaintenanceRevision = 0;
   const decoyProtectionWarning = document.getElementById("decoy-protection-warning");
+  const decoyProtectionUnmount = document.getElementById("decoy-protection-unmount");
+  const decoyProtectionUnmountStatus = document.getElementById("decoy-protection-unmount-status");
+  document.body.appendChild(decoyProtectionWarning);
+  let decoyProtectionOwnsInert = false;
+  const showDecoyProtectionWarning = () => {
+    if (!decoyProtectionWarning.hidden) return;
+    decoyProtectionOwnsInert = !dashboard.hasAttribute("inert");
+    dashboard.setAttribute("inert", "");
+    decoyProtectionWarning.hidden = false;
+    decoyProtectionUnmount.focus();
+  };
+  decoyProtectionWarning.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === "Tab") (decoyProtectionUnmount.disabled ? decoyProtectionWarning : decoyProtectionUnmount).focus();
+    }
+  });
   const decoyProtectionStatus = document.getElementById("decoy-protection-status");
   let decoyProtectionTimer = null;
   let decoyProtectionPending = false;
@@ -2963,7 +2980,7 @@
       if (!current()) return;
       if (typeof blocked !== "boolean") throw new Error("invalid protection status");
       decoyWriteBlocked = decoyWriteBlocked || blocked;
-      decoyProtectionWarning.hidden = !decoyWriteBlocked;
+      if (decoyWriteBlocked) showDecoyProtectionWarning();
       decoyProtectionStatus.hidden = true;
       if (decoyWriteBlocked) {
         decoyMaintenanceWritable.textContent = "写入已阻止";
@@ -2999,6 +3016,16 @@
     ++decoyProtectionGeneration;
     clearTimeout(decoyProtectionTimer);
     decoyProtectionTimer = null;
+  });
+  window.addEventListener("focus", () => { void pollDecoyProtection(); });
+  window.addEventListener("usb-vault-window-activated", () => {
+    if (decoyStage !== "maintenance" || decoyProtectionDisposed) return;
+    clearTimeout(decoyProtectionTimer);
+    decoyProtectionTimer = null;
+    void pollDecoyProtection();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) void pollDecoyProtection();
   });
   // What the native window was last told to accept a drop into, so the page
   // does not re-arm it on every render. It is the destination only: the page
@@ -3109,6 +3136,9 @@
     decoyProtectionTimer = null;
     decoyWriteBlocked = false;
     decoyProtectionWarning.hidden = true;
+    if (decoyProtectionOwnsInert) dashboard.removeAttribute("inert");
+    decoyProtectionOwnsInert = false;
+    decoyProtectionUnmountStatus.textContent = "";
     decoyProtectionStatus.hidden = true;
     decoyMaintenanceWritable.textContent = "—";
     decoyMaintenanceSpaceDetail.textContent = "";
@@ -3177,6 +3207,7 @@
   };
 
   const renderDecoySection = () => {
+    decoyProtectionUnmount.disabled = busy || currentState !== nativeState.authenticated;
     decoyVerify.hidden = decoyStage !== "verify";
     decoyProgress.hidden = decoyStage !== "running";
     decoyResults.hidden = decoyStage !== "results" && !decoyListVisible;
@@ -3459,6 +3490,11 @@
   const refreshDecoyMaintenanceFacts = async () => {
     if (busy || bridge === null || decoyStage !== "maintenance" ||
         currentState !== nativeState.authenticated) return;
+    const sessionRevision = batchSessionRevision;
+    const maintenanceId = decoyMaintenanceId;
+    await pollDecoyProtection();
+    if (busy || decoyWriteBlocked || sessionRevision !== batchSessionRevision ||
+        maintenanceId !== decoyMaintenanceId || decoyStage !== "maintenance") return;
     const id = decoyMaintenanceId;
     const revision = ++decoyMaintenanceRevision;
     let capacityFailed = false;
@@ -3521,6 +3557,7 @@
       busy = false;
       if (revision === decoyMaintenanceRevision) {
         renderDecoySection();
+        void pollDecoyProtection();
       } else if (externalRefreshPending) {
         await refreshAfterExternalChange();
         renderDecoySection();
@@ -3576,6 +3613,7 @@
     const id = decoyMaintenanceId;
     busy = true;
     setDecoyStatus(decoyMaintenanceStatus, "");
+    decoyProtectionUnmountStatus.textContent = "";
     renderDecoySection();
     try {
       await waitForVolumeOperation(() => bridge.beginEndDecoyMaintenance(id));
@@ -3589,7 +3627,10 @@
       filePath = [];
       fileEntries = [];
       clearDecoyMaintenanceFacts();
+      showDashboardSection("decoy");
     } catch (pageError) { logCaughtPageError("endDecoyMaintenance/1", pageError);
+      if (revision !== batchSessionRevision) return;
+      decoyProtectionUnmountStatus.textContent = "无法卸载，请关闭占用该卷的程序后重试。";
       setDecoyStatus(decoyMaintenanceStatus,
         "无法结束维护，请关闭可能占用文件的程序后重试。", "error");
     } finally {
@@ -3644,6 +3685,7 @@
   decoyMaintenanceEnd.addEventListener("click", () => {
     void endDecoyMaintenance();
   });
+  decoyProtectionUnmount.addEventListener("click", () => { void endDecoyMaintenance(); });
   decoySelectFiles.addEventListener("click", async () => {
     if (busy || decoyUploadRecovery || decoyWriteBlocked || decoyStage !== "maintenance") return;
     await armDecoyDrop();

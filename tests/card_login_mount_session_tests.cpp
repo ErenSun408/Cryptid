@@ -1384,7 +1384,7 @@ void test_runtime_log_records_session_stages_and_failures() {
        std::to_wstring(::GetTickCount64()));
   require(std::filesystem::create_directory(root), "the log fixture directory already exists");
   const SYSTEMTIME time{2026, 9, 0, 26, 10, 0, 0, 0};
-  const std::filesystem::path path = root / L"runtime-log-20260926-100000.txt";
+  const std::filesystem::path path = root / L"logs" / L"runtime-log-20260926-100000.txt";
   {
     diagnostics::DebugLogFile file;
     require(file.open(root, time), "cannot open the session log fixture");
@@ -1458,6 +1458,7 @@ void test_runtime_log_records_session_stages_and_failures() {
             "the session log carried a password or a derived key");
   }
   std::filesystem::remove(path);
+  std::filesystem::remove(root / L"logs");
   std::filesystem::remove(root);
 #endif
 }

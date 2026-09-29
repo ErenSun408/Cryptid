@@ -1741,7 +1741,7 @@ void test_runtime_log_records_page_calls() {
        std::to_wstring(::GetTickCount64()));
   require(std::filesystem::create_directory(root), "the bridge log fixture already exists");
   const SYSTEMTIME time{2026, 9, 0, 26, 12, 0, 0, 0};
-  const std::filesystem::path path = root / L"runtime-log-20260926-120000.txt";
+  const std::filesystem::path path = root / L"logs" / L"runtime-log-20260926-120000.txt";
   {
     diagnostics::DebugLogFile file;
     require(file.open(root, time), "cannot open the bridge log fixture");
@@ -1784,6 +1784,7 @@ void test_runtime_log_records_page_calls() {
           "a swallowed bridge exception was not recorded before its failed HRESULT");
   require(text.find("sekrit") == std::string::npos, "a password reached the bridge log");
   std::filesystem::remove(path);
+  std::filesystem::remove(root / L"logs");
   std::filesystem::remove(root);
 #endif
 }

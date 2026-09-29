@@ -214,7 +214,7 @@
     }
     .setup-surface[data-busy="true"] #setup-save:disabled { cursor: wait; }
     #decoy-protection-warning, #decoy-protection-status { color: var(--danger); }
-    #decoy-protection-warning { padding: 1rem; border: 1px solid var(--danger); border-radius: .6rem; }
+    #decoy-protection-message { color: var(--danger); margin: .85rem 0 0; }
     #setup-status { color: var(--text-2); }
     #setup-status[data-tone="ok"] { color: var(--ok); }
     #setup-status[data-tone="error"] { color: var(--danger); }
@@ -891,14 +891,14 @@
     #forgot-password-close svg, #reset-card-close svg { width: 1.35rem; height: 1.35rem; stroke-width: 2; }
     .modal-body { padding: 1.25rem; max-height: calc(100vh - 9rem); overflow-y: auto; }
     .modal-body > p { margin: 0 0 1.1rem; font-size: .8rem; line-height: 1.7; color: var(--text-2); }
-    #volume-operation-dialog .modal { width: min(23rem, 100%); min-height: 13rem; display: flex; flex-direction: column; text-align: center; }
-    #volume-operation-dialog .modal-body { flex: 1; padding: 1.5rem 1.5rem .75rem; }
+    :is(#volume-operation-dialog, #decoy-protection-warning) .modal { width: min(23rem, 100%); min-height: 13rem; display: flex; flex-direction: column; text-align: center; }
+    :is(#volume-operation-dialog, #decoy-protection-warning) .modal-body { flex: 1; padding: 1.5rem 1.5rem .75rem; }
     #volume-operation-title { font-size: 1.05rem; line-height: 1.6; overflow-wrap: anywhere; margin: .85rem 0 .5rem; }
     #volume-operation-note { font-size: .8rem; line-height: 1.7; color: var(--text-2); margin: 0; overflow-wrap: anywhere; }
-    #volume-operation-dialog .modal-footer { justify-content: center; min-height: 3.25rem; }
+    :is(#volume-operation-dialog, #decoy-protection-warning) .modal-footer { justify-content: center; min-height: 3.25rem; }
     /* One shared floor so the two footer buttons match whatever their labels
        say: the longest is "确认强制卸载" at roughly 6.2rem, so 7rem wins. */
-    #volume-operation-confirm, #volume-operation-force, #volume-operation-retry { min-width: 7rem; }
+    #volume-operation-confirm, #volume-operation-force, #volume-operation-retry, #decoy-protection-unmount { min-width: 7rem; }
     /* All three states keep the same disc, so the mark never collapses when a
        result replaces the spinner; only its colour and inner shape change. The
        shapes are drawn in CSS like .creation-progress-steps .step-mark above,
@@ -907,13 +907,16 @@
     #volume-operation-dialog[data-result="running"] .volume-operation-mark { border-color: var(--line); border-top-color: var(--gold); animation: creation-spin 1s linear infinite; }
     #volume-operation-dialog[data-result="success"] .volume-operation-mark { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
     /* A pending force confirmation is still a warning, so it keeps the danger disc. */
+    #decoy-protection-warning .volume-operation-mark,
     #volume-operation-dialog[data-result="error"] .volume-operation-mark,
     #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
     /* Two borders of a box, rotated into a tick. */
     #volume-operation-dialog[data-result="success"] .volume-operation-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: .8rem; height: .42rem; border-left: 2.5px solid currentColor; border-bottom: 2.5px solid currentColor; border-radius: 1px; transform: translate(-50%, -70%) rotate(-45deg); }
     /* A stem and a dot, so the exclamation is ours rather than the font's. */
+    #decoy-protection-warning .volume-operation-mark::before,
     #volume-operation-dialog[data-result="error"] .volume-operation-mark::before,
     #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark::before { content: ""; position: absolute; left: 50%; top: .58rem; width: 2.5px; height: .78rem; border-radius: 1.25px; background: currentColor; transform: translateX(-50%); }
+    #decoy-protection-warning .volume-operation-mark::after,
     #volume-operation-dialog[data-result="error"] .volume-operation-mark::after,
     #volume-operation-dialog[data-result="confirm-force"] .volume-operation-mark::after { content: ""; position: absolute; left: 50%; top: 1.61rem; width: 3px; height: 3px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
     @media (prefers-reduced-motion: reduce) { #volume-operation-dialog .volume-operation-mark { animation: none !important; } }
@@ -1505,10 +1508,15 @@
               </div>
             </div>
             <output id="decoy-maintenance-status" class="section-note" aria-live="polite" data-tone="" hidden></output>
-            <div id="decoy-protection-warning" class="section-note" role="alert" hidden>
-              <strong>保护已触发，当前外层卷已停止接受写入。</strong>
-              <p>本次复制或修改可能未完整保存，页面显示完成也不代表数据已落盘。请停止复制、删除和修改，保留源文件，关闭占用该卷的程序，然后点击“卸载”。</p>
-              <p>卸载后重新进入维护并核对文件；不要关闭保护或反复重试原来的写入。此提示不代表完成了文件完整性校验。</p>
+            <div id="decoy-protection-warning" class="modal-overlay" role="alertdialog" aria-modal="true" aria-label="写入保护已触发" aria-describedby="decoy-protection-message" tabindex="-1" hidden>
+              <div class="modal">
+                <div class="modal-body">
+                  <div class="volume-operation-mark" aria-hidden="true"></div>
+                  <p id="decoy-protection-message">保护已触发，当前外层卷已停止接受写入。 本次数据修改可能未完整保存，请停止正在进行的操作，保留源文件，关闭占用该卷的程序，卸载后重新进入维护并核对文件完整性</p>
+                  <output id="decoy-protection-unmount-status" role="status"></output>
+                </div>
+                <div class="modal-footer"><button id="decoy-protection-unmount" class="shell-button danger" type="button">卸载</button></div>
+              </div>
             </div>
             <output id="decoy-protection-status" class="section-note" aria-live="polite" hidden></output>
             <div class="decoy-update-grid">

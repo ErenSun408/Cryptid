@@ -686,6 +686,25 @@ void resize_webview(const HWND window) noexcept {
   if (FAILED(result)) report_webview_failure(1316, result, 0, 0, 2);
 }
 
+void notify_webview_foreground(const HWND window, const bool immediate) noexcept {
+  static ULONGLONG last_notice = 0;
+  const ULONGLONG now = ::GetTickCount64();
+  if ((!immediate && now - last_notice < 1000) || !g_webview ||
+      g_view_switch_pending || !g_webview_startup.current(g_page_generation) ||
+      ::IsIconic(window) || ::GetAncestor(::GetForegroundWindow(), GA_ROOT) != window) return;
+  last_notice = now;
+  const HRESULT result = g_webview->ExecuteScript(
+      usb_vault::ui::kWebviewActivatedScript,
+      Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+          [](HRESULT result, LPCWSTR) -> HRESULT {
+            USB_VAULT_TRACE("窗口", "前台保护补查通知完成", usb_vault::diagnostics::hex_text(static_cast<std::uint32_t>(result)));
+            return S_OK;
+          }).Get());
+  if (FAILED(result)) {
+    USB_VAULT_TRACE("窗口", "前台保护补查通知失败", usb_vault::diagnostics::hex_text(static_cast<std::uint32_t>(result)));
+  }
+}
+
 void notify_webview_session_changed() noexcept {
   if (!g_webview || !g_webview_startup.current(g_page_generation)) return;
   // Only the bounded numeric failure snapshot crosses this boundary. Never
@@ -1233,6 +1252,9 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     return 0;
   }
   switch (message) {
+    case WM_ACTIVATE:
+      if (LOWORD(wparam) != WA_INACTIVE && !HIWORD(wparam)) notify_webview_foreground(window, true);
+      return ::DefWindowProcW(window, message, wparam, lparam);
     case kTrayMessage:
       if (!g_tray.hidden() || HIWORD(lparam) != 1) return 0;
       if (LOWORD(lparam) == NIN_SELECT || LOWORD(lparam) == NIN_KEYSELECT || LOWORD(lparam) == WM_LBUTTONDBLCLK) {
@@ -1368,6 +1390,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         return 0;
       }
       if (wparam == 2) { poll_webview_ready(); return 0; }
+      if (wparam == 1) notify_webview_foreground(window, false);
       if (wparam == 1 && g_drop_target != nullptr) {
         notify_webview_external_drop(g_drop_target->status().state);
       }

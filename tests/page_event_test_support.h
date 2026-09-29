@@ -59,7 +59,7 @@ struct Log final {
   std::filesystem::path root = std::filesystem::temp_directory_path() /
       (L"usb-vault-page-report-" + std::to_wstring(::GetCurrentProcessId()) + L"-" +
        std::to_wstring(::GetTickCount64()));
-  std::filesystem::path path = root / L"runtime-log-20260927-120000.txt";
+  std::filesystem::path path = root / L"logs" / L"runtime-log-20260927-120000.txt";
   usb_vault::diagnostics::DebugLogFile file;
   Log() {
     check(std::filesystem::create_directory(root), "page log fixture already exists");
@@ -72,6 +72,7 @@ struct Log final {
     file.close();
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
+    std::filesystem::remove(root / L"logs", ignored);
     std::filesystem::remove(root, ignored);
   }
   std::string read() {

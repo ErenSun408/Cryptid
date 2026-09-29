@@ -267,7 +267,26 @@
     check(window.navigationFixture.pageEvents.some(event => event.category === 2 &&
       event.content.includes("invalid protection status")), "Invalid bridge data reaches the page validation log");
     window.navigationFixture.protectionBlocked = true;
-    await protectionTick();
+    window.navigationFixture.delayProtection = true;
+    window.navigationFixture.completeProtection = null;
+    window.dispatchEvent(new Event("usb-vault-window-activated"));
+    await wait(() => typeof window.navigationFixture.completeProtection === "function");
+    const protectionQueryCount = window.navigationFixture.protectionQueries.length;
+    window.dispatchEvent(new Event("usb-vault-window-activated"));
+    window.dispatchEvent(new Event("usb-vault-window-activated"));
+    await tick();
+    check(window.navigationFixture.protectionQueries.length === protectionQueryCount,
+      "Repeated native foreground notices do not overlap a pending protection query");
+    window.navigationFixture.delayProtection = false;
+    window.navigationFixture.completeProtection(true);
+    await wait(() => !$("#decoy-protection-warning").hidden);
+    check($("#authenticated-dashboard").hasAttribute("inert") &&
+      $("#decoy-protection-warning").getAttribute("role") === "alertdialog" &&
+      all("#decoy-protection-warning button").length === 1,
+      "Returning to the window immediately shows a blocking single-action protection dialog");
+    $("#decoy-protection-warning").dispatchEvent(new KeyboardEvent("keydown", {key:"Escape", bubbles:true}));
+    $("#decoy-protection-warning").click();
+    check(!$("#decoy-protection-warning").hidden, "Escape and backdrop cannot close protection dialog");
     check(!$("#decoy-protection-warning").hidden && $("#decoy-protection-status").hidden &&
       $("#decoy-maintenance-writable").textContent === "写入已阻止" &&
       !$("#decoy-maintenance-space-detail").textContent.includes("536,870,912") &&
@@ -284,7 +303,16 @@
 
     const clearsBefore = window.navigationFixture.dropClears;
     const endedBefore = window.navigationFixture.endedMaintenance.length;
-    $("#decoy-maintenance-end").click();
+    const nativeBridge = window.chrome.webview.hostObjects.nativeBridge;
+    const originalEnd = nativeBridge.beginEndDecoyMaintenance;
+    nativeBridge.beginEndDecoyMaintenance = () => { throw new Error("volume is in use"); };
+    $("#decoy-protection-unmount").click();
+    await wait(() => $("#decoy-protection-unmount-status").textContent.includes("无法卸载") &&
+      !$("#decoy-protection-unmount").disabled);
+    check(!$("#decoy-protection-warning").hidden && window.navigationFixture.endedMaintenance.length === endedBefore,
+      "Failed unmount keeps the protection dialog open for retry");
+    nativeBridge.beginEndDecoyMaintenance = originalEnd;
+    $("#decoy-protection-unmount").click();
     await wait(() => window.navigationFixture.endedMaintenance.length === endedBefore + 1);
     check(window.navigationFixture.endedMaintenance.at(-1) === 1 &&
       !$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
@@ -292,6 +320,8 @@
       "Ending maintenance unmounts the current container and restores the shared file manager");
     check(window.navigationFixture.dropClears >= clearsBefore && !window.navigationFixture.dropArmed,
       "Leaving maintenance disarms the window, so a drag lands nowhere");
+    check($("#decoy-protection-warning").hidden && !$("#authenticated-dashboard").hasAttribute("inert"),
+      "Successful unmount releases the protection dialog and its background lock");
 
     $("#decoy-container-list [data-decoy-container='3'] button").click();
     await wait(() => window.navigationFixture.openedMaintenance.length === 5 &&
