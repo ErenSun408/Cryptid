@@ -2788,11 +2788,7 @@
     if (failed.length !== 0) {
       // What succeeded is already gone from the selection, so what stays
       // ticked is exactly what still has to be dealt with.
-      const done = requests.length - failed.length;
-      setBackupStatus(done === 0
-        ? "导出没有完成。位置可能不可写、空间不足，或那里已经有同名文件了。"
-        : `已导出 ${done} 项，${failed.length} 项没有完成，仍勾选着。` +
-          "位置可能不可写、空间不足，或那里已经有同名文件了。", "error");
+      setBackupStatus("部分文件导出失败，请检查目标位置和可用空间后重试。", "error");
       renderBackupCentre();
       return;
     }

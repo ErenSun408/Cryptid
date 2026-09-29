@@ -69,7 +69,7 @@ using TransferCancellation = std::function<bool()>;
 // directory goes with everything inside it.
 //
 // **The destination is never replaced and never merged into.** A copy onto an
-// existing name fails with `ERROR_FILE_EXISTS` or `ERROR_ALREADY_EXISTS`, and
+// existing name normally fails with `ERROR_FILE_EXISTS` or `ERROR_ALREADY_EXISTS`, and
 // what was already there is left exactly as it was, down to not being cleaned
 // up when the copy is abandoned: that entry belongs to the user, not to this
 // operation.
@@ -103,9 +103,12 @@ using TransferCancellation = std::function<bool()>;
 // resolves onto another volume or the source holds a link, and
 // `std::system_error` carrying the Win32 code for everything else, including
 // `ERROR_CANCELLED` when the cancellation asked it to stop.
+// Plaintext export may enable rename_on_collision: append " (n)" before the
+// file extension or after the whole directory name, without replacing or merging.
 void copy_volume_entry(std::wstring_view absolute_source,
                        std::wstring_view absolute_destination,
-                       const TransferCancellation& cancelled = {});
+                       const TransferCancellation& cancelled = {},
+                       bool rename_on_collision = false);
 
 // Copies one entry to another place and then deletes the source. This is the
 // move that works across volumes, where a rename cannot: to the file system

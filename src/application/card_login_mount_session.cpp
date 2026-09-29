@@ -320,6 +320,10 @@ class ProductionCardLoginMountSessionRuntime final
     volume::move_volume_entry_by_copying(absolute_source, absolute_destination);
   }
 
+  void copy_export_entry(const std::wstring_view source, const std::wstring_view destination) override {
+    volume::copy_volume_entry(source, destination, {}, true);
+  }
+
   void copy_entry(const std::wstring_view absolute_source,
                   const std::wstring_view absolute_destination,
                   const volume::TransferCancellation& cancelled) override {
@@ -3092,7 +3096,7 @@ void CardLoginMountSessionCore::export_container_entry(
       volume::resolve_volume_child_path(drive_letter, relative_directory, name);
   SESSION_TRACE("导出条目", "容器 #" + std::to_string(id) + "；来源 " + wide_text(source) +
                                 "；目标 " + wide_text(destination));
-  runtime_.copy_entry(source, destination, {});
+  runtime_.copy_export_entry(source, destination);
 }
 
 void CardLoginMountSessionCore::export_container_file(

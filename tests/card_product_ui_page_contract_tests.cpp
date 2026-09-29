@@ -1381,7 +1381,7 @@ void test_the_backup_centre_owns_the_plaintext_export() {
   // ones that did not stay ticked -- the page never reports a whole export
   // for a partial one.
   require(script.find("failed.push(request);") != std::string::npos &&
-              script.find("项没有完成，仍勾选着。") != std::string::npos,
+              script.find("部分文件导出失败，请检查目标位置和可用空间后重试。") != std::string::npos,
           "a partly failed export does not say what is left to do");
 
   // The migration wording sits beside the title, where it is read before the

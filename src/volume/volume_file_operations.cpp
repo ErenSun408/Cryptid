@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -258,14 +259,20 @@ void require_room_on_volume(const wchar_t drive, const std::uint64_t needed) {
 // Asked by `CopyFileEx` as it writes. `PROGRESS_CANCEL` rather than
 // `PROGRESS_STOP` on purpose: cancel makes it delete the partly written
 // destination file itself, stop leaves the fragment sitting there.
+struct CopyProgress {
+  const TransferCancellation& cancelled;
+  bool destination_opened{};
+};
+
 DWORD CALLBACK on_copy_progress(LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER,
                                 LARGE_INTEGER, DWORD, DWORD, HANDLE, HANDLE,
                                 const LPVOID data) {
-  const auto* const cancelled = static_cast<const TransferCancellation*>(data);
+  auto* const progress = static_cast<CopyProgress*>(data);
+  progress->destination_opened = true;
   // An exception must not cross back into the file system's own frames, and a
   // cancellation that misbehaves is reason enough to stop.
   try {
-    return wants_stop(*cancelled) ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
+    return wants_stop(progress->cancelled) ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("volume/volume_file_operations", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     return PROGRESS_CANCEL;
@@ -286,11 +293,9 @@ void discard_partial_destination(const std::wstring& path) noexcept {
 void copy_file_entry(const std::wstring& source,
                      const std::wstring& destination,
                      const TransferCancellation& cancelled) {
-  // The cast is only because `CopyFileEx` takes its callback data as a plain
-  // `void*`; the callback puts the const straight back on.
-  auto* const data = const_cast<TransferCancellation*>(&cancelled);
+  CopyProgress progress{cancelled};
   if (::CopyFileExW(source.c_str(), destination.c_str(), &on_copy_progress,
-                    data, nullptr, COPY_FILE_FAIL_IF_EXISTS) != FALSE) {
+                    &progress, nullptr, COPY_FILE_FAIL_IF_EXISTS) != FALSE) {
     return;
   }
 
@@ -300,7 +305,8 @@ void copy_file_entry(const std::wstring& source,
     // the user's, and nothing was written over it.
     throw_last_error(error, "copy the file");
   }
-  discard_partial_destination(destination);
+  // Never clean up an occupied path that CopyFileEx did not open for copying.
+  if (progress.destination_opened) discard_partial_destination(destination);
   if (error == ERROR_REQUEST_ABORTED) throw_cancelled();
   throw_last_error(error, "copy the file");
 }
@@ -391,7 +397,8 @@ void move_volume_entry(const std::wstring_view absolute_source,
 
 void copy_volume_entry(const std::wstring_view absolute_source,
                        const std::wstring_view absolute_destination,
-                       const TransferCancellation& cancelled) {
+                       const TransferCancellation& cancelled,
+                       const bool rename_on_collision) {
   const wchar_t source_drive = require_drive_absolute(absolute_source);
   const wchar_t destination_drive = require_drive_absolute(absolute_destination);
 
@@ -411,21 +418,36 @@ void copy_volume_entry(const std::wstring_view absolute_source,
   require_room_on_volume(destination_drive, survey.total_bytes);
   if (wants_stop(cancelled)) throw_cancelled();
 
-  if (!survey.is_directory) {
-    copy_file_entry(source, destination, cancelled);
-    return;
+  std::wstring target = destination;
+  const std::filesystem::path path(destination);
+  const std::wstring extension = survey.is_directory ? L"" : path.extension().wstring();
+  const std::wstring stem = survey.is_directory ? path.filename().wstring() : path.stem().wstring();
+  for (unsigned int number = 0; ; ++number) {
+    if (wants_stop(cancelled)) throw_cancelled();
+    if (number > 100000) throw_last_error(ERROR_FILE_EXISTS, "too many export name collisions");
+    if (number != 0) target = (path.parent_path() / (stem + L" (" + std::to_wstring(number) + L")" + extension)).wstring();
+    if (rename_on_collision && ::GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) continue;
+    if (!survey.is_directory) {
+      try { copy_file_entry(source, target, cancelled); return; }
+      catch (const std::system_error& error) {
+        if (rename_on_collision && error.code().category() == std::system_category() &&
+            (error.code().value() == ERROR_FILE_EXISTS || error.code().value() == ERROR_ALREADY_EXISTS)) continue;
+        throw;
+      }
+    }
+    if (::CreateDirectoryW(target.c_str(), nullptr) != FALSE) break;
+    const DWORD error = ::GetLastError();
+    if (rename_on_collision && (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) continue;
+    throw_last_error(error, "create the destination directory");
   }
 
   // 🔴 Made before the rollback scope opens, deliberately. If this fails
   // because something is already there, that something is the user's, and a
   // rollback must never be in a position to take it away.
-  if (::CreateDirectoryW(destination.c_str(), nullptr) == FALSE) {
-    throw_last_error(::GetLastError(), "create the destination directory");
-  }
   try {
-    copy_directory_contents(source, destination, cancelled);
+    copy_directory_contents(source, target, cancelled);
   } catch (...) {
-    discard_partial_destination(destination);
+    discard_partial_destination(target);
     throw;
   }
 }

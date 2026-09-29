@@ -154,6 +154,9 @@ class CardLoginMountSessionRuntime {
   // virtual is bound to the static type, so an override that disagreed about
   // it would silently receive something the caller never wrote. Every caller
   // says what it means, including the ones that mean "not cancellable".
+  virtual void copy_export_entry(std::wstring_view source, std::wstring_view destination) {
+    copy_entry(source, destination, {});
+  }
   virtual void copy_entry(std::wstring_view absolute_source,
                           std::wstring_view absolute_destination,
                           const volume::TransferCancellation& cancelled) = 0;

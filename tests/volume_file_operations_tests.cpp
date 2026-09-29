@@ -74,6 +74,33 @@ void require_win32_error(Callable&& callable, const DWORD expected,
   require(false, message);
 }
 
+void test_numbered_exports_preserve_existing_entries() {
+  const TemporaryDirectory temporary;
+  const auto source = temporary.root() / L"source.txt";
+  const auto target = temporary.root() / L"report.txt";
+  write_text_file(source, "new");
+  write_text_file(target, "original");
+  write_text_file(temporary.root() / L"report (1).txt", "previous");
+  copy_volume_entry(source.wstring(), target.wstring(), {}, true);
+  require(read_text_file(target) == "original", "export overwrote original");
+  require(read_text_file(temporary.root() / L"report (1).txt") == "previous", "export overwrote numbered file");
+  require(read_text_file(temporary.root() / L"report (2).txt") == "new", "export did not preserve extension");
+  const auto folder = temporary.root() / L"folder.with.dot";
+  make_directory(folder);
+  write_text_file(folder / L"inside.txt", "nested");
+  const auto output = temporary.root() / L"output";
+  make_directory(output);
+  make_directory(output / L"folder.with.dot");
+  copy_volume_entry(folder.wstring(), (output / L"folder.with.dot").wstring(), {}, true);
+  require(read_text_file(output / L"folder.with.dot (1)" / L"inside.txt") == "nested", "directory suffix treated dot as extension");
+  require(!path_exists(output / L"folder.with.dot" / L"inside.txt"), "export merged directories");
+  make_directory(output / L"source.txt");
+  copy_volume_entry(source.wstring(), (output / L"source.txt").wstring(), {}, true);
+  require(path_exists(output / L"source.txt") && read_text_file(output / L"source (1).txt") == "new", "file-directory collision lost data");
+  require_throws([&] { copy_volume_entry(source.wstring(), target.wstring(), [] { return true; }, true); }, "cancelled export copied anyway");
+  require(!path_exists(temporary.root() / L"report (3).txt"), "cancelled export left a copy");
+}
+
 void test_a_file_is_deleted() {
   const TemporaryDirectory temporary;
   const std::filesystem::path file = temporary.root() / L"notes.txt";
@@ -599,6 +626,7 @@ void test_a_copy_through_an_escaping_parent_is_refused() {
 
 int main() {
   try {
+    test_numbered_exports_preserve_existing_entries();
     test_a_file_is_deleted();
     test_a_read_only_file_is_deleted();
     test_a_directory_goes_with_everything_inside_it();
