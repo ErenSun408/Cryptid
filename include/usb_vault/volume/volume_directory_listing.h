@@ -42,7 +42,8 @@ struct VolumeDirectoryListing final {
 // Lists one directory inside a mounted volume.
 //
 // `absolute_directory` must be a drive-absolute path, which is what
-// `resolve_volume_entry_path` produces. `.` and `..` are dropped, entries come
+// `resolve_volume_entry_path` produces. `.` and `..` are dropped; entries
+// marked Hidden or System are omitted from this display listing. Entries come
 // back with directories first and then names in ordinal case-insensitive
 // order, and the count is capped.
 //

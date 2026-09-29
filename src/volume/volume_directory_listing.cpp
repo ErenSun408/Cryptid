@@ -100,6 +100,7 @@ VolumeDirectoryListing list_volume_directory(
 
   do {
     if (is_dot_entry(found.cFileName)) continue;
+    if ((found.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0) continue;
     if (listing.entries.size() >= kVolumeDirectoryEntryLimit) {
       listing.truncated = true;
       break;

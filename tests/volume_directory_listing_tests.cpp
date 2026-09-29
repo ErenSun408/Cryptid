@@ -88,6 +88,33 @@ void test_a_directory_lists_its_entries() {
   }
 }
 
+void test_hidden_and_system_attributes_are_filtered_without_changing_files() {
+  const TemporaryDirectory temporary;
+  for (const auto name : {L"hidden.txt", L"system.txt", L"both.txt", L".visible.txt"})
+    make_file(temporary.root() / name, 1);
+  make_directory(temporary.root() / L"hidden-directory");
+  make_directory(temporary.root() / L"System Volume Information");
+  const auto mark = [&](const wchar_t* name, DWORD attributes) {
+    require(::SetFileAttributesW((temporary.root() / name).c_str(), attributes) != FALSE,
+            "could not set fixture attributes");
+  };
+  mark(L"hidden.txt", FILE_ATTRIBUTE_HIDDEN);
+  mark(L"system.txt", FILE_ATTRIBUTE_SYSTEM);
+  mark(L"both.txt", FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+  mark(L"hidden-directory", FILE_ATTRIBUTE_HIDDEN);
+  mark(L"System Volume Information", FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+  const auto listing = list_volume_directory(temporary.path());
+  require(listing.entries.size() == 1 && find_entry(listing, L".visible.txt") != nullptr,
+          "display listing did not filter by attributes");
+  require(!listing.truncated, "filtered entries caused truncation");
+  require(::GetFileAttributesW((temporary.root() / L"both.txt").c_str()) ==
+              (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM),
+          "listing removed the file or changed its attributes");
+  // Restore the fixture attributes before normal temporary-directory cleanup.
+  for (const auto name : {L"hidden.txt", L"system.txt", L"both.txt", L"hidden-directory", L"System Volume Information"})
+    mark(name, FILE_ATTRIBUTE_NORMAL);
+}
+
 void test_dot_entries_never_appear() {
   const TemporaryDirectory temporary;
   make_file(temporary.root() / L"only.txt", 1);
@@ -222,6 +249,7 @@ int main() {
   try {
     test_a_directory_lists_its_entries();
     test_dot_entries_never_appear();
+    test_hidden_and_system_attributes_are_filtered_without_changing_files();
     test_an_empty_directory_lists_nothing();
     test_a_trailing_separator_is_accepted();
     test_a_missing_or_non_directory_path_is_refused();
