@@ -1921,6 +1921,10 @@ std::uint32_t CardLoginMountSessionCore::create_container(
   bool mounted = false;
   try {
     volume_password = derive_standard_password();
+    // The worker owns the session here, so no upload is running. Release only
+    // the idle helper pipe; keep the protected mount and its identity intact.
+    if (std::ranges::any_of(state_.containers, [](const auto& entry) { return entry.maintenance; }))
+      runtime_.end_measurements();
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
     SESSION_TRACE("暂存容器已生成", "暂存路径 " + wide_text(staging_path));
@@ -2045,6 +2049,10 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     SESSION_TRACE("外层卷派生完成", "输出长度 " + std::to_string(outer_password.size()) + " 字节");
     const security::SecureBuffer& hidden_password =
         hidden_container_password();
+    // The worker owns the session here, so no upload is running. Release only
+    // the idle helper pipe; keep the protected mount and its identity intact.
+    if (std::ranges::any_of(state_.containers, [](const auto& entry) { return entry.maintenance; }))
+      runtime_.end_measurements();
     runtime_.create_with_hidden(staging_path,
                                 outer_size_bytes,
                                 hidden_size_bytes,

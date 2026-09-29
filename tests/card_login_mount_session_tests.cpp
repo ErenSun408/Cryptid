@@ -397,17 +397,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "measurement did not receive authenticated derived credentials");
     events.emplace_back("measure");
     ++measure_calls;
+    maintenance_helper_open = true;
     measured_drive = drive_letter;
     if (fail_measure) throw std::runtime_error("measurement refused");
     if(change_identity_during_measure) ++identities.at(drive_letter).unique_id;
     return reported_safe;
   }
 
-  void end_measurements() noexcept override { ++end_measure_calls; }
+  bool maintenance_helper_open{};
+  void end_measurements() noexcept override { ++end_measure_calls; maintenance_helper_open = false; }
   unsigned end_import_calls{};
   unsigned protected_import_calls{};
   bool change_identity_during_import{};
-  void end_imports() noexcept override { ++end_import_calls; }
+  void end_imports() noexcept override { ++end_import_calls; maintenance_helper_open = false; }
   void import_protected(std::wstring_view container, const usb_vault::volume::MountIdentity& identity,
       const SecureBuffer& outer, const SecureBuffer& hidden, std::wstring_view source,
       std::wstring_view destination, const usb_vault::volume::TransferCancellation& cancelled, const std::function<void(unsigned int)>& progress) override {
@@ -460,6 +462,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       const std::wstring_view target_path,
       const std::uint64_t size_bytes,
       const SecureBuffer& volume_password) override {
+    require(!maintenance_helper_open, "maintenance helper still owns the elevation slot");
     const bool is_container_a = target_path == L"C:\\vault\\a.hc.preparing";
     events.emplace_back(is_container_a ? "create:A" : "create:other");
     require(target_path.ends_with(L".preparing"),
@@ -486,6 +489,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
       const std::uint64_t hidden_size_bytes,
       const SecureBuffer& outer_password,
       const SecureBuffer& hidden_password) override {
+    require(!maintenance_helper_open, "maintenance helper still owns the elevation slot");
     events.emplace_back("create:hidden");
     require(target_path.ends_with(L".preparing"),
             "hidden creation did not use a staging path");
@@ -3395,6 +3399,38 @@ void test_maintenance_refuses_before_it_touches_anything() {
   throw std::runtime_error("the container left the session");
 }
 
+void test_creation_yields_the_idle_maintenance_helper_without_unmounting() {
+  for (const bool hidden : {false, true}) {
+    for (const bool fail : {false, true}) {
+      FakeRuntime runtime;
+      CardAuthenticationSession authentication;
+      CardLoginMountSessionCore session(authentication, runtime, layout());
+      const auto maintained = maintenance_fixture(runtime, session);
+      const auto drive = session.open_decoy_maintenance(maintained, bytes("decoy-password"));
+      const auto identity = runtime.mount_identity(drive);
+      static_cast<void>(session.decoy_maintenance_space(maintained));
+      require(runtime.maintenance_helper_open, "measurement did not retain its helper");
+      runtime.fail_create = fail;
+      const auto create = [&] {
+        if (hidden) return session.create_container_b(L"D:\\new-hidden.hc",
+            64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
+        return session.create_container(L"D:\\new-plain.hc", 64ULL * 1024ULL * 1024ULL);
+      };
+      if (fail) require_throws<std::runtime_error>([&] { static_cast<void>(create()); },
+                                                 "creation failure was lost");
+      else require(mounted_now(session, create()), "new container was not mounted");
+      require(runtime.end_measure_calls == 1 && !runtime.maintenance_helper_open,
+              "creation did not hand off the maintenance helper");
+      require(mounted_now(session, maintained) && runtime.mount_identity(drive) == identity &&
+                  identity.protected_outer_writable && !session.decoy_maintenance_write_blocked(maintained),
+              "creation disturbed the protected maintenance mount");
+      static_cast<void>(session.decoy_maintenance_space(maintained));
+      require(runtime.maintenance_helper_open && runtime.measure_calls == 2,
+              "measurement could not resume after creation");
+    }
+  }
+}
+
 void test_a_survey_lists_only_what_the_password_opens() {
   FakeRuntime runtime;
   runtime.free_drive_letters = {L'S', L'T', L'U', L'V', L'W', L'Z'};
@@ -4743,6 +4779,7 @@ int main() {
     test_maintenance_refuses_every_failure_the_same_way();
     test_a_trial_answers_without_leaving_anything_mounted();
     test_maintenance_refuses_before_it_touches_anything();
+    test_creation_yields_the_idle_maintenance_helper_without_unmounting();
     test_a_survey_lists_only_what_the_password_opens();
     test_a_survey_counts_containers_it_could_not_release();
     test_a_survey_stops_when_asked_and_keeps_nothing_it_did_not_find();
