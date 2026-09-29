@@ -20,6 +20,7 @@ int wmain(int argc, wchar_t** argv) {
     if (classify(Presence::absent, false) != Result::missing ||
         classify(Presence::absent, true) != Result::unavailable ||
         classify(Presence::trusted_running, false) != Result::ready ||
+        classify(Presence::trusted_stopped, false) != Result::repairable ||
         classify(Presence::existing_unavailable, false) != Result::unavailable ||
         classify(Presence::unknown, false) != Result::unavailable ||
         classify(Presence::incompatible, false) != Result::incompatible)
@@ -69,16 +70,16 @@ int wmain(int argc, wchar_t** argv) {
       const auto fixture = directory / L"untrusted.exe";
       if (exists) { std::ofstream file(fixture, std::ios::binary); file << "untrusted installer"; }
       bool rejected = false;
-      try { static_cast<void>(configuration::verify_veracrypt_installer(fixture)); }
+      try { static_cast<void>(configuration::verify_veracrypt_driver(fixture)); }
       catch (...) { rejected = true; }
-      if (!rejected) throw std::runtime_error("untrusted or missing installer accepted");
+      if (!rejected) throw std::runtime_error("untrusted or missing driver accepted");
       rejected = false;
       try { static_cast<void>(configuration::verify_webview_installer(fixture)); }
       catch (...) { rejected = true; }
       if (!rejected) throw std::runtime_error("untrusted WebView2 installer accepted");
     }
     if (argc >= 2) {
-      const auto verified = configuration::verify_veracrypt_installer(argv[1]);
+      const auto verified = configuration::verify_veracrypt_driver(argv[1]);
       std::cout << "Reviewed installer hash and Authenticode verified (not executed)\n";
     }
     if (argc == 3) {

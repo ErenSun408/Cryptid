@@ -61,35 +61,11 @@ static InstallResult run_installer(const usb_vault::card::VerifiedLocalArtifact&
   return classify_installer_exit(exit_code);
 }
 
-static std::filesystem::path system_executable(const wchar_t* name) {
-  std::wstring directory(MAX_PATH, L'\0');
-  const UINT size = ::GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
-  if (size == 0 || size >= directory.size()) {
-    throw DiagnosticError(make_error_code(CardError::backend_unavailable),
-        DiagnosticStage::installer_start, "resolve system installer", ::GetLastError(),
-        NativeCodeKind::win32);
-  }
-  directory.resize(size);
-  return std::filesystem::path(directory) / name;
-}
-
-usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(const std::filesystem::path& path) {
-  return verify_installer(path, kVeraCryptInstallerDigest);
-}
 usb_vault::card::VerifiedLocalArtifact verify_veracrypt_driver(const std::filesystem::path& path) {
   return verify_installer(path, kVeraCryptDriverDigest);
 }
 usb_vault::card::VerifiedLocalArtifact verify_webview_installer(const std::filesystem::path& path) {
   return verify_installer(path, kWebViewInstallerDigest);
-}
-InstallResult install_veracrypt(const std::filesystem::path& directory, const bool silent) {
-  const auto installer = verify_veracrypt_installer(
-      directory / L"prerequisites" / L"VeraCrypt_Setup_x64_1.26.29.msi");
-  std::wstring parameters = L"/i \"" + installer.path().native() + L"\"";
-  if (silent) {
-    parameters += L" /qn REBOOT=ReallySuppress MSIRESTARTMANAGERCONTROL=Disable ACCEPTLICENSE=YES";
-  }
-  return run_installer(installer, system_executable(L"msiexec.exe"), parameters.c_str());
 }
 InstallResult install_webview(const std::filesystem::path& directory, const bool silent) {
   const auto installer = verify_webview_installer(directory / L"prerequisites" / L"MicrosoftEdgeWebView2RuntimeInstallerX64.exe");

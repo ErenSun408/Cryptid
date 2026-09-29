@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <shellapi.h>
 #include <objbase.h>
 #include <WebView2.h>
 #include <string>
@@ -36,9 +37,8 @@ std::filesystem::path directory() {
   return std::filesystem::path(path).parent_path();
 }
 
-Result install(bool browser) {
-  const auto result = browser ? configuration::install_webview(directory(), true)
-                              : configuration::install_veracrypt(directory(), true);
+Result install_webview() {
+  const auto result = configuration::install_webview(directory(), true);
   switch (result.state) {
     case configuration::InstallState::success: return Result::ready;
     case configuration::InstallState::reboot_required: return Result::restart;
@@ -49,17 +49,23 @@ Result install(bool browser) {
 }
 }
 
-int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR command, _In_ int) {
+int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
   if (!SetDllDirectoryW(L"")) return static_cast<int>(Result::unavailable);
   const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   if (FAILED(com)) return static_cast<int>(Result::unavailable);
   Result result = Result::bad_arguments;
   try {
-    const std::wstring_view mode(command);
+    int argc{};
+    auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv) { CoUninitialize(); return static_cast<int>(Result::bad_arguments); }
+    const std::wstring mode = argc == 2 ? argv[1] : L"";
+    LocalFree(argv);
     if (mode == L"--webview")
-      result = configuration::setup::ensure_dependency(webview, [] { return install(true); });
+      result = configuration::setup::ensure_dependency(webview, [] { return install_webview(); });
     else if (mode == L"--veracrypt")
-      result = configuration::setup::ensure_dependency(veracrypt, [] { return install(false); });
+      result = configuration::driver::request_install(directory() / L"usb_vault_setup_helper.exe");
+    else if (mode == L"--install-driver-elevated")
+      result = configuration::driver::install_elevated(directory());
     else if (mode == L"--probe-webview") result = webview();
     else if (mode == L"--probe-veracrypt") result = veracrypt();
   } catch (...) { result = Result::failed; }

@@ -3,7 +3,7 @@
 namespace configuration::setup {
 // Stable process exit codes shared with the bootstrap installer.
 enum class Result : int {
-  ready = 0, missing = 10, incompatible = 11, unavailable = 12,
+  ready = 0, missing = 10, incompatible = 11, unavailable = 12, repairable = 13,
   restart = 20, cancelled = 21, failed = 22, bad_arguments = 64
 };
 
