@@ -266,6 +266,10 @@ void test_exit_hotkey_settings() {
     write_raw(path, invalid);
     expect(exit_hotkey_settings_v1(path) == ExitHotkeySettings{}, "malformed config activated hotkey");
   }
+  for (unsigned int key : {8U,9U,13U,37U,46U,103U,135U,144U,186U,226U}) {
+    set_exit_hotkey_settings_v1(path, {true,key,2});
+    expect(exit_hotkey_settings_v1(path) == ExitHotkeySettings{true,key,2}, "extended key lost on reload");
+  }
   bool rejected = false;
   try { set_exit_hotkey_settings_v1(path, {true, 17, 2}); } catch (...) { rejected = true; }
   expect(rejected, "modifier admitted as single key");

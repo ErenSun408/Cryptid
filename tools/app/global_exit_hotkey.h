@@ -30,7 +30,7 @@ class GlobalExitHotkey final {
           // aggregate VK_SHIFT/CONTROL/MENU aliases. Do not latch aliases.
           if ((key < VK_SHIFT || key > VK_MENU) &&
               (::GetAsyncKeyState(static_cast<int>(key)) & 0x8000) != 0) counter.held(key);
-        Context context{&counter, target, message, generation_, &pending_};
+        Context context{&counter, target, message, generation_, &pending_, &capture_};
         context_ = &context;
         const HHOOK hook = ::SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_proc, ::GetModuleHandleW(nullptr), 0);
         ready.set_value(hook != nullptr);
@@ -48,6 +48,7 @@ class GlobalExitHotkey final {
     } catch (...) { stop(); }
     return false;
   }
+  void set_capture(bool active) noexcept { capture_.store(active); }
   void stop() noexcept {
     if (thread_.joinable()) {
       ::PostThreadMessageW(thread_id_, WM_QUIT, 0, 0);
@@ -65,13 +66,15 @@ class GlobalExitHotkey final {
     UINT message;
     WPARAM generation;
     std::atomic<bool>* pending;
+    std::atomic<bool>* capture;
   };
   static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam) noexcept {
     if (code == HC_ACTION && context_ &&
         (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN || wparam == WM_KEYUP || wparam == WM_SYSKEYUP)) {
       const auto& key = *reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
       if (context_->counter->input(key.vkCode, wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN,
-                                  (key.flags & LLKHF_INJECTED) != 0, ::GetTickCount64())) {
+                                  (key.flags & LLKHF_INJECTED) != 0, ::GetTickCount64(),
+                                  context_->capture->load() && ::GetForegroundWindow() == context_->target)) {
         if (!context_->pending->exchange(true) &&
             !::PostMessageW(context_->target, context_->message, context_->generation, 0))
           context_->pending->store(false);
@@ -84,4 +87,5 @@ class GlobalExitHotkey final {
   DWORD thread_id_{};
   WPARAM generation_{};
   std::atomic<bool> pending_{};
+  std::atomic<bool> capture_{};
 };

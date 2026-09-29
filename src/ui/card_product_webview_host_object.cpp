@@ -44,6 +44,7 @@ constexpr DISPID kGetContainerVolumeUnavailableId = 121;
 constexpr DISPID kReportPageEventId = 122;
 constexpr DISPID kBeginForceUnmountForExitId = 123;
 constexpr DISPID kDismissCloseConfirmationId = 124;
+constexpr DISPID kSetExitHotkeyCaptureId = 130;
 constexpr DISPID kGetExitHotkeyId = 125;
 constexpr DISPID kSetExitHotkeyId = 126;
 constexpr DISPID kGetCloseToTrayId = 127;
@@ -708,6 +709,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"exitApplication")) { ids[0] = kExitApplicationId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountForExit")) { ids[0] = kBeginForceUnmountForExitId; return S_OK; }
     if (matches(names[0], L"dismissCloseConfirmation")) { ids[0] = kDismissCloseConfirmationId; return S_OK; }
+    if (matches(names[0], L"setExitHotkeyCapture")) { ids[0] = kSetExitHotkeyCaptureId; return S_OK; }
     if (matches(names[0], L"getExitHotkey")) { ids[0] = kGetExitHotkeyId; return S_OK; }
     if (matches(names[0], L"setExitHotkey")) { ids[0] = kSetExitHotkeyId; return S_OK; }
     if (matches(names[0], L"getCloseToTrayEnabled")) { ids[0] = kGetCloseToTrayId; return S_OK; }
@@ -984,6 +986,13 @@ class CardProductWebViewHostObject final : public IDispatch {
                           EXCEPINFO*, UINT* argument_error) noexcept {
     if (iid != IID_NULL) return DISP_E_UNKNOWNINTERFACE;
     if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
+    if (member == kSetExitHotkeyCaptureId) {
+      if (!parameters || parameters->cArgs != 1 || parameters->cNamedArgs || !parameters->rgvarg) return DISP_E_BADPARAMCOUNT;
+      if (parameters->rgvarg[0].vt != VT_BOOL) return DISP_E_TYPEMISMATCH;
+      if (!exit_hotkey_sink_) return E_FAIL;
+      exit_hotkey_sink_->set_capture(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+      return S_OK;
+    }
     if (configuration_pending_ || creation_work_->hotkey_exit_pending.load()) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);

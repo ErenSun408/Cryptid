@@ -242,6 +242,13 @@ void test_exit_hotkey_counter() {
   c.input(0xA2,false,false,6400);
   require(!c.input(123,true,true,6500) && !c.input(123,true,true,6510), "injected key fired");
   require(!press(6600) && !press(6700) && press(6800), "injected input altered state");
+  ExitHotkeyCounter captured({true, 65, 1});
+  require(!captured.input(65,true,false,0,true), "capture fired exit");
+  require(!captured.input(65,true,false,1), "capture release leaked repeat");
+  captured.input(65,false,false,2);
+  require(captured.input(65,true,false,3), "capture did not resume");
+  ExitHotkeyCounter arrow({true, 37, 1});
+  require(arrow.input(37,true,false,0), "arrow not supported");
   ExitHotkeyCounter off({false, 123, 1}); require(!off.input(123,true,false,0), "disabled key fired");
   ExitHotkeyCounter one({true, 65, 1}); one.held(65);
   require(!one.input(65,true,false,0), "held key fired after enabling");

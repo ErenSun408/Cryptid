@@ -12,10 +12,11 @@ class ExitHotkeyCounter final {
  public:
   explicit ExitHotkeyCounter(application::ExitHotkeySettings settings) : settings_(settings) {}
   void held(unsigned int key) noexcept { if (key < down_.size()) down_[key] = true; }
-  bool input(unsigned int key, bool down, bool injected, std::uint64_t now) noexcept {
+  bool input(unsigned int key, bool down, bool injected, std::uint64_t now, bool suppressed = false) noexcept {
     if (injected || key >= down_.size()) return false;
     const bool repeated = down_[key];
     down_[key] = down;
+    if (suppressed) { size_ = 0; return false; }
     if (!down) return false;
     if (key != settings_.key) { size_ = 0; return false; }
     if (repeated || !settings_.enabled || !application::valid_exit_hotkey(settings_)) return false;
@@ -41,6 +42,7 @@ class ExitHotkeyCounter final {
 class IUiExitHotkeySink {
  public:
   virtual ~IUiExitHotkeySink() = default;
+  virtual void set_capture(bool) noexcept {}
   virtual application::ExitHotkeySettings exit_hotkey() const noexcept = 0;
   virtual bool set_exit_hotkey(application::ExitHotkeySettings settings) noexcept = 0;
 };

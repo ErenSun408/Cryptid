@@ -1574,6 +1574,8 @@ void test_exit_hotkey_settings_bridge() {
       ++calls; if (!succeeds) return false; value = next; return true;
     }
     usb_vault::application::ExitHotkeySettings value;
+    void set_capture(bool active) noexcept override { capturing = active; }
+    bool capturing{};
     unsigned int calls{};
     bool succeeds{true};
   } sink;
@@ -1582,6 +1584,15 @@ void test_exit_hotkey_settings_bridge() {
   ComPtr<IDispatch> host;
   require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host,
       nullptr, &work, nullptr, nullptr, &sink)), "shortcut host failed");
+  VARIANTARG capture_arg{}; capture_arg.vt = VT_BOOL; capture_arg.boolVal = VARIANT_TRUE;
+  DISPPARAMS capture_params{&capture_arg, nullptr, 1, 0};
+  auto capture = [&] { return host->Invoke(member_id(*host.Get(), L"setExitHotkeyCapture"), IID_NULL,
+      LOCALE_INVARIANT, DISPATCH_METHOD, &capture_params, nullptr, nullptr, nullptr); };
+  require(capture() == S_OK && sink.capturing, "capture not enabled");
+  work.running.store(true); capture_arg.boolVal = VARIANT_FALSE;
+  require(capture() == S_OK && !sink.capturing, "busy work prevented capture release");
+  work.running.store(false); capture_arg.vt = VT_I4;
+  require(capture() == DISP_E_TYPEMISMATCH, "invalid capture type accepted");
   VARIANTARG args[3]{};
   args[0].vt = VT_UI4; args[0].ulVal = 3;
   args[1].vt = VT_UI4; args[1].ulVal = 123;

@@ -195,7 +195,13 @@ void write_settings(const std::wstring &path, const std::string_view content) {
 bool valid_exit_hotkey(ExitHotkeySettings s) noexcept {
   return s.count >= 1 && s.count <= 10 &&
       ((s.key >= 0x30 && s.key <= 0x39) || (s.key >= 0x41 && s.key <= 0x5A) ||
-       (s.key >= 0x70 && s.key <= 0x7B) || s.key == 0x1B || s.key == 0x20);
+       (s.key >= 0x70 && s.key <= 0x87) || (s.key >= 0x60 && s.key <= 0x6F) ||
+       (s.key >= 0x21 && s.key <= 0x28) || (s.key >= 0xBA && s.key <= 0xC0) ||
+       (s.key >= 0xDB && s.key <= 0xDF) || s.key == 0xE2 ||
+       (s.key >= 0xA6 && s.key <= 0xB7) || s.key == 0x90 || s.key == 0x91 ||
+       s.key == 8 || s.key == 9 || s.key == 12 || s.key == 13 || s.key == 19 ||
+       s.key == 20 || s.key == 27 || s.key == 32 || s.key == 44 ||
+       s.key == 45 || s.key == 46 || s.key == 93);
 }
 
 ExitHotkeySettings exit_hotkey_settings_v1(std::wstring_view path) {

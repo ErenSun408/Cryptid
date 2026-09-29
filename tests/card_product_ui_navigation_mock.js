@@ -106,6 +106,7 @@ window.navigationFixture = {
     getWindowSize: () => fixture.windowPreset,
     getCloseToTrayEnabled: () => fixture.closeToTray ?? false,
     setCloseToTrayEnabled: value => { fixture.closeToTray = value; },
+    setExitHotkeyCapture: () => {},
     getExitHotkey: () => fixture.exitHotkey ?? (3 * 256 + 123),
     setExitHotkey: (enabled, key, count) => { fixture.exitHotkey = (enabled ? 65536 : 0) + count * 256 + key; },
     beginMountBatch: (ids) => beginBatch(ids, true),

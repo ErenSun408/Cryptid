@@ -432,8 +432,8 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
               count_occurrences(settings, "aria-disabled=\"true\"") == 1 &&
               settings.find("拔出安全卡时立即卸载全部卷") != std::string::npos,
           "the card-removal unmount is not a locked, unactuatable switch");
-  require(settings.find("<input") == std::string::npos,
-          "settings page must not use form inputs");
+  require(count_occurrences(settings, "<input") == 1 && settings.find("<input id=\"exit-hotkey-key\"") != std::string::npos,
+          "settings must only expose the shortcut capture input");
 
   // P3.23 separates successful login from a visible background mount batch.
   require(script.find("control.setAttribute(\"aria-checked\", "

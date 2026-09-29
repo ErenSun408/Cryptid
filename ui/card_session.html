@@ -790,6 +790,19 @@
     #settings-window-size { color-scheme: dark; }
     #settings-window-size option { background-color: var(--ink-800); color: var(--text); }
     #exit-hotkey-key, #exit-hotkey-count { color-scheme: dark; }
+    #exit-hotkey-key:focus:not(:disabled) {
+      outline: none; color: var(--gold-2); border-color: var(--gold);
+      background: rgba(200, 169, 106, .08);
+      box-shadow: 0 0 0 2px rgba(200, 169, 106, .12);
+      animation: hotkey-capture-glow 2.2s ease-in-out infinite;
+    }
+    @keyframes hotkey-capture-glow {
+      0%, 100% { border-color: rgba(200, 169, 106, .55); box-shadow: 0 0 0 2px rgba(200, 169, 106, .08), 0 0 8px rgba(200, 169, 106, .04); }
+      50% { border-color: var(--gold-2); box-shadow: 0 0 0 2px rgba(200, 169, 106, .18), 0 0 12px rgba(200, 169, 106, .14); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #exit-hotkey-key:focus:not(:disabled) { animation: none; }
+    }
     #exit-hotkey-key option, #exit-hotkey-count option { background-color: var(--ink-800); color: var(--text); }
     #settings-exit-hotkey small { display: block; margin-top: .35rem; color: var(--text-3); font-size: .75rem; line-height: 1.6; }
     .settings-group + .settings-group { margin-top: 1.5rem; }
@@ -1713,8 +1726,8 @@
               </div>
               <div id="exit-hotkey-options" hidden>
                 <div class="settings-row">
-                  <label class="settings-copy" for="exit-hotkey-key"><b>单个按键</b></label>
-                  <select id="exit-hotkey-key" class="shell-button" aria-label="退出快捷键"></select>
+                  <label class="settings-copy" for="exit-hotkey-key"><b>触发按键</b></label>
+                  <input id="exit-hotkey-key" class="shell-button" type="text" readonly aria-label="触发按键" placeholder="点击后按下按键" style="width:140px;text-align:center;caret-color:transparent">
                 </div>
                 <div class="settings-row">
                   <label class="settings-copy" for="exit-hotkey-count"><b>触发次数</b><small>长按不计入次数；按下其他键会重新计数。</small></label>

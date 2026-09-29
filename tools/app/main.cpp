@@ -161,6 +161,7 @@ MainWindowSizeSink g_window_size_sink;
 
 class MainExitHotkeySink final : public usb_vault::ui::IUiExitHotkeySink {
  public:
+  void set_capture(bool active) noexcept override { listener.set_capture(active); }
   usb_vault::application::ExitHotkeySettings exit_hotkey() const noexcept override { return settings_; }
   bool set_exit_hotkey(usb_vault::application::ExitHotkeySettings settings) noexcept override {
     if (!usb_vault::application::valid_exit_hotkey(settings)) return false;

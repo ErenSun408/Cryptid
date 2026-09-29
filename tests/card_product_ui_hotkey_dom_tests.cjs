@@ -5,7 +5,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 100));
 (async () => {
  for (const scenario of ['save', 'failure', 'readback', 'unauthenticated']) {
   const dom = new JSDOM(read('ui/card_session.html'), {runScripts:'outside-only', pretendToBeVisual:true});
-  const w = dom.window; w.TextEncoder = TextEncoder;
+  const w = dom.window; w.TextEncoder = TextEncoder; w.document.hasFocus = () => true;
   try {
    w.eval(read('tests/card_product_ui_navigation_mock.js'));
    w.navigationFixture.state = scenario === 'unauthenticated' ? 2 : 3;
@@ -20,7 +20,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 100));
    const el = id => w.document.getElementById(id), toggle = el('exit-hotkey-enabled');
    if (scenario === 'readback') {
     assert.equal(toggle.getAttribute('aria-checked'), 'true');
-    assert.equal(el('exit-hotkey-key').value, '65'); assert.equal(el('exit-hotkey-count').value, '5');
+    assert.equal(el('exit-hotkey-key').value, 'A'); assert.equal(el('exit-hotkey-count').value, '5');
     toggle.click(); await settle(); assert.deepEqual(calls, [[false,65,5]]);
     assert.equal(el('exit-hotkey-options').hidden, true); continue;
    }
@@ -34,10 +34,21 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 100));
     assert.match(el('exit-hotkey-status').textContent, /无法保存/); continue;
    }
    assert.equal(el('exit-hotkey-options').hidden, false);
-   el('exit-hotkey-key').value = '66'; el('exit-hotkey-count').value = '2';
+   el('exit-hotkey-key').focus(); await settle();
+   el('exit-hotkey-key').dispatchEvent(new w.KeyboardEvent('keydown', {key:'b', bubbles:true, cancelable:true}));
+   assert.equal(el('exit-hotkey-key').value, 'B');
+   for (const options of [{key:'c',ctrlKey:true},{key:'d',repeat:true},{key:'Unidentified'}]) {
+    el('exit-hotkey-key').dispatchEvent(new w.KeyboardEvent('keydown', options));
+    assert.equal(el('exit-hotkey-key').value, 'B');
+   } el('exit-hotkey-count').value = '2';
+   for (const [code,key,label] of [['ArrowLeft',37,'ArrowLeft'],['Numpad7',103,'Numpad7'],['Semicolon',186,'Semicolon'],['F24',135,'F24'],['Tab',9,'Tab']]) {
+    el('exit-hotkey-key').dispatchEvent(new w.KeyboardEvent('keydown', {key:label,code}));
+    assert.equal(el('exit-hotkey-key').dataset.key,String(key));
+   }
+   el('exit-hotkey-key').dispatchEvent(new w.KeyboardEvent('keydown',{key:'b'}));
    el('exit-hotkey-save').click(); await settle();
    assert.deepEqual(calls[1], [true,66,2]);
-   assert.equal(el('exit-hotkey-key').value, '66');
+   assert.equal(el('exit-hotkey-key').value, 'B');
    toggle.click(); await settle(); assert.deepEqual(calls[2], [false,66,2]);
   } finally { w.close(); }
  }

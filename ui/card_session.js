@@ -5067,12 +5067,26 @@
   exitHotkeyKeys.set(27, "Esc"); exitHotkeyKeys.set(32, "空格");
   for (let key = 65; key <= 90; key++) exitHotkeyKeys.set(key, String.fromCharCode(key));
   for (let key = 48; key <= 57; key++) exitHotkeyKeys.set(key, String.fromCharCode(key));
+  const exitHotkeyCodes = new Map([
+    ["Backspace",8],["Tab",9],["Clear",12],["Enter",13],["NumpadEnter",13],["Pause",19],["CapsLock",20],
+    ["PageUp",33],["PageDown",34],["End",35],["Home",36],["ArrowLeft",37],["ArrowUp",38],["ArrowRight",39],["ArrowDown",40],
+    ["PrintScreen",44],["Insert",45],["Delete",46],["ContextMenu",93],
+    ["NumpadMultiply",106],["NumpadAdd",107],["NumpadComma",108],["NumpadSubtract",109],["NumpadDecimal",110],["NumpadDivide",111],
+    ["NumLock",144],["ScrollLock",145],["Semicolon",186],["Equal",187],["Comma",188],["Minus",189],["Period",190],["Slash",191],["Backquote",192],
+    ["BracketLeft",219],["Backslash",220],["BracketRight",221],["Quote",222],["IntlBackslash",226]
+  ]);
+  for (let n=0;n<10;n++) exitHotkeyCodes.set('Numpad'+n,96+n);
+  for (let n=1;n<=24;n++) exitHotkeyCodes.set('F'+n,111+n);
+  for (const [label,key] of exitHotkeyCodes) if (!exitHotkeyKeys.has(key)) exitHotkeyKeys.set(key,label);
+  for (let key=166;key<=183;key++) exitHotkeyKeys.set(key, '媒体/浏览器键 '+key);
+  exitHotkeyKeys.set(223, 'OEM 8');
   const renderExitHotkey = () => {
     if (!exitHotkeyEnabled) return;
     exitHotkeyEnabled.setAttribute("aria-checked", String(savedExitHotkey.enabled));
     exitHotkeyEnabled.disabled = exitHotkeySaving;
     exitHotkeyOptions.hidden = !savedExitHotkey.enabled;
-    exitHotkeyKey.value = String(savedExitHotkey.key);
+    exitHotkeyKey.value = exitHotkeyKeys.get(savedExitHotkey.key);
+    exitHotkeyKey.dataset.key = String(savedExitHotkey.key);
     exitHotkeyCount.value = String(savedExitHotkey.count);
     exitHotkeyKey.disabled = exitHotkeyCount.disabled = exitHotkeySave.disabled = exitHotkeySaving;
   };
@@ -5103,9 +5117,29 @@
     }
   };
   if (exitHotkeyEnabled) {
-    for (const [key, label] of exitHotkeyKeys) {
-      const option = document.createElement("option"); option.value = String(key); option.textContent = label; exitHotkeyKey.append(option);
-    }
+    let captureReady = false;
+    const capture = async active => {
+      captureReady = false;
+      try {
+        await bridge.setExitHotkeyCapture(active);
+        captureReady = active && document.activeElement === exitHotkeyKey && document.hasFocus();
+      } catch { exitHotkeyStatus.textContent = active ? "暂时无法录入按键，请重新点击输入框。" : ""; }
+    };
+    exitHotkeyKey.addEventListener("focus", () => void capture(true));
+    exitHotkeyKey.addEventListener("blur", () => void capture(false));
+    window.addEventListener("blur", () => void capture(false));
+    window.addEventListener("focus", () => { if (document.activeElement === exitHotkeyKey) void capture(true); });
+    exitHotkeyKey.addEventListener("keydown", event => {
+      if (event.key === "Tab" && event.shiftKey) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!captureReady || event.repeat || event.isComposing || event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return;
+      const key = exitHotkeyCodes.get(event.code) || (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key) ? 111 + Number(event.key.slice(1))
+        : event.key === "Escape" ? 27 : event.key === " " ? 32
+        : /^[a-z0-9]$/i.test(event.key) ? event.key.toUpperCase().charCodeAt(0) : exitHotkeyKeys.has(event.keyCode) ? event.keyCode : 0);
+      if (!exitHotkeyKeys.has(key)) { exitHotkeyStatus.textContent = "请按单个普通键；Ctrl、Alt、Shift、Win 及组合键不支持。"; return; }
+      exitHotkeyKey.dataset.key = String(key); exitHotkeyKey.value = exitHotkeyKeys.get(key);
+      exitHotkeyStatus.textContent = ""; exitHotkeySaved.textContent = "";
+    });
     for (let count = 1; count <= 10; count++) {
       const option = document.createElement("option"); option.value = String(count); option.textContent = `${count} 次`; exitHotkeyCount.append(option);
     }
@@ -5114,7 +5148,7 @@
       control.addEventListener("change", () => { exitHotkeySaved.textContent = ""; });
     }
     exitHotkeyEnabled.addEventListener("click", () => void saveExitHotkey(!savedExitHotkey.enabled, savedExitHotkey.key, savedExitHotkey.count));
-    exitHotkeySave.addEventListener("click", () => void saveExitHotkey(true, Number(exitHotkeyKey.value), Number(exitHotkeyCount.value), true));
+    exitHotkeySave.addEventListener("click", () => void saveExitHotkey(true, Number(exitHotkeyKey.dataset.key), Number(exitHotkeyCount.value), true));
   }
 
   const refreshNativeState = async () => {
