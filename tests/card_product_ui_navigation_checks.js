@@ -171,7 +171,7 @@
       window.navigationFixture.endedMaintenance.length === endsBeforeNavigation,
       "Container navigation preserves maintenance and disables only its container");
     check($("#unmount-items input[data-id='3']").disabled &&
-      !$("#unmount-items input[data-id='1']").disabled,
+      $("#unmount-items input[data-id='1']").disabled === !window.navigationFixture.containers.find(item => item.id === 1).mounted,
       "Batch unmount excludes only the maintenance container");
     maintenanceRow.click();
     check(!$("#management-containers").hidden,
@@ -192,18 +192,23 @@
     check(!$("#decoy-results").hidden && $("#decoy-maintenance").hidden &&
       window.navigationFixture.endedMaintenance.length === endsBeforeNavigation,
       "Advanced update heading returns to the list without ending maintenance");
-    all("#decoy-container-list .container-row .container-actions button")[1].click();
-    await wait(() => window.navigationFixture.openedMaintenance.length === 2 &&
+    $("#decoy-container-list [data-decoy-container='3'] .container-name").click();
+    await wait(() => window.navigationFixture.openedMaintenance.length === 1 &&
       !$("#decoy-maintenance-end").disabled);
 
 
+    await new Promise(resolve => setTimeout(resolve, 100));
     $("#decoy-maintenance-container").value = "1";
     $("#decoy-maintenance-container").dispatchEvent(new Event("change", { bubbles: true }));
-    await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
+    await wait(() => $("#decoy-maintenance-container").value === "1" && !$("#decoy-maintenance-end").disabled);
+    check(window.navigationFixture.openedMaintenance.length === 1, "Switching view does not mount an unopened container");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    $("#decoy-maintenance-end").click();
+    await wait(() => window.navigationFixture.openedMaintenance.length === 2 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 1);
     check(window.navigationFixture.openedMaintenance.at(-1) === 1 &&
       $("#decoy-maintenance-container").value === "1",
-      "The page switches maintenance through the same one-container transaction");
+      "The page switches the viewed maintenance container while retaining other mounts");
     // --- dropping files in from the shell ---------------------------------
     // The page arms the window with the destination it is showing and nothing
     // else. No source path exists on this side of the boundary at all.
@@ -294,6 +299,7 @@
     await wait(() => window.navigationFixture.dropTargets.at(-1) === "1/");
 
     const protectionTick = () => new Promise(resolve => setTimeout(resolve, 1150));
+    window.navigationFixture.protectionById = { 3: false };
     window.navigationFixture.protectionBlocked = "invalid";
     await protectionTick();
     check(!$("#decoy-protection-status").hidden && $("#decoy-protection-warning").hidden,
@@ -324,7 +330,7 @@
     check(!$("#decoy-protection-warning").hidden && $("#decoy-protection-status").hidden &&
       $("#decoy-maintenance-writable").textContent === "写入已阻止" &&
       !$("#decoy-maintenance-space-detail").textContent.includes("536,870,912") &&
-      window.navigationFixture.protectionQueries.at(-1) === 1,
+      window.navigationFixture.protectionQueries.includes(1) && window.navigationFixture.protectionQueries.includes(3),
       "Protection polling warns for the current container and replaces writable capacity");
     window.navigationFixture.protectionBlocked = false;
     await protectionTick();
@@ -357,8 +363,8 @@
     check($("#decoy-protection-warning").hidden && !$("#authenticated-dashboard").hasAttribute("inert"),
       "Successful unmount releases the protection dialog and its background lock");
 
-    $("#decoy-container-list [data-decoy-container='3'] .container-actions button").click();
-    await wait(() => window.navigationFixture.openedMaintenance.length === 5 &&
+    $("#decoy-container-list [data-decoy-container='3'] .container-name").click();
+    await wait(() => window.navigationFixture.openedMaintenance.length === 3 &&
       window.navigationFixture.measuredMaintenance.at(-1) === 3);
     check($("#decoy-protection-warning").hidden, "Reopening maintenance clears the old mount warning");
     window.navigationFixture.delayProtection = true;

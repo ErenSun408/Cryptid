@@ -396,7 +396,8 @@ class CardLoginMountSessionCore final {
       std::uint32_t id, const security::SecureBuffer& decoy_password_utf8);
   // A maintenance page has one current outer volume. Switching releases the
   // old one without dropping the measuring connection the new one will use.
-  [[nodiscard]] bool release_other_maintenance(std::uint32_t next_id);
+  [[nodiscard]] bool prepare_maintenance_target(std::uint32_t next_id);
+  std::uint32_t maintenance_helper_target_{};
   void record_operation(::usb_vault::application::OperationKind kind,
                         ::usb_vault::application::OperationOutcome outcome,
                         std::wstring_view container_name = {},

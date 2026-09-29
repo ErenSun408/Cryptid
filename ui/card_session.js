@@ -1482,7 +1482,10 @@
 
   const selectedFileContainer = () => {
     for (const container of containers) {
-      if (container.id === fileContainerId) return container;
+      if (container.id === fileContainerId) {
+        if (inDecoyFileView() && !decoyMounted.has(container.id)) return { ...container, mounted: false, drive: "" };
+        return container;
+      }
     }
     return null;
   };
@@ -1535,7 +1538,8 @@
     fileMountToggle.classList.toggle("danger", mounted);
     fileMountToggle.hidden = inDecoyFileView();
     fileMountToggle.disabled = busy || container === null || currentState !== nativeState.authenticated;
-    fileCreateDirectoryButton.disabled = busy || !mounted;
+    fileCreateDirectoryButton.hidden = inDecoyFileView();
+    fileCreateDirectoryButton.disabled = busy || !mounted || inDecoyFileView();
     renderFileBreadcrumb();
     updateFileRefreshAvailability();
   };
@@ -1612,7 +1616,7 @@
       return;
     }
     if (!container.mounted) {
-      appendFileNotice("这个容器没有挂载。点击工具栏右侧的「挂载」，即可查看文件。");
+      appendFileNotice(inDecoyFileView() ? "点击右上角的「更新」挂载后，即可查看文件。" : "这个容器没有挂载。点击工具栏右侧的「挂载」，即可查看文件。");
       return;
     }
     if (fileEntries.length === 0) {
@@ -2871,7 +2875,7 @@
     renderFileBreadcrumb();
     renderFileDropTargets();
     const container = selectedFileContainer();
-    if (bridge === null || container === null || !container.mounted) {
+    if (bridge === null || container === null || !container.mounted || (inDecoyFileView() && !decoyMounted.has(container.id))) {
       fileEntries = [];
       setFileStatus("");
       renderFileList();
@@ -2926,7 +2930,8 @@
   let decoyListVisible = false;
   let decoyMaintenanceId = 0;
   let decoyMaintenancePath = [];
-  const isMaintenanceContainer = (id) => decoyStage === "maintenance" && id === decoyMaintenanceId;
+  const decoyMounted = new Map();
+  const isMaintenanceContainer = (id) => decoyMounted.has(id);
   const inDecoyFileView = () => decoyStage === "maintenance" && !decoyListVisible && activeSection === "decoy";
   let decoyFound = [];
   let decoyUnreachable = 0;
@@ -2937,8 +2942,12 @@
   const decoyProtectionUnmountStatus = document.getElementById("decoy-protection-unmount-status");
   document.body.appendChild(decoyProtectionWarning);
   let decoyProtectionOwnsInert = false;
-  const showDecoyProtectionWarning = () => {
+  let decoyProtectionTarget = 0;
+  const showDecoyProtectionWarning = (id) => {
     if (!decoyProtectionWarning.hidden) return;
+    decoyProtectionTarget = id;
+    const item = containers.find(item => item.id === id);
+    document.getElementById("decoy-protection-container").textContent = item ? `${item.name} · ${item.drive}` : "";
     decoyProtectionOwnsInert = !dashboard.hasAttribute("inert");
     dashboard.setAttribute("inert", "");
     decoyProtectionWarning.hidden = false;
@@ -2960,24 +2969,23 @@
   let decoyProtectionDisposed = false;
 
   const scheduleDecoyProtection = () => {
-    if (decoyProtectionDisposed || decoyProtectionTimer !== null || decoyStage !== "maintenance") return;
+    if (decoyProtectionDisposed || decoyProtectionTimer !== null || decoyMounted.size === 0) return;
     decoyProtectionTimer = setTimeout(() => {
       decoyProtectionTimer = null;
       void pollDecoyProtection();
     }, 1000);
   };
   const pollDecoyProtection = async () => {
-    if (decoyStage !== "maintenance" || currentState !== nativeState.authenticated) return;
+    if (decoyMounted.size === 0 || currentState !== nativeState.authenticated) return;
     if (busy || decoyProtectionPending || bridge === null) {
       scheduleDecoyProtection();
       return;
     }
-    const id = decoyMaintenanceId;
     const revision = batchSessionRevision;
     const generation = decoyProtectionGeneration;
     const current = () => !decoyProtectionDisposed && revision === batchSessionRevision &&
-      generation === decoyProtectionGeneration && id === decoyMaintenanceId &&
-      decoyStage === "maintenance" && currentState === nativeState.authenticated;
+      generation === decoyProtectionGeneration &&
+      decoyMounted.size > 0 && currentState === nativeState.authenticated;
     decoyProtectionPending = true;
     const uploading = async () => {
       const status = String(await bridge.getExternalDropStatus());
@@ -2995,11 +3003,24 @@
         return;
       }
       if (!current() || busy) return;
-      const blocked = await bridge.getDecoyMaintenanceWriteBlocked(id);
-      if (!current()) return;
-      if (typeof blocked !== "boolean") throw new Error("invalid protection status");
-      decoyWriteBlocked = decoyWriteBlocked || blocked;
-      if (decoyWriteBlocked) showDecoyProtectionWarning();
+      const ids = [...decoyMounted.keys()].sort((a, b) => Number(b === decoyMaintenanceId) - Number(a === decoyMaintenanceId));
+      let queryError = null;
+      for (const id of ids) {
+        if (!current() || busy) return;
+        const known = decoyMounted.get(id);
+        if (known?.blocked) { showDecoyProtectionWarning(id); continue; }
+        let blocked;
+        try {
+          blocked = await bridge.getDecoyMaintenanceWriteBlocked(id);
+          if (typeof blocked !== "boolean") throw new Error("invalid protection status");
+        } catch (error) { queryError ??= error; continue; }
+        if (!current()) return;
+        const facts = decoyMounted.get(id);
+        if (!facts) continue;
+        facts.blocked ||= blocked;
+        if (facts.blocked) showDecoyProtectionWarning(id);
+      }
+      decoyWriteBlocked = decoyMounted.get(decoyMaintenanceId)?.blocked ?? false;
       decoyProtectionStatus.hidden = true;
       if (decoyWriteBlocked) {
         decoyMaintenanceWritable.textContent = "写入已阻止";
@@ -3009,6 +3030,7 @@
         decoyMaintenanceTotal.textContent = "";
         disarmDecoyDrop();
       }
+      if (queryError) throw queryError;
     } catch (pageError) {
       if (!current()) return;
       // A drop can start between the progress read and the protection query.
@@ -3038,7 +3060,7 @@
   });
   window.addEventListener("focus", () => { void pollDecoyProtection(); });
   window.addEventListener("usb-vault-window-activated", () => {
-    if (decoyStage !== "maintenance" || decoyProtectionDisposed) return;
+    if (decoyMounted.size === 0 || decoyProtectionDisposed) return;
     clearTimeout(decoyProtectionTimer);
     decoyProtectionTimer = null;
     void pollDecoyProtection();
@@ -3089,7 +3111,7 @@
 
   const armDecoyDrop = async () => {
     if (bridge === null) return;
-    if (!inDecoyFileView() || fileContainerId !== decoyMaintenanceId || decoyMaintenanceId === 0 || decoyUploadRecovery || decoyWriteBlocked ||
+    if (!inDecoyFileView() || !decoyMounted.has(decoyMaintenanceId) || fileContainerId !== decoyMaintenanceId || decoyMaintenanceId === 0 || decoyUploadRecovery || decoyWriteBlocked ||
         currentState !== nativeState.authenticated) {
       disarmDecoyDrop();
       return;
@@ -3138,11 +3160,13 @@
   };
 
   const renderDecoyDropZone = () => {
-    decoySelectFiles.disabled = busy || decoyUploadRecovery || decoyWriteBlocked || currentState !== nativeState.authenticated;
+    decoySelectFiles.disabled = !decoyMounted.has(decoyMaintenanceId) || busy || decoyUploadRecovery || decoyWriteBlocked || currentState !== nativeState.authenticated;
     decoyDropRun.hidden = !decoyDropWatching;
     decoyDropCancel.disabled = !decoyDropWatching;
-    decoyDropZone.setAttribute("aria-disabled", String(busy || decoyUploadRecovery || decoyWriteBlocked));
-    if (busy || decoyUploadRecovery || decoyWriteBlocked) {
+    const disabled = !decoyMounted.has(decoyMaintenanceId) || busy || decoyUploadRecovery || decoyWriteBlocked;
+    decoyDropZone.setAttribute("aria-disabled", String(disabled));
+    decoyDropZone.tabIndex = disabled ? -1 : 0;
+    if (disabled) {
       decoyDropZone.classList.remove("drop-hover");
       decoySelectFiles.classList.remove("drop-button-hover");
     }
@@ -3153,7 +3177,9 @@
     ++decoyProtectionGeneration;
     clearTimeout(decoyProtectionTimer);
     decoyProtectionTimer = null;
-    decoyWriteBlocked = false;
+    decoyWriteBlocked = decoyMounted.get(decoyMaintenanceId)?.blocked ?? false;
+    decoyUploadRecovery = decoyMounted.get(decoyMaintenanceId)?.recovery ?? false;
+    decoyProtectionTarget = 0;
     decoyProtectionWarning.hidden = true;
     if (decoyProtectionOwnsInert) dashboard.removeAttribute("inert");
     decoyProtectionOwnsInert = false;
@@ -3168,6 +3194,7 @@
     decoyMaintenanceFreshness.dataset.age = "";
     setDecoyStatus(decoyMaintenanceStatus, "");
     setDecoyStatus(decoyDropStatus, "");
+    restoreDecoyFacts();
   };
 
   const maintenanceCapacityState = () => decoyWriteBlocked ? "写入已阻止"
@@ -3183,6 +3210,39 @@
     if (mib < 1024) return `${Math.floor(mib)} MiB`;
     const gib = mib / 1024;
     return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GiB`;
+  };
+
+  // Display-only snapshots belong to one live maintenance mount, never to disk.
+  const renderDecoyCapacity = ({ total, free, safeFree }, cached = false) => {
+    const used = total - free;
+    const capacityUnit = total >= 1073741824 ? 1073741824 : 1048576;
+    const capacityLabel = capacityUnit === 1073741824 ? "GiB" : "MiB";
+    decoyMaintenanceUsed.textContent = (used / capacityUnit).toFixed(1);
+    decoyMaintenanceTotal.textContent = `/ ${(total / capacityUnit).toFixed(1)} ${capacityLabel}`;
+    decoyMaintenanceWritable.textContent = maintenanceCapacityState() || formatSafeBytes(safeFree);
+    decoyMaintenanceSpaceDetail.textContent =
+      (maintenanceCapacityState() ? "请结束维护并检查未完成文件，再重新进入维护。" :
+        `当前安全空闲 ${safeFree.toLocaleString("zh-CN")} 字节，已排除保护区域。目录及文件系统元数据也会占用空间，不保证同等大小文件均可放入。`);
+    decoyMaintenanceSpaceBar.style.width = total === 0
+      ? "0%" : `${Math.min(100, Math.round((used / total) * 100))}%`;
+    if (cached && !maintenanceCapacityState()) {
+      decoyMaintenanceSpaceDetail.textContent = "上次计算结果，正在更新。" + decoyMaintenanceSpaceDetail.textContent.replace("当前安全空闲", "上次安全空闲");
+    }
+  };
+
+  const restoreDecoyFacts = () => {
+    const facts = decoyMounted.get(decoyMaintenanceId);
+    if (!facts) return;
+    if (maintenanceCapacityState()) {
+      decoyMaintenanceWritable.textContent = maintenanceCapacityState();
+      decoyMaintenanceSpaceDetail.textContent = "请结束维护并检查未完成文件，再重新进入维护。";
+    } else if (facts.capacity) {
+      renderDecoyCapacity(facts.capacity, true);
+    }
+    if (facts.freshness) {
+      decoyMaintenanceFreshness.textContent = facts.freshness.text;
+      decoyMaintenanceFreshness.dataset.age = facts.freshness.age;
+    }
   };
 
   const renderDecoyFreshness = (listing) => {
@@ -3230,11 +3290,14 @@
   };
 
   const renderDecoySection = () => {
+    scheduleDecoyProtection();
     decoyExit.disabled = busy || decoyRefreshing || currentState !== nativeState.authenticated;
     decoyRefresh.dataset.refreshing = String(decoyRefreshing && !busy);
     decoyRefresh.disabled = busy || decoyRefreshing || currentState !== nativeState.authenticated;
     const mounted = containers.find(item => item.id === decoyMaintenanceId && item.mounted);
-    decoyMaintenanceDrive.textContent = `盘符 ${decoyStage === "maintenance" && mounted ? mounted.drive : "—"}`;
+    const maintenanceMounted = decoyStage === "maintenance" && decoyMounted.has(decoyMaintenanceId) && mounted;
+    decoyMaintenanceDrive.textContent = maintenanceMounted ? `盘符 ${mounted.drive}` : "该容器未挂载，点击右侧更新以查看容器详情";
+    decoyMaintenanceDrive.classList.toggle("unmounted", !maintenanceMounted);
     decoyProtectionUnmount.disabled = busy || currentState !== nativeState.authenticated;
     decoyVerify.hidden = decoyStage !== "verify";
     decoyProgress.hidden = decoyStage !== "running";
@@ -3247,6 +3310,8 @@
       if (inDecoyFileView()) placeFileManagerInDecoyMaintenance();
       else restoreFileManagerPlacement();
       decoyMaintenanceEnd.disabled = busy || currentState !== nativeState.authenticated;
+      decoyMaintenanceEnd.textContent = decoyMounted.has(decoyMaintenanceId) ? "卸载" : "更新";
+      decoyMaintenanceEnd.classList.toggle("danger", decoyMounted.has(decoyMaintenanceId));
       renderDecoyMaintenanceChoices();
       renderDecoyDropZone();
       renderManagementView();
@@ -3262,6 +3327,7 @@
     ++decoyRefreshRevision;
     decoyRefreshing = false;
     decoyEmptyDialog.hidden = true;
+    decoyMounted.clear();
     decoyMaintenanceId = 0;
     decoyListVisible = false;
     decoyMaintenancePath = [];
@@ -3376,11 +3442,23 @@
       const actions = document.createElement("div");
       actions.className = "container-actions";
       const open = document.createElement("button");
-      open.className = "shell-button";
+      open.className = known.mounted ? "shell-button danger" : "shell-button";
       open.type = "button";
-      open.textContent = "更新";
+      open.textContent = known.mounted ? "卸载" : "更新";
       open.disabled = busy;
-      open.addEventListener("click", () => { void openDecoyMaintenance(id); });
+      open.addEventListener("click", () => {
+        if (decoyMounted.has(id)) void endDecoyMaintenance(id);
+        else if (known.mounted) void unmountAdoptedContainer(id);
+        else void openDecoyMaintenance(id);
+      });
+      name.tabIndex = 0;
+      name.setAttribute("role", "button");
+      name.setAttribute("aria-label", `查看 ${known.name}`);
+      name.style.cursor = "pointer";
+      name.addEventListener("click", () => { void openDecoyMaintenance(id, false); });
+      name.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openDecoyMaintenance(id, false); }
+      });
       actions.appendChild(open);
 
       row.append(grab, mark, identity, facts, actions);
@@ -3491,6 +3569,7 @@
   const reportDecoyDrop = async ([state, , done, failed]) => {
     if (state === 3 || state === 4) {
       decoyUploadRecovery = true;
+      if (decoyMounted.has(decoyMaintenanceId)) decoyMounted.get(decoyMaintenanceId).recovery = true;
       decoyMaintenanceWritable.textContent = maintenanceCapacityState();
       decoyMaintenanceSpaceDetail.textContent = "请结束维护并检查未完成文件，再重新进入维护。";
       disarmDecoyDrop();
@@ -3571,7 +3650,7 @@
   };
 
   const refreshDecoyMaintenanceFacts = async () => {
-    if (busy || bridge === null || decoyStage !== "maintenance" ||
+    if (busy || bridge === null || decoyStage !== "maintenance" || !decoyMounted.has(decoyMaintenanceId) ||
         currentState !== nativeState.authenticated) return;
     const sessionRevision = batchSessionRevision;
     const maintenanceId = decoyMaintenanceId;
@@ -3598,21 +3677,15 @@
         }
         if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
             decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
-        const used = total - free;
-        const capacityUnit = total >= 1073741824 ? 1073741824 : 1048576;
-        const capacityLabel = capacityUnit === 1073741824 ? "GiB" : "MiB";
-        decoyMaintenanceUsed.textContent = (used / capacityUnit).toFixed(1);
-        decoyMaintenanceTotal.textContent = `/ ${(total / capacityUnit).toFixed(1)} ${capacityLabel}`;
-        decoyMaintenanceWritable.textContent = maintenanceCapacityState() || formatSafeBytes(safeFree);
-        decoyMaintenanceSpaceDetail.textContent =
-          (maintenanceCapacityState() ? "请结束维护并检查未完成文件，再重新进入维护。" :
-            `当前安全空闲 ${safeFree.toLocaleString("zh-CN")} 字节，已排除保护区域。目录及文件系统元数据也会占用空间，不保证同等大小文件均可放入。`);
-        decoyMaintenanceSpaceBar.style.width = total === 0
-          ? "0%" : `${Math.min(100, Math.round((used / total) * 100))}%`;
+        const facts = decoyMounted.get(id);
+        if (facts) facts.capacity = { total, free, safeFree };
+        renderDecoyCapacity({ total, free, safeFree });
       } catch (pageError) { logCaughtPageError("refreshDecoyMaintenanceFacts/1", pageError);
         if (revision !== decoyMaintenanceRevision || id !== decoyMaintenanceId ||
             decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
         capacityFailed = true;
+        const facts = decoyMounted.get(id);
+        if (facts) delete facts.capacity;
         decoyMaintenanceWritable.textContent = maintenanceCapacityState() || "无法读取";
         decoyMaintenanceSpaceDetail.textContent = "容量事实暂不可用，请稍后刷新。";
         decoyMaintenanceSpaceBar.style.width = "0%";
@@ -3627,10 +3700,14 @@
           decoyStage !== "maintenance") { logPageEvent(4, "refreshDecoyMaintenanceFacts", "会话或页面状态变化，已放弃等待结果。"); return; }
       if (listing === null) {
         freshnessFailed = true;
+        const facts = decoyMounted.get(id);
+        if (facts) delete facts.freshness;
         decoyMaintenanceFreshness.textContent = "无法读取";
         decoyMaintenanceFreshness.dataset.age = "";
       } else {
         renderDecoyFreshness(listing);
+        const facts = decoyMounted.get(id);
+        if (facts) facts.freshness = { text: decoyMaintenanceFreshness.textContent, age: decoyMaintenanceFreshness.dataset.age };
       }
       if (capacityFailed || freshnessFailed) {
         setDecoyStatus(decoyMaintenanceStatus,
@@ -3648,7 +3725,7 @@
     }
   };
 
-  const openDecoyMaintenance = async (id) => {
+  const openDecoyMaintenance = async (id, mount = true) => {
     if (busy || currentState !== nativeState.authenticated) return;
     const revision = batchSessionRevision;
     const wasMaintenance = decoyStage === "maintenance";
@@ -3660,10 +3737,13 @@
     }
     renderDecoySection();
     try {
-      await waitForVolumeOperation(() => bridge.beginOpenDecoyMaintenance(id));
+      if (mount && !decoyMounted.has(id)) {
+        await waitForVolumeOperation(() => bridge.beginOpenDecoyMaintenance(id));
+        if (revision === batchSessionRevision) decoyMounted.set(id, { blocked: false, recovery: false });
+      }
       if (revision !== batchSessionRevision) { logPageEvent(4, "openDecoyMaintenance", "会话或页面状态变化，已放弃等待结果。"); return; }
       opened = true;
-      decoyUploadRecovery = false;
+
       decoyStage = "maintenance";
       decoyListVisible = false;
       decoyMaintenanceId = id;
@@ -3689,11 +3769,10 @@
     }
   };
 
-  const endDecoyMaintenance = async () => {
+  const endDecoyMaintenance = async (id = decoyMaintenanceId) => {
     if (busy || currentState !== nativeState.authenticated ||
-        decoyStage !== "maintenance") return;
+        !decoyMounted.has(id)) return;
     const revision = batchSessionRevision;
-    const id = decoyMaintenanceId;
     busy = true;
     setDecoyStatus(decoyMaintenanceStatus, "");
     decoyProtectionUnmountStatus.textContent = "";
@@ -3701,6 +3780,7 @@
     try {
       await waitForVolumeOperation(() => bridge.beginEndDecoyMaintenance(id));
       if (revision !== batchSessionRevision) { logPageEvent(4, "endDecoyMaintenance", "会话或页面状态变化，已放弃等待结果。"); return; }
+      decoyMounted.delete(id);
       ++decoyMaintenanceRevision;
       decoyStage = "results";
       decoyListVisible = false;
@@ -3714,7 +3794,7 @@
     } catch (pageError) { logCaughtPageError("endDecoyMaintenance/1", pageError);
       if (revision !== batchSessionRevision) return;
       decoyProtectionUnmountStatus.textContent = "无法卸载，请关闭占用该卷的程序后重试。";
-      setDecoyStatus(decoyMaintenanceStatus,
+      setDecoyStatus(decoyListVisible || decoyStage === "results" ? decoyResultsStatus : decoyMaintenanceStatus,
         "无法结束维护，请关闭可能占用文件的程序后重试。", "error");
     } finally {
       busy = false;
@@ -3726,10 +3806,12 @@
   decoyExit.addEventListener("click", async () => {
     if (busy || decoyRefreshing || currentState !== nativeState.authenticated) return;
     const revision = batchSessionRevision;
-    if (decoyStage === "maintenance") {
-      await endDecoyMaintenance();
+    for (const id of [...decoyMounted.keys()]) {
+      await endDecoyMaintenance(id);
       if (revision !== batchSessionRevision || currentState !== nativeState.authenticated) return;
-      if (decoyStage === "maintenance") {
+      if (decoyMounted.has(id)) {
+        decoyListVisible = true;
+        renderDecoySection();
         setDecoyStatus(decoyResultsStatus, "无法退出高级更新，请关闭占用该卷的程序后重试。", "error");
         return;
       }
@@ -3778,14 +3860,15 @@
   decoyMaintenanceContainer.addEventListener("change", () => {
     const id = Number(decoyMaintenanceContainer.value);
     if (!Number.isInteger(id) || id <= 0 || id === decoyMaintenanceId) return;
-    void openDecoyMaintenance(id);
+    void openDecoyMaintenance(id, false);
   });
   decoyMaintenanceEnd.addEventListener("click", () => {
-    void endDecoyMaintenance();
+    if (decoyMounted.has(decoyMaintenanceId)) void endDecoyMaintenance();
+    else void openDecoyMaintenance(decoyMaintenanceId);
   });
-  decoyProtectionUnmount.addEventListener("click", () => { void endDecoyMaintenance(); });
+  decoyProtectionUnmount.addEventListener("click", () => { void endDecoyMaintenance(decoyProtectionTarget); });
   decoySelectFiles.addEventListener("click", async () => {
-    if (busy || decoyUploadRecovery || decoyWriteBlocked || decoyStage !== "maintenance") return;
+    if (busy || !decoyMounted.has(decoyMaintenanceId) || decoyUploadRecovery || decoyWriteBlocked || decoyStage !== "maintenance") return;
     await armDecoyDrop();
     try { if (await bridge.selectExternalFiles()) await watchDecoyDrop(); }
     catch (pageError) { logCaughtPageError("decoySelectFiles.click/1", pageError); setDecoyStatus(decoyDropStatus, "无法选择文件，请稍后重试。", "error"); }
@@ -3800,7 +3883,7 @@
     if (!decoySelectFiles.disabled) decoySelectFiles.click();
   });
   window.addEventListener("usb-vault-drop-hover", (event) => {
-    const enabled = inDecoyFileView() && !busy && !decoyUploadRecovery && !decoyWriteBlocked;
+    const enabled = inDecoyFileView() && decoyMounted.has(decoyMaintenanceId) && !busy && !decoyUploadRecovery && !decoyWriteBlocked;
     decoyDropZone.classList.toggle("drop-hover", enabled && (event.detail === 1 || event.detail === 3));
     decoySelectFiles.classList.toggle("drop-button-hover", enabled && event.detail === 2);
   });
@@ -5066,6 +5149,10 @@
     cardResetAvailable = nextResetAvailable;
     forgotAvailable = nextForgotAvailable;
     containers = nextContainers;
+    for (const id of decoyMounted.keys()) {
+      if (!containers.some(item => item.id === id && item.mounted)) decoyMounted.delete(id);
+    }
+    if (decoyProtectionTarget && !decoyMounted.has(decoyProtectionTarget)) clearDecoyMaintenanceFacts();
     containerOrder = nextContainers.map((container) => container.id);
     operationEvents = nextOperationEvents;
   };

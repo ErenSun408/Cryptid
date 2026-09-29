@@ -2262,17 +2262,34 @@ wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
     const std::uint32_t id,
     const security::SecureBuffer& decoy_password_utf8) {
   SessionContainer& entry = maintenance_target(id, decoy_password_utf8);
-  if (entry.mounted && entry.maintenance) return entry.drive_letter;
-  const bool switched = release_other_maintenance(id);
+  if (entry.mounted && entry.maintenance) {
+    if (entry.maintenance_recovery_required) throw std::logic_error("end failed maintenance before reopening");
+    static_cast<void>(prepare_maintenance_target(id));
+    return entry.drive_letter;
+  }
+  const bool switched = prepare_maintenance_target(id);
   security::SecureBuffer outer_password;
   try {
     outer_password = runtime_.derive_container_password(
         decoy_password_utf8, authentication_.root_secret_,
         layout_.container_b.salt);
+    {
+      unsigned int difference = outer_password.size() == state_.decoy_outer_password.size() ? 0U : 1U;
+      if (difference == 0) {
+        volatile unsigned int bytes_differ = 0;
+        for (std::size_t i = 0; i < outer_password.size(); ++i)
+          bytes_differ = bytes_differ | std::to_integer<unsigned int>(outer_password.data()[i] ^ state_.decoy_outer_password.data()[i]);
+        difference = bytes_differ;
+      }
+      if (difference != 0 && std::ranges::any_of(state_.containers, [id](const auto& item) { return item.id != id && item.maintenance; }))
+        throw std::logic_error("end existing maintenance before changing credentials");
+      if (difference != 0) state_.decoy_candidates.clear();
+    }
     const wchar_t drive_letter = mount_outer_for_maintenance(
         entry, outer_password, MaintenanceMount::open);
     state_.decoy_outer_password = std::move(outer_password);
-    state_.decoy_candidates = {id};
+    if (std::ranges::find(state_.decoy_candidates, id) == state_.decoy_candidates.end())
+      state_.decoy_candidates.push_back(id);
     return drive_letter;
   } catch (...) {
     SESSION_TRACE_FAILURE("打开诱饵维护失败", container_text(entry));
@@ -2403,6 +2420,7 @@ DecoyMaintenanceSpace CardLoginMountSessionCore::decoy_maintenance_space(
     throw std::logic_error("partition maintenance capacity measurement is not supported");
   verify_identity();
   const volume::VolumeSpace space = runtime_.volume_space(entry->drive_letter);
+  static_cast<void>(prepare_maintenance_target(id));
   const auto safe = runtime_.measure_protected_space(
       entry->path, *entry->maintenance_identity, state_.decoy_outer_password,
       hidden_container_password());
@@ -2490,6 +2508,7 @@ void CardLoginMountSessionCore::import_external_entry(
     verify();
     SESSION_TRACE("开始导入到维护卷", container_text(*entry) + "；来源 " + wide_text(absolute_source) +
                                           "；目标 " + wide_text(destination));
+    static_cast<void>(prepare_maintenance_target(id));
     runtime_.import_protected(entry->path, *entry->maintenance_identity, state_.decoy_outer_password,
         hidden_container_password(), absolute_source, destination, cancelled, progress);
     verify();
@@ -2519,9 +2538,10 @@ wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
   }
   if (entry->mounted && entry->maintenance) {
     if (entry->maintenance_recovery_required) throw std::logic_error("end failed maintenance before reopening");
+    static_cast<void>(prepare_maintenance_target(id));
     return entry->drive_letter;
   }
-  const bool switched = release_other_maintenance(id);
+  const bool switched = prepare_maintenance_target(id);
   try {
     return mount_outer_for_maintenance(*entry, state_.decoy_outer_password,
                                        MaintenanceMount::open);
@@ -2532,16 +2552,12 @@ wchar_t CardLoginMountSessionCore::open_surveyed_maintenance(
   }
 }
 
-bool CardLoginMountSessionCore::release_other_maintenance(
+bool CardLoginMountSessionCore::prepare_maintenance_target(
     const std::uint32_t next_id) {
-  bool released = false;
-  for (const SessionContainer& container : state_.containers) {
-    if (container.id == next_id || !container.maintenance) continue;
-    SESSION_TRACE("切换维护卷，先卸下原维护卷", container_text(container));
-    unmount_container_impl(container.id, false, false);
-    released = true;
-  }
-  return released;
+  const bool changed = maintenance_helper_target_ != 0 && maintenance_helper_target_ != next_id;
+  if (changed) runtime_.end_measurements();
+  maintenance_helper_target_ = next_id;
+  return changed;
 }
 
 bool CardLoginMountSessionCore::verify_decoy_maintenance(

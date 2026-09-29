@@ -115,6 +115,9 @@ window.navigationFixture = {
     beginDecoySurvey: (bytes) => {
       if (fixture.failSurvey) throw new Error("survey refused");
       fixture.surveyPasswords.push(Array.from(bytes));
+      for (const item of fixture.containers) {
+        if (fixture.surveyFound.includes(item.id)) { item.mounted = false; item.drive = ""; }
+      }
       return true;
     },
     getDecoySurveyProgress: () => fixture.surveyProgress,
@@ -139,7 +142,7 @@ window.navigationFixture = {
       fixture.protectionQueries.push(id);
       if (fixture.dropStatus.startsWith("1,")) throw new Error("E_PENDING: upload owns session");
       if (fixture.delayProtection) return new Promise(resolve => { fixture.completeProtection = resolve; });
-      return fixture.protectionBlocked;
+      return fixture.protectionById?.[id] ?? fixture.protectionBlocked;
     },
     setExternalDropTarget: (id, directory) => {
       if (fixture.failDropTarget) throw new Error("the window refused to arm");
@@ -156,7 +159,7 @@ window.navigationFixture = {
       return true;
     },
     beginEndDecoyMaintenance: (id) => beginVolume(() => {
-      if (fixture.failEndMaintenance) throw new Error("simulated end failure");
+      if (fixture.failEndMaintenance || fixture.failEndIds?.includes(id)) throw new Error("simulated end failure");
       fixture.endedMaintenance.push(id);
       bridge.unmountContainer(id);
     }),

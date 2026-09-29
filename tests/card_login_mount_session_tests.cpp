@@ -3746,11 +3746,13 @@ void test_every_unmount_path_ends_a_measuring_run() {
           "a whole-session unmount left the measuring run open");
 }
 
-void test_switching_maintenance_reuses_one_measuring_run() {
+void test_multiple_maintenance_mounts_share_one_helper() {
   FakeRuntime runtime;
   CardAuthenticationSession authentication;
   CardLoginMountSessionCore session(authentication, runtime, layout());
   const std::uint32_t first = maintenance_fixture(runtime, session);
+  runtime.free_drive_letters.push_back(L'W');
+  runtime.free_drive_letters.push_back(L'Z');
   const std::uint32_t second = session.create_container_b(
       L"D:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL,
       16ULL * 1024ULL * 1024ULL, bytes("decoy-password"));
@@ -3764,19 +3766,39 @@ void test_switching_maintenance_reuses_one_measuring_run() {
   static_cast<void>(
       session.open_surveyed_maintenance(second));
 
-  require(!mounted_now(session, first) && mounted_now(session, second),
-          "switching maintenance left two outer volumes current");
-  require(runtime.end_measure_calls == 0,
-          "switching containers discarded the measuring run");
-  require(runtime.end_import_calls == closed_imports + 1,
-          "switching maintenance retained the previous import session");
+  require(mounted_now(session, first) && mounted_now(session, second),
+          "switching maintenance released an outer volume");
+  require(runtime.end_measure_calls == 1,
+          "switching containers retained the old helper binding");
+  require(runtime.end_import_calls == closed_imports,
+          "switching maintenance unexpectedly unmounted a volume");
   static_cast<void>(session.decoy_maintenance_space(second));
   session.import_external_entry(second, L"", L"C:\\source\\second.txt", {});
   require(runtime.protected_import_calls == 2,
           "the switched maintenance mount could not import");
+  static_cast<void>(session.open_surveyed_maintenance(first));
+  static_cast<void>(session.decoy_maintenance_space(first));
+  require(mounted_now(session, first) && mounted_now(session, second),
+          "returning to an existing maintenance mount released a volume");
+  require_throws_plain_logic_error([&] {
+    static_cast<void>(session.open_decoy_maintenance(second, bytes("different-password")));
+    // Already mounted targets retain their original credential.
+    const auto third = session.create_container_b(L"D:\\vault\\third.hc", 64ULL * 1024ULL * 1024ULL,
+        16ULL * 1024ULL * 1024ULL, bytes("different-password"));
+    static_cast<void>(session.open_decoy_maintenance(third, bytes("different-password")));
+  }, "a different credential replaced active maintenance credentials");
+  const auto first_drive = session.open_surveyed_maintenance(first);
+  const auto second_drive = session.open_surveyed_maintenance(second);
+  runtime.attached_volume_types[first_drive] = usb_vault::volume::VolumeType::outer_write_prevented;
+  require(session.decoy_maintenance_write_blocked(first) && !session.decoy_maintenance_write_blocked(second),
+          "protection status leaked between maintenance volumes");
+  require(first_drive != second_drive, "maintenance volumes shared a drive letter");
   session.end_decoy_maintenance(second);
-  require(runtime.end_measure_calls == 1,
-          "ending after a switch did not close exactly one measuring run");
+  require(mounted_now(session, first) && !mounted_now(session, second),
+          "ending one maintenance volume released another");
+  require(session.decoy_maintenance_write_blocked(first),
+          "ending another volume cleared the first volume protection");
+  session.end_decoy_maintenance(first);
 }
 
 void test_a_shell_drop_lands_in_the_directory_the_page_named() {
@@ -4791,7 +4813,7 @@ int main() {
     test_maintenance_identity_failure_releases_new_mount();
     test_ending_maintenance_releases_the_volume_and_the_elevation();
     test_every_unmount_path_ends_a_measuring_run();
-    test_switching_maintenance_reuses_one_measuring_run();
+    test_multiple_maintenance_mounts_share_one_helper();
     test_a_shell_drop_lands_in_the_directory_the_page_named();
     test_a_shell_drop_reaches_only_a_volume_open_for_maintenance();
     test_a_shell_drop_cannot_name_anything_outside_the_directory();
