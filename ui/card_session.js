@@ -2143,7 +2143,7 @@
         if (!scroll.has(parent)) scroll.set(parent, [parent.scrollLeft, parent.scrollTop]);
       }
       const groups = new Map(rowsAround(list).map(row => [Number(row.dataset.rowContainer),
-        row.parentElement === list ? row : row.parentElement]));
+        row.closest(".container-group") || (row.parentElement === list ? row : row.parentElement)]));
       let anchor = list.firstElementChild;
       for (const id of ids) {
         const group = groups.get(id);
@@ -2256,10 +2256,11 @@
   let reorderState = null;
 
   const rowsAround = (list) =>
-    [...list.querySelectorAll(":scope > .xrow, :scope > div > .xrow, :scope > .container-group > .container-row")];
+    [...list.querySelectorAll(":scope > .xrow, :scope > div > .xrow, :scope > .container-group > .container-swipe > .container-row")];
 
   const beginContainerReorder = (event, row, id) => {
     if (busy || reorderState !== null || event.button !== 0) return;
+    closeContainerSwipe();
     const list = row.closest(".xlist, [data-container-list]");
     if (list === null) return;
     event.preventDefault();
@@ -2315,9 +2316,9 @@
     if (anchor === undefined) {
       reorderState.list.appendChild(reorderState.marker);
     } else {
-      const holder = anchor.parentElement === reorderState.list
+      const holder = anchor.closest(".container-group") || (anchor.parentElement === reorderState.list
         ? anchor
-        : anchor.parentElement;
+        : anchor.parentElement);
       reorderState.list.insertBefore(reorderState.marker, holder);
     }
   };
@@ -3919,6 +3920,7 @@
 
   const showDashboardSection = (sectionName) => {
     if (sectionName === "history" && !operationLoggingEnabled) return;
+    closeContainerSwipe();
     if (inDecoyFileView() && sectionName !== "decoy") {
       decoyMaintenancePath = [...filePath];
       fileListingRevision += 1;
@@ -4198,6 +4200,98 @@
     return button;
   };
 
+  let openContainerSwipe = null;
+  let cancelContainerSwipe = null;
+  const closeContainerSwipe = () => {
+    cancelContainerSwipe?.();
+    if (openContainerSwipe) {
+      openContainerSwipe.row.style.transform = "";
+      openContainerSwipe.remove.hidden = true;
+      openContainerSwipe = null;
+    }
+  };
+  document.addEventListener("pointerdown", event => {
+    if (openContainerSwipe && !openContainerSwipe.rail.contains(event.target)) closeContainerSwipe();
+  });
+  window.addEventListener("blur", closeContainerSwipe);
+  const wireContainerSwipe = (rail, row, remove) => {
+    const swipeWidth = 108;
+    const setDistance = distance => {
+      remove.hidden = distance === 0;
+      remove.style.clipPath = `inset(0 0 0 ${swipeWidth - distance}px)`;
+      row.style.transform = `translateX(-${distance}px)`;
+    };
+    let suppressClick = false;
+    const reveal = () => {
+      closeContainerSwipe();
+      setDistance(swipeWidth);
+      openContainerSwipe = { rail, row, remove };
+    };
+    row.addEventListener("click", event => {
+      if (suppressClick) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        suppressClick = false;
+        return;
+      }
+      if (openContainerSwipe?.row === row) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        closeContainerSwipe();
+      }
+    }, true);
+    row.addEventListener("keydown", event => {
+      if (event.target.closest("input, button") || busy || row.dataset.busy === "true") return;
+      if (event.key === "ArrowLeft") { event.preventDefault(); reveal(); if (!remove.disabled) remove.focus(); }
+      if (["ArrowRight", "Escape"].includes(event.key)) { event.preventDefault(); closeContainerSwipe(); }
+    });
+    remove.addEventListener("keydown", event => {
+      if (["Escape", "ArrowRight"].includes(event.key)) {
+        event.preventDefault(); closeContainerSwipe(); row.querySelector(".container-name").focus();
+      }
+    });
+    row.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || busy || reorderState || containerRename || row.dataset.busy === "true" ||
+          event.target.closest("button, input, a")) return;
+      suppressClick = false;
+      const wasOpen = openContainerSwipe?.row === row;
+      closeContainerSwipe();
+      if (wasOpen) setDistance(swipeWidth);
+      const startX = event.clientX, startY = event.clientY, pointer = event.pointerId;
+      let distance = wasOpen ? swipeWidth : 0, dragging = false;
+      const cleanup = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", end);
+        document.removeEventListener("pointercancel", cancel);
+        rail.removeAttribute("data-dragging");
+        cancelContainerSwipe = null;
+      };
+      const cancel = () => { cleanup(); suppressClick = false; row.style.transform = ""; remove.hidden = true; };
+      const move = e => {
+        if (e.pointerId !== pointer) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        if (!dragging) {
+          if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { cancel(); return; }
+          if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy)) return;
+          dragging = true;
+          suppressClick = true;
+          rail.dataset.dragging = "true";
+        }
+        e.preventDefault();
+        distance = Math.max(0, Math.min(swipeWidth, (wasOpen ? swipeWidth : 0) - dx));
+        setDistance(distance);
+      };
+      const end = e => {
+        if (e.pointerId !== pointer) return;
+        cleanup();
+        if (distance >= swipeWidth / 3 && dragging) reveal();
+        else { row.style.transform = ""; remove.hidden = true; }
+      };
+      cancelContainerSwipe = cancel;
+      document.addEventListener("pointermove", move, { passive: false });
+      document.addEventListener("pointerup", end);
+      document.addEventListener("pointercancel", cancel);
+    });
+  };
+
   const containerRow = (container, management) => {
     const group = document.createElement("div");
     group.className = "container-group";
@@ -4294,13 +4388,15 @@
 
     const actions = document.createElement("div");
     actions.className = "container-actions";
+    if (!management) {
+      const reserve = document.createElement("span");
+      reserve.className = "shell-button container-action-reserve";
+      reserve.textContent = "从列表移除";
+      reserve.setAttribute("aria-hidden", "true");
+      actions.appendChild(reserve);
+    }
     actions.appendChild(containerActionButton(container,
       container.conversion === 2 ? "resume" : container.mounted ? "unmount" : "mount", container.conversion === 2 ? "继续加密" : container.mounted ? "卸载" : "挂载"));
-    if (!management) {
-      const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
-      if (container.mounted) remove.title = "请先卸载容器";
-      actions.appendChild(remove);
-    }
     const expanded = !management && expandedContainerId === container.id;
     const details = containerActionButton(container, "details", "");
     details.className = "container-details-toggle";
@@ -4309,7 +4405,15 @@
     details.appendChild(exportGlyph(["M6 9l6 6 6-6"]));
     row.append(grab, mark, identity, facts, actions);
     if (!management) row.appendChild(details);
-    group.appendChild(row);
+    const rail = document.createElement("div");
+    rail.className = "container-swipe";
+    const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
+    remove.className = "container-swipe-remove";
+    remove.hidden = true;
+    if (container.mounted) remove.title = "请先卸载容器";
+    rail.append(remove, row);
+    wireContainerSwipe(rail, row, remove);
+    group.appendChild(rail);
 
     if (expanded) {
       const panel = document.createElement("div");
@@ -4327,10 +4431,6 @@
       operations.className = "container-detail-actions";
       operations.appendChild(containerActionButton(container, "browse", "浏览文件"));
       operations.appendChild(containerActionButton(container, "export", "导出与迁移"));
-      const forget = containerActionButton(container, "forget", "从列表移除", container.mounted);
-      forget.classList.add("container-forget");
-      if (container.mounted) forget.title = "请先卸载容器";
-      operations.appendChild(forget);
       panel.append(grid, operations);
       group.appendChild(panel);
     }
@@ -4338,6 +4438,7 @@
   };
 
   const renderContainers = () => {
+    closeContainerSwipe();
     if (containerRename) {
       const editor = containerRename;
       const exists = containers.some(item => item.id === editor.id);

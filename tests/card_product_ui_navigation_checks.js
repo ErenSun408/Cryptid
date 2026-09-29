@@ -409,8 +409,8 @@
       all(`${home} .container-details-grid .container-fact`).length === 6, "Details contain six allowed facts");
     check(!$(".container-details [data-container-action=unavailable]") &&
       !$(home + " .container-row [data-container-action=browse]") &&
-      !$(manager + " [data-container-action=details]") && !$(manager + " [data-container-action=forget]"),
-      "Management has no disclosure or removal actions");
+      !$(manager + " [data-container-action=details]") && $(manager + " .container-swipe-remove").hidden,
+      "Management has no disclosure and keeps removal hidden until swiped");
     action(home, 2, "details").click();
     check(!$(home + " .container-details"), "Details collapse");
 

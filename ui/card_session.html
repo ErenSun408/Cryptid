@@ -575,6 +575,14 @@
     .container-list { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
     .container-row { display: flex; align-items: center; gap: .9rem; padding: .8rem 1rem; border-top: 1px solid var(--line); }
     .container-group + .container-group { border-top: 1px solid var(--line); }
+    .container-swipe { position: relative; overflow: hidden; }
+    .container-swipe > .container-row { background: var(--ink-800); touch-action: pan-y; transition: transform .18s ease; }
+    .container-swipe[data-dragging] > .container-swipe-remove { transition: none; }
+    .container-swipe[data-dragging] > .container-row { transition: none; user-select: none; }
+    .container-swipe-remove { position: absolute; right: 0; top: 0; bottom: 0; width: 108px; padding: 0; white-space: nowrap; clip-path: inset(0 0 0 108px); transition: clip-path .18s ease; border: 0; border-radius: 0; background: var(--danger); color: #fff; font: inherit; font-size: .78rem; font-weight: 600; cursor: pointer; }
+    .container-swipe-remove:disabled { cursor: default; opacity: .5; }
+    .container-action-reserve { visibility: hidden; pointer-events: none; }
+    @media (prefers-reduced-motion: reduce) { .container-swipe > .container-row, .container-swipe-remove { transition: none; } }
     .container-row { border-top: 0; position: relative; padding-right: 3rem; cursor: pointer; }
     .container-row:hover { background: rgba(255,255,255,.025); }
     .container-row.container-new { animation: container-arrival 2.2s ease-out; }
