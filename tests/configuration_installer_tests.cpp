@@ -1,5 +1,6 @@
 #include "../src/platform/windows/vikey_configuration/installers.h"
 #include "../src/platform/windows/vikey_configuration/setup_policy.h"
+#include "../src/platform/windows/vikey_configuration/driver_deployment.h"
 #include "../src/platform/windows/installation_state.h"
 #include <Windows.h>
 #include <filesystem>
@@ -14,6 +15,15 @@ int wmain(int argc, wchar_t** argv) {
   try {
     using configuration::setup::Result;
     using configuration::setup::ensure_dependency;
+    using configuration::driver::Presence;
+    using configuration::driver::classify;
+    if (classify(Presence::absent, false) != Result::missing ||
+        classify(Presence::absent, true) != Result::unavailable ||
+        classify(Presence::trusted_running, false) != Result::ready ||
+        classify(Presence::existing_unavailable, false) != Result::unavailable ||
+        classify(Presence::unknown, false) != Result::unavailable ||
+        classify(Presence::incompatible, false) != Result::incompatible)
+      throw std::runtime_error("unsafe driver disposition");
     for (auto initial : {Result::ready, Result::incompatible, Result::unavailable}) {
       int installs = 0;
       const auto result = ensure_dependency([&] { return initial; }, [&]() -> Result {

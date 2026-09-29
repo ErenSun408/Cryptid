@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "platform/windows/vikey_configuration/installers.h"
+#include "platform/windows/vikey_configuration/driver_deployment.h"
 #include "platform/windows/vikey_configuration/setup_policy.h"
 #include "usb_vault/volume/volume_provider.h"
 
@@ -25,24 +26,7 @@ Result webview() {
   return Result::unavailable;
 }
 
-Result veracrypt() {
-  try {
-    return usb_vault::volume::VolumeProvider{}.driver_version() == 0x126
-        ? Result::ready : Result::incompatible;
-  } catch (const std::system_error& error) {
-    if (error.code().category() != std::system_category() ||
-        (error.code().value() != ERROR_FILE_NOT_FOUND && error.code().value() != ERROR_PATH_NOT_FOUND))
-      return Result::unavailable;
-  }
-  // Do not overwrite an existing but inaccessible or stopped driver.
-  const auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-  if (!manager) return Result::unavailable;
-  const auto service = OpenServiceW(manager, L"veracrypt", SERVICE_QUERY_STATUS);
-  const DWORD error = service ? ERROR_SUCCESS : GetLastError();
-  if (service) CloseServiceHandle(service);
-  CloseServiceHandle(manager);
-  return error == ERROR_SERVICE_DOES_NOT_EXIST ? Result::missing : Result::unavailable;
-}
+Result veracrypt() { return configuration::driver::probe(); }
 
 std::filesystem::path directory() {
   std::wstring path(32768, L'\0');

@@ -605,6 +605,7 @@ if(USB_VAULT_BUILD_UI)
 
   add_executable(usb_vault_setup_helper WIN32 EXCLUDE_FROM_ALL
     tools/setup_helper/main.cpp
+    src/platform/windows/vikey_configuration/driver_deployment.cpp
     src/platform/windows/vikey_configuration/installers.cpp)
   target_include_directories(usb_vault_setup_helper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src "${webview2_sdk_SOURCE_DIR}/build/native/include")

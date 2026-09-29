@@ -76,6 +76,9 @@ static std::filesystem::path system_executable(const wchar_t* name) {
 usb_vault::card::VerifiedLocalArtifact verify_veracrypt_installer(const std::filesystem::path& path) {
   return verify_installer(path, kVeraCryptInstallerDigest);
 }
+usb_vault::card::VerifiedLocalArtifact verify_veracrypt_driver(const std::filesystem::path& path) {
+  return verify_installer(path, kVeraCryptDriverDigest);
+}
 usb_vault::card::VerifiedLocalArtifact verify_webview_installer(const std::filesystem::path& path) {
   return verify_installer(path, kWebViewInstallerDigest);
 }
