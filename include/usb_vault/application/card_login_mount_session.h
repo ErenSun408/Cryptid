@@ -263,6 +263,9 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // never taken away to learn what is already known. The password is derived
   // once for the whole walk, and kept for the rest of the session when at
   // least one container answered.
+  [[nodiscard]] virtual std::vector<std::uint32_t> decoy_maintenance_candidates() {
+    throw std::logic_error("decoy maintenance is unavailable");
+  }
   [[nodiscard]] virtual DecoyMaintenanceSurvey survey_decoy_maintenance(
       const security::SecureBuffer&, const SurveyProgress& = {},
       const SurveyCancellation& = {}) {
@@ -560,6 +563,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   [[nodiscard]] bool verify_decoy_maintenance(
       std::uint32_t id,
       const security::SecureBuffer& decoy_password_utf8) override;
+  [[nodiscard]] std::vector<std::uint32_t> decoy_maintenance_candidates() override;
   [[nodiscard]] DecoyMaintenanceSurvey survey_decoy_maintenance(
       const security::SecureBuffer& decoy_password_utf8,
       const SurveyProgress& progress,

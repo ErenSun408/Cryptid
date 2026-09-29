@@ -244,6 +244,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return adopt(path, 64ULL * 1024ULL * 1024ULL);
   }
 
+  std::vector<std::uint32_t> decoy_maintenance_candidates() override { return survey_result; }
+
   usb_vault::application::DecoyMaintenanceSurvey survey_decoy_maintenance(
       const usb_vault::security::SecureBuffer& decoy_password_utf8,
       const usb_vault::application::SurveyProgress& progress,
@@ -2857,6 +2859,11 @@ void test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   require(!work.running.load(), "the survey did not finish");
+  VARIANT refreshed{};
+  require(invoke_named(*host.Get(), L"refreshDecoyCandidates", nullptr, 0, &refreshed, nullptr) == S_OK &&
+              refreshed.vt == VT_BSTR && std::wstring(refreshed.bstrVal) == L"2,5",
+          "candidate refresh did not expose the current authenticated list");
+  static_cast<void>(::VariantClear(&refreshed));
 
   require(progress() == L"2,3,3,2,1,0",
           "the survey did not report what it walked and found");

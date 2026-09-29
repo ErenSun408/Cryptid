@@ -204,6 +204,8 @@ struct CardLoginMountSessionState final {
   // Derived outer credential for this authenticated maintenance flow, retained
   // for survey navigation and protected measurement. Released with the session.
   security::SecureBuffer decoy_outer_password;
+  // Session-only results bound to the current verified outer credential.
+  std::vector<std::uint32_t> decoy_candidates;
   std::array<OperationEvent, ::usb_vault::application::kOperationHistoryCapacity>
       operation_events;
   std::size_t operation_start{};
@@ -258,6 +260,7 @@ class CardLoginMountSessionCore final {
   [[nodiscard]] bool verify_decoy_maintenance(
       std::uint32_t id,
       const security::SecureBuffer& decoy_password_utf8);
+  [[nodiscard]] std::vector<std::uint32_t> decoy_maintenance_candidates();
   [[nodiscard]] ::usb_vault::application::DecoyMaintenanceSurvey
   survey_decoy_maintenance(
       const security::SecureBuffer& decoy_password_utf8,

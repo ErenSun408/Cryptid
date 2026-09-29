@@ -3520,6 +3520,22 @@ void test_a_surveyed_container_opens_without_asking_again() {
   require(is_b_derivation(runtime.last_mount_password, "decoy-password"),
           "the surveyed password was not the one that opened the volume");
 
+  const auto added = session.create_container_b(
+      L"D:\\new.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("decoy-password"));
+  const auto other = session.create_container_b(
+      L"D:\\other.hc", 64ULL * 1024ULL * 1024ULL, 16ULL * 1024ULL * 1024ULL,
+      bytes("different-password"));
+  runtime.events.clear();
+  const auto candidates = session.decoy_maintenance_candidates();
+  require(std::ranges::find(candidates, id) != candidates.end() &&
+              std::ranges::find(candidates, added) != candidates.end() &&
+              std::ranges::find(candidates, other) == candidates.end(),
+          "refresh mixed credentials or missed the newly created container");
+  require(runtime.events.empty() && mounted_now(session, id) &&
+              mounted_now(session, added) && mounted_now(session, other),
+          "refresh touched mounted volumes");
+
   // It goes when the rest of the session's secrets go, and the card leaving
   // is the path that must not be the one exception.
   static_cast<void>(session.force_unmount_active());
@@ -3528,6 +3544,9 @@ void test_a_surveyed_container_opens_without_asking_again() {
       "a card removal left the surveyed password behind");
 
   session.release_session_secrets();
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(session.decoy_maintenance_candidates()); },
+      "released session exposed maintenance candidates");
   require_throws<std::logic_error>(
       [&] { static_cast<void>(session.open_surveyed_maintenance(id)); },
       "a released session still held the surveyed password");

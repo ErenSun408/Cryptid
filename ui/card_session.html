@@ -679,7 +679,8 @@
     .container-forget { margin-left: auto; }
     .management-toolbar { display: flex; align-items: center; gap: .75rem; justify-content: flex-start; margin-bottom: .6rem; }
     #file-mount-toggle { margin-left: auto; }
-    #file-refresh { width: 2.25rem; padding: 0; }
+    #file-refresh, #decoy-refresh { width: 2.25rem; padding: 0; }
+    #decoy-results .overview-heading { justify-content: flex-start; gap: .6rem; }
     @media (max-width: 850px) {
       .container-facts { gap: .5rem; }
       .container-row { gap: .5rem; padding: .8rem 3rem .8rem .8rem; flex-wrap: wrap; }
@@ -1498,6 +1499,9 @@
             <div class="overview-group">
               <div class="overview-heading">
                 <div><h3>可进行高级更新的容器</h3></div>
+                <button id="decoy-refresh" class="shell-button" type="button" aria-label="刷新容器列表">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 0 0 8"></path><path d="M20 3v5h-5"></path></svg>
+                </button>
               </div>
               <div id="decoy-container-list" class="container-list"></div>
             </div>

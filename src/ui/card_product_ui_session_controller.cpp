@@ -218,6 +218,12 @@ void CardProductUiSessionController::submit_login(
   USB_VAULT_TRACE("登录", "登录成功", "状态 " + std::to_string(static_cast<int>(state())));
 }
 
+std::vector<std::uint32_t> CardProductUiSessionController::decoy_maintenance_candidates() {
+  if (state() != CardProductUiState::authenticated)
+    throw_wrong_route("maintenance candidates require authentication");
+  return volume_session_.decoy_maintenance_candidates();
+}
+
 DecoyMaintenanceUiSurvey CardProductUiSessionController::survey_decoy_maintenance(
     const std::span<std::byte> mutable_password_utf8,
     const application::SurveyProgress& progress,

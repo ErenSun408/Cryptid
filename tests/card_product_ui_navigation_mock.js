@@ -111,6 +111,7 @@ window.navigationFixture = {
     beginMountBatch: (ids) => beginBatch(ids, true),
     beginUnmountBatch: (ids) => beginBatch(ids, false),
     beginForceUnmountBatch: (ids) => beginBatch(ids, false, true),
+    refreshDecoyCandidates: () => fixture.surveyFound.join(","),
     beginDecoySurvey: (bytes) => {
       if (fixture.failSurvey) throw new Error("survey refused");
       fixture.surveyPasswords.push(Array.from(bytes));

@@ -179,6 +179,7 @@ class CardProductUiSessionController final {
   // Tries one decoy password against every container and reports which ones
   // it can open for maintenance. The buffer is wiped on every path, and the
   // password itself is kept by the session rather than by this page.
+  [[nodiscard]] std::vector<std::uint32_t> decoy_maintenance_candidates();
   [[nodiscard]] DecoyMaintenanceUiSurvey survey_decoy_maintenance(
       std::span<std::byte> mutable_password_utf8,
       const application::SurveyProgress& progress = {},

@@ -64,6 +64,24 @@
       all("#decoy-container-list [data-decoy-container]")
         .map((row) => row.dataset.decoyContainer).join(",") === "1,3",
       "The column lists exactly the containers the walk found");
+    window.navigationFixture.surveyFound = [1, 3, 2];
+    $("#decoy-refresh").click();
+    await wait(() => !$("#decoy-refresh").disabled);
+    check(!!$("#decoy-container-list [data-decoy-container='2']") &&
+      window.navigationFixture.surveyPasswords.length === 1,
+      "Manual refresh includes new verified candidates without another password survey");
+    check($("#decoy-results-status").textContent === "列表已刷新。" &&
+      !$("#decoy-results-status").hidden && !$("#decoy-refresh").textContent.trim() &&
+      !!$("#decoy-refresh svg") && $("#decoy-refresh").getAttribute("aria-label"),
+      "Refresh uses an accessible icon and concise success message");
+    await new Promise(resolve => setTimeout(resolve, 3100));
+    check($("#decoy-results-status").hidden && $("#decoy-results-status").textContent === "",
+      "Refresh success message disappears after three seconds");
+    window.navigationFixture.surveyFound = [1, 3];
+    $("[data-section=files]").click(); decoyNav.click();
+    await wait(() => !$("#decoy-refresh").disabled);
+    check(!$("#decoy-container-list [data-decoy-container='2']"),
+      "Returning to advanced updates automatically refreshes candidates");
     check(!$("#decoy-container-list [data-decoy-container='1'] .container-grab") &&
       $("#decoy-container-list .container-row").textContent.includes("更新") &&
       !$("#decoy-container-list .container-row").textContent.includes("从列表移除"),

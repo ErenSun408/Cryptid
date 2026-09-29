@@ -338,6 +338,7 @@
   const decoyProgressBar = document.getElementById("decoy-progress-bar");
   const decoyProgressCancel = document.getElementById("decoy-progress-cancel");
   const decoyResults = document.getElementById("decoy-results");
+  const decoyRefresh = document.getElementById("decoy-refresh");
   const decoyContainerList = document.getElementById("decoy-container-list");
   const decoyResultsStatus = document.getElementById("decoy-results-status");
   const decoyOverviewHeader = document.getElementById("decoy-overview-header");
@@ -1418,6 +1419,7 @@
     creationCancelLabel.textContent = "取消";
     creationBackIcon.hidden = true;
     renderContainers();
+    if (activeSection === "decoy") void refreshDecoyCandidates();
   };
 
   // ---- File manager ------------------------------------------------------
@@ -2912,6 +2914,9 @@
   // Which of the three panels the maintenance column is showing. It starts
   // over whenever the session does: the walk's findings are session facts.
   let decoyStage = "verify";
+  let decoyRefreshing = false;
+  let decoyRefreshRevision = 0;
+  let decoyRefreshStatusTimer = null;
   let decoyListVisible = false;
   let decoyMaintenanceId = 0;
   let decoyMaintenancePath = [];
@@ -3206,6 +3211,10 @@
   };
 
   const setDecoyStatus = (element, message, tone = "") => {
+    if (element === decoyResultsStatus && decoyRefreshStatusTimer !== null) {
+      clearTimeout(decoyRefreshStatusTimer);
+      decoyRefreshStatusTimer = null;
+    }
     element.textContent = message;
     element.dataset.tone = tone;
     if (element === decoyResultsStatus || element === decoyMaintenanceStatus ||
@@ -3215,6 +3224,7 @@
   };
 
   const renderDecoySection = () => {
+    decoyRefresh.disabled = busy || decoyRefreshing || currentState !== nativeState.authenticated;
     decoyProtectionUnmount.disabled = busy || currentState !== nativeState.authenticated;
     decoyVerify.hidden = decoyStage !== "verify";
     decoyProgress.hidden = decoyStage !== "running";
@@ -3239,6 +3249,8 @@
   };
 
   const resetDecoySection = () => {
+    ++decoyRefreshRevision;
+    decoyRefreshing = false;
     decoyEmptyDialog.hidden = true;
     decoyMaintenanceId = 0;
     decoyListVisible = false;
@@ -3268,6 +3280,38 @@
     restoreFileManagerPlacement();
     renderDecoySection();
   };
+
+  const refreshDecoyCandidates = async (manual = false) => {
+    if (busy || decoyRefreshing || currentState !== nativeState.authenticated ||
+        !["results", "maintenance"].includes(decoyStage)) return;
+    const revision = ++decoyRefreshRevision;
+    const session = batchSessionRevision;
+    decoyRefreshing = true;
+    renderDecoySection();
+    try {
+      const raw = String(await bridge.refreshDecoyCandidates());
+      if (revision !== decoyRefreshRevision || session !== batchSessionRevision) return;
+      if (raw !== "" && !/^[1-9]\d*(,[1-9]\d*)*$/.test(raw)) throw new Error("invalid candidates");
+      const ids = raw === "" ? [] : raw.split(",").map(Number);
+      if (ids.some(id => !Number.isSafeInteger(id))) throw new Error("invalid candidates");
+      decoyFound = [...new Set(ids)].filter(id => containers.some(item => item.id === id));
+      if (manual) {
+        setDecoyStatus(decoyResultsStatus, "列表已刷新。", "");
+        decoyRefreshStatusTimer = setTimeout(() => {
+          setDecoyStatus(decoyResultsStatus, "");
+        }, 3000);
+      }
+    } catch (error) {
+      if (revision === decoyRefreshRevision && session === batchSessionRevision)
+        setDecoyStatus(decoyResultsStatus, "无法刷新列表，请稍后重试；验证已失效时请重新验证。", "error");
+    } finally {
+      if (revision === decoyRefreshRevision && session === batchSessionRevision) {
+        decoyRefreshing = false;
+        renderDecoySection();
+      }
+    }
+  };
+  decoyRefresh.addEventListener("click", () => { void refreshDecoyCandidates(true); });
 
   const renderDecoyList = () => {
     while (decoyContainerList.firstChild !== null) {
@@ -3966,7 +4010,8 @@
     if (sectionName === "backup") renderBackupCentre();
     if (sectionName === "decoy") {
       renderDecoySection();
-      if (returningToMaintenance) void refreshFileManager();
+      if (returningToMaintenance) void refreshFileManager().then(() => refreshDecoyCandidates());
+      else void refreshDecoyCandidates();
     }
     renderContainers();
   };

@@ -170,6 +170,7 @@ constexpr DISPID kGetAutoMountId = 68;
 constexpr DISPID kSetAutoMountId = 69;
 constexpr DISPID kOpenConfigurationId = 70;
 constexpr DISPID kGetStartupViewId = 71;
+constexpr DISPID kRefreshDecoyCandidatesId = 89;
 constexpr DISPID kBeginDecoySurveyId = 72;
 constexpr DISPID kDecoySurveyProgressId = 73;
 constexpr DISPID kDecoySurveyIdId = 74;
@@ -434,6 +435,7 @@ class PasswordArgumentsWiper final {
     case kBeginConfirmLoginResetId: return "beginConfirmLoginReset";
     case kBeginCreateBId: return "beginCreateContainerBMib";
     case kBeginCreateId: return "beginCreateContainerMib";
+    case kRefreshDecoyCandidatesId: return "refreshDecoyCandidates";
     case kBeginDecoySurveyId: return "beginDecoySurvey";
     case kBeginEndDecoyMaintenanceId: return "beginEndDecoyMaintenance";
     case kBeginForceUnmountBatchId: return "beginForceUnmountBatch";
@@ -565,6 +567,7 @@ class PasswordArgumentsWiper final {
 // Polling getters run many times a second while work is in flight. They are
 // recorded only when they fail for a reason other than "still busy".
 [[nodiscard]] bool polled_member(const DISPID member) noexcept {
+  if (member == kRefreshDecoyCandidatesId) return true;
   const char* const name = member_name(member);
   if (name == nullptr) return false;
   const std::string_view text(name);
@@ -854,6 +857,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginUnmount")) { ids[0] = kBeginUnmountId; return S_OK; }
     if (matches(names[0], L"beginForceUnmountLast")) { ids[0] = kBeginForceUnmountLastId; return S_OK; }
     if (matches(names[0], L"getVolumeOperationStatus")) { ids[0] = kVolumeOperationStatusId; return S_OK; }
+    if (matches(names[0], L"refreshDecoyCandidates")) { ids[0] = kRefreshDecoyCandidatesId; return S_OK; }
     if (matches(names[0], L"beginDecoySurvey")) { ids[0] = kBeginDecoySurveyId; return S_OK; }
     if (matches(names[0], L"getDecoySurveyProgress")) { ids[0] = kDecoySurveyProgressId; return S_OK; }
     if (matches(names[0], L"getDecoySurveyId")) { ids[0] = kDecoySurveyIdId; return S_OK; }
@@ -1032,6 +1036,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:
       case kBeginOpenDecoyMaintenanceId: // Opening one is what a survey is for.
+      case kRefreshDecoyCandidatesId:
       case kDecoySpaceId:
       case kDecoyWriteBlockedId:
       // Arming the window is not a session mutation: it says where a drop
@@ -1141,6 +1146,20 @@ class CardProductWebViewHostObject final : public IDispatch {
         return S_OK;
       case kBatchProgressId: case kBatchItemIdId: case kBatchItemNameId: case kBatchItemOutcomeId:
         return invoke_batch_query(member, parameters, result);
+      case kRefreshDecoyCandidatesId: {
+        if (!parameters || parameters->cArgs != 0 || parameters->cNamedArgs != 0)
+          return DISP_E_BADPARAMCOUNT;
+        if (!result) return E_POINTER;
+        try {
+          const auto ids = controller_.decoy_maintenance_candidates();
+          std::wstring packed;
+          for (const auto id : ids) {
+            if (!packed.empty()) packed += L",";
+            packed += std::to_wstring(id);
+          }
+          return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+        } catch (...) { return E_FAIL; }
+      }
       case kBeginDecoySurveyId:
         return begin_decoy_survey(parameters, result, argument_error);
       case kDecoySurveyProgressId: case kDecoySurveyIdId: case kCancelDecoySurveyId:

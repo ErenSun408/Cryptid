@@ -621,6 +621,10 @@ bool CardLoginMountSession::verify_decoy_maintenance(
                      [&] { return impl_->core.verify_decoy_maintenance(id, decoy_password_utf8); });
 }
 
+std::vector<std::uint32_t> CardLoginMountSession::decoy_maintenance_candidates() {
+  return impl_->core.decoy_maintenance_candidates();
+}
+
 DecoyMaintenanceSurvey CardLoginMountSession::survey_decoy_maintenance(
     const security::SecureBuffer& decoy_password_utf8,
     const SurveyProgress& progress,
@@ -2062,6 +2066,16 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     // volume with the login derivation.
     const std::uint32_t id = retain_published_container(state_, path, true);
     listed = true;
+    // Creation proves both headers without disturbing the newly mounted volume.
+    // Compare the full derived value; never retain the supplied clear password.
+    if (!state_.decoy_outer_password.empty() &&
+        state_.decoy_outer_password.size() == outer_password.size()) {
+      volatile unsigned int difference = 0;
+      for (std::size_t i = 0; i < outer_password.size(); ++i)
+        difference = difference | std::to_integer<unsigned int>(
+            outer_password.data()[i] ^ state_.decoy_outer_password.data()[i]);
+      if (difference == 0) state_.decoy_candidates.push_back(id);
+    }
     SESSION_TRACE("容器已收录", "容器 #" + std::to_string(id));
     remember_container_path(path);
 
@@ -2250,6 +2264,7 @@ wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
     const wchar_t drive_letter = mount_outer_for_maintenance(
         entry, outer_password, MaintenanceMount::open);
     state_.decoy_outer_password = std::move(outer_password);
+    state_.decoy_candidates = {id};
     return drive_letter;
   } catch (...) {
     SESSION_TRACE_FAILURE("打开诱饵维护失败", container_text(entry));
@@ -2257,6 +2272,15 @@ wchar_t CardLoginMountSessionCore::open_decoy_maintenance(
     if (switched) runtime_.end_measurements();
     throw;
   }
+}
+
+std::vector<std::uint32_t> CardLoginMountSessionCore::decoy_maintenance_candidates() {
+  if (!authentication_.authenticated() || state_.decoy_outer_password.empty())
+    throw std::logic_error("verified maintenance session required");
+  std::vector<std::uint32_t> result;
+  for (const auto id : state_.decoy_candidates)
+    if (find_by_id(state_, id) != nullptr) result.push_back(id);
+  return result;
 }
 
 DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
@@ -2282,6 +2306,7 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
       decoy_password_utf8, authentication_.root_secret_,
       layout_.container_b.salt);
 
+  state_.decoy_candidates.clear();
   DecoyMaintenanceSurvey survey;
   const auto total = static_cast<std::uint32_t>(state_.containers.size());
   std::uint32_t done = 0;
@@ -2331,6 +2356,7 @@ DecoyMaintenanceSurvey CardLoginMountSessionCore::survey_decoy_maintenance(
   // finding nothing would only be holding a secret for no one.
   if (!survey.maintainable.empty()) {
     state_.decoy_outer_password = std::move(outer_password);
+    state_.decoy_candidates = survey.maintainable;
   } else {
     outer_password.clear();
   }
@@ -2566,6 +2592,7 @@ void CardLoginMountSessionCore::release_session_secrets() noexcept {
   for (auto& container : state_.containers) container.maintenance_identity.reset();
   state_.hidden_container_password = security::SecureBuffer();
   state_.decoy_outer_password = security::SecureBuffer();
+  state_.decoy_candidates.clear();
   state_.login_password = security::SecureBuffer();
   // The elevated runs belonged to the session that opened them.
   runtime_.end_imports();
