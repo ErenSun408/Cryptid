@@ -2935,61 +2935,73 @@ void test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password() {
 }
 
 void test_opening_maintenance_runs_on_the_volume_worker() {
-  Fixture fixture;
-  fixture.authentication.establish(root_secret());
-  usb_vault::ui::CreationWorkState work;
-  ComPtr<IDispatch> host;
-  require(SUCCEEDED(create_card_product_webview_host_object(
-              fixture.controller, nullptr, &host, nullptr, &work)),
-          "maintenance host creation failed");
+  for (const int previous_mode : {0, 1, 2}) {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    usb_vault::ui::CreationWorkState work;
+    ComPtr<IDispatch> host;
+    require(SUCCEEDED(create_card_product_webview_host_object(
+                fixture.controller, nullptr, &host, nullptr, &work)),
+            "maintenance host creation failed");
 
-  // Follow the actual UI sequence; opening without a prior survey hides a
-  // stale worker-mode bug. Keep the mount pending while polling through COM.
-  ByteArray password(bytes("decoy-password"));
-  VARIANT surveyed{};
-  require(invoke_named(*host.Get(), L"beginDecoySurvey", &password.value(), 1,
-                       &surveyed, nullptr) == S_OK, "preliminary survey failed");
-  static_cast<void>(::VariantClear(&surveyed));
-  for (int i = 0; work.running.load() && i < 2000; ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  require(!work.running.load(), "preliminary survey did not finish");
-  fixture.volume.pause_volume.store(true);
-  fixture.volume.volume_entered.store(false);
-  VARIANT started{};
-  require(invoke_with_number(*host.Get(), L"beginOpenDecoyMaintenance", 7,
-                             &started, nullptr) == S_OK,
-          "opening maintenance did not start");
-  static_cast<void>(::VariantClear(&started));
-  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  VARIANT progress{};
-  const HRESULT polled = invoke_named(*host.Get(), L"getVolumeOperationStatus",
-                                      nullptr, 0, &progress, nullptr);
-  const bool running = polled == S_OK && progress.vt == VT_UI4 && progress.ulVal == 1;
-  static_cast<void>(::VariantClear(&progress));
-  VARIANT state{};
-  const HRESULT state_read = invoke_named(*host.Get(), L"getSessionState",
-                                          nullptr, 0, &state, nullptr);
-  static_cast<void>(::VariantClear(&state));
-  fixture.volume.pause_volume.store(false);
-  for (int i = 0; work.running.load() && i < 2000; ++i) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  require(!work.running.load(), "opening maintenance did not finish");
-  require(running, "survey-to-maintenance transition refused volume progress");
-  require(state_read == E_PENDING, "mounting exposed mutable session state");
-  require(invoke_named(*host.Get(), L"getVolumeOperationStatus", nullptr, 0,
-                       &progress, nullptr) == S_OK && progress.vt == VT_UI4 &&
-              progress.ulVal == 2, "maintenance completion was not observable");
-  static_cast<void>(::VariantClear(&progress));
-  require(invoke_named(*host.Get(), L"getSessionState", nullptr, 0,
-                       &state, nullptr) == S_OK,
-          "completed maintenance still blocked session refresh");
-  static_cast<void>(::VariantClear(&state));
-  require(fixture.volume.open_maintenance_calls == 1 &&
-              fixture.volume.opened_maintenance_id == 7 &&
-              fixture.volume.volume_thread != std::this_thread::get_id(),
-          "maintenance did not open the named container off the UI thread");
+    // Cover a completed survey, ordinary batch, and force batch before a mount.
+    if (previous_mode == 0) {
+      ByteArray password(bytes("decoy-password"));
+      VARIANT surveyed{};
+      require(invoke_named(*host.Get(), L"beginDecoySurvey", &password.value(), 1,
+                           &surveyed, nullptr) == S_OK, "preliminary survey failed");
+      static_cast<void>(::VariantClear(&surveyed));
+    } else {
+      const auto id = fixture.volume.adopt(L"test.hc", 64ULL * 1024 * 1024);
+      fixture.volume.containers.back().mounted = true;
+      VARIANT selection{}; selection.vt = VT_BSTR;
+      selection.bstrVal = ::SysAllocString(std::to_wstring(id).c_str());
+      const auto hr = invoke_named(*host.Get(), previous_mode == 1 ? L"beginUnmountBatch" : L"beginForceUnmountBatch",
+                                   &selection, 1, nullptr, nullptr);
+      static_cast<void>(::VariantClear(&selection));
+      require(hr == S_OK, "preliminary unmount batch failed");
+    }
+    for (int i = 0; work.running.load() && i < 2000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(), "preliminary operation did not finish");
+    fixture.volume.pause_volume.store(true);
+    fixture.volume.volume_entered.store(false);
+    VARIANT started{};
+    require(invoke_with_number(*host.Get(), L"beginOpenDecoyMaintenance", 7,
+                               &started, nullptr) == S_OK,
+            "opening maintenance did not start");
+    static_cast<void>(::VariantClear(&started));
+    for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    VARIANT progress{};
+    const HRESULT polled = invoke_named(*host.Get(), L"getVolumeOperationStatus",
+                                        nullptr, 0, &progress, nullptr);
+    const bool running = polled == S_OK && progress.vt == VT_UI4 && progress.ulVal == 1;
+    static_cast<void>(::VariantClear(&progress));
+    VARIANT state{};
+    const HRESULT state_read = invoke_named(*host.Get(), L"getSessionState",
+                                            nullptr, 0, &state, nullptr);
+    static_cast<void>(::VariantClear(&state));
+    fixture.volume.pause_volume.store(false);
+    for (int i = 0; work.running.load() && i < 2000; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(!work.running.load(), "opening maintenance did not finish");
+    require(running, "completed operation left stale mode blocking maintenance progress");
+    require(state_read == E_PENDING, "mounting exposed mutable session state");
+    require(invoke_named(*host.Get(), L"getVolumeOperationStatus", nullptr, 0,
+                         &progress, nullptr) == S_OK && progress.vt == VT_UI4 &&
+                progress.ulVal == 2, "maintenance completion was not observable");
+    static_cast<void>(::VariantClear(&progress));
+    require(invoke_named(*host.Get(), L"getSessionState", nullptr, 0,
+                         &state, nullptr) == S_OK,
+            "completed maintenance still blocked session refresh");
+    static_cast<void>(::VariantClear(&state));
+    require(fixture.volume.open_maintenance_calls == 1 &&
+                fixture.volume.opened_maintenance_id == 7 &&
+                fixture.volume.volume_thread != std::this_thread::get_id(),
+            "maintenance did not open the named container off the UI thread");
+    }
 }
 
 void test_maintenance_facts_are_async_current_and_session_scoped() {
