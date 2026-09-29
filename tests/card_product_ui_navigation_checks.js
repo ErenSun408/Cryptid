@@ -127,6 +127,22 @@
     }
     window.navigationFixture.freshnessDays = 1;
     const endsBeforeNavigation = window.navigationFixture.endedMaintenance.length;
+    check(!$('#file-list-body [data-file-action="export"]') &&
+      !!$('#file-list-body [data-file-action="delete"]'),
+      "Maintenance removes export actions while retaining deletion");
+    $('[data-section=backup]').click();
+    $('[data-export-toggle="3"] .xrow-open').click();
+    check($('[data-export-toggle="3"]').parentNode.querySelector('.xnote').textContent ===
+      "该容器正在进行高级更新，暂不支持此操作。" &&
+      !$('[data-export-toggle="3"]').parentNode.querySelector('.xfile'),
+      "A maintenance container opens an explanation instead of exportable files");
+    $('[data-export-select-all="3"]').click();
+    check(!$('[data-export-select-all="3"]').classList.contains('on'),
+      "Maintenance select-all cannot select entries for export");
+    $('[data-export-toggle="3"] .xrow-open').click();
+    check(!$('[data-export-toggle="3"]').parentNode.querySelector('.xfiles'),
+      "The maintenance explanation can be collapsed");
+
     $("[data-section=files]").click();
     await wait(() => $("#dashboard-section-files").classList.contains("active"));
     const maintenanceRow = $("#management-containers [data-row-container='3']");

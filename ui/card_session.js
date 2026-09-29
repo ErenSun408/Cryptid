@@ -1667,6 +1667,7 @@
         ["export", "导出", false],
         ["delete", "删除", true],
       ]) {
+        if (action === "export" && isMaintenanceContainer(container.id)) continue;
         const button = document.createElement("button");
         button.className = danger ? "file-icon-button danger" : "file-icon-button";
         button.type = "button";
@@ -2439,15 +2440,16 @@
       const head = exportRow(container, tail, () => {
         void toggleExportContainer(container.id);
       });
-      head.disabled = head.disabled || isMaintenanceContainer(container.id);
       head.dataset.exportToggle = String(container.id);
       head.setAttribute("aria-expanded", open ? "true" : "false");
       group.appendChild(head);
 
-      if (open && !isMaintenanceContainer(container.id)) {
+      if (open) {
         const files = document.createElement("div");
         files.className = "xfiles";
-        if (!container.mounted) {
+        if (isMaintenanceContainer(container.id)) {
+          exportNote(files, "该容器正在进行高级更新，暂不支持此操作。");
+        } else if (!container.mounted) {
           exportNote(files, "这个容器没有挂载。");
         } else if (openExportError !== "") {
           exportNote(files, openExportError);
@@ -2601,7 +2603,7 @@
     for (const candidate of containers) {
       if (candidate.id === id) container = candidate;
     }
-    if (container === null || !container.mounted) return;
+    if (container === null || !container.mounted || isMaintenanceContainer(id)) return;
     const listing = await readContainerRoot(id);
     if (openExportContainer !== id) return;
     if (listing === null) {
@@ -2613,6 +2615,7 @@
   };
 
   const toggleExportPick = (id, directory, entry) => {
+    if (isMaintenanceContainer(id)) return;
     const key = exportKey(id, directory, entry.name);
     if (exportSelection.has(key)) {
       exportSelection.delete(key);
@@ -2635,6 +2638,10 @@
   // first rather than ticking nothing and looking like it worked.
   const toggleExportContainerAll = async (id, checked) => {
     if (busy) return;
+    if (isMaintenanceContainer(id)) {
+      if (openExportContainer !== id) void toggleExportContainer(id);
+      return;
+    }
     if (!checked) {
       for (const entry of selectionForContainer(id)) {
         exportSelection.delete(exportKey(id, entry.directory, entry.name));
@@ -2680,7 +2687,7 @@
   // it ticks the entry here and opens the card it landed in.
   const offerEntryForExport = (name) => {
     const container = selectedFileContainer();
-    if (container === null || !container.mounted) return;
+    if (container === null || !container.mounted || isMaintenanceContainer(container.id)) return;
     const directory = filePath.join("/");
     const entry = fileEntries.find((candidate) => candidate.name === name);
     exportSelection.set(exportKey(container.id, directory, name), {

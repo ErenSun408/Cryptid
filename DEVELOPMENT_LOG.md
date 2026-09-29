@@ -4445,3 +4445,13 @@
 - 反馈验证：108px／实时裁切调整后再次通过侧滑 8（含中途 24px 位移与背景裁切断言）、排序 5、改名 19 场景；Release 构建及页面契约 1/1 通过，未重复全导航测试；只改展示，不改变移除权限及确认逻辑。
 - 证据：out/container-swipe-refine-build.txt、out/container-swipe-refine-tests.txt、out/container-swipe-final-build.txt、out/container-swipe-tests.txt、out/container-swipe-navigation-tests.txt；新增 tests/card_product_ui_swipe_dom_tests.cjs。
 - 提交：用户已授权以 [ui] 提交，本片验证通过后入库；其他 P5 计划文档修改保留，不归入本片；禁止推送。
+
+### 2026-09-28 — 导出交互 / 高级更新容器说明
+- 范围与审计：核对高级更新、明文导出与阶段记录；P5 改造已废弃，本片仅调整现有维护会话的导出入口和解释，不改变双密码与隐藏保护。
+- 检查与实现：检查共用文件列表、导出展开／全选／选中交接及导航测试；高级更新文件列表不再生成导出按钮，普通容器保留。
+- 交互：导出页点击维护容器可展开下方说明“该容器正在进行高级更新，暂不支持此操作。”，再次点击收起；不读取其根目录或展示可导出文件。
+- 安全审查：全选、单项选中及文件页导出交接均拒绝维护容器，沿用现有选择清理；不改变后端权限、维护挂载或密文迁移限制，不新增日志敏感字段。
+- 验证：构建前检查应用未运行，p46 Release 构建成功，页面契约 1/1 与导航 322 项通过；脚本语法及差异检查通过。
+- 风险与限制：未做真实 WebView 视觉验收、实卡验证或全量原生回归；未生成安装包。
+- 证据：out/maintenance-export-build.txt、out/maintenance-export-tests.txt、out/maintenance-export-navigation-tests.txt。
+- 提交：用户已授权以 [ui] 提交，验证通过后随本次提交入库；保留其他文档修改，禁止推送。
