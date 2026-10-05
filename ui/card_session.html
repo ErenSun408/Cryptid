@@ -949,7 +949,7 @@
     :is(#batch-result-dialog, #export-result-dialog) .modal { width: min(24rem, 100%); min-width: 0; }
     #batch-result-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: .1rem .5rem; font-size: 1.05rem; }
     .batch-result-counts { font-size: .72rem; font-weight: 400; color: var(--text-3); }
-    :is(#batch-result-confirm, #export-result-confirm) { color: #14160f; border-color: transparent; background: transparent; }
+    :is(#batch-result-confirm, #export-result-confirm) { color: #14160f; border-color: transparent; background: linear-gradient(145deg, var(--gold-2), var(--gold)); }
     :is(#batch-result-confirm, #export-result-confirm):hover:not(:disabled) { border-color: transparent; background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     :is(#batch-result-dialog, #export-result-dialog) .modal-body { padding: .75rem 1.25rem; }
     #export-result-summary { display: block; margin-bottom: .65rem; }
@@ -1212,7 +1212,7 @@
     .creation-cancel-work[data-finalizing]:disabled { cursor: default; }
     .modal-button.primary {
       color: #14160f; border-color: transparent;
-      background: transparent;
+      background: linear-gradient(145deg, var(--gold-2), var(--gold));
     }
     .modal-button.primary:hover:not(:disabled) { background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     .visually-hidden {

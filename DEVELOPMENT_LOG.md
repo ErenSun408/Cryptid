@@ -4783,3 +4783,13 @@
 - 风险与验收：新后缀可被第三方关联软件、扫描器误处理，不承诺隐蔽或系统级保护；未进行真实卡／磁盘／Shell 选择器实机兼容验收、全量 CTest 或完整 WebView 集成运行，历史其他 UI DOM 六项失败保留。
 - 证据：原目录成功重建为 out/container-extension-build.txt；独立成功构建为 out/container-extension-isolated-build.txt，回归为 out/container-extension-native-tests.txt、out/container-extension-dom-tests.txt、out/container-extension-exit-regression.txt；视觉预览为 out/settings-extension-preview.png。
 - 提交：用户已授权以 [P5.2] 提交本片，本条随代码入库；此前临时产物清理记录继续留在工作区，禁止推送。
+
+### 2026-10-05 — UI / 主操作按钮默认背景可见性修复
+- 范围与审计：按用户反馈检查新建安全盘“下一步”默认、悬浮与禁用状态，审阅新建流程和现行安全要求；全局检查 ui 中透明背景、深色文字及悬浮选择器组合。
+- 检查与实现：git blame／show 确认问题由当天 P4.15 提交 901188c 引入：Logo 背景调整同时误改 .modal-button.primary 与两个结果确认按钮的默认背景为透明，深色文字与悬浮渐变未变；本片两处规则恢复原浅金色渐变，未修改页面脚本或操作门禁。
+- 同类范围：统一修复新建下一步、文件命名确认、BitLocker 继续、隐藏安全盘创建确认，以及批量结果、明文导出结果确认六个按钮；其他透明图标按钮使用浅色文字，未发现同一问题。
+- 验证：p46 Release 主程序及页面契约目标构建成功，页面契约 CTest 1/1 通过；离线 Edge 对六个按钮的默认／禁用／悬浮共 18 状态计算样式检查通过，截图确认默认背景与文字可见。
+- 验证边界：悬浮在离线预览中以等价类选择器模拟；未执行真实 WebView 鼠标悬浮、全量业务 DOM 或真卡创建，历史其他 DOM 失败不变。
+- 安全与风险：仅调整背景，不修改 hidden、disabled、认证、分区清空确认、任务互斥或命令入口；禁用透明度仍为 0.45，未使未授权操作可点击。
+- 证据：out/button-visibility-build.txt、out/button-visibility-native-tests.txt、out/button-visibility-results.json 和 out/button-visibility-check.png；早期渲染输出重定向无结果，使用显式进程重定向后获得有效检查。
+- 提交：用户已授权将本片提交前缀由 [ui] 改为 [fix]，本条随修复入库；此前清理与磁盘验证记录继续留在工作区，禁止推送。
