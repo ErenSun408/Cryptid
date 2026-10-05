@@ -276,6 +276,12 @@ class ProductionCardLoginMountSessionRuntime final
   bool force_unmount_enabled() override {
     return product_preference_v1(product_settings_v1_default_path(), ProductPreference::force_unmount) != 0;
   }
+  unsigned int container_extension_preference() override {
+    return product_preference_v1(product_settings_v1_default_path(), ProductPreference::container_extension);
+  }
+  void set_container_extension_preference(unsigned int value) override {
+    set_product_preference_v1(product_settings_v1_default_path(), ProductPreference::container_extension, value);
+  }
   bool auto_mount_enabled() override {
     return product_preference_v1(product_settings_v1_default_path(), ProductPreference::auto_mount) != 0;
   }
@@ -852,6 +858,8 @@ bool CardLoginMountSession::operation_logging_enabled() {
   return impl_->core.operation_logging_enabled();
 }
 bool CardLoginMountSession::force_unmount_enabled() { return impl_->core.force_unmount_enabled(); }
+unsigned int CardLoginMountSession::container_extension_preference() { return impl_->core.container_extension_preference(); }
+void CardLoginMountSession::set_container_extension_preference(unsigned int value) { impl_->core.set_container_extension_preference(value); }
 bool CardLoginMountSession::auto_mount_enabled() { return impl_->core.auto_mount_enabled(); }
 void CardLoginMountSession::set_auto_mount_enabled(bool enabled) {
   traced_call("设置登录后自动挂载", [&] { return std::string(enabled ? "开" : "关"); },

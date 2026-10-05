@@ -5,6 +5,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <Windows.h>
+#include <bcrypt.h>
+#include <limits>
 
 namespace usb_vault::ui {
 namespace {
@@ -153,21 +156,46 @@ void validate_directory(const std::wstring_view directory) {
 
 }  // namespace
 
+std::wstring_view choose_container_file_extension(const unsigned int preference) {
+  constexpr std::array<std::wstring_view, 3> extensions{L".sys", L".dat", L".bin"};
+  if (preference < extensions.size()) return extensions[preference];
+  if (preference != 3) reject("invalid container extension preference");
+  unsigned int sample{};
+  do {
+    if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&sample), sizeof(sample),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+      throw std::runtime_error("container extension selection failed");
+  } while (sample == std::numeric_limits<unsigned int>::max());
+  return extensions[sample % extensions.size()];
+}
+
 std::wstring resolve_container_target_path(const std::wstring_view directory,
-                                           const std::wstring_view name) {
+                                           const std::wstring_view name,
+                                           const std::wstring_view extension) {
   validate_directory(directory);
   validate_name(name);
+  if (extension != L".hc" && extension != L".sys" && extension != L".dat" && extension != L".bin")
+    reject("unsupported container file extension");
 
   std::wstring path(directory);
   std::replace(path.begin(), path.end(), L'/', L'\\');
   if (!is_separator(path.back())) path.push_back(L'\\');
   path.append(name);
 
-  // The name carries the extension only when the user typed it, so append it
-  // unless the name already ends in the one this unit owns. Any other
-  // extension stays and this one goes after it: the file is always a
-  // container, whatever the user called it.
-  const std::wstring_view extension = kContainerFileExtension;
+  // Preserve the legacy helper's .hc behavior. Product creation supplies its
+  // selected extension and replaces any recognized trailing suffix.
+  if (extension != L".hc") {
+    for (const auto suffix : {L".hc", L".sys", L".dat", L".bin"}) {
+      const std::wstring_view known(suffix);
+      if (name.size() > known.size() && equals_ignoring_case(name.substr(name.size() - known.size()), known)) {
+        path.resize(path.size() - known.size());
+        break;
+      }
+    }
+    path.append(extension);
+    if (path.size() > kContainerPathMaximumLength) reject("container path is too long");
+    return path;
+  }
   const bool already_extended =
       name.size() > extension.size() &&
       equals_ignoring_case(name.substr(name.size() - extension.size()),

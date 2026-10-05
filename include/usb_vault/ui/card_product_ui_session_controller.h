@@ -304,6 +304,8 @@ class CardProductUiSessionController final {
   void set_creation_revocation(application::CreationCancellation revoked);
   [[nodiscard]] bool operation_logging_enabled();
   bool force_unmount_enabled();
+  unsigned int container_extension_preference();
+  void set_container_extension_preference(unsigned int value);
   bool auto_mount_enabled();
   void set_auto_mount_enabled(bool enabled);
   void set_force_unmount_enabled(bool enabled);

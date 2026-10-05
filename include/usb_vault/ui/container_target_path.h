@@ -6,10 +6,11 @@
 
 namespace usb_vault::ui {
 
-// The extension every container file carries. The page never states it: the
-// user names a container, and the extension is appended here so a name the
-// page supplies cannot decide how the file is typed.
+// Legacy helper default; product creation supplies its native settings choice.
+// File extensions are an allowlisted naming preference, not a format change.
 inline constexpr wchar_t kContainerFileExtension[] = L".hc";
+// Resolve one creation preference; random selects once per submitted path.
+[[nodiscard]] std::wstring_view choose_container_file_extension(unsigned int preference);
 
 // Longest container name the form accepts, in UTF-16 code units. It leaves
 // room for a directory of ordinary depth inside the 259-character limit below.
@@ -37,6 +38,7 @@ inline constexpr std::size_t kContainerPathMaximumLength = 259;
 // above. The check is pure — nothing here touches the file system, so the
 // caller still has to establish that the directory exists.
 [[nodiscard]] std::wstring resolve_container_target_path(
-    std::wstring_view directory, std::wstring_view name);
+    std::wstring_view directory, std::wstring_view name,
+    std::wstring_view extension = kContainerFileExtension);
 
 }  // namespace usb_vault::ui

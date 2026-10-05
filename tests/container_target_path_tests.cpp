@@ -180,6 +180,27 @@ void test_the_joined_path_stays_inside_the_win32_limit() {
 
 int main() {
   try {
+    using usb_vault::ui::choose_container_file_extension;
+    for (unsigned int value = 0; value < 3; ++value) {
+      const auto extension = choose_container_file_extension(value);
+      require(extension == (value == 0 ? L".sys" : value == 1 ? L".dat" : L".bin"), "fixed extension selection failed");
+      for (const auto name : {L"work", L"work.HC", L"work.sys", L"work.DAT", L"work.bin"})
+        require(resolve_container_target_path(L"D:\\Vault", name, extension) == L"D:\\Vault\\work" + std::wstring(extension),
+                "selected extension was doubled or ignored");
+    }
+    for (int i = 0; i < 64; ++i) {
+      const auto extension = choose_container_file_extension(3);
+      require(extension == L".sys" || extension == L".dat" || extension == L".bin", "random extension outside allowlist");
+    }
+    bool rejected = false;
+    try { static_cast<void>(choose_container_file_extension(4)); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "invalid preference accepted");
+    rejected = false;
+    try { static_cast<void>(resolve_container_target_path(L"D:\\Vault", L"work", L".exe")); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "unsafe extension accepted");
+    rejected = false;
+    try { static_cast<void>(resolve_container_target_path(L"D:\\Vault", L"CON.hc", L".dat")); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "extension override bypassed reserved name protection");
     test_a_name_and_a_directory_become_one_path();
     test_a_name_that_is_not_a_file_name_is_refused();
     test_only_a_drive_absolute_directory_is_accepted();

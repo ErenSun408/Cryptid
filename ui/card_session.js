@@ -275,6 +275,54 @@
   const dashboardStatus = document.getElementById("dashboard-status");
   const windowSizeSelect = document.getElementById("settings-window-size");
   const windowSizeStatus = document.getElementById("settings-window-size-status");
+  const containerExtensionSelect = document.getElementById("settings-container-extension");
+  const containerExtensionStatus = document.getElementById("settings-container-extension-status");
+  let appliedContainerExtension = "0";
+  let containerExtensionSaving = false;
+  const refreshContainerExtension = async () => {
+    if (!containerExtensionSelect || containerExtensionSaving) return;
+    try {
+      const value = await bridge.getContainerExtension();
+      if (![0, 1, 2, 3].includes(value)) throw new Error("invalid container extension preference");
+      appliedContainerExtension = String(value);
+      containerExtensionSelect.value = appliedContainerExtension;
+      containerExtensionSelect.disabled = false;
+      containerExtensionStatus.textContent = "";
+    } catch (error) {
+      logCaughtPageError("refreshContainerExtension", error);
+      containerExtensionSelect.disabled = true;
+      containerExtensionStatus.textContent = "无法读取文件安全盘后缀设置，请重试。";
+    }
+  };
+  containerExtensionSelect?.addEventListener("change", async () => {
+    if (busy || containerExtensionSaving || externalRefreshPending || currentState !== nativeState.authenticated) {
+      containerExtensionSelect.value = appliedContainerExtension;
+      return;
+    }
+    const value = Number(containerExtensionSelect.value);
+    if (![0, 1, 2, 3].includes(value)) { containerExtensionSelect.value = appliedContainerExtension; return; }
+    containerExtensionSaving = true;
+    containerExtensionSelect.disabled = true;
+    containerExtensionStatus.textContent = "";
+    busy = true;
+    try {
+      await bridge.setContainerExtension(value);
+      const saved = await bridge.getContainerExtension();
+      if (saved !== value) throw new Error("container extension readback mismatch");
+      appliedContainerExtension = String(saved);
+      containerExtensionSelect.value = appliedContainerExtension;
+      containerExtensionStatus.textContent = "已保存，仅对新建文件安全盘生效。";
+    } catch (error) {
+      logCaughtPageError("containerExtension.change", error);
+      containerExtensionSelect.value = appliedContainerExtension;
+      containerExtensionStatus.textContent = "无法保存文件安全盘后缀设置，请重试。";
+    } finally {
+      containerExtensionSaving = false;
+      containerExtensionSelect.disabled = false;
+      busy = false;
+      if (externalRefreshPending) void refreshAfterExternalChange();
+    }
+  });
   let appliedWindowSize = "1";
   if (windowSizeSelect !== null) windowSizeSelect.addEventListener("change", async () => {
     const value = windowSizeSelect.value;
@@ -1117,7 +1165,7 @@
   const kReservedDeviceNames = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
   const kMaximumNameLength = 96;
   const kMaximumPathLength = 259;
-  const kContainerExtension = ".hc";
+  const kContainerExtensions = [".hc", ".sys", ".dat", ".bin"];
 
   const containerNameProblem = (input) => {
     const value = input.value;
@@ -1166,9 +1214,8 @@
     // The joint limit lands on this field because the directory is the half a
     // user can shorten without renaming the container.
     const name = nameInput.value;
-    const extension =
-      name.toLowerCase().endsWith(kContainerExtension) ? 0
-        : kContainerExtension.length;
+    const existingExtension = kContainerExtensions.find(suffix => name.length > suffix.length && name.toLowerCase().endsWith(suffix));
+    const extension = 4 - (existingExtension?.length ?? 0);
     const separator = /[\\/]$/.test(value) ? 0 : 1;
     if (value.length + separator + name.length + extension >
         kMaximumPathLength) {
@@ -5022,6 +5069,7 @@
     (candidate) => candidate.setting === control.dataset.setting);
 
   const refreshStoredSwitches = async () => {
+    await refreshContainerExtension();
     await refreshExitHotkey();
     const force = await bridge.getForceUnmountEnabled();
     if (typeof force !== "boolean") throw new Error("invalid force preference");

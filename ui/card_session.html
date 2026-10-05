@@ -813,6 +813,8 @@
     .settings-card { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
     .settings-row { display: flex; align-items: center; gap: 1rem; padding: .9rem 1rem; border-top: 1px solid var(--line); }
     .settings-row:first-child { border-top: 0; }
+    .settings-row select { color-scheme: dark; background-color: #14171c; color: #e8eaed; }
+    .settings-row select option { background-color: #14171c; color: #e8eaed; }
     .settings-copy { min-width: 0; flex: 1; }
     .settings-copy b { font-size: .85rem; font-weight: 600; }
     .settings-lock { flex: 0 0 auto; color: var(--text-3); }
@@ -1665,7 +1667,7 @@
             <div><h2 id="settings-title">系统设置</h2><p>会话策略与产品信息</p></div>
           </div>
           <div class="settings-group">
-            <h3>会话</h3>
+            <h3>安全</h3>
             <div class="settings-card">
               <div class="settings-row">
                 <span class="settings-copy"><b>开启操作日志</b></span>
@@ -1695,7 +1697,17 @@
                 <span class="settings-switch" role="switch" aria-checked="true" aria-disabled="true"
                       aria-label="拔出安全卡时立即卸载全部卷"></span>
               </div>
+              <div class="settings-row">
+                <label class="settings-copy" for="settings-container-extension"><b>文件安全盘后缀</b></label>
+                <select id="settings-container-extension" class="shell-button">
+                  <option value="0" selected>.sys</option>
+                  <option value="1">.dat</option>
+                  <option value="2">.bin</option>
+                  <option value="3">随机</option>
+                </select>
+              </div>
             </div>
+            <output id="settings-container-extension-status" class="creation-status" aria-live="polite"></output>
           </div>
           <div class="settings-group">
             <h3>窗口</h3>

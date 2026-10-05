@@ -732,7 +732,7 @@ class ScopedDirectory final {
 
   // The path the controller must produce for a container named `name`.
   [[nodiscard]] std::wstring target(const std::wstring_view name) const {
-    return wide() + L"\\" + std::wstring(name) + L".hc";
+    return wide() + L"\\" + std::wstring(name) + L".sys";
   }
 
  private:
@@ -1034,7 +1034,7 @@ void test_container_collection_is_projected_only_when_authenticated() {
   std::vector<ContainerUiStatus> statuses =
       fixture.controller.container_statuses();
   require(statuses.size() == 1 && statuses[0].id != 0 &&
-              statuses[0].name == L"work.hc" && statuses[0].mounted &&
+              statuses[0].name == L"work.sys" && statuses[0].mounted &&
               statuses[0].size_mib == 64 && statuses[0].drive_letter == L'D',
           "container projection lost identity, name, capacity, or drive");
   // The name is the file name: the extension belongs to this boundary, not to

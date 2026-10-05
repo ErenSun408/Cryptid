@@ -133,8 +133,9 @@ class SecureBufferGuard final {
 // mistyped.
 [[nodiscard]] std::wstring resolve_target_path(
     const std::wstring_view directory, const std::wstring_view name,
-    const std::uint64_t required_bytes) {
-  std::wstring path = resolve_container_target_path(directory, name);
+    const std::uint64_t required_bytes, const unsigned int extension_preference) {
+  std::wstring path = resolve_container_target_path(directory, name,
+      choose_container_file_extension(extension_preference));
   const std::wstring location(directory);
   std::error_code probe;
   if (!std::filesystem::is_directory(std::filesystem::path(location), probe)) {
@@ -377,7 +378,7 @@ void CardProductUiSessionController::create_container(
   }
 
   const auto size_bytes = static_cast<std::uint64_t>(size_mib) * kBytesPerMib;
-  const std::wstring path = resolve_target_path(directory, name, size_bytes);
+  const std::wstring path = resolve_target_path(directory, name, size_bytes, container_extension_preference());
   static_cast<void>(volume_session_.create_container(path, size_bytes));
 }
 
@@ -407,7 +408,7 @@ void CardProductUiSessionController::create_container_b(
   // The location is settled before anything is derived or committed, so a
   // rejected name leaves the card and the second password untouched.
   const auto outer_size_bytes = static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib;
-  const std::wstring path = resolve_target_path(directory, name, outer_size_bytes);
+  const std::wstring path = resolve_target_path(directory, name, outer_size_bytes, container_extension_preference());
 
   // The page no longer asks for the password the session was opened under:
   // the session still holds it, and which of the two it is stays unknown here
@@ -888,6 +889,17 @@ bool CardProductUiSessionController::operation_logging_enabled() {
 bool CardProductUiSessionController::force_unmount_enabled() {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
   return volume_session_.force_unmount_enabled();
+}
+unsigned int CardProductUiSessionController::container_extension_preference() {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
+  const auto value = volume_session_.container_extension_preference();
+  if (value > 3) throw std::invalid_argument("invalid container extension preference");
+  return value;
+}
+void CardProductUiSessionController::set_container_extension_preference(unsigned int value) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
+  if (value > 3) throw std::invalid_argument("invalid container extension preference");
+  volume_session_.set_container_extension_preference(value);
 }
 bool CardProductUiSessionController::auto_mount_enabled() {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");

@@ -442,7 +442,7 @@ chrome.webview.postMessage("driver-loaded");
     const facts = containerFacts(row);
     // 8.7.2: the creation entry stays visible once a container exists.
     return row.querySelector(".container-name").textContent ===
-        "integration.hc" &&
+        "integration.sys" &&
       row.querySelector(".container-state").textContent === "已挂载" &&
       facts.length === 2 && facts[0] === "64 MiB" && facts[1] === "D:" &&
       !containersCreate.hidden;
@@ -531,11 +531,11 @@ chrome.webview.postMessage("driver-loaded");
   historyNavigation.click();
   const recordedRows = historyRows();
   const expectedOperations = [
-    ["挂载安全盘", "handover.hc → E:", "成功"],
-    ["创建安全盘", "handover.hc", "成功"],
-    ["挂载安全盘", "integration.hc → D:", "成功"],
-    ["创建安全盘", "integration.hc", "成功"],
-    ["创建安全盘", "integration.hc", "失败"],
+    ["挂载安全盘", "handover.sys → E:", "成功"],
+    ["创建安全盘", "handover.sys", "成功"],
+    ["挂载安全盘", "integration.sys → D:", "成功"],
+    ["创建安全盘", "integration.sys", "成功"],
+    ["创建安全盘", "integration.sys", "失败"],
   ];
   if (!historySection.classList.contains("active") ||
       recordedRows.length !== expectedOperations.length ||

@@ -94,6 +94,13 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
   bool logging_enabled{true};
   bool force_preference{};
+  unsigned int extension_preference{0};
+  bool extension_save_fails{};
+  unsigned int container_extension_preference() override { return extension_preference; }
+  void set_container_extension_preference(unsigned int value) override {
+    if (extension_save_fails) throw std::runtime_error("settings write failed");
+    extension_preference = value;
+  }
   bool auto_preference{};
   bool auto_mount_enabled() override { return auto_preference; }
   void set_auto_mount_enabled(bool enabled) override { auto_preference = enabled; }
@@ -822,7 +829,7 @@ class ScopedDirectory final {
   [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
 
   [[nodiscard]] std::wstring target(const std::wstring_view name) const {
-    return wide() + L"\\" + std::wstring(name) + L".hc";
+    return wide() + L"\\" + std::wstring(name) + L".sys";
   }
 
  private:
@@ -1623,6 +1630,50 @@ void test_exit_hotkey_settings_bridge() {
   ::VariantClear(&result);
 }
 
+void test_container_extension_preference_is_authenticated_and_bounded() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+      fixture.controller, nullptr, &host, nullptr, &work)), "extension host creation failed");
+  DISPPARAMS none{};
+  const auto read = [&](VARIANT& result) {
+    return host->Invoke(member_id(*host.Get(), L"getContainerExtension"), IID_NULL,
+        LOCALE_INVARIANT, DISPATCH_METHOD, &none, &result, nullptr, nullptr);
+  };
+  VARIANT result{};
+  require(read(result) == E_ACCESSDENIED &&
+          invoke_with_number(*host.Get(), L"setContainerExtension", 0, nullptr, nullptr) == E_ACCESSDENIED,
+          "unauthenticated extension preference admitted");
+  fixture.authentication.establish(root_secret());
+  for (int value = 0; value < 4; ++value) {
+    require(invoke_with_number(*host.Get(), L"setContainerExtension", value, nullptr, nullptr) == S_OK &&
+            read(result) == S_OK && result.vt == VT_UI4 && result.ulVal == static_cast<unsigned int>(value),
+            "extension preference did not round trip");
+    ::VariantClear(&result);
+  }
+  for (const double invalid : {-1.0, 4.0, 0.5, 4294967296.0}) {
+    VARIANTARG arg{}; arg.vt = VT_R8; arg.dblVal = invalid;
+    DISPPARAMS parameters{&arg, nullptr, 1, 0};
+    require(host->Invoke(member_id(*host.Get(), L"setContainerExtension"), IID_NULL,
+        LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, nullptr, nullptr, nullptr) == DISP_E_TYPEMISMATCH,
+        "unsupported extension selection admitted");
+  }
+  fixture.volume.extension_save_fails = true;
+  require(invoke_with_number(*host.Get(), L"setContainerExtension", 0, nullptr, nullptr) == E_FAIL &&
+          fixture.volume.extension_preference == 3, "failed extension write fabricated success");
+  fixture.volume.extension_save_fails = false;
+  work.running.store(true);
+  require(invoke_with_number(*host.Get(), L"setContainerExtension", 0, nullptr, nullptr) == E_PENDING &&
+          fixture.volume.extension_preference == 3, "busy worker allowed extension mutation");
+  work.running.store(false);
+  require(invoke_with_number(*host.Get(), L"setContainerExtension", 0, nullptr, nullptr) == S_OK,
+          "fixed sys preference rejected");
+  require(create_container_succeeds(*host.Get(), L"cache.hc", fixture.directory.wide(), 64) &&
+          fixture.volume.created_path == fixture.directory.wide() + L"\\cache.sys",
+          "stored extension did not reach standard creation");
+}
+
 void test_window_size_presets_are_bounded() {
   class SizeSink final : public usb_vault::ui::IUiWindowSizeSink {
    public:
@@ -1966,7 +2017,7 @@ void test_container_collection_is_exposed_by_position_and_route_gated() {
               invoke_container_number(*host.Get(), L"getContainerId", 0) ==
                   1UL &&
               invoke_container_text(*host.Get(), L"getContainerName", 0) ==
-                  L"work.hc" &&
+                  L"work.sys" &&
               invoke_container_mounted(*host.Get(), 0) &&
               invoke_container_number(*host.Get(), L"getContainerSizeMib",
                                       0) == 64UL &&
@@ -4154,6 +4205,7 @@ int main() {
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();
+    test_container_extension_preference_is_authenticated_and_bounded();
     test_operation_logging_setting_is_authenticated_and_boolean();
     test_background_creation_reports_progress_and_excludes_concurrent_calls();
     test_a_running_creation_can_be_called_off();

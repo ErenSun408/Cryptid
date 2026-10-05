@@ -10,11 +10,11 @@
 namespace usb_vault::platform::windows {
 namespace {
 
-constexpr wchar_t kContainerExtension[] = L"hc";
 constexpr wchar_t kContainerDirectoryTitle[] = L"选择加密盘的保存位置";
 constexpr wchar_t kExistingContainerTitle[] = L"选择要打开的加密盘文件";
 constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
-    {L"加密盘文件", L"*.hc"},
+    {L"安全盘文件", L"*.hc;*.sys;*.dat;*.bin"},
+    {L"所有文件", L"*.*"},
 };
 
 // Neither dialog may leave a trace of the chosen location. `FOS_DONTADDTORECENT`
@@ -103,9 +103,6 @@ class CoTaskPath final {
   if (SUCCEEDED(result) && filter_files) {
     result = dialog->SetFileTypes(
         static_cast<UINT>(std::size(kContainerFilter)), kContainerFilter);
-  }
-  if (SUCCEEDED(result) && filter_files) {
-    result = dialog->SetDefaultExtension(kContainerExtension);
   }
   if (FAILED(result)) {
     throw_dialog_failure(result, "container file dialog rejected its setup");

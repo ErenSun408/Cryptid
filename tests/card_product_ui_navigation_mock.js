@@ -98,6 +98,8 @@ window.navigationFixture = {
       return true;
     },
     getForceUnmountEnabled: () => fixture.forceEnabled,
+    getContainerExtension: () => fixture.containerExtension ?? 0,
+    setContainerExtension: value => { fixture.containerExtension = value; },
     setForceUnmountEnabled: (value) => {
       if (fixture.failForcePreference) throw new Error("preference write failed");
       fixture.forceEnabled = value;

@@ -8,9 +8,17 @@ namespace usb_vault::volume::detail {
 // Use the common FAT/NTFS limit. Do not let the driver's truncation split a
 // UTF-16 pair, and never include a path or an inferred volume role.
 inline std::wstring mount_display_label(std::wstring_view name) {
-  if (name.size() >= 3 && name[name.size() - 3] == L'.' &&
-      (name[name.size() - 2] == L'h' || name[name.size() - 2] == L'H') &&
-      (name.back() == L'c' || name.back() == L'C')) name.remove_suffix(3);
+  for (const auto extension : {std::wstring_view(L".hc"), std::wstring_view(L".sys"),
+                               std::wstring_view(L".dat"), std::wstring_view(L".bin")}) {
+    if (name.size() <= extension.size()) continue;
+    bool matches = true;
+    for (std::size_t i = 0; i < extension.size(); ++i) {
+      auto c = name[name.size() - extension.size() + i];
+      if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
+      if (c != extension[i]) { matches = false; break; }
+    }
+    if (matches) { name.remove_suffix(extension.size()); break; }
+  }
   std::wstring result;
   constexpr std::wstring_view forbidden = L"\\/\"*?:<>|.,;+=[]";
   for (std::size_t i = 0; i < name.size() && result.size() < 11; ++i) {

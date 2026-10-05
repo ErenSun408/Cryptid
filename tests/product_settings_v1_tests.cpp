@@ -282,6 +282,28 @@ int main() {
     using namespace usb_vault::application;
     const TemporaryDirectory directory;
     const auto path = directory.settings_path();
+    expect(product_preference_v1(path, ProductPreference::container_extension) == 0, "extension default is not sys");
+    for (unsigned int value = 0; value < 4; ++value) {
+      set_product_preference_v1(path, ProductPreference::container_extension, value);
+      set_exit_hotkey_settings_v1(path, {true,123,3});
+      set_remember_container_paths_v1(path, false);
+      set_product_preference_v1(path, ProductPreference::close_to_tray, 1);
+      expect(product_preference_v1(path, ProductPreference::container_extension) == value &&
+             exit_hotkey_settings_v1(path).enabled && !remember_container_paths_v1(path), "extension or neighbors lost");
+    }
+    for (const auto text : {"container-extension=4\n", "container-extension=03\n", "xcontainer-extension=0\n",
+                           "container-extension=0\ncontainer-extension=2\n", "container-extension=yes\n"}) {
+      write_raw(path, text);
+      expect(product_preference_v1(path, ProductPreference::container_extension) == 0, "damaged extension did not fall back to sys");
+    }
+    bool rejected = false;
+    try { set_product_preference_v1(path, ProductPreference::container_extension, 4); } catch (...) { rejected = true; }
+    expect(rejected, "unsupported extension preference admitted");
+  }
+  {
+    using namespace usb_vault::application;
+    const TemporaryDirectory directory;
+    const auto path = directory.settings_path();
     expect(product_preference_v1(path, ProductPreference::close_to_tray) == 0, "tray default not off");
     set_product_preference_v1(path, ProductPreference::close_to_tray, 1);
     set_exit_hotkey_settings_v1(path, {true, 123, 3});

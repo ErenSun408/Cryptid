@@ -95,6 +95,8 @@ void test_valid_mount_request() {
 void test_mount_labels() {
   using usb_vault::volume::detail::mount_display_label;
   require(mount_display_label(L"work.hc") == L"work", "file extension leaked into label");
+  for (const auto name : {L"work.sys", L"work.DAT", L"work.bin"})
+    require(mount_display_label(name) == L"work", "new file suffix leaked into label");
   require(mount_display_label(L"资料:归档.HC") == L"资料_归档", "label sanitization failed");
   require(mount_display_label(L"1234567890\U0001F512") == L"1234567890", "label split a surrogate pair");
   require(mount_display_label(L"123456789\U0001F512") == L"123456789\U0001F512", "valid surrogate pair was lost");

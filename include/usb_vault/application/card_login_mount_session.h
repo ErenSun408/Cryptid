@@ -496,6 +496,8 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void set_creation_revocation(CreationCancellation) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
   virtual bool force_unmount_enabled() { return false; }
+  virtual unsigned int container_extension_preference() { return 0; }
+  virtual void set_container_extension_preference(unsigned int) { throw std::logic_error("preferences unavailable"); }
   virtual bool auto_mount_enabled() { return false; }
   virtual void set_auto_mount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
   virtual void set_force_unmount_enabled(bool) { throw std::logic_error("preferences unavailable"); }
@@ -628,6 +630,8 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void set_creation_revocation(CreationCancellation revoked) override;
   [[nodiscard]] bool operation_logging_enabled() override;
   bool force_unmount_enabled() override;
+  unsigned int container_extension_preference() override;
+  void set_container_extension_preference(unsigned int value) override;
   void set_force_unmount_enabled(bool enabled) override;
   bool auto_mount_enabled() override;
   void set_auto_mount_enabled(bool enabled) override;

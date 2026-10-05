@@ -4770,3 +4770,16 @@
 - 安全复核：普通卸载无隐式强制升级；驱动返回后仍有挂载则阻止关闭；旧桥拒绝测试覆盖确认已武装及批量操作完成后的调用，不启动线程、不触及挂载卷。
 - 风险与验收：未执行真实卡／磁盘占用和 Windows 快捷键实机验收、全量 CTest；历史其他 UI DOM 六项失败仍保留。证据为 out/normal-exit-build.txt、out/normal-exit-native-tests.txt 与 out/normal-exit-dom-tests.txt。
 - 提交：用户已决定以 [refactor] 提交本片，本条随代码入库；此前清理记录继续保留在工作区，禁止推送。
+
+### 2026-10-05 — P5.2 / 文件安全盘后缀设置
+- 范围与审计：审阅产品设置、文件创建与导入、P5.1 挂载命名及 R-03／8.6；用户要求 sys／dat／bin／随机四项，仅影响后续新建文件安全盘，不变更分区或卷格式。
+- 检查与实现：检查设置原子保存、会话／控制器／WebView 桥、路径校验和导入对话框；新增中性 container-extension 枚举偏好，默认 sys，缺项／损坏／重复／越界回退 sys。
+- 随机与名称：原生提交时用 Windows RNG 在三种后缀中均匀选一次；普通与带隐藏卷创建共用规则，已带支持后缀时替换，不支持尾部内容保留后追加，不重命名旧文件。
+- 页面与兼容：按最终反馈将“会话”改为“安全”，末项为“文件安全盘后缀”，删除说明、“随机选择”改“随机”，下拉框及选项使用深底浅字；保存后读回，失败恢复显示。导入支持 hc／sys／dat／bin 及所有文件，不注册文件关联；挂载名去除后缀，导出保留真实文件名。
+- 验证：最终 sys 默认及 UI 修订首次在 p46 重建时遇到运行中 creator 的 LNK1104 输出占用；独立 out/build/extension-review Release 构建成功，用户退出后原 out/build/p46 主程序及创建助手重新构建成功。p46 已重编译测试目标的设置、目标路径、卷提供器、会话、UI controller、WebView host object、页面契约七组 CTest 全部通过。
+- 页面验证：脚本语法检查、七个后缀设置 DOM 场景及六个普通退出 DOM 回归通过，覆盖默认 sys、末项布局、选项深底浅字、固定／随机、重新载入、读写失败、保存中重复事件及未认证拒绝；离线 Edge 展开列表截图确认文字可读，不冒充真实 WebView 原生弹出菜单验收。
+- 修复与复验：初次 DOM 发现保存中重复事件造成下拉框旧值，已按保存读回结果修复；初次页面契约因测试页面缺少新控件失败，补齐后复验通过，不将初次失败记为通过。
+- 安全复核：原生桥限定整数 0～3、认证与后台独占门禁；路径继续拒绝保留设备名、路径穿越／流／非法字符，仍由原有创建层拒绝覆盖与安全发布；偏好及随机结果不记录卷角色、密码或选择历史。
+- 风险与验收：新后缀可被第三方关联软件、扫描器误处理，不承诺隐蔽或系统级保护；未进行真实卡／磁盘／Shell 选择器实机兼容验收、全量 CTest 或完整 WebView 集成运行，历史其他 UI DOM 六项失败保留。
+- 证据：原目录成功重建为 out/container-extension-build.txt；独立成功构建为 out/container-extension-isolated-build.txt，回归为 out/container-extension-native-tests.txt、out/container-extension-dom-tests.txt、out/container-extension-exit-regression.txt；视觉预览为 out/settings-extension-preview.png。
+- 提交：用户已授权以 [P5.2] 提交本片，本条随代码入库；此前临时产物清理记录继续留在工作区，禁止推送。

@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cstdint>
 #include <limits>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -21,10 +22,10 @@ constexpr std::wstring_view kSettingsFileName = L"settings.txt";
 constexpr std::string_view kRememberKey = "remember-container-paths=";
 constexpr std::string_view kMountImportedKey = "mount-imported-containers=";
 constexpr std::size_t kMaximumSettingsSize = 4096;
-constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size=", "auto-mount=", "close-to-tray="};
+constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size=", "auto-mount=", "close-to-tray=", "container-extension="};
 unsigned int preference_index(ProductPreference key) {
   const auto index = static_cast<unsigned int>(key);
-  if (index > 4) throw std::invalid_argument("unknown preference");
+  if (index >= std::size(kPreferenceKeys)) throw std::invalid_argument("unknown preference");
   return index;
 }
 
@@ -51,7 +52,7 @@ unsigned int preference_index(ProductPreference key) {
   text += kMountImportedKey;
   text += mount_imported ? '1' : '0';
   text += "\r\n";
-  for (unsigned int i = 0; i < 5; ++i) {
+  for (unsigned int i = 0; i < std::size(kPreferenceKeys); ++i) {
     text += kPreferenceKeys[i];
     text += static_cast<char>('0' + product_preference_v1(path, static_cast<ProductPreference>(i)));
     text += "\r\n";
@@ -249,7 +250,7 @@ void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings sett
 
 unsigned int product_preference_v1(std::wstring_view path, ProductPreference key) {
   const auto index = preference_index(key);
-  const auto fallback = index == 0 || index == 3 || index == 4 ? 0U : 1U;
+  const auto fallback = index == 0 || index == 3 || index == 4 || index == 5 ? 0U : 1U;
   const auto content = read_settings(std::wstring(path));
   if (!content) return fallback;
   const auto prefix = kPreferenceKeys[index];
@@ -264,7 +265,7 @@ unsigned int product_preference_v1(std::wstring_view path, ProductPreference key
       if (found) return fallback;
       found = true;
       const auto value = line.substr(prefix.size());
-      if (value.size() != 1 || value[0] < '0' || value[0] > (index == 2 ? '3' : '1')) return fallback;
+      if (value.size() != 1 || value[0] < '0' || value[0] > (index == 2 || index == 5 ? '3' : '1')) return fallback;
       result = static_cast<unsigned int>(value[0] - '0');
     }
     if (end == std::string::npos) break;
@@ -275,7 +276,7 @@ unsigned int product_preference_v1(std::wstring_view path, ProductPreference key
 
 void set_product_preference_v1(std::wstring_view path, ProductPreference key, unsigned int value) {
   const auto index = preference_index(key);
-  if (value > (index == 2 ? 3U : 1U)) throw std::invalid_argument("invalid preference value");
+  if (value > (index == 2 || index == 5 ? 3U : 1U)) throw std::invalid_argument("invalid preference value");
   auto text = settings_text(remember_container_paths_v1(path), mount_imported_containers_v1(path), path);
   const auto at = text.find(kPreferenceKeys[index]);
   text[at + kPreferenceKeys[index].size()] = static_cast<char>('0' + value);

@@ -45,6 +45,8 @@ constexpr DISPID kReportPageEventId = 122;
 constexpr DISPID kBeginForceUnmountForExitId = 123;
 constexpr DISPID kDismissCloseConfirmationId = 124;
 constexpr DISPID kSetExitHotkeyCaptureId = 130;
+constexpr DISPID kGetContainerExtensionId = 131;
+constexpr DISPID kSetContainerExtensionId = 132;
 constexpr DISPID kGetExitHotkeyId = 125;
 constexpr DISPID kSetExitHotkeyId = 126;
 constexpr DISPID kGetCloseToTrayId = 127;
@@ -478,6 +480,8 @@ class PasswordArgumentsWiper final {
     case kSetExitHotkeyId: return "setExitHotkey";
     case kGetCloseToTrayId: return "getCloseToTrayEnabled";
     case kSetCloseToTrayId: return "setCloseToTrayEnabled";
+    case kGetContainerExtensionId: return "getContainerExtension";
+    case kSetContainerExtensionId: return "setContainerExtension";
     case kExportContainerEntryId: return "exportContainerEntry";
     case kExportContainerFileId: return "exportContainerFile";
     case kForgetContainerId: return "forgetContainer";
@@ -714,6 +718,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"setExitHotkey")) { ids[0] = kSetExitHotkeyId; return S_OK; }
     if (matches(names[0], L"getCloseToTrayEnabled")) { ids[0] = kGetCloseToTrayId; return S_OK; }
     if (matches(names[0], L"setCloseToTrayEnabled")) { ids[0] = kSetCloseToTrayId; return S_OK; }
+    if (matches(names[0], L"getContainerExtension")) { ids[0] = kGetContainerExtensionId; return S_OK; }
+    if (matches(names[0], L"setContainerExtension")) { ids[0] = kSetContainerExtensionId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1063,6 +1069,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kGetForcePreferenceId: case kGetWindowSizeId:
+      case kGetContainerExtensionId:
       case kGetExitHotkeyId:
       case kGetCloseToTrayId:
       case kGetStartupViewId:
@@ -1304,6 +1311,27 @@ class CardProductWebViewHostObject final : public IDispatch {
           }
           return S_OK;
         } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
+      }
+      case kGetContainerExtensionId:
+      case kSetContainerExtensionId: {
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        const bool write = member == kSetContainerExtensionId;
+        if (!parameters || parameters->cNamedArgs != 0 || parameters->cArgs != (write ? 1U : 0U) ||
+            (write && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+        std::uint32_t value = 0;
+        if (write && (!exact_uint32(parameters->rgvarg[0], value) || value > 3)) {
+          if (argument_error) *argument_error = 0;
+          return DISP_E_TYPEMISMATCH;
+        }
+        try {
+          if (write) controller_.set_container_extension_preference(value);
+          else {
+            if (!result) return E_POINTER;
+            ::VariantInit(result); result->vt = VT_UI4;
+            result->ulVal = controller_.container_extension_preference();
+          }
+          return S_OK;
+        } catch (...) { return E_FAIL; }
       }
       case kSetWindowSizeId: {
         if (parameters == nullptr || parameters->cArgs != 1 ||
