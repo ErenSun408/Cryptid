@@ -170,6 +170,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
                 !options.read_only && !options.notify_shell,
             "partition mount received other fixed options than a file mount");
     events.emplace_back("mount:partition");
+    last_mount_label = options.label;
     if (partition_mount_fail) throw std::runtime_error("partition unavailable");
     const wchar_t landed =
         partition_lands_on ? partition_lands_on : options.drive_letter;
@@ -274,6 +275,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::vector<std::byte> hidden_outer_password;
   std::vector<std::byte> hidden_inner_password;
   std::vector<std::byte> last_mount_password;
+  std::wstring last_mount_label;
   std::vector<std::wstring> other_existing;
   std::vector<std::wstring> other_staging;
   std::vector<std::string> events;
@@ -558,6 +560,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "created mount received the wrong fixed options");
     last_mount_password.assign(volume_password.bytes().begin(),
                                volume_password.bytes().end());
+    last_mount_label = options.label;
     attached_volume_sizes[options.drive_letter] = volume_size_of(path);
     if (options.hidden_volume_protection.has_value()) {
       events.emplace_back("protect");
@@ -3247,6 +3250,7 @@ void test_maintenance_opens_the_outer_volume_under_protection() {
                            "mount-created:other", "protect", "volume-type",
                            "notify:A"});
   require(drive_letter == L'T', "maintenance took an unexpected drive letter");
+  require(runtime.last_mount_label == L"decoy", "maintenance changed the neutral label");
   require(is_b_derivation(runtime.last_mount_password, "decoy-password"),
           "the outer volume was not opened with the password supplied here");
   require(is_b_derivation(runtime.last_protection_password, "login-password"),
@@ -3324,6 +3328,7 @@ void test_a_trial_answers_without_leaving_anything_mounted() {
 
   require(session.verify_decoy_maintenance(id, bytes("decoy-password")),
           "a trial did not recognise the container it can maintain");
+  require(runtime.last_mount_label.empty(), "validation probe attempted to change the label");
   require_events(runtime, {"derive:B", "force:other", "allocate",
                            "mount-created:other", "protect", "volume-type",
                            "force:other"});
@@ -4035,6 +4040,7 @@ void test_display_alias_persistence_and_export_identity() {
   require_throws<std::logic_error>([&] { session.rename_container(1, L"资料"); }, "unauthenticated rename accepted");
   session.consume_authenticated_login(root_secret(), bytes("login"));
   const auto id = session.create_container(L"C:\\vault\\original.hc", 64ULL*1024*1024);
+  require(runtime.last_mount_label == L"original", "new file mount omitted its label");
   runtime.events.clear();
   session.rename_container(id, L"工作:资料 \U0001F512");
   require(runtime.events.empty(), "renaming performed a volume operation");
@@ -4068,6 +4074,9 @@ void test_display_alias_persistence_and_export_identity() {
   auto restored = next.container_statuses();
   require(restored.size()==1 && restored[0].name==rows[0].name, "alias did not survive another valid login");
   require(next.container_operation_targets()[0].name==rows[0].name, "batch target lost alias");
+  next.mount_adopted_container(restored[0].id);
+  require(runtime.last_mount_label == L"工作_资料 \U0001F512", "remount did not use sanitized saved alias");
+  next.unmount_container(restored[0].id);
   next.rename_container(restored[0].id, {});
   require(next.container_statuses()[0].name==L"original.hc", "empty alias did not restore default");
   next_auth.clear_authentication();
@@ -4242,6 +4251,8 @@ void test_partition_creation_persistence_and_mounting() {
             "partition identity was lost or recorded without consent");
     if (scenario != 0) continue;
     require(session.container_statuses().back().mounted, "new partition was not mounted");
+    require(runtime.last_mount_label == session.container_statuses().back().name,
+            "new partition mount omitted its label");
     require(final_stage == 5 && final_drive == session.container_statuses().back().drive_letter, "partition completion omitted mounted drive");
     require_throws<std::logic_error>([&] { session.export_container_file(id, L"D:\\exports"); },
         "partition ciphertext exported as a file");

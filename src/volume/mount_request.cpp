@@ -69,6 +69,10 @@ void validate_protection(const MountOptions& options) {
 
 void validate_options(const MountOptions& options) {
   static_cast<void>(drive_number(options.drive_letter));
+  if (options.label.size() >= abi::kLabelCharacters ||
+      std::ranges::any_of(options.label, [](wchar_t c) { return c < 0x20 || c == 0x7f; })) {
+    throw std::invalid_argument("mount label exceeds the driver limit or contains control characters");
+  }
   if (options.prf != Pkcs5Prf::sha512) {
     throw std::invalid_argument("only the explicitly validated SHA-512 PRF is allowed");
   }
@@ -125,6 +129,8 @@ void populate_mount_request(
   request.pkcs5_prf = static_cast<std::int32_t>(options.prf);
   request.bytes_per_physical_sector = 512;
   request.volume_pim = options.pim;
+  std::ranges::fill(request.label, L'\0');
+  std::ranges::copy(options.label, request.label);
 
   // The zero-initialized buffer leaves caches, recovery, backup headers and
   // removable mode off. Protection is the one a caller can ask for.

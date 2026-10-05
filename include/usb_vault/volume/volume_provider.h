@@ -65,6 +65,9 @@ struct MountOptions final {
   // Absent for every mount but outer-volume maintenance. Protection belongs to
   // one mount and is never written down anywhere.
   std::optional<HiddenVolumeProtection> hidden_volume_protection{};
+  // Passed to the driver; it may persist this value as the filesystem label.
+  // Empty preserves the existing label. No registry fallback is requested.
+  std::wstring label{};
 };
 
 struct UnmountOptions final {

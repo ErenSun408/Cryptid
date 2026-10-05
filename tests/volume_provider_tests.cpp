@@ -3,6 +3,7 @@
 
 #include "volume/locked_driver_buffer.h"
 #include "volume/mount_request.h"
+#include "volume/mount_label.h"
 #include "volume/mount_identity.h"
 #include "volume/mount_completion.h"
 #include "volume/unmount_notifications.h"
@@ -89,6 +90,30 @@ void test_valid_mount_request() {
           "logical sector size was not locked to the validated value");
   require(request.bytes_per_physical_sector == 512,
           "physical sector size was not locked to the validated value");
+}
+
+void test_mount_labels() {
+  using usb_vault::volume::detail::mount_display_label;
+  require(mount_display_label(L"work.hc") == L"work", "file extension leaked into label");
+  require(mount_display_label(L"资料:归档.HC") == L"资料_归档", "label sanitization failed");
+  require(mount_display_label(L"1234567890\U0001F512") == L"1234567890", "label split a surrogate pair");
+  require(mount_display_label(L"123456789\U0001F512") == L"123456789\U0001F512", "valid surrogate pair was lost");
+  require(mount_display_label(L"   ") == L"SecureDrive", "blank label has no bounded fallback");
+  const auto password = fixture_password(64);
+  for (const auto& label : {std::wstring{}, std::wstring(L"工作资料"), std::wstring(32, L'x')}) {
+    LockedDriverBuffer<MountRequest> request;
+    const MountOptions options{.drive_letter=L'W', .label=label};
+    usb_vault::volume::detail::populate_mount_request(request.get(), L"D:\\vault\\one.hc", password, options);
+    require(std::wstring(request.get().label) == label && request.get().label[label.size()] == 0,
+            "driver label was not copied and terminated");
+  }
+  for (const auto& label : {std::wstring(33,L'x'), std::wstring(L"a\0b",3), std::wstring(L"a\nb")}) {
+    require_invalid_argument([&] {
+      LockedDriverBuffer<MountRequest> request;
+      const MountOptions options{.drive_letter=L'W', .label=label};
+      usb_vault::volume::detail::populate_mount_request(request.get(), L"D:\\vault\\one.hc", password, options);
+    }, "invalid driver label accepted");
+  }
 }
 
 void test_invalid_mount_requests() {
@@ -246,6 +271,7 @@ void test_protected_mount_request() {
       .notify_shell = false,
       .hidden_volume_protection =
           HiddenVolumeProtection{.password = &hidden_password},
+      .label = L"work",
   };
 
   usb_vault::volume::detail::populate_mount_request(
@@ -253,6 +279,7 @@ void test_protected_mount_request() {
 
   require(request.protect_hidden_volume == 1,
           "a maintenance mount left hidden-volume protection off");
+  require(std::wstring(request.label) == L"work", "protected mount omitted label");
   require(request.protected_hidden_volume_password.length == 72,
           "protection password length was not preserved");
   for (std::size_t index = 0; index < hidden_password.size(); ++index) {
@@ -560,6 +587,7 @@ int main() {
     test_unmount_notifications();
     test_mount_completion_retains_ownership_and_clears_secrets();
     test_valid_mount_request();
+    test_mount_labels();
     test_protected_mount_request();
     test_invalid_mount_requests();
     test_driver_error_codes();

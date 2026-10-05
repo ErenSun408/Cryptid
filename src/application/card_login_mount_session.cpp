@@ -12,6 +12,7 @@
 #include "usb_vault/volume/volume_file_operations.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include "volume/drive_letter_pool.h"
+#include "volume/mount_label.h"
 #include "volume/mount_request.h"
 
 #include <Windows.h>
@@ -1590,11 +1591,14 @@ CardLoginMountSessionCore::mount_with_either_derivation(
   try {
     standard_password = derive_standard_password();
     drive_letter = reserve_drive_letter();
+    const auto* entry = find_by_path(state_, path);
     options = {.drive_letter = drive_letter,
                .prf = volume::Pkcs5Prf::sha512,
                .pim = 0,
                .read_only = false,
-               .notify_shell = false};
+               .notify_shell = false,
+               .label = volume::detail::mount_display_label(
+                   entry ? display_name(*entry) : file_name_of(path))};
     SESSION_TRACE("以标准派生尝试挂载", "路径 " + wide_text(path) + "；" + options_text(options));
     const volume::MountResult mounted =
         runtime_.mount_created(path, standard_password, options);
@@ -1973,7 +1977,8 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                                        .prf = volume::Pkcs5Prf::sha512,
                                        .pim = 0,
                                        .read_only = false,
-                                       .notify_shell = false};
+                                       .notify_shell = false,
+                                       .label = volume::detail::mount_display_label(container_name)};
     SESSION_TRACE("挂载新建安全盘", "路径 " + wide_text(path) + "；" + options_text(options));
     const volume::MountResult mount_result =
         runtime_.mount_created(path, volume_password, options);
@@ -2117,7 +2122,8 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                                        .prf = volume::Pkcs5Prf::sha512,
                                        .pim = 0,
                                        .read_only = false,
-                                       .notify_shell = false};
+                                       .notify_shell = false,
+                                       .label = volume::detail::mount_display_label(container_name)};
     SESSION_TRACE("以登录派生挂载新建安全盘", "路径 " + wide_text(path) + "；" + options_text(options));
     const volume::MountResult mount_result =
         runtime_.mount_created(path, hidden_password, options);
@@ -2213,7 +2219,9 @@ wchar_t CardLoginMountSessionCore::mount_outer_for_maintenance(
          .read_only = false,
          .notify_shell = false,
          .hidden_volume_protection =
-             volume::HiddenVolumeProtection{.password = &hidden_password}};
+             volume::HiddenVolumeProtection{.password = &hidden_password},
+         .label = mode == MaintenanceMount::open
+             ? volume::detail::mount_display_label(display_name(entry)) : std::wstring{}};
     SESSION_TRACE(std::string("带保护挂载外层卷（") + mode_text + "）",
                   container_text(entry) + "；" + options_text(options));
     const volume::MountResult mount_result = entry.partition
@@ -2678,7 +2686,8 @@ void CardLoginMountSessionCore::mount_adopted_container(
                                        .prf = volume::Pkcs5Prf::sha512,
                                        .pim = 0,
                                        .read_only = false,
-                                       .notify_shell = false};
+                                       .notify_shell = false,
+                                       .label = volume::detail::mount_display_label(display_name(*entry))};
     bool login_derived = entry->derivation_known && entry->release_first;
     volume::MountResult mounted{};
     if (!login_derived) {
@@ -2753,7 +2762,8 @@ void CardLoginMountSessionCore::mount_adopted_container(
                                          .prf = volume::Pkcs5Prf::sha512,
                                          .pim = 0,
                                          .read_only = false,
-                                         .notify_shell = false};
+                                         .notify_shell = false,
+                                         .label = volume::detail::mount_display_label(display_name(*entry))};
       SESSION_TRACE(hidden_volume ? "以登录派生挂载文件安全盘" : "以标准派生挂载文件安全盘",
                     options_text(options));
       const volume::MountResult mount_result =
