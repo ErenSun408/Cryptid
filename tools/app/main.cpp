@@ -1537,7 +1537,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         if (::MessageBoxW(window,
                           g_creation_work.inplace_operation.load()
                             ? L"分区正在加密。要正常暂停吗？应用会等待进度保存，请确认已暂停后再关闭。"
-                            : L"容器正在创建。要取消创建吗？应用会等待处理结束，请查看处理结果后再关闭。",
+                            : L"安全盘正在创建。要取消创建吗？应用会等待处理结束，请查看处理结果后再关闭。",
                           kWindowTitle, MB_YESNO | MB_ICONQUESTION) == IDYES) {
           if (!g_creation_work.request_cancel()) {
             ::MessageBoxW(window, L"取消未生效，创建已进入完成阶段或已结束。请查看处理结果后再关闭。",
@@ -1700,6 +1700,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   window_class.lpfnWndProc = window_proc;
   window_class.hInstance = instance;
   window_class.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+  window_class.hIcon = ::LoadIconW(instance, MAKEINTRESOURCEW(101));
+  window_class.hIconSm = window_class.hIcon;
   window_class.lpszClassName = kWindowClass;
   if (::RegisterClassExW(&window_class) == 0) {
     show_numeric_failure(L"窗口类注册失败。", 1201, 1, ::GetLastError());

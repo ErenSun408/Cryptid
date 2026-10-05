@@ -27,7 +27,7 @@ const wait=async p=>{for(let i=0;i<200;i++){if(p())return;await tick();}throw Er
    assert.equal(el('decoy-maintenance-container').value,'3');
    assert.equal(el('decoy-maintenance-writable').textContent,capacity);
    assert.equal(el('decoy-verify').hidden,true);
-   removed(3);notice();await wait(()=>el('decoy-maintenance-drive').textContent.includes('该容器未挂载'));
+   removed(3);notice();await wait(()=>el('decoy-maintenance-drive').textContent.includes('该安全盘未挂载'));
    assert.equal(el('decoy-maintenance-writable').textContent,'—');
    assert.equal(fixture.dropArmed,false);assert.equal(fixture.surveyPasswords.length,1);
    q('[data-decoy-back]').click();assert.match(q('#decoy-container-list [data-decoy-container="3"] .container-actions button').textContent,/更新/);

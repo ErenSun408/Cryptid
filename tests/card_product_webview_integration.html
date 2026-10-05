@@ -54,12 +54,12 @@
   <section id="authenticated-dashboard" hidden>
     <div id="mount-split">
       <button id="dashboard-mount" type="button" disabled>一键挂载</button>
-      <button id="mount-select" type="button" aria-expanded="false">选择挂载容器</button>
+      <button id="mount-select" type="button" aria-expanded="false">选择挂载安全盘</button>
       <div id="mount-menu" hidden><input id="mount-select-all" type="checkbox"><div id="mount-items"></div></div>
     </div>
     <div id="unmount-split">
       <button id="dashboard-unmount" type="button" disabled>一键卸载</button>
-      <button id="unmount-select" type="button" aria-expanded="false">选择卸载容器</button>
+      <button id="unmount-select" type="button" aria-expanded="false">选择卸载安全盘</button>
       <div id="unmount-menu" hidden><input id="unmount-force" type="checkbox"><input id="unmount-select-all" type="checkbox"><div id="unmount-items"></div></div>
     </div>
     <span id="dashboard-volume-state">未挂载</span>
@@ -69,7 +69,7 @@
       <button class="dashboard-nav active" type="button"
               data-section="dashboard" aria-current="page">仪表盘</button>
       <button class="dashboard-nav" type="button"
-              data-section="files">容器管理<span id="nav-container-count">0</span></button>
+              data-section="files">安全盘管理<span id="nav-container-count">0</span></button>
       <button class="dashboard-nav" type="button"
               data-section="backup">导出与迁移</button>
       <button class="dashboard-nav" type="button"
@@ -78,14 +78,14 @@
               data-section="settings">系统设置</button>
     </nav>
     <section id="dashboard-section-dashboard" class="dashboard-section active">
-      <button type="button" data-create-container>新建容器</button>
+      <button type="button" data-create-container>新建安全盘</button>
       <button type="button" data-mount-existing>导入</button>
       <div class="container-list" data-container-list></div>
     </section>
     <section id="dashboard-section-files" class="dashboard-section">
       <nav id="file-breadcrumb"></nav>
-      <button type="button" data-create-container>新建容器</button>
-      <button type="button" data-mount-existing>导入容器</button>
+      <button type="button" data-create-container>新建安全盘</button>
+      <button type="button" data-mount-existing>导入安全盘</button>
       <div id="management-containers" class="container-list" data-container-list></div>
       <div id="management-files" hidden>
       <table><tbody id="file-list-body"></tbody></table>
@@ -123,13 +123,13 @@
     </section>
     <section id="dashboard-section-settings" class="dashboard-section">
       <button type="button" role="switch" aria-checked="false"
-              data-setting="auto-mount">登录后自动挂载全部容器</button>
+              data-setting="auto-mount">登录后自动挂载全部安全盘</button>
       <button id="reset-card-open" type="button">重新初始化安全卡</button>
       <span id="reset-card-blocked" hidden></span>
       <button type="button" role="switch" aria-checked="true"
-              data-setting="remember-containers">持久化容器列表</button>
+              data-setting="remember-containers">持久化安全盘列表</button>
       <button type="button" role="switch" aria-checked="false"
-              data-setting="mount-imported">自动尝试挂载导入的容器</button>
+              data-setting="mount-imported">自动尝试挂载导入的安全盘</button>
       <span role="switch" aria-checked="true" aria-disabled="true"
             >拔出安全卡时立即卸载全部卷</span>
     </section>
@@ -250,15 +250,15 @@
     <button id="forget-container-confirm" type="button">移除</button>
   </div>
   <div id="create-volume-dialog" role="dialog" data-step="type" hidden>
-    <h3 id="create-volume-title">新建容器</h3>
+    <h3 id="create-volume-title">新建安全盘</h3>
     <p id="create-volume-description"></p>
     <div id="create-type-note"></div>
     <button id="create-volume-close" type="button">关闭</button>
     <div id="create-type-step" role="radiogroup">
       <button type="button" role="radio" aria-checked="true"
-              data-create-kind="encrypted">标准容器</button>
+              data-create-kind="encrypted">标准安全盘</button>
       <button type="button" role="radio" aria-checked="false"
-              data-create-kind="hidden">含隐藏卷的容器</button>
+              data-create-kind="hidden">含隐藏卷的安全盘</button>
     </div>
     <div id="create-container-form" hidden>
       <label for="create-container-name">名称</label>
@@ -363,7 +363,7 @@
       <div class="modal-body">
         <div id="forgot-password-intro">
           <p>忘记应用登录密码后，可重新初始化这张安全卡。此操作会销毁本应用保存在卡上的认证密钥，且不可撤销。</p>
-          <p>现有容器文件和安全卡的其他数据不会被删除。重置后，旧容器将无法凭重新初始化后的安全卡打开。</p>
+          <p>现有安全盘文件和安全卡的其他数据不会被删除。重置后，旧安全盘将无法凭重新初始化后的安全卡打开。</p>
           <p>重置不能撤销其他程序已保留的访问权限。完成后应用会关闭，请重新插卡并设置新的登录密码。</p>
           <label class="creation-check"><input id="forgot-password-acknowledge" type="checkbox"><span>我已知晓重置安全卡可能带来的所有影响，并确认重置。</span></label>
         </div>
@@ -371,10 +371,10 @@
           <p id="forgot-password-mount-lead"></p>
           <p id="forgot-password-drives" class="export-confirm-path"></p>
           <div id="forgot-password-mount-guidance">
-            <p>若这些容器属于本次重置的安全卡，请先保存文件、关闭相关程序，再点击“强制卸载”。</p>
-            <p>若这些容器与本次重置无关，或你希望保留当前挂载状态，请点击“跳过”，继续重置。</p>
+            <p>若这些安全盘属于本次重置的安全卡，请先保存文件、关闭相关程序，再点击“强制卸载”。</p>
+            <p>若这些安全盘与本次重置无关，或你希望保留当前挂载状态，请点击“跳过”，继续重置。</p>
           </div>
-          <p>强制卸载可能导致未保存的数据丢失。重置后，旧容器将无法凭重新初始化后的安全卡打开。</p>
+          <p>强制卸载可能导致未保存的数据丢失。重置后，旧安全盘将无法凭重新初始化后的安全卡打开。</p>
         </div>
         <output id="forgot-password-status" class="creation-status" aria-live="polite"></output>
       </div>
@@ -399,13 +399,13 @@
 <input id="partition-preserve-data" type="checkbox"><p id="partition-conversion-note" hidden></p><span id="partition-consent-text"></span>
 <input id="partition-erase-consent" type="checkbox" disabled>
 </section>
-          <div id="create-storage-switch" class="storage-switch" role="group" aria-label="容器存储方式">
-          <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘容器</button>
-          <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件容器</button>
+          <div id="create-storage-switch" class="storage-switch" role="group" aria-label="安全盘存储方式">
+          <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘安全盘</button>
+          <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件安全盘</button>
         </div>
 <div id="force-exit-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="force-exit-title" hidden>
   <div class="modal"><h3 id="force-exit-title">退出应用</h3>
-    <p>当前仍有挂载中的容器，确定要强制卸载并退出吗？</p>
+    <p>当前仍有挂载中的安全盘，确定要强制卸载并退出吗？</p>
     <output id="force-exit-status" aria-live="polite"></output>
     <button id="force-exit-cancel" type="button">取消</button>
     <button id="force-exit-confirm" type="button">确认</button>

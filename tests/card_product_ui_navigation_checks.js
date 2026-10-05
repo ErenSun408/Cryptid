@@ -45,7 +45,7 @@
     check(!$("#decoy-confirm-dialog").hidden,
       "Verifying asks for confirmation before anything is dismounted");
     check($("#decoy-confirm-dialog").textContent.includes(
-      "为挂载对应容器外层卷，需强制卸载其隐藏卷"),
+      "为挂载对应安全盘外层卷，需强制卸载其隐藏卷"),
       "The confirmation states what it will dismount");
     $("#decoy-confirm-cancel").click();
     check($("#decoy-confirm-dialog").hidden &&
@@ -151,7 +151,7 @@
     $('[data-section=backup]').click();
     $('[data-export-toggle="3"] .xrow-open').click();
     check($('[data-export-toggle="3"]').parentNode.querySelector('.xnote').textContent ===
-      "该容器正在进行高级更新，暂不支持此操作。" &&
+      "该安全盘正在进行高级更新，暂不支持此操作。" &&
       !$('[data-export-toggle="3"]').parentNode.querySelector('.xfile'),
       "A maintenance container opens an explanation instead of exportable files");
     $('[data-export-select-all="3"]').click();
@@ -178,7 +178,7 @@
       "The maintained container cannot enter the ordinary file manager");
     $("#management-containers [data-row-container='1']").click();
     await wait(() => !$("#management-files").hidden);
-    check($("#files-title").textContent.includes("容器管理") &&
+    check($("#files-title").textContent.includes("安全盘管理") &&
       !$("#file-mount-toggle").hidden,
       "Another container uses the normal file controls during maintenance");
     check($("#management-list-actions").hidden, "Container detail hides list-only creation and import actions");
@@ -398,7 +398,7 @@
     $("#decoy-confirm-accept").click();
     await wait(() => !$("#decoy-empty-dialog").hidden);
     check(!$("#decoy-verify").hidden && $("#decoy-results").hidden &&
-      $("#decoy-empty-title").textContent === "无可更新容器",
+      $("#decoy-empty-title").textContent === "无可更新安全盘",
       "An empty survey stays on verification and shows a neutral dialog");
     $("#decoy-empty-close").click();
 
@@ -547,7 +547,7 @@
     check(!$('#create-type-step').hidden && !$('#create-disk-step').hidden,
       "Disk creation always offers both container shapes");
     check($('#create-volume-description').parentElement === $('#create-storage-switch') &&
-      $('#create-volume-description').textContent === "容器为物理硬盘上已有的独立数据分区",
+      $('#create-volume-description').textContent === "安全盘为物理硬盘上已有的独立数据分区",
       "Storage description shares the selector row");
     $('[data-create-kind="hidden"]').click();
     check(!$('#create-container-b-form').hidden && $('#partition-preserve-data').closest('label').hidden,
@@ -783,7 +783,7 @@
         await wait(() => !$('#create-volume-close').disabled);
         const outcome = $('#create-volume-status');
         check(outcome.dataset.tone === (status === 2 ? 'success' : status === 4 ? 'cancelled' : 'error') &&
-          outcome.textContent.includes('没有留下容器文件') === (status === 4) &&
+          outcome.textContent.includes('没有留下安全盘文件') === (status === 4) &&
           outcome.textContent.includes('未能确认临时文件已清理') === (status === 5),
           `${kind} creation distinguishes failure, confirmed cancellation and cleanup failure (${status})`);
         if (status === 2) {
@@ -907,12 +907,12 @@
     check(!$("#file-refresh").disabled, "Refresh removes externally deleted entries and becomes available again");
     $("[data-file-depth='0']").click();
     await wait(() => $("[data-file-enter]"));
-    check($("#file-breadcrumb").textContent === "容器管理>工作资料", "Container breadcrumb returns to the root");
+    check($("#file-breadcrumb").textContent === "安全盘管理>工作资料", "Container breadcrumb returns to the root");
     $("[data-file-back]").click();
     check(!$(manager).hidden && $("#management-files").hidden, "Breadcrumb returns to container list");
     $(manager + ' [data-row-container="2"]').click();
     await tick();
-    check($("#file-list-body").textContent.includes("这个容器没有挂载"), "Unmounted containers remain reachable");
+    check($("#file-list-body").textContent.includes("这个安全盘没有挂载"), "Unmounted containers remain reachable");
     check($("#file-mount-toggle").textContent === "挂载" && $("#file-create-directory").disabled,
       "Unmounted file view offers mounting and disables file creation");
     window.navigationFixture.delayVolume = true;

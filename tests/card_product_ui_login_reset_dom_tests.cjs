@@ -42,7 +42,7 @@ const settle = () => new Promise(r => setTimeout(r, 30));
    assert.equal(confirms.length, 0);
    assert.equal(el("force").hidden, scenario === "unknown");
    assert.equal(el("skip").hidden, false);
-   assert.match(el("mounts").textContent, /强制卸载可能导致未保存的数据丢失。重置后，旧容器将无法凭重新初始化后的安全卡打开。/);
+   assert.match(el("mounts").textContent, /强制卸载可能导致未保存的数据丢失。重置后，旧安全盘将无法凭重新初始化后的安全卡打开。/);
    if (scenario === "cancel" || scenario === "change") {
     if (scenario === "cancel") el("close").click();
     else { w.navigationFixture.state = 0; w.dispatchEvent(new w.Event("usb-vault-session-changed")); }

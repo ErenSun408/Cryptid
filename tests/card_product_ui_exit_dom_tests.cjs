@@ -57,7 +57,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 80));
    w.eval(read("ui/card_session.js")); await settle();
    const el = id => w.document.getElementById(id), dialog = el("force-exit-dialog");
    assert.equal(w.usbVaultConfirmForceExit(), true); assert.equal(w.usbVaultConfirmForceExit(), true);
-   assert.match(dialog.textContent, /当前仍有挂载中的容器，确定要强制卸载并退出吗？/);
+   assert.match(dialog.textContent, /当前仍有挂载中的安全盘，确定要强制卸载并退出吗？/);
    assert.equal(w.document.activeElement, el("force-exit-cancel"));
    if (scenario === "cancel") el("force-exit-cancel").click();
    else if (["click", "mousedown", "pointerdown"].includes(scenario))

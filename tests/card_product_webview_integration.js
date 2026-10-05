@@ -269,7 +269,7 @@ chrome.webview.postMessage("driver-loaded");
     request("fail-settings-switch");
     return;
   }
-  // 记住容器位置 is the one switch with a store behind it. The click carries an
+  // 记住安全盘位置 is the one switch with a store behind it. The click carries an
   // instruction to the native side and the position comes back from there, so
   // it settles a turn later rather than in place.
   rememberContainers.click();
@@ -301,7 +301,7 @@ chrome.webview.postMessage("driver-loaded");
   containersCreate.click();
   document.querySelector('[data-create-storage="file"]').click();
   if (creationDialog.hidden || typeStep.hidden ||
-      creationTitle.textContent !== "新建容器" ||
+      creationTitle.textContent !== "新建安全盘" ||
       creationContinue.textContent !== "下一步" ||
       creationCancelLabel.textContent !== "取消" ||
       standardPick.getAttribute("aria-checked") !== "true" ||
@@ -317,9 +317,9 @@ chrome.webview.postMessage("driver-loaded");
   creationContinue.click();
   // The form opens empty and stays uncommittable until it is named and placed:
   // there is no dialog left to supply either.
-  if (!typeStep.hidden || creationTitle.textContent !== "新建标准容器" ||
+  if (!typeStep.hidden || creationTitle.textContent !== "新建标准安全盘" ||
       creationCancelLabel.textContent !== "上一步" ||
-      creationContinue.textContent !== "创建容器" ||
+      creationContinue.textContent !== "创建安全盘" ||
       creationName.value !== "" || creationDirectory.value !== "" ||
       creationCapacity.value !== "64" || capacityUnit.dataset.unit !== "mib" ||
       !creationContinue.disabled || creationNameError.hidden ||
@@ -334,7 +334,7 @@ chrome.webview.postMessage("driver-loaded");
   creationCancel.click();
   if (typeStep.hidden || creationName.value !== "" ||
       creationDirectory.value !== "" || creationCapacity.value !== "64" ||
-      creationTitle.textContent !== "新建容器") {
+      creationTitle.textContent !== "新建安全盘") {
     request("fail-creation-back-step");
     return;
   }
@@ -531,11 +531,11 @@ chrome.webview.postMessage("driver-loaded");
   historyNavigation.click();
   const recordedRows = historyRows();
   const expectedOperations = [
-    ["挂载容器", "handover.hc → E:", "成功"],
-    ["创建容器", "handover.hc", "成功"],
-    ["挂载容器", "integration.hc → D:", "成功"],
-    ["创建容器", "integration.hc", "成功"],
-    ["创建容器", "integration.hc", "失败"],
+    ["挂载安全盘", "handover.hc → E:", "成功"],
+    ["创建安全盘", "handover.hc", "成功"],
+    ["挂载安全盘", "integration.hc → D:", "成功"],
+    ["创建安全盘", "integration.hc", "成功"],
+    ["创建安全盘", "integration.hc", "失败"],
   ];
   if (!historySection.classList.contains("active") ||
       recordedRows.length !== expectedOperations.length ||

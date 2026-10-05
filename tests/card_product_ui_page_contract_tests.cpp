@@ -117,7 +117,7 @@ void test_the_maintenance_column_is_visible_the_same_way_for_everyone() {
 
   // The warning the user settled on, word for word.
   require(page.find(
-              "为挂载对应容器外层卷，需强制卸载其隐藏卷，请确认您没有正在对隐藏"
+              "为挂载对应安全盘外层卷，需强制卸载其隐藏卷，请确认您没有正在对隐藏"
               "卷进行写入或其他重要操作。") != std::string::npos,
           "the maintenance confirmation must carry the agreed wording");
 
@@ -354,7 +354,7 @@ void test_authenticated_dashboard_is_real_state_only() {
   require(
       count_occurrences(page, "class=\"nav-item nav-item-disabled\"") == 0 &&
           count_occurrences(page, "data-tooltip=\"正在开发中\"") == 0 &&
-          page.find("容器管理") != std::string::npos &&
+          page.find("安全盘管理") != std::string::npos &&
           page.find("导出与迁移") != std::string::npos &&
           page.find("<button class=\"nav-item dashboard-nav\" type=\"button\""
                     " data-section=\"files\">") != std::string::npos &&
@@ -414,12 +414,12 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
               settings.find("data-setting=\"operation-logging\" "
                             "aria-label=\"开启操作日志\"") != std::string::npos &&
               settings.find("data-setting=\"auto-mount\" "
-                            "aria-label=\"登录后自动挂载全部容器\"") !=
+                            "aria-label=\"登录后自动挂载全部安全盘\"") !=
                   std::string::npos &&
               settings.find("data-setting=\"remember-containers\" "
-                            "aria-label=\"持久化容器列表\"") != std::string::npos &&
+                            "aria-label=\"持久化安全盘列表\"") != std::string::npos &&
               settings.find("data-setting=\"mount-imported\" "
-                            "aria-label=\"自动尝试挂载导入的容器\"") !=
+                            "aria-label=\"自动尝试挂载导入的安全盘\"") !=
                   std::string::npos,
           "settings switches do not match the existing settings plus shortcut");
   require(settings.find("id=\"exit-hotkey-enabled\"") != std::string::npos &&
@@ -591,7 +591,7 @@ void test_operation_history_is_bounded_session_only_and_inert() {
       "operation history does not state its current-session lifetime");
   require(history.find("密码尝试") != std::string::npos &&
               history.find("卡标识") != std::string::npos &&
-              history.find("容器类型与结构") != std::string::npos &&
+              history.find("安全盘类型与结构") != std::string::npos &&
               history.find("完整路径") != std::string::npos,
           "operation history does not disclose its deliberate omissions");
 
@@ -693,7 +693,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
               script.find("containerBPassword") == std::string::npos,
           "the page still asks for the password it was opened with");
   // 8.7.2: the wording is fixed and never adapts to who is logged in.
-  require(page.find("为该容器设置诱饵密码") != std::string::npos &&
+  require(page.find("为该安全盘设置诱饵密码") != std::string::npos &&
               page.find("再次输入诱饵密码") != std::string::npos &&
               page.find("若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致") !=
                   std::string::npos,
@@ -703,7 +703,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // acknowledgement reads the same under either login.
   require(page.find("我已知悉诱饵密码不一致可能带来的永久性后果") != std::string::npos &&
               page.find("id=\"hidden-create-review\"") != std::string::npos &&
-              page.find("创建这个容器会重写安全卡记录") == std::string::npos &&
+              page.find("创建这个安全盘会重写安全卡记录") == std::string::npos &&
               script.find("containerBAcknowledge.checked") !=
                   std::string::npos,
           "the card record rewrite is committed without an acknowledgement");
@@ -729,8 +729,8 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // Storage describes its backing medium on the shared selector row;
   // shape selection remains visible for both file and partition forms.
   require(script.find("接着会让你选择保存位置") == std::string::npos &&
-              script.find("容器为物理硬盘上已有的独立数据分区") != std::string::npos &&
-              script.find("容器为一个加密文件，挂载后显示为普通磁盘") != std::string::npos &&
+              script.find("安全盘为物理硬盘上已有的独立数据分区") != std::string::npos &&
+              script.find("安全盘为一个加密文件，挂载后显示为普通磁盘") != std::string::npos &&
               script.find("creationTypeStep.hidden = reviewing || creationRunning || creationResult") != std::string::npos &&
               script.find("bridge.beginPartitionPair(") != std::string::npos,
           "the shared creation selectors or partition pair route are missing");
@@ -765,7 +765,7 @@ void test_dropping_a_container_is_confirmed_and_says_what_it_keeps() {
           "dropping a container has no confirmation step");
   // The one thing a user could fear here is losing the data. The dialog has to
   // say plainly that it does not touch the file, or the action is unusable.
-  require(page.find("不会删除容器文件") != std::string::npos &&
+  require(page.find("不会删除安全盘文件") != std::string::npos &&
               page.find("重新添加至列表") != std::string::npos,
           "the drop confirmation does not say the container file survives");
   require(script.find("bridge.forgetContainer(id)") != std::string::npos,
@@ -867,7 +867,7 @@ void test_card_reset_is_gated_and_states_its_cost() {
   // The operation destroys the only copy of the root secret. The page has to
   // say what that costs before it can be started at all.
   require(page.find("销毁安全卡上的认证密钥") != std::string::npos &&
-              page.find("现有容器文件不会被删除，但将永久无法打开") !=
+              page.find("现有安全盘文件不会被删除，但将永久无法打开") !=
                   std::string::npos &&
               page.find("此操作不可撤销") != std::string::npos,
           "the reset confirmation does not state what it destroys");
@@ -920,9 +920,9 @@ void test_container_creation_form_is_bounded() {
                   std::string::npos &&
               script.find("showFileCreationFailure(error, creationAccepted, \"名称与路径\", false, previousIds)") !=
                   std::string::npos &&
-              script.find("容器已经创建，但挂载没有成功。它已在容器列表中，可以稍后挂载。") !=
+              script.find("安全盘已经创建，但挂载没有成功。它已在安全盘列表中，可以稍后挂载。") !=
                   std::string::npos &&
-              script.find("分区已经创建，但没有挂载。它已在容器列表中，可以稍后挂载。") !=
+              script.find("分区已经创建，但没有挂载。它已在安全盘列表中，可以稍后挂载。") !=
                   std::string::npos,
           "creation lacks busy, success, or recovery feedback");
 }
@@ -1133,9 +1133,9 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
 
   // Every state the browse view has to be able to say, including the two that
   // look alike on screen and mean opposite things.
-  require(script.find("这个容器没有挂载。") != std::string::npos &&
+  require(script.find("这个安全盘没有挂载。") != std::string::npos &&
               script.find("这个文件夹是空的。") != std::string::npos &&
-              script.find("还没有容器。先新建或导入一个容器") !=
+              script.find("还没有安全盘。先新建或导入一个安全盘") !=
                   std::string::npos,
           "the browse view cannot say unmounted, empty, or no containers yet");
   require(script.find("这个文件夹里的条目太多") != std::string::npos,
@@ -1171,12 +1171,14 @@ void test_every_file_row_carries_one_icon_the_page_drew_itself() {
               count_occurrences(script, "bridge.listContainerDirectory") == 2,
           "the page asks the native side what kind of file it is holding");
 
-  // Every glyph is drawn by the page. An icon taken from the shell or from a
-  // file on disk would put artwork, and a cache of it, outside the container.
-  require(page.find("<img") == std::string::npos &&
+  // Static brand artwork is embedded in the integrity-checked page. File
+  // glyphs remain code-drawn: no shell thumbnails, disk images or remote loads.
+  require(count_occurrences(page, "<img") == 3 &&
+              count_occurrences(page, "class=\"brand-logo\" src=\"data:image/png;base64,") == 3 &&
+              page.find("img-src data:;") != std::string::npos &&
               page.find("url(") == std::string::npos &&
               script.find("<img") == std::string::npos,
-          "the page loads artwork instead of drawing it");
+          "brand artwork escaped the embedded-only image boundary");
 }
 
 void test_a_running_creation_can_be_called_off_from_the_page() {
@@ -1387,7 +1389,7 @@ void test_the_backup_centre_owns_the_plaintext_export() {
   // The migration wording sits beside the title, where it is read before the
   // panels rather than inside the one it describes.
   require(section.find("class=\"section-aside\"") != std::string::npos &&
-              section.find("迁移只复制容器文件本身") != std::string::npos &&
+              section.find("迁移只复制安全盘文件本身") != std::string::npos &&
               section.find("不导出根密钥、密码或任何恢复材料") !=
                   std::string::npos,
           "the section does not carry the migration wording by its title");
@@ -1423,7 +1425,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
   // 🔴 What a migrating user has to understand, in Q-04's own terms: this is
   // not a key backup and not a recovery channel, and a lost card is still a
   // lost vault.
-  require(section.find("原样复制容器文件本身") != std::string::npos &&
+  require(section.find("原样复制安全盘文件本身") != std::string::npos &&
               section.find("不导出根密钥、密码或任何恢复材料") !=
                   std::string::npos &&
               section.find("仍需原卡与原密码才能打开") !=

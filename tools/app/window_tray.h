@@ -45,7 +45,8 @@ class WindowTray final {
     data.cbSize = sizeof(data); data.hWnd = window_; data.uID = 1;
     data.uCallbackMessage = callback_;
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
-    data.hIcon = ::LoadIconW(nullptr, MAKEINTRESOURCEW(32512)); // IDI_APPLICATION, explicitly Unicode.
+    data.hIcon = ::LoadIconW(::GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
+    if (!data.hIcon) data.hIcon = ::LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
     wcscpy_s(data.szTip, L"USB Vault");
     return data;
   }

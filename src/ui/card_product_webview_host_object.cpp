@@ -1583,16 +1583,16 @@ class CardProductWebViewHostObject final : public IDispatch {
               }
             } catch (const std::system_error& error) {
               USB_VAULT_TRACE_FAILURE("页面桥", "批量操作单项失败",
-                                      "容器 #" + std::to_string(plan[i].target.id));
+                                      "安全盘 #" + std::to_string(plan[i].target.id));
               outcome = volume_failure_status(error.code());
             } catch (...) { // One failed item does not stop an independent request.
               USB_VAULT_TRACE_FAILURE("页面桥", "批量操作单项失败",
-                                      "容器 #" + std::to_string(plan[i].target.id));
+                                      "安全盘 #" + std::to_string(plan[i].target.id));
             }
           }
           USB_VAULT_TRACE("页面桥", mount ? "批量挂载单项结果" : force ? "批量强制卸载单项结果" : "批量卸载单项结果",
                           "第 " + std::to_string(i + 1) + " / " + std::to_string(plan.size()) +
-                              " 项；容器 #" + std::to_string(plan[i].target.id) + "；结果码 " +
+                              " 项；安全盘 #" + std::to_string(plan[i].target.id) + "；结果码 " +
                               std::to_string(interrupted() ? 10u : outcome));
           {
             std::lock_guard lock(batch_mutex_);
@@ -2099,10 +2099,10 @@ class CardProductWebViewHostObject final : public IDispatch {
             status = 2;
           }
         } catch (const std::system_error& error) {
-          USB_VAULT_TRACE_FAILURE("页面桥", "卷操作失败", member_text(member) + "；容器 #" + std::to_string(id));
+          USB_VAULT_TRACE_FAILURE("页面桥", "卷操作失败", member_text(member) + "；安全盘 #" + std::to_string(id));
           status = volume_failure_status(error.code());
         } catch (...) {
-          USB_VAULT_TRACE_FAILURE("页面桥", "卷操作失败", member_text(member) + "；容器 #" + std::to_string(id));
+          USB_VAULT_TRACE_FAILURE("页面桥", "卷操作失败", member_text(member) + "；安全盘 #" + std::to_string(id));
         }
         if (SUCCEEDED(com)) ::CoUninitialize();
         // A removal during an IOCTL is handled by the deferred lifecycle path.
@@ -2112,7 +2112,7 @@ class CardProductWebViewHostObject final : public IDispatch {
           clear_space();
         }
         USB_VAULT_TRACE("页面桥", "卷操作结束",
-                        member_text(member) + "；容器 #" + std::to_string(id) + "；强制 " +
+                        member_text(member) + "；安全盘 #" + std::to_string(id) + "；强制 " +
                             diagnostics::flag_text(force) + "；状态码 " + std::to_string(status) +
                             "；安全卡中断 " + diagnostics::flag_text(creation_work_->interrupted.load()));
         volume_status_.store(status);

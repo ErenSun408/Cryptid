@@ -48,8 +48,8 @@ async function run(kind) {
     if (kind === 'full') assert.match(message, /剩余空间不足.*错误码19/);
     if (kind === 'unknown') assert.match(message, /原因无法确定.*错误码123456/);
     if (kind === 'rejected') { assert.match(message, /错误码2147500037/); assert.equal(reads, 0); }
-    if (kind === 'cancel') { assert.match(message, /已取消创建，没有留下容器文件/); assert.equal(reads, 0); }
-    if (kind === 'cleanup') { assert.doesNotMatch(message, /没有留下容器文件/); assert.equal(reads, 0); }
+    if (kind === 'cancel') { assert.match(message, /已取消创建，没有留下安全盘文件/); assert.equal(reads, 0); }
+    if (kind === 'cleanup') { assert.doesNotMatch(message, /没有留下安全盘文件/); assert.equal(reads, 0); }
     if (kind !== 'cleanup') assert.match(message, /重新填写名称与路径/);
     assert.equal($('#create-container-name').value, '');
     assert.equal($('#create-container-directory').value, '');

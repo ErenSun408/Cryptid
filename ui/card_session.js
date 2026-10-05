@@ -510,7 +510,7 @@
     if (!phase) {
       if (bitlockerPhase) {
         resetBitlocker(); creationProgress.hidden = false;
-        creationTitle.textContent = creationInplace ? "正在加密分区" : "正在创建容器";
+        creationTitle.textContent = creationInplace ? "正在加密分区" : "正在创建安全盘";
         creationStatus.textContent = "";
       }
       return;
@@ -582,9 +582,9 @@
     creationFinalizing = false;
     creationProgress.hidden = false;
     creationDialog.dataset.running = "true";
-    creationTitle.textContent = creationInplace ? "正在加密分区" : "正在创建容器";
-    creationProgressAllocate.children[1].textContent = creationInplace ? "准备文件系统" : "分配容器文件";
-    creationProgressWork.children[1].textContent = creationInplace ? "加密原有数据" : "格式化容器";
+    creationTitle.textContent = creationInplace ? "正在加密分区" : "正在创建安全盘";
+    creationProgressAllocate.children[1].textContent = creationInplace ? "准备文件系统" : "分配安全盘文件";
+    creationProgressWork.children[1].textContent = creationInplace ? "加密原有数据" : "格式化安全盘";
     creationProgressCheck.children[1].textContent = creationInplace ? "保存进度与完成处理" : "挂载并分配盘符";
     for (const step of [creationProgressAuthorize, creationProgressAllocate, creationProgressWork]) {
       step.className = "";
@@ -629,7 +629,7 @@
       creationProgressWork.className = ""; creationProgressWork.querySelector(".step-tail").textContent = "已暂停";
       creationProgressCheck.className = "done"; creationProgressCheck.querySelector(".step-tail").textContent = "进度已保存";
       for (const step of [creationProgressAuthorize, creationProgressAllocate, creationProgressWork, creationProgressCheck]) step.removeAttribute("aria-current");
-      setCreationDescription("可以退出应用；下次用原安全卡登录，在容器列表选择继续加密。");
+      setCreationDescription("可以退出应用；下次用原安全卡登录，在安全盘列表选择继续加密。");
       return;
     }
     resetBitlocker();
@@ -640,7 +640,7 @@
     creationProgress.dataset.result = creationResult;
     creationDialog.dataset.running = "false";
     creationTitle.textContent = succeeded
-      ? (creationInplace ? "分区加密已完成" : "容器已创建并挂载")
+      ? (creationInplace ? "分区加密已完成" : "安全盘已创建并挂载")
       : cancelled ? "已取消创建" : "创建未完成";
     setCreationDescription("");
     creationProgressWork.removeAttribute("aria-current");
@@ -878,7 +878,7 @@
       if (!control.items.childElementCount && authenticated && !busy) {
         const empty = document.createElement("div");
         empty.className = "batch-empty";
-        empty.textContent = "暂无容器";
+        empty.textContent = "暂无安全盘";
         control.items.append(empty);
       }
       updateBatchSelection(control);
@@ -1323,10 +1323,10 @@
     creationDescription.hidden = text === "";
   };
   const applyCreationStepCopy = () => {
-    creationTitle.textContent = "新建容器";
+    creationTitle.textContent = "新建安全盘";
     setCreationDescription(creationStorage === "disk"
-      ? "容器为物理硬盘上已有的独立数据分区"
-      : "容器为一个加密文件，挂载后显示为普通磁盘");
+      ? "安全盘为物理硬盘上已有的独立数据分区"
+      : "安全盘为一个加密文件，挂载后显示为普通磁盘");
   };
 
   // Leaving a parameter step discards what was typed on it: a decoy password
@@ -1383,7 +1383,7 @@
     document.getElementById("forget-container-description").textContent =
       containers.find(container => container.id === id)?.partition
         ? "只移除加密身份记录，不会删除分区或解密数据。当前版本无法通过文件导入找回分区；移除后将失去应用中的挂载入口，请确认不再需要此记录。"
-        : "只移除记录，不会删除容器文件。文件仍在原路径，可通过「导入」重新添加至列表。";
+        : "只移除记录，不会删除安全盘文件。文件仍在原路径，可通过「导入」重新添加至列表。";
     forgetStatus.textContent = "";
     forgetStatus.dataset.tone = "";
     forgetDialog.hidden = false;
@@ -1571,7 +1571,7 @@
       const back = document.createElement("button");
       back.type = "button";
       back.className = "file-crumb";
-      back.textContent = "容器管理";
+      back.textContent = "安全盘管理";
       back.dataset.fileBack = "";
       back.disabled = busy;
       heading.appendChild(back);
@@ -1612,11 +1612,11 @@
     }
     const container = selectedFileContainer();
     if (container === null) {
-      appendFileNotice("还没有容器。先新建或导入一个容器，再回到这里。");
+      appendFileNotice("还没有安全盘。先新建或导入一个安全盘，再回到这里。");
       return;
     }
     if (!container.mounted) {
-      appendFileNotice(inDecoyFileView() ? "点击右上角的「更新」挂载后，即可查看文件。" : "这个容器没有挂载。点击工具栏右侧的「挂载」，即可查看文件。");
+      appendFileNotice(inDecoyFileView() ? "点击右上角的「更新」挂载后，即可查看文件。" : "这个安全盘没有挂载。点击工具栏右侧的「挂载」，即可查看文件。");
       return;
     }
     if (fileEntries.length === 0) {
@@ -1869,7 +1869,7 @@
     if (others.length === 0) return;
     const hint = document.createElement("span");
     hint.className = "file-drop-hint";
-    hint.textContent = "拖到这里放进另一个容器（按住 Ctrl 拖为复制）：";
+    hint.textContent = "拖到这里放进另一个安全盘（按住 Ctrl 拖为复制）：";
     fileDropTargets.appendChild(hint);
     for (const other of others) {
       const chip = document.createElement("span");
@@ -1886,7 +1886,7 @@
   // says where that is instead of doing it here.
   const reportFileDropRefused = () => {
     setFileStatus(
-      "没有移动。文件只能放进本容器的文件夹，或另一个已挂载的容器。" +
+      "没有移动。文件只能放进本安全盘的文件夹，或另一个已挂载的安全盘。" +
       "要把文件拿出加密卷，那是明文导出，请到「导出与迁移」做。", "error");
   };
 
@@ -2427,7 +2427,7 @@
       exportContainerList.removeChild(exportContainerList.firstChild);
     }
     if (containers.length === 0) {
-      exportNote(exportContainerList, "还没有容器。");
+      exportNote(exportContainerList, "还没有安全盘。");
       return;
     }
     for (const container of orderedContainers()) {
@@ -2460,9 +2460,9 @@
         const files = document.createElement("div");
         files.className = "xfiles";
         if (isMaintenanceContainer(container.id)) {
-          exportNote(files, "该容器正在进行高级更新，暂不支持此操作。");
+          exportNote(files, "该安全盘正在进行高级更新，暂不支持此操作。");
         } else if (!container.mounted) {
-          exportNote(files, "这个容器没有挂载。");
+          exportNote(files, "这个安全盘没有挂载。");
         } else if (openExportError !== "") {
           exportNote(files, openExportError);
         } else if (openExportListing === null) {
@@ -2483,7 +2483,7 @@
               () => { toggleExportPick(container.id, entry.directory, entry); }));
           }
           if (roots.length === 0 && picked.length === 0) {
-            exportNote(files, "这个容器是空的。");
+            exportNote(files, "这个安全盘是空的。");
           }
           if (openExportListing.truncated) {
             exportNote(files, "条目太多，只列出了其中一部分。");
@@ -2502,7 +2502,7 @@
       migrateContainerList.removeChild(migrateContainerList.firstChild);
     }
     if (containers.length === 0) {
-      exportNote(migrateContainerList, "还没有容器。");
+      exportNote(migrateContainerList, "还没有安全盘。");
       return;
     }
     let known = false;
@@ -2619,7 +2619,7 @@
     const listing = await readContainerRoot(id);
     if (openExportContainer !== id) return;
     if (listing === null) {
-      openExportError = "无法读取这个容器的根目录。";
+      openExportError = "无法读取这个安全盘的根目录。";
     } else {
       openExportListing = listing;
     }
@@ -2904,7 +2904,7 @@
     render(messageForCurrentState());
     if (failed) {
       setMigrateStatus(
-        "迁移没有完成。容器可能仍挂载着，位置不可写、空间不足，或那里已经有同名文件了。",
+        "迁移没有完成。安全盘可能仍挂载着，位置不可写、空间不足，或那里已经有同名文件了。",
         "error");
       renderBackupCentre();
       return;
@@ -2921,16 +2921,16 @@
   // none of them claims the contents are missing unless the volume itself
   // answered and the folder was the part that was not there.
   const directoryFailureMessages = {
-    1: "这个容器当前没有挂载，请先挂载再浏览。",
-    2: "这个容器已不在当前会话，请刷新列表后重试。",
-    3: "读不到这个容器的磁盘。它可能已被卸载或断开，请重新挂载后再试。",
-    4: "这个文件夹已经不在了，可能已被删除或移动。已返回容器根目录。",
+    1: "这个安全盘当前没有挂载，请先挂载再浏览。",
+    2: "这个安全盘已不在当前会话，请刷新列表后重试。",
+    3: "读不到这个安全盘的磁盘。它可能已被卸载或断开，请重新挂载后再试。",
+    4: "这个文件夹已经不在了，可能已被删除或移动。已返回安全盘根目录。",
     5: "没有读取这个文件夹的权限。",
     6: "读取磁盘时出错，请检查存储设备的连接及可用状态。",
     7: "这个文件夹的内容无法安全显示，已拒绝读取。",
   };
   const kDirectoryFailureUnknown =
-    "暂时读不到这个文件夹，原因无法确定。请确认容器仍处于挂载状态后重试。";
+    "暂时读不到这个文件夹，原因无法确定。请确认安全盘仍处于挂载状态后重试。";
   const readDirectoryFailure = async () => {
     try {
       const reason = await bridge.getDirectoryError();
@@ -3369,7 +3369,7 @@
     decoyRefresh.disabled = busy || decoyRefreshing || currentState !== nativeState.authenticated;
     const mounted = containers.find(item => item.id === decoyMaintenanceId && item.mounted);
     const maintenanceMounted = decoyStage === "maintenance" && decoyMounted.has(decoyMaintenanceId) && mounted;
-    decoyMaintenanceDrive.textContent = maintenanceMounted ? `盘符 ${mounted.drive}` : "该容器未挂载，点击右侧更新以查看容器详情";
+    decoyMaintenanceDrive.textContent = maintenanceMounted ? `盘符 ${mounted.drive}` : "该安全盘未挂载，点击右侧更新以查看安全盘详情";
     decoyMaintenanceDrive.classList.toggle("unmounted", !maintenanceMounted);
     decoyProtectionUnmount.disabled = busy || currentState !== nativeState.authenticated;
     decoyVerify.hidden = decoyStage !== "verify";
@@ -3607,10 +3607,10 @@
             setDecoyStatus(decoyResultsStatus, "");
           } else if (cancelled === 1) {
             setDecoyStatus(decoyResultsStatus,
-              "验证已中止，下面只列出中止前确认可更新的容器。", "warn");
+              "验证已中止，下面只列出中止前确认可更新的安全盘。", "warn");
           } else if (unreachable > 0) {
             setDecoyStatus(decoyResultsStatus,
-              `有 ${unreachable} 个容器未能验证，通常是其中还有文件正在使用。`, "warn");
+              `有 ${unreachable} 个安全盘未能验证，通常是其中还有文件正在使用。`, "warn");
           } else setDecoyStatus(decoyResultsStatus, "");
           break;
         }
@@ -3827,7 +3827,7 @@
       clearDecoyMaintenanceFacts();
     } catch (pageError) { logCaughtPageError("openDecoyMaintenance/1", pageError);
       setDecoyStatus(wasMaintenance ? decoyMaintenanceStatus : decoyResultsStatus,
-        "无法打开该容器的外层卷。", "error");
+        "无法打开该安全盘的外层卷。", "error");
     } finally {
       busy = false;
       renderDecoySection();
@@ -4393,8 +4393,8 @@
         currentState !== nativeState.authenticated || isMaintenanceContainer(container.id)) return;
     if (containerListPersistence !== true) {
       setDashboardStatus(containerListPersistence === false
-        ? "请先在系统设置开启“持久化容器列表”，再修改名称。"
-        : "无法读取“持久化容器列表”设置，请稍后重试。", "error");
+        ? "请先在系统设置开启“持久化安全盘列表”，再修改名称。"
+        : "无法读取“持久化安全盘列表”设置，请稍后重试。", "error");
       return;
     }
     if (containerRename) { containerRename.input.focus(); return; }
@@ -4406,7 +4406,7 @@
     input.spellcheck = false;
     input.value = container.name;
     input.placeholder = "清空恢复默认名称";
-    input.setAttribute("aria-label", "容器显示名称");
+    input.setAttribute("aria-label", "安全盘显示名称");
     const status = document.createElement("span");
     status.className = "container-name-status";
     status.setAttribute("role", "status");
@@ -4560,7 +4560,7 @@
     if (management) {
       row.classList.add("management-row");
       row.tabIndex = maintaining ? -1 : 0;
-      row.setAttribute("aria-label", `打开容器 ${container.name}`);
+      row.setAttribute("aria-label", `打开安全盘 ${container.name}`);
       row.addEventListener("keydown", (event) => {
         if (event.target !== row || !["Enter", " "].includes(event.key)) return;
         event.preventDefault();
@@ -4664,7 +4664,7 @@
     const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
     remove.className = "container-swipe-remove";
     remove.hidden = true;
-    if (container.mounted) remove.title = "请先卸载容器";
+    if (container.mounted) remove.title = "请先卸载安全盘";
     rail.append(remove, row);
     wireContainerSwipe(rail, row, remove);
     group.appendChild(rail);
@@ -4727,8 +4727,8 @@
         const empty = document.createElement("p");
         empty.className = "container-empty";
         empty.textContent =
-          "还没有容器。容器是一个加密文件，挂载后在系统里显示为一个普通磁盘。" +
-          "新建一个，或导入已有的容器文件。";
+          "还没有安全盘。安全盘是一个加密文件，挂载后在系统里显示为一个普通磁盘。" +
+          "新建一个，或导入已有的安全盘文件。";
         list.appendChild(empty);
         continue;
       }
@@ -4763,7 +4763,7 @@
   };
 
   const operationEventName = (kind) => [
-    "打开会话", "创建容器", "挂载容器", "卸载容器",
+    "打开会话", "创建安全盘", "挂载安全盘", "卸载安全盘",
   ][kind];
 
   const operationTarget = (event) => {
@@ -5683,7 +5683,7 @@
     const context = { ...volumeRetryContext };
     hideVolumeOperation();
     await runContainerAction(() => bridge.beginMountAdoptedContainer(context.id),
-      "无法挂载该容器，请稍后重试。", context);
+      "无法挂载该安全盘，请稍后重试。", context);
   });
   // A finished result is safe to dismiss by clicking away; a running operation is not.
   volumeOperationDialog.addEventListener("pointerdown", (event) => {
@@ -5706,9 +5706,9 @@
   const volumeFailureMessages = {
     3: "操作未完成，暂时无法确定具体原因。请检查磁盘状态后重试。",
     4: "卷正在被其他程序占用或锁定。请关闭使用该卷的文件、窗口或程序后重试。",
-    5: "找不到容器文件或所在位置。请确认文件未被移动，且存储设备已连接。",
-    6: "访问被拒绝。请检查容器文件和所在位置的访问权限。",
-    7: "无法打开容器：当前安全卡或登录信息不匹配，或容器数据无法识别。",
+    5: "找不到安全盘文件或所在位置。请确认文件未被移动，且存储设备已连接。",
+    6: "访问被拒绝。请检查安全盘文件和所在位置的访问权限。",
+    7: "无法打开安全盘：当前安全卡或登录信息不匹配，或安全盘数据无法识别。",
     8: "读取或写入磁盘失败。请检查存储设备的连接及可用状态。",
     9: "加密驱动或目标磁盘不可用，或驱动版本不兼容。请检查安全组件和磁盘状态。",
     10: "操作期间安全卡已拔出，无法确认操作成功。请重新插卡并检查磁盘状态。",
@@ -5854,7 +5854,7 @@
       name.title = item.name;
       const failure = batchItemFailed(item)
         ? `${verb}失败：${volumeFailureMessages[item.outcome] || volumeFailureMessages[3]}` +
-          (eligible.has(item.id) ? "" : "当前状态无需重试，或容器已不在本会话中。")
+          (eligible.has(item.id) ? "" : "当前状态无需重试，或安全盘已不在本会话中。")
         : "";
       row.append(name, batchResultMark(item, verb, failure));
       if (failure) logShownPageError(`batch-result/${item.id}`, `${item.name}；${failure}`,
@@ -6043,7 +6043,7 @@
       busy = false;
     } catch (error) {
       logCaughtPageError("forceExit", error);
-      forceExitStatus.textContent = "强制卸载并退出未完成，应用仍保持打开。请取消后检查容器状态。";
+      forceExitStatus.textContent = "强制卸载并退出未完成，应用仍保持打开。请取消后检查安全盘状态。";
       forceExitStatus.dataset.tone = "error";
       forceExitCancel.disabled = false;
       forceExitCancel.focus();
@@ -6160,19 +6160,19 @@
 
   const mountExistingContainer = () => runContainerAction(
     () => bridge.mountContainer(),
-    "无法导入该容器，请确认文件仍在原位置且与当前安全卡匹配。", null, true);
+    "无法导入该安全盘，请确认文件仍在原位置且与当前安全卡匹配。", null, true);
 
   const mountAdoptedContainer = (id) => runContainerAction(
     () => bridge.beginMountAdoptedContainer(id),
-    "无法挂载该容器，请稍后重试。", { verb: "挂载", id, target: containers.find((container) => container.id === id)?.name || "当前卷" });
+    "无法挂载该安全盘，请稍后重试。", { verb: "挂载", id, target: containers.find((container) => container.id === id)?.name || "当前卷" });
 
   const unmountAdoptedContainer = (id) => runContainerAction(
     () => bridge.beginUnmountContainer(id),
-    "无法卸载该容器，请检查磁盘状态，并关闭可能占用文件的程序后重试。", { verb: "卸载", id, target: containers.find((container) => container.id === id)?.name || "当前卷" });
+    "无法卸载该安全盘，请检查磁盘状态，并关闭可能占用文件的程序后重试。", { verb: "卸载", id, target: containers.find((container) => container.id === id)?.name || "当前卷" });
 
   const forgetAdoptedContainer = (id) => runContainerAction(
     () => bridge.forgetContainer(id),
-    "无法从列表移除该容器，请稍后重试。");
+    "无法从列表移除该安全盘，请稍后重试。");
 
   const runSelectedBatch = async (control, retryContext = null, automaticIds = null) => {
     if (busy || bridge === null || currentState !== nativeState.authenticated ||
@@ -6197,7 +6197,7 @@
     closeBatchMenus();
     render(messageForCurrentState());
     setDashboardStatus("");
-    showVolumeOperation({ verb, target: automaticIds ? "全部可用容器" : "所选容器", batch: true });
+    showVolumeOperation({ verb, target: automaticIds ? "全部可用安全盘" : "所选安全盘", batch: true });
     try {
       await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
       checkSession();
@@ -6217,7 +6217,7 @@
           const name = await bridge.getBatchItemName(current - 1);
           checkSession();
           volumeOperationTitle.textContent = `正在${verb} ${name} (${current}/${total})`;
-        } else volumeOperationTitle.textContent = `正在${verb}所选容器 (${completed}/${total})`;
+        } else volumeOperationTitle.textContent = `正在${verb}所选安全盘 (${completed}/${total})`;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       const results = [];
@@ -6286,7 +6286,7 @@
     const revision = forgotRevision;
     forgotRunning = true; updateForgotControls();
     forgotStatus.dataset.tone = "";
-    forgotStatus.textContent = prepare ? "正在核验安全卡，请勿拔卡。" : force ? "正在卸载容器并重置安全卡，请勿拔卡。" : "正在重置安全卡，请勿拔卡。";
+    forgotStatus.textContent = prepare ? "正在核验安全卡，请勿拔卡。" : force ? "正在卸载安全盘并重置安全卡，请勿拔卡。" : "正在重置安全卡，请勿拔卡。";
     let writing = !prepare;
     try {
       if (prepare) {
@@ -6301,8 +6301,8 @@
         if (!known || drives !== "") {
           forgotIntro.hidden = true; forgotMounts.hidden = false; forgotConfirm.hidden = true;
           forgotForce.hidden = !known || drives === ""; forgotSkip.hidden = false;
-          forgotTitle.textContent = known ? "仍有容器处于挂载状态" : "无法确认挂载状态";
-          forgotLead.textContent = known ? "检测到当前仍有处于挂载状态的容器，请确认是否需要在重置安全卡前卸载。" : "暂时无法确认容器的挂载状态。你可以自行检查并卸载容器，或点击“跳过”继续重置。";
+          forgotTitle.textContent = known ? "仍有安全盘处于挂载状态" : "无法确认挂载状态";
+          forgotLead.textContent = known ? "检测到当前仍有处于挂载状态的安全盘，请确认是否需要在重置安全卡前卸载。" : "暂时无法确认安全盘的挂载状态。你可以自行检查并卸载安全盘，或点击“跳过”继续重置。";
           forgotDrives.textContent = drives; forgotDrives.hidden = !known;
           forgotGuidance.hidden = !known;
           forgotStatus.textContent = ""; forgotRunning = false; updateForgotControls(); forgotSkip.focus();
@@ -6313,7 +6313,7 @@
       await bridge.beginConfirmLoginReset(forgotTicket, force);
       const outcome = await pollForgotPassword(revision);
       if (outcome === 4) {
-        forgotStatus.textContent = "强制卸载未完成。请检查容器状态，或点击“跳过”继续重置。";
+        forgotStatus.textContent = "强制卸载未完成。请检查安全盘状态，或点击“跳过”继续重置。";
         forgotStatus.dataset.tone = "error";
         forgotRunning = false; updateForgotControls(); forgotSkip.focus(); return;
       }
@@ -6469,7 +6469,7 @@
       busy = false;
       render(messageForCurrentState());
       creationCompleted = true;
-      setCreationDescription("容器已经创建并挂载。");
+      setCreationDescription("安全盘已经创建并挂载。");
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();
@@ -6510,7 +6510,7 @@
     16: "已取消创建。",
     17: "读写失败。请检查保存位置的剩余空间、文件系统限制（FAT32 单个文件不能超过 4 GiB）以及设备连接。",
     18: "安全组件意外结束，请重新打开应用后重试。",
-    19: "保存位置的剩余空间不足，装不下这个容量的容器。请换个位置，或调小容量。",
+    19: "保存位置的剩余空间不足，装不下这个容量的安全盘。请换个位置，或调小容量。",
   };
   let creationFailureOrigin = "来源未知";
   const describeCreationFailure = (code) => {
@@ -6550,9 +6550,9 @@
       containers.some((container) => !previousIds.has(container.id) && !container.mounted);
     let failure;
     if (cleanupFailed) failure = kCreationCleanupMessage;
-    else if (cancelled) failure = "已取消创建，没有留下容器文件。" + retry;
+    else if (cancelled) failure = "已取消创建，没有留下安全盘文件。" + retry;
     else if (publishedUnmounted) {
-      failure = "容器已经创建，但挂载没有成功。它已在容器列表中，可以稍后挂载。";
+      failure = "安全盘已经创建，但挂载没有成功。它已在安全盘列表中，可以稍后挂载。";
     } else {
       failure = describeCreationFailure(failureCode);
       if (!disk) failure += retry;
@@ -6565,7 +6565,7 @@
   const runPartitionConversion = async (id, resume) => {
     if (busy || currentState !== nativeState.authenticated) return;
     if (!resume && await bridge.getRememberContainerPaths() !== true) {
-      creationStatus.textContent = "请先在系统设置开启“持久化容器列表”，再开始分区加密。";
+      creationStatus.textContent = "请先在系统设置开启“持久化安全盘列表”，再开始分区加密。";
       creationStatus.dataset.tone = "error"; return;
     }
     if (resume) openCreationFlow(false);
@@ -6632,7 +6632,7 @@
         const createdUnmounted = failureCode === 12 &&
           containers.some((container) => !previousIds.has(container.id) && !container.mounted);
         creationStatus.textContent = createdUnmounted
-          ? mappedPageError("分区已经创建，但没有挂载。它已在容器列表中，可以稍后挂载。", failureCode, creationFailureOrigin)
+          ? mappedPageError("分区已经创建，但没有挂载。它已在安全盘列表中，可以稍后挂载。", failureCode, creationFailureOrigin)
           : describeCreationFailure(failureCode);
         creationStatus.dataset.tone = "error";
       }
@@ -6680,7 +6680,7 @@
       busy = false;
       render(messageForCurrentState());
       creationCompleted = true;
-      setCreationDescription("容器已经创建并挂载。");
+      setCreationDescription("安全盘已经创建并挂载。");
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
       updateCreationAvailability();

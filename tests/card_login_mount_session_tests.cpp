@@ -1439,20 +1439,20 @@ void test_runtime_log_records_session_stages_and_failures() {
     text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
   }
   for (const char* const expected : {
-           "[会话] 登录完成；收录容器数 0",
-           "[会话] 开始创建文件容器；路径 C:\\vault\\a.hc；暂存路径 C:\\vault\\a.hc.preparing；容量 67108864 字节",
-           "[会话] 挂载新建容器；路径 C:\\vault\\a.hc；请求盘符 X:；PRF 1；PIM 0；只读 否；通知资源管理器 否；隐藏卷保护 否",
-           "[会话] 新建容器挂载返回；驱动回报盘符 X:",
-           "[会话] 文件容器创建完成；容器 #",
-           "[会话] 全部卸载：卸载容器失败；容器 #",
+           "[会话] 登录完成；收录安全盘数 0",
+           "[会话] 开始创建文件安全盘；路径 C:\\vault\\a.hc；暂存路径 C:\\vault\\a.hc.preparing；容量 67108864 字节",
+           "[会话] 挂载新建安全盘；路径 C:\\vault\\a.hc；请求盘符 X:；PRF 1；PIM 0；只读 否；通知资源管理器 否；隐藏卷保护 否",
+           "[会话] 新建安全盘挂载返回；驱动回报盘符 X:",
+           "[会话] 文件安全盘创建完成；安全盘 #",
+           "[会话] 全部卸载：卸载安全盘失败；安全盘 #",
            "异常类型：class std::runtime_error；原文：unmount A failed",
            "[会话] 标准派生挂载失败；路径 D:\\kept.hc；异常类型：class std::system_error；错误类别：",
            "错误码：3（0x00000003）",
            "[会话] 标准派生被拒，改用登录派生；路径 D:\\kept.hc",
            "[会话] 登录派生挂载成功；路径 D:\\kept.hc",
            "[会话] 清理暂存文件失败；暂存路径 D:\\broken.hc.preparing",
-           "[会话] 创建文件容器失败；路径 D:\\broken.hc；暂存已生成 是；已发布 否",
-           "[会话] 记录容器路径失败；路径 D:\\kept2.hc；异常类型：class std::runtime_error；原文：the index cannot be written",
+           "[会话] 创建文件安全盘失败；路径 D:\\broken.hc；暂存已生成 是；已发布 否",
+           "[会话] 记录安全盘路径失败；路径 D:\\kept2.hc；异常类型：class std::runtime_error；原文：the index cannot be written",
            "[会话] 拔卡清理开始",
            "[会话] 拔卡清理结束；有卷被强制卸下"}) {
     if (text.find(expected) == std::string::npos) {
@@ -2490,7 +2490,7 @@ void test_restored_order_keeps_unmatched_entries_stable_and_preserves_identity()
                 shown[2].id == 1 && shown[3].id == 2,
             "saved order or stable unmatched order changed");
     require(shown[0].name == L"saved.hc" && !shown[0].partition &&
-                shown[1].name == L"磁盘容器 1" && shown[1].partition &&
+                shown[1].name == L"磁盘安全盘 1" && shown[1].partition &&
                 shown[1].conversion_state == 2 && shown[0].conversion_state == 0 &&
                 shown[2].name == L"b.hc" && shown[3].name == L"a.hc",
             "sorting detached identity or conversion state from its container");
@@ -4136,7 +4136,7 @@ void test_partition_alias_survives_conversion_and_restart() {
   require(next.container_statuses()[0].name==L"备份盘" && next.container_statuses()[0].mounted,
           "conversion completion overwrote alias");
   next.rename_container(id,{});
-  require(next.container_statuses()[0].name==L"磁盘容器 1", "partition default number lost");
+  require(next.container_statuses()[0].name==L"磁盘安全盘 1", "partition default number lost");
 }
 
 void test_partition_conversion_lifecycle() {
@@ -4296,7 +4296,7 @@ void test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart() {
     const auto first = create(session, 7);
     const auto second = create(session, 8);
     const auto third = create(session, 9);
-    require(disk_names(session) == std::vector<std::wstring>{L"磁盘容器 3", L"磁盘容器 2", L"磁盘容器 1"},
+    require(disk_names(session) == std::vector<std::wstring>{L"磁盘安全盘 3", L"磁盘安全盘 2", L"磁盘安全盘 1"},
             "creation did not number disk containers in the order they were made");
 
     // Oldest to the top, newest into the middle: a position no numbering implies.
@@ -4305,7 +4305,7 @@ void test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart() {
       if (!status.partition) dragged.push_back(status.id);
     session.reorder_containers(dragged);
     after_drag = disk_names(session);
-    require(after_drag == std::vector<std::wstring>{L"磁盘容器 1", L"磁盘容器 3", L"磁盘容器 2"},
+    require(after_drag == std::vector<std::wstring>{L"磁盘安全盘 1", L"磁盘安全盘 3", L"磁盘安全盘 2"},
             "dragging the list renamed the disk containers");
   }
 
@@ -4319,11 +4319,11 @@ void test_a_disk_container_keeps_its_name_through_a_drag_and_a_restart() {
 
   // The new container reuses the smallest gap without renaming existing rows.
   for (const auto& status : next.container_statuses())
-    if (status.partition && status.name == L"磁盘容器 2") next.forget_container(status.id);
+    if (status.partition && status.name == L"磁盘安全盘 2") next.forget_container(status.id);
   static_cast<void>(create(next, 10));
   const auto names = disk_names(next);
-  require(std::ranges::find(names, std::wstring(L"磁盘容器 2")) != names.end() &&
-              std::ranges::find(names, std::wstring(L"磁盘容器 4")) == names.end(),
+  require(std::ranges::find(names, std::wstring(L"磁盘安全盘 2")) != names.end() &&
+              std::ranges::find(names, std::wstring(L"磁盘安全盘 4")) == names.end(),
           "the smallest unused disk container number was not reused");
 }
 
@@ -4368,8 +4368,8 @@ void test_a_dragged_order_records_disk_containers_too() {
   std::vector<std::wstring> names;
   for (const auto& status : shown)
     if (status.partition) names.push_back(status.name);
-  require(names.size() == 3 && names[0] == L"磁盘容器 3" &&
-              names[1] == L"磁盘容器 2" && names[2] == L"磁盘容器 1",
+  require(names.size() == 3 && names[0] == L"磁盘安全盘 3" &&
+              names[1] == L"磁盘安全盘 2" && names[2] == L"磁盘安全盘 1",
           "a newly created disk container did not go first with the next number");
 
   // Drag them into an order no slot layout would produce, oldest in the middle.
@@ -4430,11 +4430,11 @@ void test_disk_containers_are_numbered_among_themselves() {
 
   std::vector<std::wstring> disk_names;
   for (const auto& status : session.container_statuses()) {
-    if (status.name.starts_with(L"磁盘容器 ")) disk_names.push_back(status.name);
+    if (status.name.starts_with(L"磁盘安全盘 ")) disk_names.push_back(status.name);
   }
   std::ranges::sort(disk_names);
-  require(disk_names.size() == 3 && disk_names[0] == L"磁盘容器 1" &&
-              disk_names[1] == L"磁盘容器 2" && disk_names[2] == L"磁盘容器 3",
+  require(disk_names.size() == 3 && disk_names[0] == L"磁盘安全盘 1" &&
+              disk_names[1] == L"磁盘安全盘 2" && disk_names[2] == L"磁盘安全盘 3",
           "disk containers were not numbered one after another among themselves");
 
   // The ids themselves stay unique across every kind: they are the handle the

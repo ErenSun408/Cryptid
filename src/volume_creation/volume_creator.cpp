@@ -562,7 +562,7 @@ std::uint64_t VolumeImportSession::protected_space(std::wstring_view container_p
     if (!impl_->connected) {
       impl_->nonce = random_nonce(); header.nonce = impl_->nonce;
       const auto suffix = hex_nonce(impl_->nonce);
-      USB_VAULT_TRACE("创建助手", "维护测量：启动助手", "容器 " + diagnostics::utf8(container));
+      USB_VAULT_TRACE("创建助手", "维护测量：启动助手", "安全盘 " + diagnostics::utf8(container));
       impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
     impl_->pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, impl_->process.get());
       impl_->container = container; impl_->drive = letter;
@@ -616,7 +616,7 @@ void VolumeImportSession::copy(std::wstring_view container_path, wchar_t drive, 
   if (!impl_->connected) {
     impl_->nonce = random_nonce(); header.nonce = impl_->nonce;
     const auto suffix = hex_nonce(impl_->nonce);
-    USB_VAULT_TRACE("创建助手", "受保护导入：启动助手", "容器 " + diagnostics::utf8(container));
+    USB_VAULT_TRACE("创建助手", "受保护导入：启动助手", "安全盘 " + diagnostics::utf8(container));
     impl_->process = launch_elevated_helper(impl_->helper_path, suffix, suffix);
     impl_->pipe = connect_to_helper(L"\\\\.\\pipe\\usb-vault-create-" + suffix, impl_->process.get());
     impl_->container=container;impl_->drive=letter;impl_->mount_id=mount_id;impl_->mounted_bytes=mounted_bytes;

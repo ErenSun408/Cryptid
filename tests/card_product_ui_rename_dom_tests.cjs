@@ -44,7 +44,7 @@ const scenarios = ['enter', 'blur', 'escape', 'unchanged', 'empty', 'invalid', '
    let input = row.querySelector('.container-name-input');
    if (scenario.startsWith('persistence-')) {
     assert.equal(input, null); assert.equal(writes.length, 0);
-    assert.match(d.getElementById('dashboard-status').textContent, /持久化容器列表/); continue;
+    assert.match(d.getElementById('dashboard-status').textContent, /持久化安全盘列表/); continue;
    }
    assert.ok(input, `${scenario}: editor missing`);
    assert.equal(input.hasAttribute('title'), false, 'editor should not show a hover tooltip');

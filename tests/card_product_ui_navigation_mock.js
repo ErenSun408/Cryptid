@@ -261,7 +261,7 @@ window.navigationFixture = {
       fixture.creationProgress = "1,3,20,0,3";
       fixture.pendingCreation = {
         resolve: () => {
-          fixture.containers.push({id: 100, name: "磁盘容器 100", mounted: true, size: 1024, drive: "W:", partition: true});
+          fixture.containers.push({id: 100, name: "磁盘安全盘 100", mounted: true, size: 1024, drive: "W:", partition: true});
           fixture.creationProgress = "2,5,100,87,3";
         },
         reject: () => { fixture.creationProgress = "3,3,41,0,3"; },

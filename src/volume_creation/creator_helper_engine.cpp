@@ -482,11 +482,11 @@ void create_new_target_as_caller(const HANDLE pipe,
   try {
     const Impersonation caller(pipe);
     if (::DeleteFileW(path.c_str()) != FALSE) {
-      USB_VAULT_TRACE("创建助手进程", "已删除未完成的容器", usb_vault::diagnostics::utf8(path));
+      USB_VAULT_TRACE("创建助手进程", "已删除未完成的安全盘", usb_vault::diagnostics::utf8(path));
       return true;
     }
     const DWORD error = ::GetLastError();
-    USB_VAULT_TRACE("创建助手进程", "删除未完成的容器失败",
+    USB_VAULT_TRACE("创建助手进程", "删除未完成的安全盘失败",
                     usb_vault::diagnostics::utf8(path) + "；Win32 " + std::to_string(error));
     return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
   } catch (...) {
@@ -966,7 +966,7 @@ void create_with_hidden(const HANDLE pipe, Request& request,
                      CreationStage::formatting_hidden);
     });
   } catch (...) {
-    USB_VAULT_TRACE_FAILURE("创建助手进程", "创建含隐藏卷的容器失败",
+    USB_VAULT_TRACE_FAILURE("创建助手进程", "创建含隐藏卷的安全盘失败",
                             "临时挂载中 " + usb_vault::diagnostics::flag_text(mounted));
     if (mounted) {
       try {

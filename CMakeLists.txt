@@ -627,12 +627,16 @@ if(USB_VAULT_BUILD_UI)
   # The start check is compiled into the product itself: the installer owns
   # dependency repair, and setup is the product page, so there is no second
   # configuration process and no window outside this executable.
+  enable_language(RC)
   add_executable(usb_vault_vikey_p2_development_app WIN32 EXCLUDE_FROM_ALL
     tools/app/main.cpp
     tools/app/usb_vault_app.manifest
+    tools/app/app_icon.rc
     src/platform/windows/vikey_configuration/diagnostics.cpp
     src/card/vikey/vikey_hid_probe.cpp
   )
+  set_source_files_properties(tools/app/app_icon.rc PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/ui/assets/cryptid.ico")
   set(p2_deployment_header "${CMAKE_CURRENT_BINARY_DIR}/generated/p2_deployment.h")
   add_custom_command(OUTPUT "${p2_deployment_header}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
@@ -651,6 +655,7 @@ if(USB_VAULT_BUILD_UI)
   target_sources(usb_vault_vikey_p2_development_app PRIVATE "${p2_deployment_header}")
   target_include_directories(usb_vault_vikey_p2_development_app PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    "${CMAKE_SOURCE_DIR}/ui/assets"
     "${webview2_sdk_SOURCE_DIR}/build/native/include"
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
