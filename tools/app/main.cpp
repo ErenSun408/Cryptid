@@ -1546,33 +1546,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         }
         return 0;
       }
-      if (g_creation_work.close_confirmation_pending()) {
-        g_tray.restore();
-        if (g_webview && g_webview_startup.current(g_page_generation)) return 0;
-        g_creation_work.dismiss_close_confirmation();
-      }
       if (g_ui_session != nullptr &&
           !usb_vault::ui::prepare_ui_session_for_close(*g_ui_session)) {
         g_tray.restore();
         USB_VAULT_TRACE("窗口", "关闭前卸载失败，保留窗口", "");
-        if (g_webview && g_webview_startup.current(g_page_generation)) {
-          g_creation_work.arm_close_confirmation();
-          const auto generation = g_page_generation;
-          const HRESULT shown = g_webview->ExecuteScript(
-              L"typeof window.usbVaultConfirmForceExit === 'function' && window.usbVaultConfirmForceExit()",
-              Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-                  [generation](HRESULT result, LPCWSTR value) -> HRESULT {
-                    if (!g_webview_startup.current(generation) ||
-                        !g_creation_work.close_confirmation_pending()) return S_OK;
-                    if (FAILED(result) || !value || std::wstring_view(value) != L"true") {
-                      g_creation_work.dismiss_close_confirmation();
-                      show_failure(L"无法安全卸载当前磁盘，且无法显示退出确认。请关闭占用文件后重试。");
-                    }
-                    return S_OK;
-                  }).Get());
-          if (SUCCEEDED(shown)) return 0;
-          g_creation_work.dismiss_close_confirmation();
-        }
         show_failure(L"无法安全卸载当前磁盘，请关闭占用文件后重试。");
         return 0;
       }

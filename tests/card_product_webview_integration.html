@@ -403,14 +403,6 @@
           <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘安全盘</button>
           <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件安全盘</button>
         </div>
-<div id="force-exit-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="force-exit-title" hidden>
-  <div class="modal"><h3 id="force-exit-title">退出应用</h3>
-    <p>当前仍有挂载中的安全盘，确定要强制卸载并退出吗？</p>
-    <output id="force-exit-status" aria-live="polite"></output>
-    <button id="force-exit-cancel" type="button">取消</button>
-    <button id="force-exit-confirm" type="button">确认</button>
-  </div>
-</div>
 <button id="exit-hotkey-enabled" role="switch" aria-checked="false"></button>
 <div id="exit-hotkey-options" hidden><input id="exit-hotkey-key" readonly><select id="exit-hotkey-count"></select><button id="exit-hotkey-save">保存</button></div>
 <output id="exit-hotkey-status"></output>

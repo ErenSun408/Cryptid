@@ -158,7 +158,7 @@ class FakeProductVolume final : public IAuthenticatedCardVolumeSession {
   void unmount_active() override {
     ++unmount_calls;
     if (reject_unmount) throw std::runtime_error("busy");
-    is_mounted = false;
+    if (!retain_mount) is_mounted = false;
   }
   [[nodiscard]] bool force_unmount_active() override {
     throw std::logic_error("not used by close guard");
@@ -201,11 +201,15 @@ void test_product_controller_uses_the_same_close_contract() {
           "inactive product session blocked close");
   volume.is_mounted = true;
   volume.reject_unmount = true;
-  require(!prepare_ui_session_for_close(controller) && volume.is_mounted,
+  require(!prepare_ui_session_for_close(controller) && volume.is_mounted && volume.force_calls == 0,
           "failed product unmount allowed close");
   volume.reject_unmount = false;
+  volume.retain_mount = true;
+  require(!prepare_ui_session_for_close(controller) && volume.is_mounted && volume.force_calls == 0,
+          "residual mount allowed normal close or forced cleanup");
+  volume.retain_mount = false;
   require(prepare_ui_session_for_close(controller) && !volume.is_mounted &&
-              volume.unmount_calls == 2,
+              volume.unmount_calls == 3 && volume.force_calls == 0,
           "product unmount retry did not allow close");
 }
 

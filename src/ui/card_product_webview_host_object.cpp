@@ -2015,13 +2015,11 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   HRESULT begin_volume_operation(DISPID member, DISPPARAMS* parameters,
                                  VARIANT* result, UINT* argument_error) noexcept {
-    const bool force_exit = member == kBeginForceUnmountForExitId;
-    const bool force = force_exit || member == kBeginForceUnmountLastId;
-    if (force_exit) {
-      if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
-      if (!creation_work_->consume_close_confirmation()) return E_ACCESSDENIED;
-      member = kBeginUnmountId;
-    } else if (force) {
+    // Keep the retired member fail-closed for stale pages. Forced application
+    // exit is owned by the native hotkey path, never by page confirmation.
+    if (member == kBeginForceUnmountForExitId) return E_ACCESSDENIED;
+    const bool force = member == kBeginForceUnmountLastId;
+    if (force) {
       if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
       if (volume_status_.load() != 4 || last_volume_epoch_ != creation_work_->card_epoch.load() ||
           (last_volume_member_ != kBeginUnmountId && last_volume_member_ != kBeginUnmountContainerId))
@@ -2034,7 +2032,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (!parameters || parameters->cNamedArgs != 0 ||
         parameters->cArgs != (all || force ? 0U : 1U) ||
         (!all && !force && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
-    std::uint32_t id = force && !force_exit ? last_volume_id_ : 0;
+    std::uint32_t id = force ? last_volume_id_ : 0;
     if (!all && !force && (!exact_uint32(parameters->rgvarg[0], id) || id == 0)) {
       if (argument_error) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
@@ -2050,7 +2048,6 @@ class CardProductWebViewHostObject final : public IDispatch {
       // progress reader is allowed while unrelated session reads stay blocked.
       clear_batch();
       clear_survey();
-      if (force_exit) clear_space();
       if (member == kBeginOpenDecoyMaintenanceId ||
           member == kBeginMeasureDecoySpaceId ||
           member == kBeginEndDecoyMaintenanceId) {
@@ -2063,9 +2060,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       creation_work_->finish(); // Volume operations cannot be cancelled.
       creation_work_->volume_operation.store(true);
       volume_status_.store(1);
-      creation_work_->force_exit_running.store(force_exit);
       creation_work_->running.store(true);
-      creation_thread_ = std::thread([this, member, id, force, force_exit,
+      creation_thread_ = std::thread([this, member, id, force,
                                       operation_epoch] {
         const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         unsigned int status = 3;
@@ -2094,8 +2090,6 @@ class CardProductWebViewHostObject final : public IDispatch {
             else if (member == kBeginMountAdoptedId) controller_.mount_container(id);
             else if (member == kBeginUnmountContainerId) controller_.unmount_container(id);
             else controller_.unmount();
-            if (force_exit && controller_.mounted())
-              throw std::runtime_error("forced exit cleanup left mounted containers");
             status = 2;
           }
         } catch (const std::system_error& error) {

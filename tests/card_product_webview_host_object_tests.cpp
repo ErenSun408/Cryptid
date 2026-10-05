@@ -2361,29 +2361,13 @@ void test_background_volume_operations() {
   require(no_args(L"unmount") == S_OK && no_args(L"beginForceUnmountForExit") == E_ACCESSDENIED,
           "mutation retained exit grant");
   work.arm_close_confirmation();
-  fixture.volume.pause_volume.store(true);
-  const int forces_before_exit = fixture.volume.manual_force_calls;
-  require(no_args(L"beginForceUnmountForExit") == S_OK && work.running.load(), "force exit worker rejected");
-  require(no_args(L"beginForceUnmountForExit") == E_PENDING, "duplicate force exit admitted");
-  fixture.volume.pause_volume.store(false);
-  wait_done();
-  require(status() == 2 && fixture.volume.manual_force_calls == forces_before_exit + 1 &&
-          fixture.volume.manual_force_id == 0, "force exit did not clean session scope");
-  require(no_args(L"beginForceUnmountForExit") == E_ACCESSDENIED, "force exit grant replayed");
-  work.arm_close_confirmation();
-  fixture.volume.volume_failure = std::make_error_code(std::errc::io_error);
-  require(no_args(L"beginForceUnmountForExit") == S_OK, "failure worker rejected");
-  wait_done();
-  fixture.volume.volume_failure.clear();
-  require(status() == 8 && no_args(L"beginForceUnmountForExit") == E_ACCESSDENIED,
-          "force exit failure fabricated success or retained grant");
   fixture.volume.mounted_state = true;
-  fixture.volume.retain_mount_after_force = true;
-  work.arm_close_confirmation();
-  require(no_args(L"beginForceUnmountForExit") == S_OK, "residual cleanup rejected");
-  wait_done();
-  require(status() == 3 && fixture.volume.mounted_state, "remaining mount reported successful exit cleanup");
-  fixture.volume.retain_mount_after_force = false;
+  const int forces_before_exit = fixture.volume.manual_force_calls;
+  require(no_args(L"beginForceUnmountForExit") == E_ACCESSDENIED,
+          "retired page force-exit route admitted an armed confirmation");
+  require(!work.running.load() && fixture.volume.mounted_state &&
+          fixture.volume.manual_force_calls == forces_before_exit,
+          "retired force-exit route touched the mounted volume");
 }
 
 void test_selected_batches_are_serial_bounded_and_session_scoped() {
@@ -2521,13 +2505,8 @@ void test_selected_batches_are_serial_bounded_and_session_scoped() {
   done();
   require(progress() == L"2,0,1,1,0,0", "new batch inherited stale progress");
   work.arm_close_confirmation();
-  fixture.volume.pause_volume.store(true);
-  require(no_args(L"beginForceUnmountForExit") == S_OK, "force exit after batch rejected");
-  require(no_args(L"getVolumeOperationStatus", &unused) == S_OK && unused.ulVal == 1,
-          "batch mode blocked force exit progress");
-  fixture.volume.pause_volume.store(false); done();
-  require(no_args(L"getVolumeOperationStatus", &unused) == S_OK && unused.ulVal == 2,
-          "force exit after batch failed");
+  require(no_args(L"beginForceUnmountForExit") == E_ACCESSDENIED && !work.running.load(),
+          "completed batch reopened the retired force-exit route");
   require(no_args(L"unmount") == S_OK && no_args(L"getBatchProgress", &unused) == E_UNEXPECTED,
           "another session action retained stale batch results");
   fixture.authentication.clear_authentication();
