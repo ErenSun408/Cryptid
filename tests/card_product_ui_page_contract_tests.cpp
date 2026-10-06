@@ -408,8 +408,8 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
   // guarantee: it is locked on because 8.4 treats the unmount as part of
   // deniability, so it must never be presented as something a user can turn
   // off. Tray closing and the shortcut are independent opt-in settings.
-  require(count_occurrences(settings, "role=\"switch\"") == 7 &&
-              count_occurrences(settings, "data-setting=\"") == 5 &&
+  require(count_occurrences(settings, "role=\"switch\"") == 8 &&
+              count_occurrences(settings, "data-setting=\"") == 6 &&
               settings.find("data-setting=\"close-to-tray\"") != std::string::npos &&
               settings.find("data-setting=\"operation-logging\" "
                             "aria-label=\"开启操作日志\"") != std::string::npos &&

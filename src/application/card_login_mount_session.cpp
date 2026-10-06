@@ -6,6 +6,7 @@
 #include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/application/container_layout_v1.h"
 #include "usb_vault/application/product_settings_v1.h"
+#include "usb_vault/application/container_file_visibility.h"
 #include "usb_vault/security/kdf_v1.h"
 #include "usb_vault/volume/unmount_retry.h"
 #include "usb_vault/volume/volume_entry_path.h"
@@ -275,6 +276,18 @@ class ProductionCardLoginMountSessionRuntime final
   }
   bool force_unmount_enabled() override {
     return product_preference_v1(product_settings_v1_default_path(), ProductPreference::force_unmount) != 0;
+  }
+  bool hide_new_file_containers() override {
+    return product_preference_v1(product_settings_v1_default_path(), ProductPreference::hide_file_containers) != 0;
+  }
+  void set_hide_new_file_containers(bool value) override {
+    set_product_preference_v1(product_settings_v1_default_path(), ProductPreference::hide_file_containers, value ? 1U : 0U);
+  }
+  bool container_file_hidden(std::wstring_view path) override {
+    return application::container_file_hidden(path);
+  }
+  void set_container_file_hidden(std::wstring_view path, bool hidden) override {
+    set_container_file_visibility(path, hidden);
   }
   unsigned int container_extension_preference() override {
     return product_preference_v1(product_settings_v1_default_path(), ProductPreference::container_extension);
@@ -858,6 +871,10 @@ bool CardLoginMountSession::operation_logging_enabled() {
   return impl_->core.operation_logging_enabled();
 }
 bool CardLoginMountSession::force_unmount_enabled() { return impl_->core.force_unmount_enabled(); }
+bool CardLoginMountSession::hide_new_file_containers() { return impl_->core.hide_new_file_containers(); }
+void CardLoginMountSession::set_hide_new_file_containers(bool value) { impl_->core.set_hide_new_file_containers(value); }
+bool CardLoginMountSession::container_file_hidden(std::uint32_t id) { return impl_->core.container_file_hidden(id); }
+void CardLoginMountSession::set_container_file_hidden(std::uint32_t id, bool hidden) { impl_->core.set_container_file_hidden(id, hidden); }
 unsigned int CardLoginMountSession::container_extension_preference() { return impl_->core.container_extension_preference(); }
 void CardLoginMountSession::set_container_extension_preference(unsigned int value) { impl_->core.set_container_extension_preference(value); }
 bool CardLoginMountSession::auto_mount_enabled() { return impl_->core.auto_mount_enabled(); }
@@ -1952,6 +1969,7 @@ std::uint32_t CardLoginMountSessionCore::create_container(
   SESSION_TRACE("开始创建文件安全盘", "路径 " + wide_text(path) + "；暂存路径 " +
                                         wide_text(staging_path) + "；容量 " + bytes_text(size_bytes));
   security::SecureBuffer volume_password;
+  const bool hide_file = runtime_.hide_new_file_containers();
   bool staging_owned = false;
   bool published = false;
   bool listed = false;
@@ -1968,6 +1986,8 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     throw_if_creation_cancelled(runtime_);
     if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == size_bytes) runtime_.creation_feedback(2, 100, 0);
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
+    if (hide_file) runtime_.set_container_file_hidden(staging_path, true);
+    throw_if_creation_cancelled(runtime_);
     runtime_.publish_created(staging_path, path);
     published = true;
     SESSION_TRACE("安全盘已发布", "路径 " + wide_text(path));
@@ -2076,6 +2096,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
   // the two the caller "really" uses. Both derivations are shared by every
   // container of this kind, so a second one costs no extra key material.
   security::SecureBuffer outer_password;
+  const bool hide_file = runtime_.hide_new_file_containers();
   bool staging_owned = false;
   bool published = false;
   bool listed = false;
@@ -2102,6 +2123,8 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     throw_if_creation_cancelled(runtime_);
     if (runtime_.creation_feedback && runtime_.container_size_if_present(staging_path) == outer_size_bytes) runtime_.creation_feedback(2, 100, 0);
     if (runtime_.creation_feedback) runtime_.creation_feedback(4, 0, 0);
+    if (hide_file) runtime_.set_container_file_hidden(staging_path, true);
+    throw_if_creation_cancelled(runtime_);
     runtime_.publish_created(staging_path, path);
     published = true;
     SESSION_TRACE("安全盘已发布", "路径 " + wide_text(path));
@@ -2942,6 +2965,31 @@ void CardLoginMountSessionCore::unmount_container_impl(
     }
   }
   throw std::invalid_argument("no container is adopted under that identifier");
+}
+
+bool CardLoginMountSessionCore::container_file_hidden(std::uint32_t id) {
+  if (!authentication_.authenticated()) throw std::logic_error("file visibility requires authentication");
+  const auto* entry = find_by_id(state_, id);
+  if (!entry) throw std::invalid_argument("unknown container");
+  if (entry->partition || entry->maintenance || entry->conversion_state) throw std::logic_error("file visibility unavailable");
+  const auto generation = authentication_.generation_;
+  const auto path = entry->path;
+  const bool hidden = runtime_.container_file_hidden(path);
+  if (!authentication_.authenticated() || authentication_.generation_ != generation) throw std::logic_error("file visibility session changed");
+  return hidden;
+}
+void CardLoginMountSessionCore::set_container_file_hidden(std::uint32_t id, bool hidden) {
+  if (!authentication_.authenticated() || partition_format_active_)
+    throw std::logic_error("file visibility requires an idle authenticated session");
+  const auto* entry = find_by_id(state_, id);
+  if (!entry) throw std::invalid_argument("unknown container");
+  if (entry->partition || entry->mounted || entry->maintenance || entry->conversion_state)
+    throw std::logic_error("file visibility requires an unmounted file container");
+  const auto generation = authentication_.generation_;
+  const auto path = entry->path;
+  runtime_.set_container_file_hidden(path, hidden);
+  if (!authentication_.authenticated() || authentication_.generation_ != generation)
+    throw std::logic_error("file visibility session changed");
 }
 
 void CardLoginMountSessionCore::rename_container(const std::uint32_t id, const std::wstring_view name) {

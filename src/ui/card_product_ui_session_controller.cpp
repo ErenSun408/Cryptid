@@ -890,6 +890,22 @@ bool CardProductUiSessionController::force_unmount_enabled() {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
   return volume_session_.force_unmount_enabled();
 }
+bool CardProductUiSessionController::hide_new_file_containers() {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("file visibility requires authentication");
+  return volume_session_.hide_new_file_containers();
+}
+void CardProductUiSessionController::set_hide_new_file_containers(bool value) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("file visibility requires authentication");
+  volume_session_.set_hide_new_file_containers(value);
+}
+bool CardProductUiSessionController::container_file_hidden(std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("file visibility requires authentication");
+  return volume_session_.container_file_hidden(id);
+}
+void CardProductUiSessionController::set_container_file_hidden(std::uint32_t id, bool hidden) {
+  if (state() != CardProductUiState::authenticated) throw_wrong_route("file visibility requires authentication");
+  volume_session_.set_container_file_hidden(id, hidden);
+}
 unsigned int CardProductUiSessionController::container_extension_preference() {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("preference requires authentication");
   const auto value = volume_session_.container_extension_preference();

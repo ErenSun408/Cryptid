@@ -22,7 +22,7 @@ constexpr std::wstring_view kSettingsFileName = L"settings.txt";
 constexpr std::string_view kRememberKey = "remember-container-paths=";
 constexpr std::string_view kMountImportedKey = "mount-imported-containers=";
 constexpr std::size_t kMaximumSettingsSize = 4096;
-constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size=", "auto-mount=", "close-to-tray=", "container-extension="};
+constexpr std::string_view kPreferenceKeys[] = {"force-unmount=", "operation-logging=", "window-size=", "auto-mount=", "close-to-tray=", "container-extension=", "hide-file-containers="};
 unsigned int preference_index(ProductPreference key) {
   const auto index = static_cast<unsigned int>(key);
   if (index >= std::size(kPreferenceKeys)) throw std::invalid_argument("unknown preference");
@@ -250,7 +250,7 @@ void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings sett
 
 unsigned int product_preference_v1(std::wstring_view path, ProductPreference key) {
   const auto index = preference_index(key);
-  const auto fallback = index == 0 || index == 3 || index == 4 || index == 5 ? 0U : 1U;
+  const auto fallback = index == 0 || index == 3 || index == 4 || index == 5 || index == 6 ? 0U : 1U;
   const auto content = read_settings(std::wstring(path));
   if (!content) return fallback;
   const auto prefix = kPreferenceKeys[index];

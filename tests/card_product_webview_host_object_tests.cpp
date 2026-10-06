@@ -94,6 +94,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
   bool logging_enabled{true};
   bool force_preference{};
+  bool file_hiding{};
+  bool container_file_hidden(std::uint32_t) override { return file_hiding; }
+  bool hide_new_file_containers() override { return file_hiding; }
+  void set_hide_new_file_containers(bool value) override {
+    if (extension_save_fails) throw std::runtime_error("settings write failed");
+    file_hiding = value;
+  }
+  std::uint32_t visibility_id{};
+  void set_container_file_hidden(std::uint32_t id, bool hidden) override { visibility_id = id; file_hiding = hidden; }
   unsigned int extension_preference{0};
   bool extension_save_fails{};
   unsigned int container_extension_preference() override { return extension_preference; }
@@ -1628,6 +1637,38 @@ void test_exit_hotkey_settings_bridge() {
       DISPATCH_METHOD, &none, &result, nullptr, nullptr)) && result.vt == VT_UI4 && result.ulVal == 66427,
       "shortcut readback incorrect");
   ::VariantClear(&result);
+}
+
+void test_file_visibility_bridge_guards() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work)), "visibility host failed");
+  VARIANTARG args[2]{};
+  args[0].vt = VT_BOOL; args[0].boolVal = VARIANT_TRUE;
+  args[1].vt = VT_UI4; args[1].ulVal = 7;
+  const auto invoke = [&](const wchar_t* name, UINT count) {
+    DISPPARAMS params{args, nullptr, count, 0};
+    return host->Invoke(member_id(*host.Get(), name), IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &params, nullptr, nullptr, nullptr);
+  };
+  require(invoke(L"setHideFileContainers", 1) == E_ACCESSDENIED && invoke(L"setContainerFileHidden", 2) == E_ACCESSDENIED, "unauthenticated visibility accepted");
+  VARIANT result{};
+  require(invoke_with_number(*host.Get(), L"getContainerFileHidden", 7, &result, nullptr) == E_ACCESSDENIED, "unauthenticated file state read accepted");
+  fixture.authentication.establish(root_secret());
+  require(invoke_with_number(*host.Get(), L"getContainerFileHidden", 7, &result, nullptr) == S_OK && result.vt == VT_BOOL && result.boolVal == VARIANT_FALSE, "file state readback failed");
+  ::VariantClear(&result);
+  require(invoke(L"setHideFileContainers", 1) == S_OK && fixture.volume.file_hiding, "visibility preference failed");
+  require(invoke(L"setContainerFileHidden", 2) == S_OK && fixture.volume.visibility_id == 7, "visibility id/boolean reversed");
+  args[0].vt = VT_I4;
+  require(invoke(L"setHideFileContainers", 1) == DISP_E_TYPEMISMATCH, "numeric boolean admitted");
+  args[0].vt = VT_BOOL;
+  args[1].ulVal = 0;
+  require(invoke(L"setContainerFileHidden", 2) == DISP_E_TYPEMISMATCH, "zero visibility id admitted");
+  fixture.volume.extension_save_fails = true;
+  require(invoke(L"setHideFileContainers", 1) == E_FAIL, "failed setting write fabricated success");
+  work.running.store(true);
+  args[1].ulVal = 8;
+  require(invoke(L"setContainerFileHidden", 2) == E_PENDING && fixture.volume.visibility_id == 7, "worker visibility mutation admitted");
 }
 
 void test_container_extension_preference_is_authenticated_and_bounded() {
@@ -4205,6 +4246,7 @@ int main() {
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();
+    test_file_visibility_bridge_guards();
     test_container_extension_preference_is_authenticated_and_bounded();
     test_operation_logging_setting_is_authenticated_and_boolean();
     test_background_creation_reports_progress_and_excludes_concurrent_calls();

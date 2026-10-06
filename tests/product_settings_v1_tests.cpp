@@ -1,4 +1,7 @@
 #include "usb_vault/application/product_settings_v1.h"
+#include "usb_vault/application/container_file_visibility.h"
+#include <fstream>
+#include <iterator>
 
 #include <Windows.h>
 
@@ -278,6 +281,55 @@ void test_exit_hotkey_settings() {
 }
 
 int main() {
+  {
+    using namespace usb_vault::application;
+    const TemporaryDirectory directory;
+    const auto path = directory.settings_path();
+    expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 0, "hiding default must be off");
+    set_product_preference_v1(path, ProductPreference::container_extension, 3);
+    set_product_preference_v1(path, ProductPreference::hide_file_containers, 1);
+    set_exit_hotkey_settings_v1(path, {true,123,3});
+    expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 1 &&
+           product_preference_v1(path, ProductPreference::container_extension) == 3, "hiding preference lost neighbors");
+    for (const auto text : {"hide-file-containers=2\n", "hide-file-containers=1\nhide-file-containers=0\n", "hide-file-containers=yes\n"}) {
+      write_raw(path, text);
+      expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 0, "invalid hiding preference must fall back off");
+    }
+    const auto file = (directory.root() / L"cache.sys").wstring();
+    write_raw(file, "ciphertext sentinel");
+    expect(::SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_READONLY), "set baseline attributes");
+    WIN32_FILE_ATTRIBUTE_DATA before{}, after{};
+    expect(::GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &before), "read baseline attributes");
+    for (const bool hidden : {true,true,false,false}) {
+      set_container_file_visibility(file, hidden);
+      expect(container_file_hidden(file) == hidden, "file visibility readback incorrect");
+      const DWORD expected = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_READONLY | (hidden ? FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM : 0);
+      expect(::GetFileAttributesW(file.c_str()) == expected, "hiding altered unrelated attributes");
+    }
+    expect(::GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &after) &&
+           ::CompareFileTime(&before.ftCreationTime, &after.ftCreationTime) == 0 &&
+           ::CompareFileTime(&before.ftLastWriteTime, &after.ftLastWriteTime) == 0, "hiding modified data timestamps");
+    std::ifstream input(std::filesystem::path(file), std::ios::binary);
+    const std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    expect(content == "ciphertext sentinel", "hiding changed file contents");
+    input.close();
+    const auto rejects = [&](std::wstring_view target) {
+      bool rejected = false;
+      try { set_container_file_visibility(target, true); } catch (...) { rejected = true; }
+      expect(rejected, "unsafe file visibility target accepted");
+    };
+    rejects(directory.root().wstring());
+    rejects((directory.root() / L"missing.sys").wstring());
+    rejects(L"relative.sys");
+    rejects(file + L":stream");
+    const auto link = (directory.root() / L"linked.sys").wstring();
+    expect(::CreateHardLinkW(link.c_str(), file.c_str(), nullptr), "create hard link fixture");
+    rejects(file);
+    expect(::SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL), "clear readonly hard link fixture");
+    expect(::DeleteFileW(link.c_str()), "remove hard link fixture");
+    expect(::SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL), "restore readonly fixture for cleanup");
+  }
+
   {
     using namespace usb_vault::application;
     const TemporaryDirectory directory;

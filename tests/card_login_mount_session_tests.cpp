@@ -156,6 +156,18 @@ void require(const bool condition, const char* const message) {
 
 class FakeRuntime final : public CardLoginMountSessionRuntime {
  public:
+  bool hiding_enabled{};
+  bool actual_hidden{};
+  bool container_file_hidden(std::wstring_view) override { return actual_hidden; }
+  bool hiding_fails{};
+  std::wstring visibility_path;
+  bool hide_new_file_containers() override { return hiding_enabled; }
+  void set_container_file_hidden(std::wstring_view path, bool hidden) override {
+    visibility_path = path;
+    events.emplace_back("file-attributes");
+    if (hiding_fails) throw std::runtime_error("attribute update failed");
+    actual_hidden = hidden;
+  }
   bool partition_mount_fail{};
   bool partition_pair{};
   std::function<void()> after_partition_mount;
@@ -1088,6 +1100,38 @@ void test_container_a_creation_requires_authentication_and_valid_size() {
       [&] { session.create_container_a(513); },
       "unaligned creation size was accepted");
   require(runtime.events.empty(), "invalid size reached the runtime");
+}
+
+void test_file_hiding_publication_and_session_guards() {
+  for (bool pair : {false, true}) for (bool fail : {false, true}) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    require_throws<std::logic_error>([&] { session.set_container_file_hidden(1, true); }, "unauthenticated visibility accepted");
+    establish_empty_authenticated_session(authentication, runtime, session);
+    runtime.hiding_enabled = true;
+    runtime.hiding_fails = fail;
+    const auto create = [&] {
+      return pair ? session.create_container_b(L"C:\\vault\\b.hc", 64ULL*1024*1024, 16ULL*1024*1024, bytes("decoy-password")) :
+                    session.create_container(L"C:\\vault\\plain.hc", 64ULL*1024*1024);
+    };
+    if (fail) {
+      require_throws<std::runtime_error>([&] { create(); }, "failed attributes published a container");
+      require(runtime.other_staging.empty() && runtime.other_existing.empty() && !session.mounted(), "failed attributes did not clean staging");
+      require(std::ranges::find(runtime.events, "publish:other") == runtime.events.end(), "failed attributes reached publish");
+    } else {
+      const auto id = create();
+      require(runtime.visibility_path.ends_with(L".preparing"), "attributes not applied to staging");
+      require(std::ranges::find(runtime.events, "file-attributes") < std::ranges::find(runtime.events, "publish:other"), "attributes applied after publication");
+      require_throws<std::logic_error>([&] { session.set_container_file_hidden(id, false); }, "mounted visibility mutation accepted");
+      require_throws<std::invalid_argument>([&] { session.set_container_file_hidden(9999, true); }, "unknown id accepted");
+      require(session.container_file_hidden(id), "mounted attribute readback failed");
+      session.unmount_container(id);
+      session.set_container_file_hidden(id, false);
+      require(!session.container_file_hidden(id), "unhide attribute readback failed");
+      require(!runtime.visibility_path.ends_with(L".preparing"), "existing file action used staging");
+    }
+  }
 }
 
 void test_container_a_creation_publishes_then_mounts() {
@@ -4476,6 +4520,7 @@ void test_a_mount_is_recorded_where_the_driver_put_it() {
   const std::uint32_t id = session.create_partition(target, [](const auto&) { return true; });
   session.unmount_container(id);
 
+  require_throws<std::logic_error>([&] { session.set_container_file_hidden(id, true); }, "partition accepted file visibility attributes");
   runtime.partition_lands_on = L'K';
   session.mount_adopted_container(id);
   const auto statuses = session.container_statuses();
@@ -4807,6 +4852,7 @@ int main() {
     test_unmount_state_is_precise_and_forced_order_is_b_then_a();
     test_card_removal_keeps_releasing_after_one_volume_fails();
     test_container_a_creation_requires_authentication_and_valid_size();
+    test_file_hiding_publication_and_session_guards();
     test_container_a_creation_publishes_then_mounts();
     test_container_a_creation_rejects_existing_targets();
     test_container_a_creation_cleans_prepublication_failures();

@@ -45,6 +45,10 @@ constexpr DISPID kReportPageEventId = 122;
 constexpr DISPID kBeginForceUnmountForExitId = 123;
 constexpr DISPID kDismissCloseConfirmationId = 124;
 constexpr DISPID kSetExitHotkeyCaptureId = 130;
+constexpr DISPID kGetFileHidingId = 133;
+constexpr DISPID kSetFileHidingId = 134;
+constexpr DISPID kSetContainerFileHiddenId = 135;
+constexpr DISPID kGetContainerFileHiddenId = 136;
 constexpr DISPID kGetContainerExtensionId = 131;
 constexpr DISPID kSetContainerExtensionId = 132;
 constexpr DISPID kGetExitHotkeyId = 125;
@@ -480,6 +484,10 @@ class PasswordArgumentsWiper final {
     case kSetExitHotkeyId: return "setExitHotkey";
     case kGetCloseToTrayId: return "getCloseToTrayEnabled";
     case kSetCloseToTrayId: return "setCloseToTrayEnabled";
+    case kGetContainerFileHiddenId: return "getContainerFileHidden";
+    case kGetFileHidingId: return "getHideFileContainers";
+    case kSetFileHidingId: return "setHideFileContainers";
+    case kSetContainerFileHiddenId: return "setContainerFileHidden";
     case kGetContainerExtensionId: return "getContainerExtension";
     case kSetContainerExtensionId: return "setContainerExtension";
     case kExportContainerEntryId: return "exportContainerEntry";
@@ -718,6 +726,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"setExitHotkey")) { ids[0] = kSetExitHotkeyId; return S_OK; }
     if (matches(names[0], L"getCloseToTrayEnabled")) { ids[0] = kGetCloseToTrayId; return S_OK; }
     if (matches(names[0], L"setCloseToTrayEnabled")) { ids[0] = kSetCloseToTrayId; return S_OK; }
+    if (matches(names[0], L"getContainerFileHidden")) { ids[0] = kGetContainerFileHiddenId; return S_OK; }
+    if (matches(names[0], L"getHideFileContainers")) { ids[0] = kGetFileHidingId; return S_OK; }
+    if (matches(names[0], L"setHideFileContainers")) { ids[0] = kSetFileHidingId; return S_OK; }
+    if (matches(names[0], L"setContainerFileHidden")) { ids[0] = kSetContainerFileHiddenId; return S_OK; }
     if (matches(names[0], L"getContainerExtension")) { ids[0] = kGetContainerExtensionId; return S_OK; }
     if (matches(names[0], L"setContainerExtension")) { ids[0] = kSetContainerExtensionId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
@@ -1069,6 +1081,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kCanResetCardRecordId: case kGetRememberContainerPathsId:
       case kGetMountImportedContainersId: case kGetOperationLoggingEnabledId:
       case kGetForcePreferenceId: case kGetWindowSizeId:
+      case kGetContainerFileHiddenId:
+      case kGetFileHidingId:
       case kGetContainerExtensionId:
       case kGetExitHotkeyId:
       case kGetCloseToTrayId:
@@ -1311,6 +1325,39 @@ class CardProductWebViewHostObject final : public IDispatch {
           }
           return S_OK;
         } catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
+      }
+      case kGetContainerFileHiddenId: {
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        if (!parameters || parameters->cNamedArgs || parameters->cArgs != 1 || !parameters->rgvarg) return DISP_E_BADPARAMCOUNT;
+        std::uint32_t id = 0;
+        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        if (!result) return E_POINTER;
+        try {
+          const bool hidden = controller_.container_file_hidden(id);
+          ::VariantInit(result); result->vt = VT_BOOL; result->boolVal = hidden ? VARIANT_TRUE : VARIANT_FALSE;
+          return S_OK;
+        } catch (...) { return E_FAIL; }
+      }
+      case kGetFileHidingId:
+      case kSetFileHidingId:
+      case kSetContainerFileHiddenId: {
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        const bool read = member == kGetFileHidingId;
+        const bool action = member == kSetContainerFileHiddenId;
+        if (!parameters || parameters->cNamedArgs || parameters->cArgs != (read ? 0U : action ? 2U : 1U) ||
+            (!read && !parameters->rgvarg)) return DISP_E_BADPARAMCOUNT;
+        std::uint32_t id = 0;
+        if (!read && parameters->rgvarg[0].vt != VT_BOOL) return DISP_E_TYPEMISMATCH;
+        if (action && (!exact_uint32(parameters->rgvarg[1], id) || !id)) return DISP_E_TYPEMISMATCH;
+        try {
+          if (read) {
+            if (!result) return E_POINTER;
+            ::VariantInit(result); result->vt = VT_BOOL;
+            result->boolVal = controller_.hide_new_file_containers() ? VARIANT_TRUE : VARIANT_FALSE;
+          } else if (action) controller_.set_container_file_hidden(id, parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+          else controller_.set_hide_new_file_containers(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
+          return S_OK;
+        } catch (...) { return E_FAIL; }
       }
       case kGetContainerExtensionId:
       case kSetContainerExtensionId: {

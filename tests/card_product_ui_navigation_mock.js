@@ -98,6 +98,10 @@ window.navigationFixture = {
       return true;
     },
     getForceUnmountEnabled: () => fixture.forceEnabled,
+    getHideFileContainers: () => fixture.hideFileContainers ?? false,
+    setHideFileContainers: value => { fixture.hideFileContainers = value; },
+    getContainerFileHidden: id => Boolean(fixture.containers.find(item => item.id === id)?.fileHidden),
+    setContainerFileHidden: (id, hidden) => { fixture.containers.find(item => item.id === id).fileHidden = hidden; },
     getContainerExtension: () => fixture.containerExtension ?? 0,
     setContainerExtension: value => { fixture.containerExtension = value; },
     setForceUnmountEnabled: (value) => {

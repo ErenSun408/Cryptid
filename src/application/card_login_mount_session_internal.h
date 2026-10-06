@@ -128,6 +128,10 @@ class CardLoginMountSessionRuntime {
   [[nodiscard]] virtual bool mount_imported_containers() = 0;
   virtual void set_mount_imported_containers(bool mount) = 0;
   virtual bool force_unmount_enabled() { return false; }
+  virtual bool hide_new_file_containers() { return false; }
+  virtual void set_hide_new_file_containers(bool) { throw std::logic_error("preferences unavailable"); }
+  virtual bool container_file_hidden(std::wstring_view) { throw std::logic_error("file visibility unavailable"); }
+  virtual void set_container_file_hidden(std::wstring_view, bool) { throw std::logic_error("file visibility unavailable"); }
   virtual unsigned int container_extension_preference() { return 0; }
   virtual void set_container_extension_preference(unsigned int) { throw std::logic_error("preferences unavailable"); }
   virtual bool auto_mount_enabled() { return false; }
@@ -345,6 +349,16 @@ class CardLoginMountSessionCore final {
     state_.operation_logging_enabled = enabled;
   }
   bool force_unmount_enabled() { return runtime_.force_unmount_enabled(); }
+  bool hide_new_file_containers() {
+    if (!authentication_.authenticated()) throw std::logic_error("preferences require authentication");
+    return runtime_.hide_new_file_containers();
+  }
+  void set_hide_new_file_containers(bool value) {
+    if (!authentication_.authenticated()) throw std::logic_error("preferences require authentication");
+    runtime_.set_hide_new_file_containers(value);
+  }
+  bool container_file_hidden(std::uint32_t id);
+  void set_container_file_hidden(std::uint32_t id, bool hidden);
   unsigned int container_extension_preference() { return runtime_.container_extension_preference(); }
   void set_container_extension_preference(unsigned int value) {
     if (value > 3) throw std::invalid_argument("invalid container extension preference");

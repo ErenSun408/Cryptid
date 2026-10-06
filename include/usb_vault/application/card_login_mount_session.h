@@ -496,6 +496,10 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void set_creation_revocation(CreationCancellation) {}
   [[nodiscard]] virtual bool operation_logging_enabled() { return true; }
   virtual bool force_unmount_enabled() { return false; }
+  virtual bool hide_new_file_containers() { return false; }
+  virtual void set_hide_new_file_containers(bool) { throw std::logic_error("preferences unavailable"); }
+  virtual bool container_file_hidden(std::uint32_t) { throw std::logic_error("file visibility unavailable"); }
+  virtual void set_container_file_hidden(std::uint32_t, bool) { throw std::logic_error("file visibility unavailable"); }
   virtual unsigned int container_extension_preference() { return 0; }
   virtual void set_container_extension_preference(unsigned int) { throw std::logic_error("preferences unavailable"); }
   virtual bool auto_mount_enabled() { return false; }
@@ -630,6 +634,10 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void set_creation_revocation(CreationCancellation revoked) override;
   [[nodiscard]] bool operation_logging_enabled() override;
   bool force_unmount_enabled() override;
+  bool hide_new_file_containers() override;
+  void set_hide_new_file_containers(bool value) override;
+  bool container_file_hidden(std::uint32_t id) override;
+  void set_container_file_hidden(std::uint32_t id, bool hidden) override;
   unsigned int container_extension_preference() override;
   void set_container_extension_preference(unsigned int value) override;
   void set_force_unmount_enabled(bool enabled) override;

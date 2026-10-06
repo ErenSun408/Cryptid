@@ -304,6 +304,10 @@ class CardProductUiSessionController final {
   void set_creation_revocation(application::CreationCancellation revoked);
   [[nodiscard]] bool operation_logging_enabled();
   bool force_unmount_enabled();
+  bool hide_new_file_containers();
+  void set_hide_new_file_containers(bool value);
+  bool container_file_hidden(std::uint32_t id);
+  void set_container_file_hidden(std::uint32_t id, bool hidden);
   unsigned int container_extension_preference();
   void set_container_extension_preference(unsigned int value);
   bool auto_mount_enabled();

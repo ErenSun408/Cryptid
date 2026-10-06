@@ -4352,6 +4352,7 @@
   // The name comes from a file the user picked, so it is only ever written as
   // text. Nothing on this row is built from markup.
   let expandedContainerId = 0;
+  const fileVisibility = new Map();
   let containerRename = null;
   let containerListPersistence = null;
 
@@ -4487,6 +4488,27 @@
     });
     input.focus();
     input.select();
+  };
+
+  const refreshFileVisibility = async (id) => {
+    if (currentState !== nativeState.authenticated) return;
+    const container = containers.find(item => item.id === id);
+    if (!container || container.partition || isMaintenanceContainer(id) || container.conversion) return;
+    const revision = batchSessionRevision;
+    const pending = { value: null, message: "正在读取…" };
+    fileVisibility.set(id, pending);
+    renderContainers();
+    try {
+      const hidden = await bridge.getContainerFileHidden(id);
+      if (typeof hidden !== "boolean") throw Error("invalid file visibility");
+      pending.value = hidden;
+      pending.message = hidden ? "已隐藏" : "未隐藏";
+    } catch (error) {
+      logCaughtPageError("getContainerFileHidden", error);
+      pending.message = "无法读取文件状态，请重新展开详情重试。";
+    }
+    if (revision !== batchSessionRevision || currentState !== nativeState.authenticated || fileVisibility.get(id) !== pending) return;
+    renderContainers();
   };
 
   const containerActionButton = (container, action, label, disabled = false) => {
@@ -4732,6 +4754,26 @@
       operations.className = "container-detail-actions";
       operations.appendChild(containerActionButton(container, "browse", "浏览文件"));
       operations.appendChild(containerActionButton(container, "export", "导出与迁移"));
+      if (!container.partition) {
+        const state = fileVisibility.get(container.id);
+        const row = document.createElement("div");
+        row.className = "container-file-visibility";
+        const label = document.createElement("label");
+        label.textContent = "隐藏文件";
+        const toggle = containerActionButton(container, "toggle-file-hidden", "", container.mounted || Boolean(container.conversion) || typeof state?.value !== "boolean");
+        toggle.id = `file-hidden-${container.id}`;
+        toggle.className = "settings-switch";
+        toggle.setAttribute("role", "switch");
+        toggle.setAttribute("aria-checked", typeof state?.value === "boolean" ? String(state.value) : "mixed");
+        toggle.setAttribute("aria-label", "隐藏文件");
+        label.htmlFor = toggle.id;
+        const status = document.createElement("output");
+        status.className = "creation-status";
+        status.setAttribute("aria-live", "polite");
+        status.textContent = container.mounted ? `${state?.message ?? "状态未读取"}；请先卸载再修改。` : state?.message ?? "正在读取…";
+        row.append(label, toggle, status);
+        operations.appendChild(row);
+      }
       panel.append(grid, operations);
       group.appendChild(panel);
     }
@@ -4896,6 +4938,7 @@
   };
 
   const render = (message, error = "") => {
+    if (currentState !== nativeState.authenticated) fileVisibility.clear();
     if (currentState !== nativeState.authenticated && partitionRows.length) discardPartitions();
     renderPartitions();
     appExitToggle.disabled = busy || currentState !== nativeState.authenticated;
@@ -5039,6 +5082,7 @@
   // refused or failed write cannot leave the page showing a setting that was
   // not saved.
   const storedSettings = [
+    { setting: "hide-file-containers", read: () => bridge.getHideFileContainers(), write: (value) => bridge.setHideFileContainers(value) },
     {
       setting: "close-to-tray",
       read: () => bridge.getCloseToTrayEnabled(),
@@ -5311,6 +5355,8 @@
     cardResetAvailable = nextResetAvailable;
     forgotAvailable = nextForgotAvailable;
     containers = nextContainers;
+    fileVisibility.clear();
+    if (expandedContainerId) await refreshFileVisibility(expandedContainerId);
     for (const id of decoyMounted.keys()) {
       if (!containers.some(item => item.id === id && item.mounted)) decoyMounted.delete(id);
     }
@@ -7187,7 +7233,50 @@
       }
       const id = Number(target.dataset.containerId);
       if (!Number.isInteger(id) || id <= 0 || isMaintenanceContainer(id)) return;
-      if (target.dataset.containerAction === "forget") {
+      if (target.dataset.containerAction === "toggle-file-hidden") {
+        const container = containers.find(item => item.id === id);
+        const state = fileVisibility.get(id);
+        if (!container || container.partition || container.mounted || container.conversion || typeof state?.value !== "boolean") return;
+        const revision = batchSessionRevision;
+        const hidden = !state.value;
+        busy = true;
+        target.setAttribute("aria-checked", String(hidden));
+        target.setAttribute("aria-disabled", "true");
+        const feedback = target.closest(".container-file-visibility")?.querySelector("output");
+        const isCurrent = () => revision === batchSessionRevision && currentState === nativeState.authenticated && fileVisibility.get(id) === state;
+        let failed = false;
+        try { await bridge.setContainerFileHidden(id, hidden); }
+        catch (error) { failed = true; logCaughtPageError("setContainerFileHidden", error); }
+        try {
+          if (isCurrent()) {
+            try {
+              const actual = await bridge.getContainerFileHidden(id);
+              if (typeof actual !== "boolean") throw Error("invalid file visibility");
+              if (isCurrent()) {
+                state.value = actual;
+                state.message = failed || actual !== hidden
+                  ? `修改失败；当前${actual ? "已隐藏" : "未隐藏"}。`
+                  : actual ? "已隐藏；资源管理器需开启隐藏受保护的操作系统文件。" : "已取消隐藏。";
+              }
+            } catch (error) {
+              logCaughtPageError("fileVisibilityReadback", error);
+              if (isCurrent()) {
+                state.value = null;
+                state.message = "无法确认文件状态，请重新展开详情重试。";
+              }
+            }
+          }
+        } finally {
+          busy = false;
+          if (isCurrent() && target.isConnected) {
+            target.setAttribute("aria-checked", typeof state.value === "boolean" ? String(state.value) : "mixed");
+            target.disabled = typeof state.value !== "boolean";
+            target.setAttribute("aria-disabled", String(target.disabled));
+            if (feedback) feedback.textContent = state.message;
+          }
+          if (externalRefreshPending) void refreshAfterExternalChange();
+        }
+      } else if (target.dataset.containerAction === "forget") {
         openForgetFlow(id, target.dataset.containerName ?? "");
       } else if (target.dataset.containerAction === "unmount") {
         await unmountAdoptedContainer(id);
@@ -7200,7 +7289,8 @@
       } else if (target.dataset.containerAction === "details") {
         expandedContainerId = expandedContainerId === id ? 0 : id;
         renderContainers();
-        list.querySelector(`[data-row-container="${id}"] [data-container-action="details"]`).focus();
+        if (expandedContainerId === id) await refreshFileVisibility(id);
+        list.querySelector(`[data-row-container="${id}"] [data-container-action="details"]`)?.focus();
       } else if (target.dataset.containerAction === "export") {
         showDashboardSection("backup");
       }
