@@ -703,6 +703,7 @@
       text-overflow: ellipsis; white-space: nowrap; height: 1.36rem; line-height: 1.36rem;
     }
     .container-state { margin-top: .15rem; font-size: .72rem; color: var(--text-3); }
+    .container-name[role="button"], .container-name[data-editing] { width: 140px; max-width: 100%; }
     .container-name[role="button"] { cursor: text; border-radius: .25rem; }
     .container-name[role="button"]:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
     .container-name[data-editing] { overflow: visible; }
@@ -824,7 +825,6 @@
        so a real blur would cost a compositing layer and show nothing. Layered
        translucency with a rim and an inner shadow reads the same here. */
     .container-file-visibility { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .container-file-visibility .creation-status { margin: 0; }
     .settings-switch {
       position: relative; flex: 0 0 auto; width: 2.4rem; height: 1.35rem; padding: 0;
       border: 1px solid var(--line-2); border-radius: 999px;
@@ -1706,7 +1706,7 @@
                       aria-label="拔出安全卡时立即卸载全部卷"></span>
               </div>
               <div class="settings-row">
-                <span class="settings-copy"><b>隐藏文件安全盘</b><small>仅新建生效；资源管理器需开启“隐藏受保护的操作系统文件”。</small></span>
+                <span class="settings-copy"><b>隐藏文件安全盘</b><small> （需开启“隐藏受保护的操作系统文件”）</small></span>
                 <button class="settings-switch" type="button" role="switch" aria-checked="false"
                         data-setting="hide-file-containers" aria-label="隐藏文件安全盘"></button>
               </div>

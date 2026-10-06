@@ -4495,19 +4495,19 @@
     const container = containers.find(item => item.id === id);
     if (!container || container.partition || isMaintenanceContainer(id) || container.conversion) return;
     const revision = batchSessionRevision;
-    const pending = { value: null, message: "正在读取…" };
+    const pending = { value: null };
     fileVisibility.set(id, pending);
     renderContainers();
     try {
       const hidden = await bridge.getContainerFileHidden(id);
       if (typeof hidden !== "boolean") throw Error("invalid file visibility");
       pending.value = hidden;
-      pending.message = hidden ? "已隐藏" : "未隐藏";
     } catch (error) {
       logCaughtPageError("getContainerFileHidden", error);
-      pending.message = "无法读取文件状态，请重新展开详情重试。";
+      pending.error = "无法读取文件状态，请重新展开详情重试。";
     }
     if (revision !== batchSessionRevision || currentState !== nativeState.authenticated || fileVisibility.get(id) !== pending) return;
+    if (pending.error) setDashboardStatus(pending.error, "error");
     renderContainers();
   };
 
@@ -4767,11 +4767,7 @@
         toggle.setAttribute("aria-checked", typeof state?.value === "boolean" ? String(state.value) : "mixed");
         toggle.setAttribute("aria-label", "隐藏文件");
         label.htmlFor = toggle.id;
-        const status = document.createElement("output");
-        status.className = "creation-status";
-        status.setAttribute("aria-live", "polite");
-        status.textContent = container.mounted ? `${state?.message ?? "状态未读取"}；请先卸载再修改。` : state?.message ?? "正在读取…";
-        row.append(label, toggle, status);
+        row.append(label, toggle);
         operations.appendChild(row);
       }
       panel.append(grid, operations);
@@ -7242,7 +7238,6 @@
         busy = true;
         target.setAttribute("aria-checked", String(hidden));
         target.setAttribute("aria-disabled", "true");
-        const feedback = target.closest(".container-file-visibility")?.querySelector("output");
         const isCurrent = () => revision === batchSessionRevision && currentState === nativeState.authenticated && fileVisibility.get(id) === state;
         let failed = false;
         try { await bridge.setContainerFileHidden(id, hidden); }
@@ -7254,15 +7249,14 @@
               if (typeof actual !== "boolean") throw Error("invalid file visibility");
               if (isCurrent()) {
                 state.value = actual;
-                state.message = failed || actual !== hidden
-                  ? `修改失败；当前${actual ? "已隐藏" : "未隐藏"}。`
-                  : actual ? "已隐藏；资源管理器需开启隐藏受保护的操作系统文件。" : "已取消隐藏。";
+                if (failed || actual !== hidden)
+                  setDashboardStatus(`修改失败；当前${actual ? "已隐藏" : "未隐藏"}。`, "error");
               }
             } catch (error) {
               logCaughtPageError("fileVisibilityReadback", error);
               if (isCurrent()) {
                 state.value = null;
-                state.message = "无法确认文件状态，请重新展开详情重试。";
+                setDashboardStatus("无法确认文件状态，请重新展开详情重试。", "error");
               }
             }
           }
@@ -7272,7 +7266,6 @@
             target.setAttribute("aria-checked", typeof state.value === "boolean" ? String(state.value) : "mixed");
             target.disabled = typeof state.value !== "boolean";
             target.setAttribute("aria-disabled", String(target.disabled));
-            if (feedback) feedback.textContent = state.message;
           }
           if (externalRefreshPending) void refreshAfterExternalChange();
         }

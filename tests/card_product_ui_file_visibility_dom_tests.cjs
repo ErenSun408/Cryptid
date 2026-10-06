@@ -56,18 +56,19 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 100));
       if (scenario === "read-failure") {
         assert.equal(button.disabled,true);
         assert.equal(button.getAttribute("aria-checked"),"mixed");
-        assert.match(d.querySelector(".container-file-visibility output").textContent,/无法读取/);
+        assert.match(d.getElementById("dashboard-status").textContent,/无法读取/);
         continue;
       }
       assert.equal(button.getAttribute("aria-checked"),scenario === "unhide" ? "true" : "false");
       if (scenario === "mounted") { assert.equal(button.disabled,true); button.click(); assert.equal(calls.length,0); continue; }
       const row = button.closest(".container-file-visibility");
-      const previousFeedback = row.querySelector("output").textContent;
+      assert.equal(row.querySelector("output"),null);
+      const previousFeedback = d.getElementById("dashboard-status").textContent;
       button.focus();
       button.click();
       assert.equal(button.isConnected,true);
       assert.equal(button.getAttribute("aria-checked"),scenario === "unhide" ? "false" : "true");
-      assert.equal(row.querySelector("output").textContent,previousFeedback);
+      assert.equal(d.getElementById("dashboard-status").textContent,previousFeedback);
       await settle();
       assert.deepEqual(calls,[[2,scenario !== "unhide"]]);
       if (["pending","session-change"].includes(scenario)) {
@@ -75,12 +76,12 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 100));
         assert.equal(button.disabled,false);
         assert.equal(button.getAttribute("aria-disabled"),"true");
         assert.equal(button.closest(".container-file-visibility"),row);
-        assert.equal(row.querySelector("output").textContent,previousFeedback);
+        assert.equal(d.getElementById("dashboard-status").textContent,previousFeedback);
         button.click(); assert.equal(calls.length,1);
         if (scenario === "session-change") { fixture.state = 2; w.dispatchEvent(new w.Event("usb-vault-session-changed")); await settle(); }
         release(); await settle();
       }
-      const status = d.querySelector(".container-file-visibility output")?.textContent ?? "";
+      const status = d.getElementById("dashboard-status").textContent;
       if (scenario === "session-change") assert.ok(!status.includes("已隐藏"));
       else if (scenario === "readback-failure") {
         const current = d.querySelector(`[data-container-id="2"][data-container-action="${action}"]`);
@@ -89,7 +90,8 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 100));
         assert.equal(current.getAttribute("aria-checked"),"mixed");
         assert.match(status,/无法确认/);
       } else {
-        assert.match(status,["failure","mismatch"].includes(scenario) ? /失败/ : scenario === "unhide" ? /取消隐藏/ : /已隐藏/);
+        if (["failure","mismatch"].includes(scenario)) assert.match(status,/失败/);
+        else assert.equal(status,previousFeedback);
         const current = d.querySelector(`[data-container-id="2"][data-container-action="${action}"]`);
         assert.equal(current.getAttribute("aria-checked"),scenario === "unhide" || ["failure","mismatch"].includes(scenario) ? "false" : "true");
         assert.equal(current.disabled,false);
