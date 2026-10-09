@@ -256,7 +256,7 @@ void test_second_card_password_rewrites_the_record_once() {
       secure_text("entry-daily-password"));
   source.record.blob.assign(initialized.bytes().begin(),
                             initialized.bytes().end());
-  CardEntryContextController controller(source);
+  CardEntryContextController controller(source, [] { return true; });
 
   controller.set_second_card_password(secure_text("entry-daily-password"),
                                       secure_text("entry-second-password"));
@@ -287,7 +287,7 @@ void test_initialization_retires_then_update_reinspects() {
   SecureBuffer marker =
       usb_vault::card::provision_uninitialized_card_record_v1();
   source.record.blob.assign(marker.bytes().begin(), marker.bytes().end());
-  CardEntryContextController controller(source);
+  CardEntryContextController controller(source, [] { return true; });
   require(controller.handle_arrival() ==
               CardEntryRoute::initialization_required,
           "a provisioning card did not route to initialization");

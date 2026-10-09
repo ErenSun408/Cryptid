@@ -6441,7 +6441,7 @@
     let confirmationBytes = null;
     busy = true;
     creationStatus.textContent =
-      "正在创建，随后写入安全卡并检查管理员会话。";
+      "请确认密码设置提示，随后开始创建安全盘。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     // Cleared with the passwords below for the same reason: nothing about a

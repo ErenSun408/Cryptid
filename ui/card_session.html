@@ -2146,7 +2146,7 @@
           <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
           <div class="creation-note" style="margin-top:.9rem">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
-            <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。</span>
+            <span>最多保留最近三次成功设置的密码，继续设置会循环替换旧密码。</span>
           </div>
         </div>
         <div id="creation-bitlocker" hidden>
@@ -2189,7 +2189,7 @@
     <div class="modal">
       <div class="modal-header"><h3 id="hidden-create-review-title">重要提醒</h3></div>
       <div class="modal-body">
-        <p>若您曾用本卡创建过含隐藏卷的安全盘，请务必确保当前诱饵密码与先前诱饵密码一致。诱饵密码不一致可能使本卡原有密码失效，导致此前安全盘中的数据永久无法访问。请务必确认后再继续。</p>
+        <p>最多保留最近三次成功设置的密码，继续设置会循环替换旧密码。旧密码失效后，可能无法再访问使用该密码的安全盘；新增密码不会替代已有安全盘的密码。每次成功设置都会计入，包括后续建盘失败后再次设置。</p>
         <label for="hidden-create-review-password">当前诱饵密码</label>
         <div class="password-field">
           <input id="hidden-create-review-password" class="creation-password" type="password" readonly autocomplete="off" spellcheck="false">
@@ -2199,7 +2199,7 @@
         </div>
         <label class="creation-check" for="create-container-b-acknowledge">
           <input id="create-container-b-acknowledge" type="checkbox">
-          <span>我已知悉诱饵密码不一致可能带来的永久性后果。</span>
+          <span>我已知悉循环替换旧密码及无法访问原有安全盘的风险。</span>
         </label>
       </div>
       <div class="modal-footer">

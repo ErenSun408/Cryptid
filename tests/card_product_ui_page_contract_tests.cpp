@@ -695,13 +695,13 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // 8.7.2: the wording is fixed and never adapts to who is logged in.
   require(page.find("为该安全盘设置诱饵密码") != std::string::npos &&
               page.find("再次输入诱饵密码") != std::string::npos &&
-              page.find("若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致") !=
+              page.find("最多保留最近三次成功设置的密码，继续设置会循环替换旧密码") !=
                   std::string::npos,
           "the second password prompt is not the fixed symmetric wording");
-  // The card holds two passwords at once, so creating this container drops
-  // whichever third one was recorded. That has to be acknowledged, and the
-  // acknowledgement reads the same under either login.
-  require(page.find("我已知悉诱饵密码不一致可能带来的永久性后果") != std::string::npos &&
+  // Every append has the same acknowledgement; it never identifies a slot or
+  // credential role, and a later volume failure does not roll back the append.
+  require(page.find("我已知悉循环替换旧密码及无法访问原有安全盘的风险") != std::string::npos &&
+              page.find("包括后续建盘失败后再次设置") != std::string::npos &&
               page.find("id=\"hidden-create-review\"") != std::string::npos &&
               page.find("创建这个安全盘会重写安全卡记录") == std::string::npos &&
               script.find("containerBAcknowledge.checked") !=

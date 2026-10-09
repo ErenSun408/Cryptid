@@ -39,8 +39,8 @@ namespace {
 }  // namespace
 
 CardEntryContextController::CardEntryContextController(
-    ICardEntryInspectionSource& source) noexcept
-    : source_(source) {}
+    ICardEntryInspectionSource& source, std::function<bool()> confirm_password_update) noexcept
+    : source_(source), confirm_password_update_(std::move(confirm_password_update)) {}
 
 CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
   entry_format_ = card::CardProductRecordState::malformed;
@@ -126,26 +126,30 @@ void CardEntryContextController::set_second_card_password(
   // later record update starts from a new read-only inspection and binds its
   // write target to the card that is physically present at that moment.
   route_ = CardEntryRoute::unavailable;
+  entry_format_ = card::CardProductRecordState::malformed;
   context_.reset();
   std::unique_ptr<IReadOnlyCardEntryInspection> context;
   std::unique_ptr<card::ICardUpdateTarget> target;
   try {
     context = source_.inspect_inserted_card();
-    if (!context || CardEntryRouter::route(*context) !=
+    auto format = card::CardProductRecordState::malformed;
+    if (!context || CardEntryRouter::route(*context, nullptr, &format) !=
                         CardEntryRoute::login_required) {
       throw std::system_error(
           card::make_error_code(card::CardError::invalid_operation),
           "card record update requires a fresh initialized insertion");
     }
-    target = source_.make_update_target(*context);
+    target = source_.make_password_update_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),
           "card adapter cannot update this insertion");
     }
-    card::CardRecordService service(target->card_store());
-    service.set_second_password(std::move(existing_password_utf8),
-                                std::move(second_password_utf8));
+    if (target->record_format() != format) {
+      throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
+    }
+    target->append_password(std::move(existing_password_utf8),
+                           std::move(second_password_utf8), confirm_password_update_);
   } catch (...) {
     existing_password_utf8.clear();
     second_password_utf8.clear();

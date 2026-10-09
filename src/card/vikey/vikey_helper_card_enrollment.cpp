@@ -5,7 +5,9 @@
 #include "card/vikey/vikey_helper_card_enrollment.h"
 
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/card/card_record_v2.h"
 
+#include <algorithm>
 #include <system_error>
 #include <utility>
 
@@ -133,6 +135,49 @@ class JournalInitializationTarget final : public ICardInitializationTarget {
   bool attempted_{};
 };
 
+class JournalUpdateTarget final : public ICardUpdateTarget {
+ public:
+  JournalUpdateTarget(std::unique_ptr<IVikeyCardJournalTransport> transport,
+      CardProductRecordState format)
+      : transport_(std::move(transport)), store_(*transport_), format_(format) {}
+  CardProductRecordState record_format() const noexcept override { return format_; }
+  void append_password(security::SecureBuffer existing, security::SecureBuffer password,
+      const std::function<bool()>& confirm) override {
+    CardOperationLease lease;
+    if (attempted_ || existing.empty() || password.empty() || !confirm)
+      throw std::system_error(make_error_code(CardError::invalid_operation));
+    attempted_ = true;
+    if (std::ranges::equal(existing.bytes(), password.bytes()))
+      throw std::invalid_argument("new password must differ from current password");
+    const auto duplicate = [](const security::SecureBuffer& value) {
+      security::SecureBuffer result(value.size());
+      std::ranges::copy(value.bytes(), result.bytes().begin());
+      return result;
+    };
+    security::SecureBuffer record, root;
+    if (format_ == CardProductRecordState::initialized_v1) {
+      record = store_.snapshot_legacy();
+      root = unlock_card_record_v1(record.bytes(), duplicate(existing));
+      auto upgrade = store_.prepare_upgrade(record.bytes(), duplicate(existing));
+      if (!confirm()) throw std::system_error(make_error_code(CardError::invalid_operation));
+      store_.commit_upgrade(std::move(upgrade));
+      record = store_.snapshot();
+    } else {
+      record = store_.snapshot();
+      root = unlock_card_record_v2(record.bytes(), duplicate(existing));
+    }
+    auto replacement = append_card_password_v2(record.bytes(), std::move(existing), std::move(password));
+    if (format_ == CardProductRecordState::initialized_v2 && !confirm())
+      throw std::system_error(make_error_code(CardError::invalid_operation));
+    store_.commit(record.bytes(), replacement.bytes(), root);
+  }
+ private:
+  std::unique_ptr<IVikeyCardJournalTransport> transport_;
+  VikeyCardJournalStore store_;
+  CardProductRecordState format_;
+  bool attempted_{};
+};
+
 }  // namespace
 
 VikeyHelperCardEnrollment::VikeyHelperCardEnrollment(
@@ -233,8 +278,18 @@ std::unique_ptr<ICardUpdateTarget>
 VikeyHelperCardEnrollment::make_update_target(
     const application::IReadOnlyCardEntryInspection& context) {
   const auto& insertion = require_context(context);
-  return std::make_unique<VikeyHelperCardUpdateTarget>(
-      config_, credential_provider_, insertion.probe());
+  return std::make_unique<VikeyHelperCardUpdateTarget>(config_, credential_provider_, insertion.probe());
+}
+
+std::unique_ptr<ICardUpdateTarget>
+VikeyHelperCardEnrollment::make_password_update_target(
+    const application::IReadOnlyCardEntryInspection& context) {
+  const auto& insertion = require_context(context);
+  const auto format = insertion.journal_state_.value_or(
+      product_state_from_legacy(insertion.probe().logical_state.value_or(CardRecordState::malformed)));
+  if (format != CardProductRecordState::initialized_v1 && format != CardProductRecordState::initialized_v2)
+    throw std::system_error(make_error_code(CardError::invalid_configuration));
+  return std::make_unique<JournalUpdateTarget>(transport(insertion.probe().hardware_id), format);
 }
 
 std::unique_ptr<application::ICardOperationLease>

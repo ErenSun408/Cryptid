@@ -359,7 +359,7 @@ void test_login_update_uses_a_fresh_inspection(
     const InitializedCardRecordV1& initialized) {
   FakeSource source;
   source.state.record = copy_bytes(initialized.record.bytes());
-  CardEntryContextController controller(source);
+  CardEntryContextController controller(source, [] { return true; });
   source.state.controller = &controller;
   RecordingConsumer consumer(controller);
   require(controller.handle_arrival() == CardEntryRoute::login_required,

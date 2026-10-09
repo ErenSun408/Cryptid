@@ -560,7 +560,15 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
           std::move(config),
           *credential_provider);
   auto entry = std::make_unique<
-      usb_vault::application::CardEntryContextController>(*enrollment);
+      usb_vault::application::CardEntryContextController>(*enrollment, [window] {
+        const auto epoch = g_creation_work.card_epoch.load();
+        const bool accepted = ::MessageBoxW(window,
+            L"最多保留最近三次成功设置的密码，继续设置会循环替换旧密码。\n旧双槽卡将先升级，保留原有密码和根密钥；升级后旧版程序不能使用此卡。\n是否继续？",
+            kWindowTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+        return accepted && ::IsWindow(window) && !g_creation_work.interrupted.load() &&
+            !g_creation_work.cancellation_requested() &&
+            g_creation_work.card_epoch.load() == epoch;
+      });
   auto authentication = std::make_unique<
       usb_vault::application::CardAuthenticationSession>();
   auto volume_session = std::make_unique<

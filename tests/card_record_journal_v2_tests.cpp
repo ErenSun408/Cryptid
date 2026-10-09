@@ -925,6 +925,111 @@ void test_enrollment_initialization_composition(const Memory& base) {
   }
 }
 
+void test_product_password_ring(const InitializedCardRecordV2& initial, const Memory& base) {
+  namespace app = usb_vault::application;
+  NoCredentials credentials;
+  EnrollmentIo io(base);
+  vikey::VikeyHelperCardEnrollment source({}, credentials, &io);
+  int confirmations = 0;
+  app::CardEntryContextController controller(source, [&] { ++confirmations; return true; });
+  for (std::size_t added = 1; added < kPasswords.size(); ++added) {
+    controller.set_second_card_password(text(kPasswords[added < 4 ? 0 : 1]), text(kPasswords[added]));
+    expect(confirmations == static_cast<int>(added) && !controller.has_context(),
+        "append did not consume exactly one confirmation and context");
+    vikey::VikeyCardJournalStore store(io.media);
+    auto record = store.snapshot();
+    for (std::size_t password = 0; password <= added; ++password) {
+      if (password + 3 <= added) {
+        rejects<CardCredentialRejected>([&] { static_cast<void>(unlock_card_record_v2(record.bytes(), text(kPasswords[password]))); },
+            "product append retained an evicted credential");
+      } else {
+        auto root = unlock_card_record_v2(record.bytes(), text(kPasswords[password]));
+        expect(same(root.bytes(), initial.root_secret.bytes()), "product append changed the card root");
+      }
+    }
+    io.media.media.sentinel();
+  }
+}
+
+void test_product_update_rejections(const Memory& base) {
+  namespace app = usb_vault::application;
+  NoCredentials credentials;
+  for (int scenario = 0; scenario < 7; ++scenario) {
+    EnrollmentIo io(base);
+    vikey::VikeyHelperCardEnrollment source({}, credentials, &io);
+    int confirmations = 0;
+    const auto confirm = [&] {
+      ++confirmations;
+      if (scenario == 3) io.actual_id = 2;
+      if (scenario == 4) io.media.media.data[1040 + 383] ^= std::byte{1};
+      if (scenario == 5) io.media.media.cut_write = 0;
+      return scenario != 0;
+    };
+    app::CardEntryContextController controller(source,
+        scenario == 6 ? std::function<bool()>{} : std::function<bool()>(confirm));
+    bool rejected = false;
+    try {
+      controller.set_second_card_password(text(scenario == 2 ? "wrong-password" : kPasswords[0]),
+          text(scenario == 1 ? kPasswords[0] : kPasswords[1]));
+    } catch (const std::exception&) { rejected = true; }
+    expect(rejected && !controller.has_context() && io.media.media.writes == (scenario == 5 ? 1U : 0U),
+        "cancelled, invalid, stale, swapped, or torn update continued writing");
+    expect(confirmations == (scenario == 1 || scenario == 2 || scenario == 6 ? 0 : 1),
+        "invalid password or missing callback reached confirmation");
+    io.media.media.sentinel();
+  }
+  EnrollmentIo repeated(base);
+  vikey::VikeyHelperCardEnrollment source({}, credentials, &repeated);
+  auto context = source.inspect_entry();
+  auto target = source.make_password_update_target(*context);
+  rejects<std::system_error>([&] { target->append_password(text(kPasswords[0]), text(kPasswords[1]), [] { return false; }); },
+      "cancelled direct target succeeded");
+  rejects<std::system_error>([&] { target->append_password(text(kPasswords[0]), text(kPasswords[1]), [] { return true; }); },
+      "consumed direct target was reused");
+  expect(repeated.media.media.writes == 0, "replayed cancelled target wrote card");
+}
+
+void test_product_legacy_upgrade_and_append() {
+  namespace app = usb_vault::application;
+  NoCredentials credentials;
+  for (const bool two_passwords : {false, true}) {
+    auto initial = initialize_card_record_and_root_v1(text(kPasswords[0]));
+    auto legacy = two_passwords
+        ? rewrap_card_record_v1(initial.record.bytes(), text(kPasswords[0]), text(kPasswords[1]), text(kPasswords[0]))
+        : copy(initial.record.bytes());
+    Memory storage;
+    auto marker = provision_uninitialized_card_record_v1();
+    provision_card_record_journal_v1(storage, marker.bytes());
+    commit_card_record_journal_v1(storage, legacy.bytes());
+    storage.online();
+    EnrollmentIo io(storage);
+    io.observed.logical_state = CardRecordState::initialized_v1;
+    vikey::VikeyHelperCardEnrollment source({}, credentials, &io);
+    app::CardEntryContextController cancelled(source, [] { return false; });
+    const auto before = io.media.media.data;
+    rejects<std::system_error>([&] { cancelled.set_second_card_password(text(kPasswords[0]), text(kPasswords[2])); },
+        "cancelled upgrade succeeded");
+    expect(io.media.media.data == before && io.media.media.writes == 0,
+        "upgrade preparation or cancellation changed old credentials");
+    int confirmations = 0;
+    app::CardEntryContextController controller(source, [&] { ++confirmations; return true; });
+    controller.set_second_card_password(text(kPasswords[0]), text(kPasswords[2]));
+    expect(confirmations == 1 && !controller.has_context(), "upgrade and append used multiple confirmations");
+    vikey::VikeyCardJournalStore store(io.media);
+    auto record = store.snapshot();
+    expect(same(record.bytes().subspan(32, 64), legacy.bytes().first(64)) &&
+        same(record.bytes().subspan(96, 152), legacy.bytes().subspan(64)),
+        "product upgrade replaced retained legacy context or envelopes");
+    for (const auto password : {kPasswords[0], kPasswords[2]}) {
+      expect(same(unlock_card_record_v2(record.bytes(), text(password)).bytes(), initial.root_secret.bytes()),
+          "upgrade and append changed root or lost password");
+    }
+    if (two_passwords) expect(same(unlock_card_record_v2(record.bytes(), text(kPasswords[1])).bytes(), initial.root_secret.bytes()),
+        "product upgrade lost the second legacy password");
+    io.media.media.sentinel();
+  }
+}
+
 } // namespace
 
 int main() {
@@ -945,6 +1050,9 @@ int main() {
     test_v2_login_target(initial, base);
     test_enrollment_login_composition(initial, base);
     test_enrollment_initialization_composition(base);
+    test_product_password_ring(initial, base);
+    test_product_update_rejections(base);
+    test_product_legacy_upgrade_and_append();
     std::cout << "card_record_journal_v2_tests: PASS (10 scenario groups)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

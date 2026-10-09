@@ -411,7 +411,7 @@ void CardProductUiSessionController::create_container_b(
   const std::wstring path = resolve_target_path(directory, name, outer_size_bytes, container_extension_preference());
 
   // The page no longer asks for the password the session was opened under:
-  // the session still holds it, and which of the two it is stays unknown here
+  // the session still holds it, and its credential slot stays unknown here
   // exactly as it is there.
   security::SecureBuffer login = volume_session_.copy_session_password();
   SecureBufferGuard login_guard(login);
@@ -427,9 +427,8 @@ void CardProductUiSessionController::create_container_b(
           .take();
   SecureBufferGuard second_guard(second);
 
-  // The card record is committed next. A volume that exists but cannot be
-  // opened with the second password would block every retry, while a second
-  // password that opens nothing yet is harmless and can be set again.
+  // Append before creating the volume. A later creation failure does not undo
+  // the card commit; a user-confirmed retry consumes another append opportunity.
   entry_.set_second_card_password(duplicate(login), duplicate(second));
   static_cast<void>(volume_session_.create_container_b(
       path, outer_size_bytes,
@@ -460,7 +459,7 @@ void CardProductUiSessionController::create_partition_pair(
     throw std::invalid_argument("invalid partition pair target or size");
 
   // The page no longer asks for the password the session was opened under:
-  // the session still holds it, and which of the two it is stays unknown here
+  // the session still holds it, and its credential slot stays unknown here
   // exactly as it is there.
   security::SecureBuffer login = volume_session_.copy_session_password();
   SecureBufferGuard login_guard(login);
@@ -476,9 +475,8 @@ void CardProductUiSessionController::create_partition_pair(
           .take();
   SecureBufferGuard second_guard(second);
 
-  // The card record is committed next. A volume that exists but cannot be
-  // opened with the second password would block every retry, while a second
-  // password that opens nothing yet is harmless and can be set again.
+  // Append before creating the volume. A later creation failure does not undo
+  // the card commit; a user-confirmed retry consumes another append opportunity.
   entry_.set_second_card_password(duplicate(login), duplicate(second));
   static_cast<void>(volume_session_.create_partition_pair(target, hidden_bytes, second, confirm));
 }

@@ -63,6 +63,11 @@ class ICardEntryInspectionSource {
     return nullptr;
   }
 
+  [[nodiscard]] virtual std::unique_ptr<card::ICardUpdateTarget>
+  make_password_update_target(const IReadOnlyCardEntryInspection& context) {
+    return make_update_target(context);
+  }
+
   [[nodiscard]] virtual std::unique_ptr<card::ICardResetTarget>
   make_reset_target(const IReadOnlyCardEntryInspection&) { return nullptr; }
 
@@ -119,7 +124,8 @@ class ICardEntryActions {
 class CardEntryContextController final : public ICardEntryActions {
  public:
   explicit CardEntryContextController(
-      ICardEntryInspectionSource& source) noexcept;
+      ICardEntryInspectionSource& source,
+      std::function<bool()> confirm_password_update = {}) noexcept;
 
   [[nodiscard]] CardEntryRoute handle_arrival() noexcept;
   void handle_removal() noexcept;
@@ -163,6 +169,7 @@ class CardEntryContextController final : public ICardEntryActions {
 
  private:
   ICardEntryInspectionSource& source_;
+  std::function<bool()> confirm_password_update_;
   std::unique_ptr<IReadOnlyCardEntryInspection> context_;
   std::optional<CardEntryRoute> route_;
   card::FailureDiagnostic startup_failure_{};
