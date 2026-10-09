@@ -1,5 +1,7 @@
 #include "usb_vault/card/card_record_v1.h"
 
+#include "card/card_record_crypto.h"
+
 #include "security/argon2id_runtime.h"
 
 #include <Windows.h>
@@ -521,4 +523,173 @@ rewrap_card_record_v1(const std::span<const std::byte> record,
   }
 }
 
+namespace detail {
+namespace {
+
+[[nodiscard]] security::SecureBuffer context_record(
+    const std::span<const std::byte> context) {
+  if (context.size() != kCardRecordV1HeaderSize) {
+    throw std::invalid_argument("invalid card authentication context length");
+  }
+  security::SecureBuffer record(kCardRecordV1Size);
+  std::ranges::copy(context, record.bytes().begin());
+  if (inspect_card_record(record.bytes()) != CardRecordState::initialized_v1) {
+    throw std::invalid_argument("invalid card authentication context");
+  }
+  return record;
+}
+
+void validate_slot(const std::byte slot) {
+  if (std::to_integer<unsigned int>(slot) >= 3U) {
+    throw std::invalid_argument("invalid card envelope slot");
+  }
+}
+
+} // namespace
+
+void fill_card_random(const std::span<std::byte> destination) {
+  fill_random(destination);
+}
+
+security::SecureBuffer make_card_context_v1() {
+  security::SecureBuffer context(kCardRecordV1HeaderSize);
+  write_header(context.bytes());
+  return context;
+}
+
+security::SecureBuffer derive_card_master_v1(
+    const security::SecureBuffer& password,
+    const std::span<const std::byte> context) {
+  const auto record = context_record(context);
+  return derive_master_key(password, record.bytes());
+}
+
+void encrypt_card_envelope_v1(const std::span<const std::byte> context,
+    const std::byte slot, const security::SecureBuffer& root,
+    const security::SecureBuffer& password,
+    const std::span<std::byte> destination) {
+  validate_slot(slot);
+  if (root.size() != kCardRecordV1RootSecretSize ||
+      destination.size() != kCardRecordV1EnvelopeSize) {
+    throw std::invalid_argument("invalid card envelope dimensions");
+  }
+  auto record = context_record(context);
+  encrypt_envelope(record.bytes(), kCardRecordV1HeaderSize, slot, root, password);
+  std::ranges::copy(record.bytes().subspan(kCardRecordV1HeaderSize,
+      kCardRecordV1EnvelopeSize), destination.begin());
+}
+
+CardEnvelopeResult decrypt_card_envelope_v1(
+    const std::span<const std::byte> context, const std::byte slot,
+    const security::SecureBuffer& master,
+    const std::span<const std::byte> envelope) {
+  validate_slot(slot);
+  if (master.size() != kMasterKeySize ||
+      envelope.size() != kCardRecordV1EnvelopeSize) {
+    throw std::invalid_argument("invalid card envelope dimensions");
+  }
+  auto record = context_record(context);
+  std::ranges::copy(envelope,
+      record.bytes().begin() + kCardRecordV1HeaderSize);
+  auto result = decrypt_envelope(record.bytes(), kCardRecordV1HeaderSize,
+      slot, master);
+  return {.authenticated = result.authenticated,
+          .root_secret = std::move(result.root_secret)};
+}
+
+security::SecureBuffer derive_card_ring_metadata_key_v2(
+    const security::SecureBuffer& root,
+    const std::span<const std::byte> context) {
+  if (root.size() != kCardRecordV1RootSecretSize) {
+    throw std::invalid_argument("invalid card metadata root size");
+  }
+  const auto record = context_record(context);
+  constexpr std::string_view domain = "usb-vault:card-ring-metadata:v2";
+  const auto algorithm = open_sha256_hmac();
+  security::SecureBuffer object(object_length(algorithm.get()));
+  HashHandle hash;
+  require_success(::BCryptCreateHash(algorithm.get(), hash.put(),
+      mutable_bytes(object), checked_ulong(object.size()), mutable_bytes(root),
+      checked_ulong(root.size()), 0), "create card metadata HMAC");
+  require_success(::BCryptHashData(hash.get(),
+      mutable_bytes(std::as_bytes(std::span(domain.data(), domain.size()))),
+      checked_ulong(domain.size()), 0), "hash card metadata domain");
+  require_success(::BCryptHashData(hash.get(),
+      mutable_bytes(record.bytes().subspan(kRecordIdOffset, kRecordIdSize)),
+      checked_ulong(kRecordIdSize), 0), "hash card metadata record identity");
+  security::SecureBuffer result(32);
+  require_success(::BCryptFinishHash(hash.get(), mutable_bytes(result),
+      checked_ulong(result.size()), 0), "finish card metadata HMAC");
+  return result;
+}
+
+void seal_card_aead(const security::SecureBuffer& key_bytes,
+    const std::span<const std::byte> plaintext,
+    const std::span<const std::byte> aad,
+    const std::span<std::byte> destination) {
+  if (key_bytes.size() != 32 || destination.size() < kNonceSize + kTagSize ||
+      plaintext.size() != destination.size() - kNonceSize - kTagSize ||
+      plaintext.empty()) {
+    throw std::invalid_argument("invalid card AEAD dimensions");
+  }
+  auto ciphertext = destination.subspan(kNonceSize, plaintext.size());
+  auto tag = destination.last(kTagSize);
+  fill_random(destination.first(kNonceSize));
+  const auto algorithm = open_aes_gcm();
+  const SymmetricKey key(algorithm.get(), key_bytes);
+  BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authentication{};
+  BCRYPT_INIT_AUTH_MODE_INFO(authentication);
+  authentication.pbNonce = mutable_bytes(destination.first(kNonceSize));
+  authentication.cbNonce = checked_ulong(kNonceSize);
+  authentication.pbAuthData = mutable_bytes(aad);
+  authentication.cbAuthData = checked_ulong(aad.size());
+  authentication.pbTag = mutable_bytes(tag);
+  authentication.cbTag = checked_ulong(tag.size());
+  ULONG written = 0;
+  require_success(::BCryptEncrypt(key.get(), mutable_bytes(plaintext),
+      checked_ulong(plaintext.size()), &authentication, nullptr, 0,
+      mutable_bytes(ciphertext), checked_ulong(ciphertext.size()), &written, 0),
+      "encrypt card metadata");
+  if (written != plaintext.size()) {
+    throw std::runtime_error("invalid card metadata ciphertext length");
+  }
+}
+
+CardAeadResult open_card_aead(const security::SecureBuffer& key_bytes,
+    const std::span<const std::byte> envelope,
+    const std::span<const std::byte> aad) {
+  if (key_bytes.size() != 32 || envelope.size() <= kNonceSize + kTagSize) {
+    throw std::invalid_argument("invalid card AEAD dimensions");
+  }
+  const auto ciphertext = envelope.subspan(kNonceSize,
+      envelope.size() - kNonceSize - kTagSize);
+  const auto algorithm = open_aes_gcm();
+  const SymmetricKey key(algorithm.get(), key_bytes);
+  CardAeadResult result{.plaintext = security::SecureBuffer(ciphertext.size())};
+  BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authentication{};
+  BCRYPT_INIT_AUTH_MODE_INFO(authentication);
+  authentication.pbNonce = mutable_bytes(envelope.first(kNonceSize));
+  authentication.cbNonce = checked_ulong(kNonceSize);
+  authentication.pbAuthData = mutable_bytes(aad);
+  authentication.cbAuthData = checked_ulong(aad.size());
+  authentication.pbTag = mutable_bytes(envelope.last(kTagSize));
+  authentication.cbTag = checked_ulong(kTagSize);
+  ULONG written = 0;
+  const NTSTATUS status = ::BCryptDecrypt(key.get(), mutable_bytes(ciphertext),
+      checked_ulong(ciphertext.size()), &authentication, nullptr, 0,
+      mutable_bytes(result.plaintext), checked_ulong(result.plaintext.size()),
+      &written, 0);
+  if (status == kStatusAuthTagMismatch) {
+    result.plaintext.clear();
+    return result;
+  }
+  require_success(status, "decrypt card metadata");
+  if (written != result.plaintext.size()) {
+    throw std::runtime_error("invalid card metadata plaintext length");
+  }
+  result.authenticated = true;
+  return result;
+}
+
+} // namespace detail
 } // namespace usb_vault::card
