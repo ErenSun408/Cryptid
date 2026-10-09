@@ -143,6 +143,45 @@ security::SecureBuffer upgrade_card_record_v1_to_v2(
   return result;
 }
 
+security::SecureBuffer append_card_password_v2(
+    const std::span<const std::byte> record,
+    security::SecureBuffer existing_password_utf8,
+    security::SecureBuffer new_password_utf8) {
+  // Keep the original solely to compare against the known current credential;
+  // the new input is not probed against any unknown credential slot.
+  security::SecureBuffer authentication_password(existing_password_utf8.size());
+  std::ranges::copy(existing_password_utf8.bytes(),
+      authentication_password.bytes().begin());
+  auto authenticated = detail::authenticate_card_record_v2(record,
+      std::move(authentication_password));
+  unsigned int equal = static_cast<unsigned int>(
+      existing_password_utf8.size() == new_password_utf8.size());
+  unsigned int difference = 0;
+  if (equal != 0U) {
+    for (std::size_t i = 0; i < existing_password_utf8.size(); ++i) {
+      difference |= std::to_integer<unsigned int>(
+          existing_password_utf8.bytes()[i] ^ new_password_utf8.bytes()[i]);
+    }
+    equal &= static_cast<unsigned int>(difference == 0U);
+  }
+  existing_password_utf8.clear();
+  if (equal != 0U) {
+    throw std::invalid_argument("new password must differ from current password");
+  }
+  security::SecureBuffer result(kCardRecordV2Size);
+  std::ranges::copy(record, result.bytes().begin());
+  detail::encrypt_card_envelope_v1(context_of(result.bytes()),
+      static_cast<std::byte>(authenticated.next_slot), authenticated.root_secret,
+      new_password_utf8, result.bytes().subspan(kCardRecordV2EnvelopeOffset +
+          authenticated.next_slot * kCardRecordV2EnvelopeSize,
+          kCardRecordV2EnvelopeSize));
+  new_password_utf8.clear();
+  detail::seal_card_ring_metadata_v2(result.bytes(), authenticated.root_secret,
+      detail::next_card_slot_v2(authenticated.next_slot));
+  authenticated.root_secret.clear();
+  return result;
+}
+
 namespace detail {
 
 std::uint32_t next_card_slot_v2(const std::uint32_t slot) {

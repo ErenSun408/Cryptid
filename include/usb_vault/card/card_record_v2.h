@@ -44,5 +44,11 @@ struct InitializedCardRecordV2 final {
 // other password. Physical migration/confirmation is a separate transaction.
 [[nodiscard]] security::SecureBuffer upgrade_card_record_v1_to_v2(
     std::span<const std::byte> record, security::SecureBuffer password_utf8);
+// Blindly replace the encrypted cursor's target; never authenticate the new
+// password against any previous envelope. The two other envelopes stay intact.
+[[nodiscard]] security::SecureBuffer append_card_password_v2(
+    std::span<const std::byte> record,
+    security::SecureBuffer existing_password_utf8,
+    security::SecureBuffer new_password_utf8);
 
 } // namespace usb_vault::card
