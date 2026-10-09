@@ -142,6 +142,7 @@ void test_non_product_record_inspection_fails_closed() {
 
 void test_journal_evidence_preserves_legacy_rejection() {
   for (const auto state : {CardProductRecordState::initialized_v2,
+                           CardProductRecordState::provisioned_uninitialized,
                            CardProductRecordState::unsupported_version,
                            CardProductRecordState::malformed}) {
     VikeyCardInsertionContext context(
@@ -152,7 +153,9 @@ void test_journal_evidence_preserves_legacy_rejection() {
       require(CardEntryRouter::route(context, nullptr, &routed_state) ==
                   (state == CardProductRecordState::initialized_v2
                        ? CardEntryRoute::login_required
-                       : CardEntryRoute::unavailable) && routed_state == state,
+                       : state == CardProductRecordState::provisioned_uninitialized
+                             ? CardEntryRoute::initialization_required
+                             : CardEntryRoute::unavailable) && routed_state == state,
               "cached journal evidence reached the wrong route or format");
       require(context.inspect_product_record_read_only() ==
                   CardRecordState::unsupported_version &&
@@ -180,8 +183,7 @@ void require_invalid_journal_evidence(VikeyCardMediaProbe value,
 }
 
 void test_journal_evidence_cannot_promote_other_media_or_formats() {
-  for (const auto state : {CardProductRecordState::provisioned_uninitialized,
-                           CardProductRecordState::initialized_v1,
+  for (const auto state : {CardProductRecordState::initialized_v1,
                            CardProductRecordState::legacy_p1_blob,
                            static_cast<CardProductRecordState>(999)}) {
     require_invalid_journal_evidence(

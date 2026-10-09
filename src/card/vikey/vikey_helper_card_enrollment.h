@@ -4,12 +4,23 @@
 #include "card/vikey/vikey_helper_backend.h"
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_client.h"
+#include "card/vikey/vikey_card_journal_store.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/card/card_initialization_service.h"
 
 #include <memory>
 
 namespace usb_vault::card::vikey {
+
+// Ciphertext-only dependency seam; production leaves this unset and uses the
+// existing helper. An injected provider must outlive the source and targets.
+class IVikeyCardEnrollmentIo {
+ public:
+  virtual ~IVikeyCardEnrollmentIo() noexcept = default;
+  virtual VikeyCardMediaProbe probe() = 0;
+  virtual std::unique_ptr<IVikeyCardJournalTransport> transport(std::uint32_t hardware_id) = 0;
+  virtual void bootstrap(const VikeyCardMediaProbe& context) = 0;
+};
 
 // ViKey-private enrollment boundary for the network-enabled development
 // helper. It stores only non-secret artifact configuration and borrows the
@@ -20,7 +31,10 @@ class VikeyHelperCardEnrollment final
  public:
   VikeyHelperCardEnrollment(
       VikeyHelperBackendConfig config,
-      IVikeyCredentialProvider& credential_provider);
+      IVikeyCredentialProvider& credential_provider,
+      IVikeyCardEnrollmentIo* io = nullptr);
+  VikeyHelperCardEnrollment(const VikeyHelperCardEnrollment&) = delete;
+  VikeyHelperCardEnrollment& operator=(const VikeyHelperCardEnrollment&) = delete;
 
   [[nodiscard]] std::unique_ptr<VikeyCardInsertionContext> inspect_entry();
   [[nodiscard]] std::unique_ptr<application::IReadOnlyCardEntryInspection>
@@ -39,9 +53,14 @@ class VikeyHelperCardEnrollment final
 
  private:
   [[nodiscard]] VikeyCardMediaProbe probe();
+  [[nodiscard]] std::unique_ptr<IVikeyCardJournalTransport> transport(std::uint32_t hardware_id);
+  [[nodiscard]] const VikeyCardInsertionContext& require_context(
+      const application::IReadOnlyCardEntryInspection& context) const;
 
   VikeyHelperBackendConfig config_;
   IVikeyCredentialProvider& credential_provider_;
+  IVikeyCardEnrollmentIo* io_;
+  std::shared_ptr<const std::byte> insertion_identity_;
 };
 
 // Binds one adapter-approved initializable insertion context to the formal

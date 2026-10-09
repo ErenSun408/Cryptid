@@ -108,17 +108,21 @@ void test_bare_initializable_contexts_remain_constructible() {
   }
 }
 
-void test_enrollment_factory_accepts_only_its_concrete_context() {
+void test_enrollment_factory_rejects_unissued_contexts() {
   RejectingCredentialProvider provider;
   VikeyHelperCardEnrollment enrollment(VikeyHelperBackendConfig{}, provider);
   usb_vault::card::vikey::VikeyCardInsertionContext insertion(
       probe(VikeyCardMediaState::product_evidence,
             CardRecordState::provisioned_uninitialized));
 
-  std::unique_ptr<usb_vault::card::ICardInitializationTarget> target =
-      enrollment.make_initialization_target(insertion);
-  require(target != nullptr && provider.loads == 0,
-          "factory did not create a side-effect-free bound target");
+  bool rejected = false;
+  try {
+    static_cast<void>(enrollment.make_initialization_target(insertion));
+  } catch (const std::system_error& error) {
+    rejected = error.code() == usb_vault::card::make_error_code(CardError::invalid_configuration);
+  }
+  require(rejected && provider.loads == 0,
+          "factory accepted an unissued context or loaded credentials");
 
   ForeignInspection foreign;
   try {
@@ -180,7 +184,7 @@ int main() {
   try {
     test_verified_marker_skips_bootstrap_and_credentials();
     test_bare_initializable_contexts_remain_constructible();
-    test_enrollment_factory_accepts_only_its_concrete_context();
+    test_enrollment_factory_rejects_unissued_contexts();
     test_all_other_contexts_are_rejected();
     std::cout << "vikey_card_initialization_target_tests passed\n";
     return 0;

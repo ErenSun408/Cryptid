@@ -21,8 +21,12 @@ class ICardInitializationTarget {
   ICardInitializationTarget(ICardInitializationTarget&&) = delete;
   ICardInitializationTarget& operator=(ICardInitializationTarget&&) = delete;
 
-  virtual void ensure_provisioning_record() = 0;
-  [[nodiscard]] virtual ICardStore& card_store() noexcept = 0;
+  virtual void ensure_provisioning_record();
+  [[nodiscard]] virtual ICardStore& card_store();
+  // The default preserves the legacy transaction. Journal targets override
+  // this complete operation and never expose an arbitrary blob writer.
+  [[nodiscard]] virtual security::SecureBuffer initialize_confirmed(
+      security::ConfirmedPassword password);
 
  protected:
   ICardInitializationTarget() noexcept = default;

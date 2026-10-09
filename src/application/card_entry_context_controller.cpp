@@ -91,6 +91,7 @@ void CardEntryContextController::initialize_and_authenticate(
   // initialization tore halfway is in a state nobody knows, and no retry may
   // run against it.
   route_ = CardEntryRoute::unavailable;
+  entry_format_ = card::CardProductRecordState::malformed;
   std::unique_ptr<IReadOnlyCardEntryInspection> context =
       std::move(context_);
   std::unique_ptr<card::ICardInitializationTarget> target =
@@ -101,9 +102,12 @@ void CardEntryContextController::initialize_and_authenticate(
         "card adapter cannot initialize this insertion");
   }
 
-  authentication.establish(
+  auto root =
       card::CardInitializationService::initialize_and_authenticate(
-          *target, std::move(confirmed_daily_password)));
+          *target, std::move(confirmed_daily_password));
+  target.reset();
+  context.reset();
+  authentication.establish(std::move(root));
 }
 
 void CardEntryContextController::set_second_card_password(

@@ -64,6 +64,7 @@ VikeyCardInsertionContext::VikeyCardInsertionContext(
     reject_invalid_probe();
   }
   switch (journal_state) {
+    case CardProductRecordState::provisioned_uninitialized:
     case CardProductRecordState::initialized_v2:
     case CardProductRecordState::unsupported_version:
     case CardProductRecordState::malformed:

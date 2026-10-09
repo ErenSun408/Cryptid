@@ -3,6 +3,8 @@
 #include "card/vikey/vikey_helper_client.h"
 #include "usb_vault/application/card_entry_router.h"
 
+#include <memory>
+
 namespace usb_vault::card::vikey {
 
 // Owns the immutable, non-secret result of one atomic ViKey media probe.
@@ -34,8 +36,10 @@ class VikeyCardInsertionContext final
   [[nodiscard]] const VikeyCardMediaProbe& probe() const noexcept;
 
  private:
+  friend class VikeyHelperCardEnrollment;
   const VikeyCardMediaProbe probe_;
   const std::optional<CardProductRecordState> journal_state_;
+  std::shared_ptr<const std::byte> insertion_identity_;
 };
 
 }  // namespace usb_vault::card::vikey

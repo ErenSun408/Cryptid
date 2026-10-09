@@ -1,6 +1,8 @@
 #include "card/card_record_journal_v2.h"
 #include "card/vikey/vikey_card_journal_store.h"
 #include "card/vikey/card_operation_lease.h"
+#include "card/vikey/vikey_helper_card_enrollment.h"
+#include "usb_vault/security/confirmed_password.h"
 
 #include "card/card_record_crypto.h"
 #include "card/card_record_v2_internal.h"
@@ -27,6 +29,7 @@ namespace {
 using namespace usb_vault::card;
 using usb_vault::security::SecureBuffer;
 namespace crypto = usb_vault::card::detail;
+namespace security = usb_vault::security;
 constexpr std::array<std::string_view, 5> kPasswords{
     "ring-password-one", "ring-password-two", "ring-password-three",
     "ring-password-four", "ring-password-five"};
@@ -405,7 +408,7 @@ class SnapshotTransport final : public vikey::IVikeyCardJournalTransport {
   std::size_t reported_error{std::numeric_limits<std::size_t>::max()};
   bool change_before_write{};
   bool corrupt_after_write{};
- private:
+ public:
   void require_lease() {
     bool blocked = false;
     std::thread competitor([&] {
@@ -751,6 +754,177 @@ void test_v2_login_target(const InitializedCardRecordV2& initial, const Memory& 
   forged.media.sentinel();
 }
 
+class NoCredentials final : public vikey::IVikeyCredentialProvider {
+ public:
+  vikey::VikeyCredentialSet load_credentials() override {
+    throw std::runtime_error("injected ciphertext operations loaded vendor credentials");
+  }
+};
+
+class EnrollmentIo final : public vikey::IVikeyCardEnrollmentIo {
+ public:
+  explicit EnrollmentIo(const Memory& base) : media(base) {}
+  vikey::VikeyCardMediaProbe observed{0x55AA, 1,
+      vikey::VikeyCardMediaState::product_evidence, CardRecordState::unsupported_version};
+  SnapshotTransport media;
+  std::uint32_t actual_id{1};
+  int bootstraps{};
+  bool fail_probe{};
+  int initialization_fault{};
+  class Bound final : public vikey::IVikeyCardJournalTransport {
+   public:
+    Bound(EnrollmentIo& io, std::uint32_t id) : io_(io), id_(id) {}
+    SecureBuffer snapshot_reserved() override { check(); return io_.media.snapshot_reserved(); }
+    void write_block(const SecureBuffer& expected, std::size_t offset, const SecureBuffer& replacement) override {
+      check(); io_.media.write_block(expected, offset, replacement);
+    }
+   private:
+    void check() {
+      if (id_ != io_.actual_id) throw std::system_error(make_error_code(CardError::invalid_operation));
+    }
+    EnrollmentIo& io_;
+    std::uint32_t id_;
+  };
+  vikey::VikeyCardMediaProbe probe() override {
+    media.require_lease();
+    if (fail_probe) throw std::system_error(make_error_code(CardError::communication_failed));
+    return observed;
+  }
+  std::unique_ptr<vikey::IVikeyCardJournalTransport> transport(std::uint32_t id) override {
+    expect(id == observed.hardware_id, "source lost probed hardware identity");
+    return std::make_unique<Bound>(*this, id);
+  }
+  void bootstrap(const vikey::VikeyCardMediaProbe& context) override {
+    media.require_lease();
+    expect(context.hardware_id == actual_id, "bootstrap used another card");
+    ++bootstraps;
+    auto marker = provision_uninitialized_card_record_v1();
+    provision_card_record_journal_v1(media.media, marker.bytes());
+    if (initialization_fault == 1) media.media.cut_write = media.media.writes;
+    if (initialization_fault == 2) media.reported_error = media.media.writes;
+  }
+};
+
+class LoginConsumer final : public usb_vault::application::ICardLoginSuccessConsumer {
+ public:
+  SecureBuffer root;
+  void consume_authenticated_login(SecureBuffer value, SecureBuffer password) override {
+    expect(same(password.bytes(), text(kPasswords[0]).bytes()), "source login changed exact input");
+    root = std::move(value);
+  }
+};
+
+security::ConfirmedPassword confirmed_initial_password() {
+  class Policy final : public security::IPasswordStrengthPolicy {
+   public:
+    security::PasswordStrength assess(const SecureBuffer&) const noexcept override {
+      return security::PasswordStrength::acceptable;
+    }
+  } policy;
+  return security::confirm_password(policy, text(kPasswords[0]), text(kPasswords[0]));
+}
+
+void test_enrollment_login_composition(const InitializedCardRecordV2& initial, const Memory& base) {
+  namespace app = usb_vault::application;
+  NoCredentials credentials;
+  EnrollmentIo io(base);
+  vikey::VikeyHelperCardEnrollment source({}, credentials, &io), other({}, credentials, &io);
+  auto context = source.inspect_entry();
+  expect(app::CardEntryRouter::route(*context) == app::CardEntryRoute::login_required &&
+      io.media.media.writes == 0, "source did not classify v2 read-only");
+  rejects<std::system_error>([&] { static_cast<void>(other.make_login_target(*context)); },
+      "source accepted another source's context");
+  auto current = source.inspect_entry();
+  rejects<std::system_error>([&] { static_cast<void>(source.make_login_target(*context)); },
+      "source accepted expired context");
+  const auto reads = io.media.snapshots;
+  auto target = source.make_login_target(*current);
+  expect(io.media.snapshots == reads, "login factory performed I/O");
+  expect(target->record_format() == CardProductRecordState::initialized_v2,
+      "source created legacy login target for v2");
+  io.fail_probe = true;
+  rejects<std::system_error>([&] { static_cast<void>(source.inspect_entry()); }, "failed replacement probe succeeded");
+  rejects<std::system_error>([&] { static_cast<void>(source.make_login_target(*current)); },
+      "failed replacement probe retained context");
+  io.fail_probe = false;
+  app::CardEntryContextController controller(source);
+  LoginConsumer consumer;
+  expect(controller.handle_arrival() == app::CardEntryRoute::login_required, "v2 arrival did not reach login");
+  rejects<CardCredentialRejected>([&] { controller.authenticate_login(consumer, text("wrong-password")); },
+      "wrong v2 password authenticated through source");
+  expect(controller.has_context() && consumer.root.empty() && io.media.media.writes == 0,
+      "wrong password lost retry or wrote card");
+  controller.authenticate_login(consumer, text(kPasswords[0]));
+  expect(same(consumer.root.bytes(), initial.root_secret.bytes()) && !controller.has_context(),
+      "source login failed root handoff or context retirement");
+  consumer.root = SecureBuffer{};
+  static_cast<void>(controller.handle_arrival());
+  io.actual_id = 2;
+  rejects<std::system_error>([&] { controller.authenticate_login(consumer, text(kPasswords[0])); },
+      "source login accepted swapped hardware");
+  expect(consumer.root.empty() && !controller.has_context() && io.media.media.writes == 0,
+      "swapped card established session or wrote card");
+  io.media.media.sentinel();
+}
+
+void test_enrollment_initialization_composition(const Memory& base) {
+  namespace app = usb_vault::application;
+  NoCredentials credentials;
+  for (int kind = 0; kind < 5; ++kind) {
+    EnrollmentIo io(base);
+    if (kind == 0 || kind >= 3) {
+      io.observed.media_state = vikey::VikeyCardMediaState::blank;
+      io.observed.logical_state.reset();
+      std::ranges::fill_n(io.media.media.data.begin(), 1808, std::byte{});
+    } else if (kind == 1) {
+      auto marker = provision_uninitialized_card_record_v1();
+      std::ranges::fill_n(io.media.media.data.begin(), 1808, std::byte{});
+      provision_card_record_journal_v1(io.media.media, marker.bytes());
+      io.observed.logical_state = CardRecordState::provisioned_uninitialized;
+    } else {
+      auto plan = prepare_card_journal_v2_reset(io.media.media, std::span(io.media.media.data).first(1808));
+      reset_card_journal_v2(io.media.media, plan);
+    }
+    io.media.media.online();
+    vikey::VikeyHelperCardEnrollment source({}, credentials, &io);
+    auto insertion = source.inspect_entry();
+    const auto reads_before_factory = io.media.snapshots;
+    auto target = source.make_initialization_target(*insertion);
+    expect(io.media.snapshots == reads_before_factory && io.media.media.writes == 0 && io.bootstraps == 0,
+        "initialization factory performed I/O");
+    rejects<std::logic_error>([&] { static_cast<void>(target->card_store()); },
+        "journal initialization exposed arbitrary legacy writes");
+    target.reset();
+    app::CardEntryContextController controller(source);
+    app::CardAuthenticationSession session;
+    expect(controller.handle_arrival() == app::CardEntryRoute::initialization_required &&
+        io.media.media.writes == 0 && io.bootstraps == 0, "initialization arrival wrote or lost marker");
+    if (kind == 3) io.initialization_fault = 1;
+    if (kind == 4) io.initialization_fault = 2;
+    try {
+      controller.initialize_and_authenticate(session, confirmed_initial_password());
+      expect(kind != 3, "uncertain initialization reported success");
+    } catch (const std::system_error&) {
+      expect(kind == 3, "healthy initialization failed");
+    }
+    expect(!controller.has_context() && session.authenticated() == (kind != 3),
+        "initialization failure retained context or reported authentication");
+    if (kind != 3) {
+      vikey::VikeyCardJournalStore store(io.media);
+      auto record = store.snapshot();
+      auto root = unlock_card_record_v2(record.bytes(), text(kPasswords[0]));
+      store.recover(record.bytes(), root);
+      expect(inspect_card_record_v2(record.bytes()) == CardRecordV2State::initialized &&
+          io.bootstraps == (kind == 0 || kind == 4 ? 1 : 0), "initialization did not publish v2 or repeated bootstrap");
+      io.observed.media_state = vikey::VikeyCardMediaState::product_evidence;
+      io.observed.logical_state = CardRecordState::unsupported_version;
+      expect(source.inspect_entry()->inspect_supported_product_record_read_only() ==
+          CardProductRecordState::initialized_v2, "initialized card did not reopen as v2");
+    }
+    io.media.media.sentinel();
+  }
+}
+
 } // namespace
 
 int main() {
@@ -769,6 +943,8 @@ int main() {
     test_application_reset_adapter(base);
     test_read_only_product_entry(base);
     test_v2_login_target(initial, base);
+    test_enrollment_login_composition(initial, base);
+    test_enrollment_initialization_composition(base);
     std::cout << "card_record_journal_v2_tests: PASS (10 scenario groups)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
