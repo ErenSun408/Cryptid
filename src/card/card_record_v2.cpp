@@ -135,10 +135,7 @@ security::SecureBuffer upgrade_card_record_v1_to_v2(
   // The old authenticator validates shape and credentials; no attempt is made
   // to infer the state or root of an envelope this password cannot decrypt.
   auto root = unlock_card_record_v1(record, std::move(password_utf8));
-  auto result = frame_record(record.first(kCardRecordV1HeaderSize));
-  std::ranges::copy(record.subspan(kCardRecordV1HeaderSize),
-      result.bytes().begin() + kCardRecordV2EnvelopeOffset);
-  detail::seal_card_ring_metadata_v2(result.bytes(), root, 2);
+  auto result = detail::upgrade_card_record_v2_with_root(record, root);
   root.clear();
   return result;
 }
@@ -183,6 +180,19 @@ security::SecureBuffer append_card_password_v2(
 }
 
 namespace detail {
+
+security::SecureBuffer upgrade_card_record_v2_with_root(
+    const std::span<const std::byte> legacy_record,
+    const security::SecureBuffer& authenticated_root) {
+  if (inspect_card_record(legacy_record) != CardRecordState::initialized_v1) {
+    throw std::invalid_argument("upgrade requires a complete legacy record");
+  }
+  auto result = frame_record(legacy_record.first(kCardRecordV1HeaderSize));
+  std::ranges::copy(legacy_record.subspan(kCardRecordV1HeaderSize),
+      result.bytes().begin() + kCardRecordV2EnvelopeOffset);
+  seal_card_ring_metadata_v2(result.bytes(), authenticated_root, 2);
+  return result;
+}
 
 std::uint32_t next_card_slot_v2(const std::uint32_t slot) {
   if (slot >= kCardRecordV2SlotCount) {

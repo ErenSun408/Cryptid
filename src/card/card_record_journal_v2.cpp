@@ -1,6 +1,7 @@
 #include "card/card_record_journal_v2.h"
 
 #include "card/card_record_crypto.h"
+#include "card/card_record_journal_v1_internal.h"
 #include "card/card_record_v2_internal.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v2.h"
@@ -45,6 +46,11 @@ bool equal(const std::span<const std::byte> a,
     difference |= std::to_integer<unsigned int>(a[i] ^ b[i]);
   }
   return difference == 0;
+}
+
+bool zero(const std::span<const std::byte> bytes) noexcept {
+  return std::ranges::all_of(bytes,
+      [](const std::byte value) { return value == std::byte{}; });
 }
 
 void require_capacity(ICardRecordJournalStorage& storage) {
@@ -310,6 +316,66 @@ std::uint32_t ring_cursor(const std::span<const std::byte> record,
   return cursor;
 }
 
+security::SecureBuffer make_anchor(const security::SecureBuffer& root,
+    const std::span<const std::byte> record, const Id& instance) {
+  security::SecureBuffer anchor(216);
+  detail::fill_card_random(anchor.bytes());
+  std::ranges::copy(detail::kCardV2AnchorMagic, anchor.bytes().begin());
+  card_journal_store_u32(anchor.bytes(), 8, 2);
+  card_journal_store_u32(anchor.bytes(), 12, 216);
+  card_journal_store_u32(anchor.bytes(), 16, 736);
+  card_journal_store_u32(anchor.bytes(), 20, 1072);
+  card_journal_store_u32(anchor.bytes(), 24, 384);
+  card_journal_store_u32(anchor.bytes(), 28, 1);
+  std::ranges::copy(record.subspan(64, 16), anchor.bytes().begin() + 32);
+  std::ranges::copy(instance, anchor.bytes().begin() + 48);
+  auto mac = anchor_mac(root, record, anchor.bytes());
+  std::ranges::copy(mac.bytes(), anchor.bytes().begin() + 184);
+  return anchor;
+}
+
+Id migration_intent(const security::SecureBuffer& root,
+    const std::span<const std::byte> legacy) {
+  auto key = detail::derive_card_record_domain_key(root, legacy.first(64),
+      "usb-vault:card-journal-migration-intent:v2");
+  auto mac = detail::card_hmac_sha256(key, legacy);
+  Id intent{};
+  std::ranges::copy_n(mac.bytes().begin(), intent.size(), intent.begin());
+  return intent;
+}
+
+bool metadata_matches_root(const security::SecureBuffer& root,
+    const std::span<const std::byte> record, const std::uint32_t cursor) {
+  auto key = detail::derive_card_ring_metadata_key_v2(root, record.subspan(32, 64));
+  auto metadata = detail::open_card_aead(key, record.subspan(324, 60), record.first(324));
+  return metadata.authenticated && card_journal_u32(metadata.plaintext.bytes(), 0) == 1 &&
+      card_journal_u32(metadata.plaintext.bytes(), 4) == cursor;
+}
+
+bool preserves_source(const std::span<const std::byte> legacy,
+    const std::span<const std::byte> record) noexcept {
+  return inspect_card_record_v2(record) == CardRecordV2State::initialized &&
+      equal(legacy.first(64), record.subspan(32, 64)) &&
+      equal(legacy.subspan(64, 152), record.subspan(96, 152));
+}
+
+void validate_owned_staging(const Extension& extension,
+    const std::span<const std::byte> legacy,
+    const security::SecureBuffer& root, const Id& intent) {
+  for (const auto& parsed : extension.parsed) {
+    if (!parsed.valid) continue;
+    if (!equal(parsed.previous, intent)) {
+      fail(CardError::invalid_operation, "foreign complete v2 staging descriptor");
+    }
+    if (!parsed.record_matches) continue;
+    const auto record = extension.bytes.bytes().subspan(304 + parsed.slot * 384, 384);
+    if (!equal(parsed.previous, intent) || !preserves_source(legacy, record) ||
+        !metadata_matches_root(root, record, 2)) {
+      fail(CardError::invalid_operation, "conflicting complete v2 staging data");
+    }
+  }
+}
+
 void require_append_transition(const std::span<const std::byte> expected,
     const std::span<const std::byte> replacement,
     const security::SecureBuffer& root) {
@@ -336,6 +402,118 @@ void require_append_transition(const std::span<const std::byte> expected,
 }
 
 } // namespace
+
+PreparedCardJournalV2Migration prepare_card_journal_v2_migration(
+    ICardRecordJournalStorage& storage, const std::span<const std::byte> expected_v1,
+    security::SecureBuffer existing_password_utf8) {
+  require_capacity(storage);
+  auto source = detail::snapshot_legacy_card_journal(storage);
+  if (inspect_card_record(expected_v1) != CardRecordState::initialized_v1 ||
+      !equal(source.record.bytes(), expected_v1)) {
+    fail(CardError::invalid_operation, "legacy migration confirmation expired");
+  }
+  PreparedCardJournalV2Migration plan;
+  plan.root_ = unlock_card_record_v1(expected_v1, std::move(existing_password_utf8));
+  plan.expected_ = std::move(source.record);
+  plan.source_commit_ = source.commit_id;
+  plan.intent_ = migration_intent(plan.root_, plan.expected_.bytes());
+  auto extension = read_extension(storage);
+  if (!zero(extension.bytes.bytes()) && !equal(plan.source_commit_, plan.intent_)) {
+    fail(CardError::invalid_operation, "migration extension contains unowned data");
+  }
+  if (!zero(extension.bytes.bytes())) {
+    validate_owned_staging(extension, plan.expected_.bytes(), plan.root_, plan.intent_);
+    const Parsed* selected = nullptr;
+    for (const auto& descriptor : extension.parsed) {
+      if (!descriptor.valid || !descriptor.record_matches) continue;
+      if (selected && (!equal(selected->commit, descriptor.commit) ||
+          !equal(selected->instance, descriptor.instance))) {
+        fail(CardError::invalid_operation, "ambiguous owned migration staging");
+      }
+      selected = &descriptor;
+    }
+    if (selected) {
+      plan.replacement_ = security::SecureBuffer(384);
+      std::ranges::copy(extension.bytes.bytes().subspan(304 + selected->slot * 384, 384),
+          plan.replacement_.bytes().begin());
+      // Staging always uses physical slot zero. A slot-one genesis is not ours.
+      if (selected->slot != 0) fail(CardError::invalid_operation, "foreign migration staging slot");
+      plan.instance_ = selected->instance;
+      plan.initial_commit_ = selected->commit;
+    }
+  }
+  if (plan.replacement_.empty()) {
+    plan.replacement_ = detail::upgrade_card_record_v2_with_root(plan.expected_.bytes(), plan.root_);
+    plan.instance_ = random_id();
+    plan.initial_commit_ = distinct_id(plan.intent_, plan.intent_);
+  }
+  plan.anchor_ = make_anchor(plan.root_, plan.replacement_.bytes(), plan.instance_);
+  return plan;
+}
+
+void commit_card_journal_v2_migration(ICardRecordJournalStorage& storage,
+    const PreparedCardJournalV2Migration& plan) {
+  require_capacity(storage);
+  // Reject default/moved-from state and malformed prepared material before IO.
+  if (plan.root_.size() != 32 || plan.expected_.size() != 216 ||
+      !preserves_source(plan.expected_.bytes(), plan.replacement_.bytes()) ||
+      !detail::is_card_record_v2_anchor(plan.anchor_.bytes())) {
+    fail(CardError::invalid_configuration, "invalid prepared v2 migration");
+  }
+  auto source = detail::snapshot_legacy_card_journal(storage);
+  if (detail::is_card_record_v2_anchor(source.record.bytes())) {
+    auto current = load_card(storage);
+    if (!equal(current.anchor.bytes(), plan.anchor_.bytes()) ||
+        !equal(current.journal.record.bytes(), plan.replacement_.bytes())) {
+      fail(CardError::invalid_operation, "completed migration snapshot changed");
+    }
+    verify_card_record_journal_v2_anchor(storage, plan.replacement_.bytes(), plan.root_);
+    recover_card_record_journal_v2(storage, plan.replacement_.bytes(), plan.root_);
+    return;
+  }
+  if (!equal(source.record.bytes(), plan.expected_.bytes()) ||
+      (!equal(source.commit_id, plan.source_commit_) &&
+       !equal(source.commit_id, plan.intent_))) {
+    fail(CardError::invalid_operation, "legacy migration source changed");
+  }
+  if (!equal(source.commit_id, plan.intent_)) {
+    auto extension = read_exact(storage, 736, 1072);
+    if (!zero(extension.bytes())) fail(CardError::invalid_operation, "unowned extension before reservation");
+    detail::commit_legacy_card_journal_transition(storage, plan.expected_.bytes(),
+        source.commit_id, plan.expected_.bytes(), plan.intent_);
+  }
+  // A durable root-bound legacy commit now owns this initially blank extension,
+  // even if the first extension write tears before any valid descriptor exists.
+  // Reject complete foreign/future staging before repairing legacy residue.
+  auto extension = read_extension(storage);
+  validate_owned_staging(extension, plan.expected_.bytes(), plan.root_, plan.intent_);
+  auto normalized_legacy = read_card_record_journal_v1(storage);
+  if (!equal(normalized_legacy.bytes(), plan.expected_.bytes())) {
+    fail(CardError::invalid_operation, "migration intent record changed");
+  }
+  security::SecureBuffer filler(384);
+  detail::fill_card_random(filler.bytes());
+  write_verified(storage, kCardRecordJournalV2Slot1Offset, filler.bytes());
+  write_verified(storage, kCardRecordJournalV2Slot0Offset, plan.replacement_.bytes());
+  const auto descriptor = make_descriptor(plan.initial_commit_, plan.intent_,
+      plan.instance_, 0, plan.replacement_.bytes(), filler.bytes());
+  write_verified(storage, kCardRecordJournalV2Descriptor0Offset, descriptor);
+  write_verified(storage, kCardRecordJournalV2Descriptor1Offset, descriptor);
+  auto verified = load_extension(storage, plan.instance_);
+  if (!verified.mirrored || !equal(verified.record.bytes(), plan.replacement_.bytes()) ||
+      !metadata_matches_root(plan.root_, verified.record.bytes(), 2)) {
+    fail(CardError::device_failure, "migration staging did not verify");
+  }
+  auto intent = detail::snapshot_legacy_card_journal(storage);
+  if (!equal(intent.commit_id, plan.intent_) || !equal(intent.record.bytes(), plan.expected_.bytes())) {
+    fail(CardError::invalid_operation, "migration intent snapshot changed");
+  }
+  const auto anchor_commit = distinct_id(intent.commit_id, intent.commit_id);
+  detail::commit_legacy_card_journal_transition(storage, plan.expected_.bytes(),
+      plan.intent_, plan.anchor_.bytes(), anchor_commit);
+  verify_card_record_journal_v2_anchor(storage, plan.replacement_.bytes(), plan.root_);
+  recover_card_record_journal_v2(storage, plan.replacement_.bytes(), plan.root_);
+}
 
 security::SecureBuffer snapshot_card_record_journal_v2(ICardRecordJournalStorage& storage) {
   return std::move(load_card(storage).journal.record);

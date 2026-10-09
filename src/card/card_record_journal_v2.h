@@ -14,11 +14,43 @@ inline constexpr std::size_t kCardRecordJournalV2Slot0Offset = 1040;
 inline constexpr std::size_t kCardRecordJournalV2Slot1Offset = 1424;
 inline constexpr std::size_t kCardRecordJournalV2StorageSize = 1808;
 
+class PreparedCardJournalV2Migration final {
+ public:
+  PreparedCardJournalV2Migration(PreparedCardJournalV2Migration&&) noexcept = default;
+  PreparedCardJournalV2Migration& operator=(PreparedCardJournalV2Migration&&) noexcept = default;
+  PreparedCardJournalV2Migration(const PreparedCardJournalV2Migration&) = delete;
+  PreparedCardJournalV2Migration& operator=(const PreparedCardJournalV2Migration&) = delete;
+  [[nodiscard]] std::span<const std::byte> replacement_record() const noexcept {
+    return replacement_.bytes();
+  }
+
+ private:
+  PreparedCardJournalV2Migration() = default;
+  friend PreparedCardJournalV2Migration prepare_card_journal_v2_migration(
+      ICardRecordJournalStorage&, std::span<const std::byte>, security::SecureBuffer);
+  friend void commit_card_journal_v2_migration(
+      ICardRecordJournalStorage&, const PreparedCardJournalV2Migration&);
+  security::SecureBuffer root_;
+  security::SecureBuffer expected_;
+  security::SecureBuffer replacement_;
+  security::SecureBuffer anchor_;
+  std::array<std::byte, 16> source_commit_{};
+  std::array<std::byte, 16> intent_{};
+  std::array<std::byte, 16> instance_{};
+  std::array<std::byte, 16> initial_commit_{};
+};
+
 // Adapter-private storage operations: the caller must hold its card operation
 // lease and stable hardware identity for the whole transaction. These routines
 // do not load vendor code and never obtain or emit credentials themselves.
 // Root-bearing calls stay in the authenticated application process; storage
 // adapters must not serialize the root into helper IPC or vendor calls.
+[[nodiscard]] PreparedCardJournalV2Migration prepare_card_journal_v2_migration(
+    ICardRecordJournalStorage& storage, std::span<const std::byte> expected_v1,
+    security::SecureBuffer existing_password_utf8);
+void commit_card_journal_v2_migration(ICardRecordJournalStorage& storage,
+    const PreparedCardJournalV2Migration& prepared);
+
 [[nodiscard]] security::SecureBuffer snapshot_card_record_journal_v2(
     ICardRecordJournalStorage& storage);
 // Verify the immutable anchor after the application has authenticated the

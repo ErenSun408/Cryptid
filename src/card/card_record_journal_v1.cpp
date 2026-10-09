@@ -1,4 +1,6 @@
 #include "card/card_record_journal_v1.h"
+#include "card/card_record_journal_v1_internal.h"
+#include "card/card_record_journal_v2_anchor.h"
 #include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/card/card_error.h"
@@ -598,5 +600,49 @@ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
     fail(CardError::device_failure, "reset did not verify");
   }
 }
+
+namespace detail {
+
+LegacyCardJournalSnapshot snapshot_legacy_card_journal(
+    ICardRecordJournalStorage& storage) {
+  auto selected = load_journal(storage);
+  return {.record = std::move(selected.record), .commit_id = selected.commit_id};
+}
+
+void commit_legacy_card_journal_transition(ICardRecordJournalStorage& storage,
+    const std::span<const std::byte> expected_record,
+    const std::array<std::byte, 16>& expected_commit,
+    const std::span<const std::byte> replacement,
+    const std::array<std::byte, 16>& new_commit) {
+  if (inspect_card_record(expected_record) != CardRecordState::initialized_v1 ||
+      (!equal_bytes(expected_record, replacement) &&
+       !is_card_record_v2_anchor(replacement))) {
+    fail(CardError::invalid_configuration, "invalid legacy migration transition");
+  }
+  auto current = load_journal(storage);
+  if (!equal_bytes(current.record.bytes(), expected_record) ||
+      !equal_bytes(current.commit_id, expected_commit) ||
+      equal_bytes(new_commit, current.commit_id) ||
+      equal_bytes(new_commit, current.previous_id)) {
+    fail(CardError::invalid_operation, "legacy migration snapshot changed");
+  }
+  const auto target_slot = current.slot ^ 1U;
+  const auto target_descriptor = current.descriptor ^ 1U;
+  write_verified(storage, slot_offset(target_slot), replacement);
+  security::SecureBuffer filler(kCardRecordV1Size);
+  fill_random(filler.bytes());
+  const auto descriptor = make_descriptor(new_commit, current.commit_id,
+      target_slot, replacement, filler.bytes());
+  write_verified(storage, descriptor_offset(target_descriptor), descriptor);
+  write_verified(storage, slot_offset(current.slot), filler.bytes());
+  write_verified(storage, descriptor_offset(current.descriptor), descriptor);
+  auto committed = load_journal(storage);
+  if (!equal_bytes(committed.commit_id, new_commit) ||
+      !equal_bytes(committed.record.bytes(), replacement)) {
+    fail(CardError::device_failure, "legacy migration did not become active");
+  }
+}
+
+} // namespace detail
 
 } // namespace usb_vault::card

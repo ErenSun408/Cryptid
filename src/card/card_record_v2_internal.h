@@ -25,4 +25,8 @@ void seal_card_ring_metadata_v2(std::span<std::byte> record,
     const security::SecureBuffer& password_utf8, std::uint32_t first_slot);
 [[nodiscard]] std::uint32_t next_card_slot_v2(std::uint32_t slot);
 
+[[nodiscard]] security::SecureBuffer upgrade_card_record_v2_with_root(
+    std::span<const std::byte> legacy_record,
+    const security::SecureBuffer& authenticated_root);
+
 } // namespace usb_vault::card::detail
