@@ -16,6 +16,7 @@ using usb_vault::application::CardEntryRoute;
 using usb_vault::application::CardEntryRouter;
 using usb_vault::card::CardError;
 using usb_vault::card::CardRecordState;
+using usb_vault::card::CardProductRecordState;
 using usb_vault::card::vikey::VikeyCardInsertionContext;
 using usb_vault::card::vikey::VikeyCardMediaProbe;
 using usb_vault::card::vikey::VikeyCardMediaState;
@@ -139,6 +140,76 @@ void test_non_product_record_inspection_fails_closed() {
   throw std::runtime_error("non-product context exposed a logical record");
 }
 
+void test_journal_evidence_preserves_legacy_rejection() {
+  for (const auto state : {CardProductRecordState::initialized_v2,
+                           CardProductRecordState::unsupported_version,
+                           CardProductRecordState::malformed}) {
+    VikeyCardInsertionContext context(
+        probe(VikeyCardMediaState::product_evidence,
+              CardRecordState::unsupported_version), state);
+    for (int repeat = 0; repeat < 2; ++repeat) {
+      CardProductRecordState routed_state = CardProductRecordState::malformed;
+      require(CardEntryRouter::route(context, nullptr, &routed_state) ==
+                  (state == CardProductRecordState::initialized_v2
+                       ? CardEntryRoute::login_required
+                       : CardEntryRoute::unavailable) && routed_state == state,
+              "cached journal evidence reached the wrong route or format");
+      require(context.inspect_product_record_read_only() ==
+                  CardRecordState::unsupported_version &&
+                  context.probe().logical_state ==
+                      CardRecordState::unsupported_version &&
+                  context.probe().hardware_id == 0x12345678u &&
+                  context.probe().security_properties == 0x55AAu,
+              "journal evidence changed the original legacy probe");
+    }
+  }
+}
+
+void require_invalid_journal_evidence(VikeyCardMediaProbe value,
+                                      const CardProductRecordState state) {
+  try {
+    VikeyCardInsertionContext context(std::move(value), state);
+    static_cast<void>(context);
+  } catch (const std::system_error& error) {
+    require(error.code() == usb_vault::card::make_error_code(
+                                CardError::invalid_configuration),
+            "invalid journal evidence returned the wrong error");
+    return;
+  }
+  throw std::runtime_error("inconsistent journal evidence was accepted");
+}
+
+void test_journal_evidence_cannot_promote_other_media_or_formats() {
+  for (const auto state : {CardProductRecordState::provisioned_uninitialized,
+                           CardProductRecordState::initialized_v1,
+                           CardProductRecordState::legacy_p1_blob,
+                           static_cast<CardProductRecordState>(999)}) {
+    require_invalid_journal_evidence(
+        probe(VikeyCardMediaState::product_evidence,
+              CardRecordState::unsupported_version), state);
+  }
+  for (const auto media : {VikeyCardMediaState::blank,
+                           VikeyCardMediaState::provisioning_interrupted,
+                           VikeyCardMediaState::foreign_data,
+                           VikeyCardMediaState::legacy_p1_or_foreign_prefix,
+                           VikeyCardMediaState::conflicting_evidence}) {
+    require_invalid_journal_evidence(probe(media),
+                                    CardProductRecordState::initialized_v2);
+  }
+  for (const auto state : {CardRecordState::provisioned_uninitialized,
+                           CardRecordState::initialized_v1,
+                           CardRecordState::malformed}) {
+    require_invalid_journal_evidence(
+        probe(VikeyCardMediaState::product_evidence, state),
+        CardProductRecordState::initialized_v2);
+  }
+  auto no_identity = probe(VikeyCardMediaState::product_evidence,
+                           CardRecordState::unsupported_version);
+  no_identity.hardware_id = 0;
+  require_invalid_journal_evidence(no_identity,
+                                  CardProductRecordState::initialized_v2);
+}
+
 }  // namespace
 
 int main() {
@@ -148,6 +219,8 @@ int main() {
     test_product_states_route_without_another_card_read();
     test_inconsistent_or_unknown_probes_are_rejected();
     test_non_product_record_inspection_fails_closed();
+    test_journal_evidence_preserves_legacy_rejection();
+    test_journal_evidence_cannot_promote_other_media_or_formats();
     std::cout << "vikey_card_insertion_context_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

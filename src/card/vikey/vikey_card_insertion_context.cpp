@@ -55,6 +55,24 @@ VikeyCardInsertionContext::VikeyCardInsertionContext(
   validate_probe(probe_);
 }
 
+VikeyCardInsertionContext::VikeyCardInsertionContext(
+    VikeyCardMediaProbe probe, const CardProductRecordState journal_state)
+    : probe_(std::move(probe)), journal_state_(journal_state) {
+  validate_probe(probe_);
+  if (probe_.media_state != VikeyCardMediaState::product_evidence ||
+      probe_.logical_state != CardRecordState::unsupported_version) {
+    reject_invalid_probe();
+  }
+  switch (journal_state) {
+    case CardProductRecordState::initialized_v2:
+    case CardProductRecordState::unsupported_version:
+    case CardProductRecordState::malformed:
+      return;
+    default:
+      reject_invalid_probe();
+  }
+}
+
 application::CardEntryMediaEvidence
 VikeyCardInsertionContext::inspect_media() {
   switch (probe_.media_state) {
@@ -82,6 +100,12 @@ VikeyCardInsertionContext::inspect_product_record_read_only() {
         "ViKey insertion context does not contain product evidence");
   }
   return *probe_.logical_state;
+}
+
+CardProductRecordState
+VikeyCardInsertionContext::inspect_supported_product_record_read_only() {
+  if (journal_state_.has_value()) return *journal_state_;
+  return product_state_from_legacy(inspect_product_record_read_only());
 }
 
 const VikeyCardMediaProbe& VikeyCardInsertionContext::probe() const noexcept {
