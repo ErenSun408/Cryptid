@@ -712,6 +712,45 @@ void test_read_only_product_entry(const Memory& base) {
   reset.media.sentinel();
 }
 
+void test_v2_login_target(const InitializedCardRecordV2& initial, const Memory& base) {
+  SnapshotTransport transport(base);
+  vikey::VikeyCardJournalLoginTarget target(transport);
+  expect(transport.snapshots == 0 && transport.media.writes == 0, "v2 login target construction performed I/O");
+  expect(target.record_format() == CardProductRecordState::initialized_v2 &&
+      same(target.read_record().bytes(), initial.record.bytes()) && transport.media.writes == 0,
+      "v2 login read changed storage or lost format identity");
+  SecureBuffer wrong(32);
+  rejects<CardCredentialRejected>([&] { target.complete_authenticated_read(initial.record.bytes(), wrong); },
+      "v2 login target accepted wrong root");
+  expect(transport.media.writes == 0, "wrong v2 login root wrote card");
+  target.complete_authenticated_read(initial.record.bytes(), initial.root_secret);
+  expect(transport.media.writes == 0, "healthy v2 login normalized storage");
+
+  SnapshotTransport pending(base);
+  pending.media.data[1424 + 383] ^= std::byte{1};
+  vikey::VikeyCardJournalLoginTarget repairing(pending);
+  const auto before = pending.media.data;
+  expect(same(repairing.read_record().bytes(), initial.record.bytes()) && pending.media.writes == 0 &&
+      pending.media.data == before, "unauthenticated v2 login repaired residue");
+  repairing.complete_authenticated_read(initial.record.bytes(), initial.root_secret);
+  expect(pending.media.writes == 3, "authenticated v2 login failed to normalize inactive journal");
+  pending.media.sentinel();
+
+  SnapshotTransport forged(base);
+  forged.media.data[304 + 184] ^= std::byte{1};
+  const auto digest = sha256(std::span(forged.media.data).subspan(304, 216));
+  for (const auto offset : {0U, 152U}) {
+    std::ranges::copy(digest, forged.media.data.begin() + offset + 56);
+    rehash_descriptor(forged.media, offset);
+  }
+  vikey::VikeyCardJournalLoginTarget invalid(forged);
+  expect(same(invalid.read_record().bytes(), initial.record.bytes()), "public snapshot incorrectly claimed anchor authentication");
+  rejects<CardCredentialRejected>([&] { invalid.complete_authenticated_read(initial.record.bytes(), initial.root_secret); },
+      "v2 login relied on public hashes instead of anchor MAC");
+  expect(forged.media.writes == 0, "forged v2 login anchor wrote card");
+  forged.media.sentinel();
+}
+
 } // namespace
 
 int main() {
@@ -729,7 +768,8 @@ int main() {
     test_full_reserved_reset(initial, base);
     test_application_reset_adapter(base);
     test_read_only_product_entry(base);
-    std::cout << "card_record_journal_v2_tests: PASS (9 scenario groups)\n";
+    test_v2_login_target(initial, base);
+    std::cout << "card_record_journal_v2_tests: PASS (10 scenario groups)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "FAILED: " << error.what() << '\n';

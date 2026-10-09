@@ -5,6 +5,7 @@
 #include "card/card_record_journal_v2_reset.h"
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/card/card_product_record_state.h"
+#include "usb_vault/card/card_login_target.h"
 
 #include <memory>
 #include <utility>
@@ -126,5 +127,19 @@ class VikeyCardJournalStore final {
  private:
   IVikeyCardJournalTransport& transport_;
   const std::shared_ptr<const std::byte> owner_{std::make_shared<const std::byte>()};
+};
+// Side-effect-free construction over one hardware-bound transport. Production
+// source composition must keep the transport alive through target destruction.
+class VikeyCardJournalLoginTarget final : public ICardLoginTarget {
+ public:
+  explicit VikeyCardJournalLoginTarget(IVikeyCardJournalTransport& transport) : store_(transport) {}
+  [[nodiscard]] security::SecureBuffer read_record() override;
+  [[nodiscard]] CardProductRecordState record_format() const noexcept override {
+    return CardProductRecordState::initialized_v2;
+  }
+  void complete_authenticated_read(std::span<const std::byte> expected,
+      const security::SecureBuffer& root) override;
+ private:
+  VikeyCardJournalStore store_;
 };
 } // namespace usb_vault::card::vikey

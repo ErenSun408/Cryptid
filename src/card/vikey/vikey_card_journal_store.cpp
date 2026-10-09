@@ -231,4 +231,9 @@ void VikeyCardJournalStore::reset(const PreparedVikeyCardReset& prepared) {
   storage.verify_current();
 }
 
+security::SecureBuffer VikeyCardJournalLoginTarget::read_record() { return store_.snapshot(); }
+void VikeyCardJournalLoginTarget::complete_authenticated_read(std::span<const std::byte> expected,
+    const security::SecureBuffer& root) {
+  store_.recover(expected, root);
+}
 } // namespace usb_vault::card::vikey

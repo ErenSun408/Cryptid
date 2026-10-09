@@ -69,7 +69,8 @@ class CardEntryRouter final {
   // and every unknown enum value fails closed to unavailable.
   [[nodiscard]] static CardEntryRoute route(
       IReadOnlyCardEntryInspection& inspection,
-      card::FailureDiagnostic* failure = nullptr) noexcept;
+      card::FailureDiagnostic* failure = nullptr,
+      card::CardProductRecordState* product_state = nullptr) noexcept;
 };
 
 }  // namespace usb_vault::application

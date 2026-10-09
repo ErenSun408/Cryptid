@@ -166,6 +166,7 @@ class CardEntryContextController final : public ICardEntryActions {
   std::unique_ptr<IReadOnlyCardEntryInspection> context_;
   std::optional<CardEntryRoute> route_;
   card::FailureDiagnostic startup_failure_{};
+  card::CardProductRecordState entry_format_{card::CardProductRecordState::malformed};
   CardResetConfirmation reset_confirmation_;
   std::unique_ptr<card::ICardResetTarget> reset_target_;
   security::SecureBuffer reset_snapshot_;

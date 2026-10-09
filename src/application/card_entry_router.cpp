@@ -6,8 +6,9 @@ namespace usb_vault::application {
 
 CardEntryRoute CardEntryRouter::route(
     IReadOnlyCardEntryInspection& inspection,
-    card::FailureDiagnostic* failure) noexcept {
+    card::FailureDiagnostic* failure, card::CardProductRecordState* product_state) noexcept {
   if (failure) *failure = {};
+  if (product_state) *product_state = card::CardProductRecordState::malformed;
   const auto unavailable = [failure](const std::uint32_t code) {
     if (failure) failure->primary.code = code;
     return CardEntryRoute::unavailable;
@@ -24,7 +25,9 @@ CardEntryRoute CardEntryRouter::route(
         return unavailable(4005);
     }
 
-    switch (inspection.inspect_supported_product_record_read_only()) {
+    const auto state = inspection.inspect_supported_product_record_read_only();
+    if (product_state) *product_state = state;
+    switch (state) {
       case card::CardProductRecordState::provisioned_uninitialized:
         return CardEntryRoute::initialization_required;
       case card::CardProductRecordState::initialized_v1:
