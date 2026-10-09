@@ -3,6 +3,7 @@
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_protocol.h"
+#include "card/vikey/vikey_card_journal_store.h"
 #include "vikey_network_probe.h"
 
 #include "usb_vault/application/card_entry_router.h"
@@ -619,6 +620,31 @@ void test_conditional_journal_inputs_before_launch(
   }
   expect(development_helper_directory_count() == directories,
          "invalid conditional input created staging directory");
+  CountingCredentialProvider provider;
+  provider.fail_load = true;
+  usb_vault::card::vikey::VikeyHelperBackendConfig config{};
+  try {
+    usb_vault::card::vikey::VikeyHelperCardJournalTransport invalid(config, provider, 0);
+    fail("journal transport accepted zero bound identity");
+  } catch (const std::system_error& error) {
+    expect(error.code() == usb_vault::card::make_error_code(CardError::invalid_configuration),
+           "journal transport identity rejection returned wrong error");
+  }
+  usb_vault::card::vikey::VikeyHelperCardJournalTransport transport(config, provider, 1);
+  const auto expected = fixed_secret(1808, std::byte{0x71});
+  const auto replacement = fixed_secret(152, std::byte{0x37});
+  for (bool write : {false, true}) {
+    try {
+      if (write) transport.write_block(expected, 0, replacement);
+      else static_cast<void>(transport.snapshot_reserved());
+      fail("journal credential provider failure escaped its boundary");
+    } catch (const std::system_error& error) {
+      expect(error.code() == usb_vault::card::make_error_code(CardError::backend_unavailable),
+             "journal credential provider failure returned wrong error");
+    }
+  }
+  expect(provider.loads == 2 && development_helper_directory_count() == directories,
+         "journal transport retained credentials or staged failed provider input");
   std::cout << "conditional journal prelaunch checks passed\n";
 }
 

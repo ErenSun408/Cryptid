@@ -341,6 +341,7 @@ usb_vault_configure_target(usb_vault_vikey_helper_protocol)
 
 add_library(usb_vault_vikey_helper_client STATIC
   src/card/vikey/vikey_helper_client.cpp
+  src/card/vikey/vikey_card_journal_store.cpp
 )
 
 target_include_directories(usb_vault_vikey_helper_client

@@ -1,4 +1,6 @@
 #include "card/card_record_journal_v2.h"
+#include "card/vikey/vikey_card_journal_store.h"
+#include "card/vikey/card_operation_lease.h"
 
 #include "card/card_record_crypto.h"
 #include "card/card_record_v2_internal.h"
@@ -16,6 +18,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -374,6 +377,130 @@ void test_corruption_stale_snapshots_and_limits(const InitializedCardRecordV2& i
   stale.sentinel();
 }
 
+class SnapshotTransport final : public vikey::IVikeyCardJournalTransport {
+ public:
+  explicit SnapshotTransport(const Memory& source) : media(source) {}
+  SecureBuffer snapshot_reserved() override {
+    require_lease();
+    const auto call = snapshots++;
+    if (media.offline) throw std::system_error(make_error_code(CardError::communication_failed));
+    if (call == change_on_snapshot) media.data[1807] ^= std::byte{1};
+    return copy(std::span(media.data).first(call == short_snapshot ? 1807 : 1808));
+  }
+  void write_block(const SecureBuffer& expected, std::size_t offset, const SecureBuffer& block) override {
+    require_lease();
+    if (change_before_write) media.data[1807] ^= std::byte{1};
+    if (!same(expected.bytes(), std::span(media.data).first(1808))) {
+      throw std::system_error(make_error_code(CardError::invalid_operation));
+    }
+    const auto call = media.writes;
+    media.write(offset, block.bytes());
+    if (corrupt_after_write) media.data[0] ^= std::byte{1};
+    if (call == reported_error) throw std::system_error(make_error_code(CardError::communication_failed));
+  }
+  Memory media;
+  std::size_t snapshots{};
+  std::size_t short_snapshot{std::numeric_limits<std::size_t>::max()};
+  std::size_t change_on_snapshot{std::numeric_limits<std::size_t>::max()};
+  std::size_t reported_error{std::numeric_limits<std::size_t>::max()};
+  bool change_before_write{};
+  bool corrupt_after_write{};
+ private:
+  void require_lease() {
+    bool blocked = false;
+    std::thread competitor([&] {
+      try { vikey::CardOperationLease lease; }
+      catch (const std::system_error& error) { blocked = error.code().value() == ERROR_BUSY; }
+    });
+    competitor.join();
+    expect(blocked, "whole transaction lease missing during transport call");
+  }
+};
+
+void test_application_journal_adapter(const InitializedCardRecordV2& initial,
+    const Memory& base, const SecureBuffer& replacement) {
+  SnapshotTransport transport(base);
+  vikey::VikeyCardJournalStore store(transport);
+  expect(same(store.snapshot().bytes(), initial.record.bytes()), "application snapshot selected wrong record");
+  expect(transport.media.writes == 0, "application snapshot normalized journal");
+  store.recover(initial.record.bytes(), initial.root_secret);
+  store.commit(initial.record.bytes(), replacement.bytes(), initial.root_secret);
+  expect(same(store.snapshot().bytes(), replacement.bytes()) && transport.media.writes == 4,
+         "application conditional append failed");
+  store.commit(initial.record.bytes(), replacement.bytes(), initial.root_secret);
+  expect(transport.media.writes == 4, "completed candidate was appended twice");
+  rejects<std::system_error>([&] {
+    store.recover(initial.record.bytes(), initial.root_secret);
+  }, "application stale logical snapshot permitted recovery");
+  expect(transport.media.writes == 4, "stale application recovery wrote card");
+  transport.media.sentinel();
+  SecureBuffer wrong_root(32);
+  SnapshotTransport rejected(base);
+  vikey::VikeyCardJournalStore rejected_store(rejected);
+  rejects<CardCredentialRejected>([&] {
+    rejected_store.recover(initial.record.bytes(), wrong_root);
+  }, "application repair accepted wrong root");
+  rejects<CardCredentialRejected>([&] {
+    rejected_store.commit(initial.record.bytes(), replacement.bytes(), wrong_root);
+  }, "application append accepted wrong root");
+  expect(rejected.media.writes == 0, "application root rejection wrote card");
+  SnapshotTransport bad_anchor(base);
+  bad_anchor.media.data[304 + 184] ^= std::byte{1};
+  for (const auto offset : {0U, 152U}) {
+    auto digest = sha256(std::span(bad_anchor.media.data).subspan(304, 216));
+    std::ranges::copy(digest, bad_anchor.media.data.begin() + offset + 56);
+    rehash_descriptor(bad_anchor.media, offset);
+  }
+  vikey::VikeyCardJournalStore bad_anchor_store(bad_anchor);
+  rejects<CardCredentialRejected>([&] {
+    bad_anchor_store.recover(initial.record.bytes(), initial.root_secret);
+  }, "application recovery relied on public checksums instead of anchor MAC");
+  expect(bad_anchor.media.writes == 0, "bad application anchor permitted cleanup writes");
+  for (unsigned int mode = 0; mode < 5; ++mode) {
+    SnapshotTransport invalid(base);
+    if (mode == 0) invalid.short_snapshot = 0;
+    if (mode == 1) invalid.change_before_write = true;
+    if (mode == 2) invalid.corrupt_after_write = true;
+    if (mode == 3) invalid.short_snapshot = 1;
+    if (mode == 4) invalid.change_on_snapshot = 5; // Final read after four writes.
+    vikey::VikeyCardJournalStore invalid_store(invalid);
+    rejects<std::system_error>([&] {
+      invalid_store.commit(initial.record.bytes(), replacement.bytes(), initial.root_secret);
+    }, "unverified complete postimage reported success");
+    expect(invalid.media.writes == (mode == 0 || mode == 1 ? 0 : mode == 4 ? 4 : 1),
+           "failed transaction performed additional writes");
+    invalid.media.sentinel();
+  }
+}
+
+void test_application_transport_faults(const InitializedCardRecordV2& initial,
+    const Memory& base, const SecureBuffer& replacement) {
+  for (std::size_t call = 0; call < 4; ++call) {
+    SnapshotTransport full(base);
+    full.reported_error = call;
+    vikey::VikeyCardJournalStore full_store(full);
+    full_store.commit(initial.record.bytes(), replacement.bytes(), initial.root_secret);
+    expect(full.media.writes == 4 && same(full_store.snapshot().bytes(), replacement.bytes()),
+           "verified complete write error failed or advanced twice");
+    for (const std::size_t mode : {0U, 2U, 1U}) {
+      SnapshotTransport interrupted(base);
+      interrupted.media.cut_write = call;
+      interrupted.media.tear_mode = mode;
+      vikey::VikeyCardJournalStore interrupted_store(interrupted);
+      rejects<std::system_error>([&] {
+        interrupted_store.commit(initial.record.bytes(), replacement.bytes(), initial.root_secret);
+      }, "offline readback allowed transaction continuation");
+      expect(interrupted.media.writes == call + 1, "offline write was blindly retried");
+      interrupted.media.online();
+      auto selected = interrupted_store.snapshot();
+      expect(same(selected.bytes(), initial.record.bytes()) || same(selected.bytes(), replacement.bytes()),
+             "interrupted application write selected an unrelated record");
+      interrupted_store.recover(selected.bytes(), initial.root_secret);
+      interrupted.media.sentinel();
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -386,7 +513,9 @@ int main() {
     test_recovery_faults(initial, base, replacement);
     test_authentication_and_transition_rejection(initial, base, replacement);
     test_corruption_stale_snapshots_and_limits(initial, base, replacement);
-    std::cout << "card_record_journal_v2_tests: PASS (4 scenario groups)\n";
+    test_application_journal_adapter(initial, base, replacement);
+    test_application_transport_faults(initial, base, replacement);
+    std::cout << "card_record_journal_v2_tests: PASS (6 scenario groups)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "FAILED: " << error.what() << '\n';
