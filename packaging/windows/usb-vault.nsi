@@ -29,7 +29,7 @@ ShowUninstDetails show
 !define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVaultDevelopment"
 !include "${__FILEDIR__}\installer-engine.nsh"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TEXT "该向导将安装 USB Vault。所需的 VeraCrypt 驱动已包含在安装包内，无需另外安装 VeraCrypt 软件；向导会自动检测并按需安装或修复驱动。$\r$\n$\r$\n安装系统组件时会请求管理员授权。卸载 USB Vault 会保留共享组件、凭据、设置和容器文件。"
+!define MUI_WELCOMEPAGE_TEXT "该向导将安装 USB Vault。所需的 VeraCrypt 驱动已包含在安装包内，无需另外安装 VeraCrypt 软件；向导会自动检测并按需安装或修复驱动。$\r$\n$\r$\n安装系统组件时会请求管理员授权。卸载时可选择删除用户配置；容器和其他自存文件始终保留。"
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageShow
 !insertmacro MUI_PAGE_WELCOME
 
@@ -57,6 +57,7 @@ Page custom DependencyPageCreate DependencyPageLeave
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
+UninstPage custom un.ConfigurationPageCreate un.ConfigurationPageLeave
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
@@ -81,6 +82,32 @@ Var WebViewCheck
 Var WebViewSelection
 Var WelcomeTitleFont
 Var WelcomeTextFont
+Var UninstallConfigurationCheck
+
+Function un.ConfigurationPageCreate
+  !insertmacro MUI_HEADER_TEXT "卸载选项" "选择需要清理的用户配置"
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    MessageBox MB_ICONSTOP "无法显示卸载选项，请重新运行卸载程序。"
+    SetErrorLevel 1603
+    Quit
+  ${EndIf}
+  ${NSD_CreateCheckbox} 0 8u 100% 14u "删除用户配置"
+  Pop $UninstallConfigurationCheck
+  ${If} $UninstallDeleteConfiguration == 1
+    ${NSD_Check} $UninstallConfigurationCheck
+  ${EndIf}
+  ${NSD_CreateLabel} 0 32u 100% 48u "删除当前 Windows 用户保存的设置、记住的容器位置索引及 ViKey 配置凭据。重新安装后需要重新配置凭据、导入容器。此清理不可撤销。"
+  Pop $0
+  ${NSD_CreateLabel} 0 88u 100% 40u "容器、安全卡及其他自存文件始终保留。安装目录存在保留文件时不会被删除。"
+  Pop $0
+  nsDialogs::Show
+FunctionEnd
+
+Function un.ConfigurationPageLeave
+  ${NSD_GetState} $UninstallConfigurationCheck $UninstallDeleteConfiguration
+FunctionEnd
 
 Function WelcomePageShow
   CreateFont $WelcomeTitleFont "Microsoft YaHei UI" 12 700
@@ -360,6 +387,11 @@ Function .onInstSuccess
 FunctionEnd
 
 Function un.onInit
+  StrCpy $UninstallDeleteConfiguration 1
+  ; Destructive choices must be visible; do not accept silent uninstall.
+  IfSilent 0 +3
+    SetErrorLevel 64
+    Quit
   Call un.AcquireSetupMutex
   ${If} $UpdateFailed == 1
     MessageBox MB_ICONSTOP "另一个 USB Vault 安装或卸载程序正在运行。"
@@ -393,6 +425,6 @@ FunctionEnd
 Section "Uninstall"
   Call un.UninstallPackage
   ${If} $UpdateFailed == 1
-    MessageBox MB_ICONSTOP "卸载未完成。请关闭程序并处理文件占用；如果存在未完成的更新，请先运行对应安装包恢复。安装记录和用户数据会保留。"
+    MessageBox MB_ICONSTOP "卸载未完成。请关闭程序并检查文件占用、权限；如果存在未完成的更新，请先运行对应安装包恢复。所选配置清理可能已部分完成，容器和其他自存文件不会删除。处理后可重新运行卸载程序。"
   ${EndIf}
 SectionEnd

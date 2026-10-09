@@ -27,6 +27,45 @@ public static class InstallerTestAcl {
     } finally { pinned.Free(); }
   }
 }
+public static class InstallerTestCredentials {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  struct Credential {
+    public uint Flags, Type;
+    public string TargetName, Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public uint CredentialBlobSize;
+    public IntPtr CredentialBlob;
+    public uint Persist, AttributeCount;
+    public IntPtr Attributes;
+    public string TargetAlias, UserName;
+  }
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool CredWrite(ref Credential credential, uint flags);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool CredRead(string target, uint type, uint flags, out IntPtr credential);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool CredDelete(string target, uint type, uint flags);
+  [DllImport("advapi32.dll")] static extern void CredFree(IntPtr credential);
+  static void Guard(string target) {
+    if (!target.StartsWith("usb-vault-installer-test-", StringComparison.Ordinal)) throw new ArgumentException("Non-test target");
+  }
+  public static void Write(string target) {
+    Guard(target);
+    var credential = new Credential { Type=1, TargetName=target, Persist=2, UserName="isolated-test" };
+    if (!CredWrite(ref credential, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+  public static bool Exists(string target) {
+    Guard(target); IntPtr credential;
+    if (CredRead(target, 1, 0, out credential)) { CredFree(credential); return true; }
+    int error = Marshal.GetLastWin32Error();
+    if (error != 1168) throw new Win32Exception(error);
+    return false;
+  }
+  public static void Delete(string target) {
+    Guard(target);
+    if (!CredDelete(target, 1, 0) && Marshal.GetLastWin32Error() != 1168) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+}
 '@
 function New-Fixture([string] $Name) {
     $fixture = Join-Path $suite $Name
@@ -49,6 +88,16 @@ function Compile-Fixture($Fixture, [string] $StopAt = 'never', [string] $Identit
     return $executable
 }
 function Run-Fixture([string] $Executable, [int] $Expected = 0, [string] $Arguments = '/S') {
+    if ((Split-Path -Leaf $Executable) -eq '卸载 USB Vault.exe') {
+        # NSIS normally re-executes a temporary copy; that parent reports 0
+        # even when its child refuses uninstall. Run our own isolated copy with
+        # _?= last so we wait for and inspect the actual uninstaller exit code.
+        $installedDirectory = Split-Path -Parent $Executable
+        $runner = Join-Path (Split-Path -Parent $installedDirectory) ('uninstall-runner-' + [Guid]::NewGuid().ToString('N') + '.exe')
+        Copy-Item -LiteralPath $Executable -Destination $runner
+        $Executable = $runner
+        $Arguments += ' _?=' + $installedDirectory
+    }
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru -Wait
     if ($process.ExitCode -ne $Expected) { throw "Expected $Expected, got $($process.ExitCode): $Executable" }
 }
@@ -67,7 +116,91 @@ function Assert-Installed($Fixture) {
         if ($shortcut.TargetPath -ne "$($Fixture.Root)\app\$name.exe" -or $shortcut.Arguments -ne '') { throw 'Shortcut target mismatch' }
     }
 }
+function Configuration-Targets($Fixture) {
+    foreach ($suffix in @('credentials', 'user-sn', 'api-key', 'user-pin', 'unrelated')) {
+        'usb-vault-installer-test-' + $Fixture.Id + '-' + $suffix
+    }
+}
 try {
+    foreach ($delete in @(0, 1)) {
+        $fixture = New-Fixture "configuration-choice-$delete"
+        $exe = Compile-Fixture $fixture
+        Run-Fixture $exe
+        New-Item -ItemType Directory -Path "$($fixture.Root)\config" | Out-Null
+        [IO.File]::WriteAllText("$($fixture.Root)\config\settings.txt", 'settings')
+        [IO.File]::WriteAllText("$($fixture.Root)\config\container_index.bin", 'encrypted index')
+        [IO.File]::WriteAllText("$($fixture.Root)\config\container.hc", 'container stays')
+        [IO.File]::WriteAllText("$($fixture.Root)\app\user.txt", 'user file stays')
+        foreach ($target in @(Configuration-Targets $fixture)) { [InstallerTestCredentials]::Write($target) }
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments "/S /DELETECONFIG=$delete"
+        foreach ($name in @('settings.txt', 'container_index.bin')) {
+            if ((Test-Path -LiteralPath "$($fixture.Root)\config\$name") -ne ($delete -eq 0)) { throw 'Configuration choice ignored' }
+        }
+        foreach ($target in @(Configuration-Targets $fixture)) {
+            $expected = $delete -eq 0 -or $target.EndsWith('-unrelated')
+            if ([InstallerTestCredentials]::Exists($target) -ne $expected) { throw 'Credential scope/choice ignored' }
+        }
+        Assert-Text "$($fixture.Root)\config\container.hc" 'container stays'
+        Assert-Text "$($fixture.Root)\app\user.txt" 'user file stays'
+        if (Test-Path -LiteralPath $fixture.Key) { throw 'Configuration uninstall left registration' }
+    }
+    Write-Output 'PASS configuration choices and exact credential scope preserve containers and unrelated files'
+
+    $fixture = New-Fixture 'configuration-absent'
+    $exe = Compile-Fixture $fixture
+    Run-Fixture $exe
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=1'
+    if (Test-Path -LiteralPath $fixture.Key) { throw 'Absent configuration blocked uninstall' }
+    Write-Output 'PASS absent configuration and credentials are idempotent'
+
+    $fixture = New-Fixture 'credentials-without-directory'
+    $exe = Compile-Fixture $fixture
+    Run-Fixture $exe
+    foreach ($target in @(Configuration-Targets $fixture)) { [InstallerTestCredentials]::Write($target) }
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=1'
+    foreach ($target in @(Configuration-Targets $fixture)) {
+        if ([InstallerTestCredentials]::Exists($target) -ne $target.EndsWith('-unrelated')) { throw 'Credential cleanup depends on configuration directory' }
+    }
+    Write-Output 'PASS credentials removed even without a configuration directory'
+
+    $fixture = New-Fixture 'configuration-file-is-directory'
+    $exe = Compile-Fixture $fixture
+    Run-Fixture $exe
+    New-Item -ItemType Directory -Path "$($fixture.Root)\config\settings.txt" | Out-Null
+    [IO.File]::WriteAllText("$($fixture.Root)\config\settings.txt\user", 'user stays')
+    foreach ($target in @(Configuration-Targets $fixture)) { [InstallerTestCredentials]::Write($target) }
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments '/S /DELETECONFIG=1'
+    Assert-Installed $fixture
+    Assert-Text "$($fixture.Root)\config\settings.txt\user" 'user stays'
+    foreach ($target in @(Configuration-Targets $fixture)) {
+        if (![InstallerTestCredentials]::Exists($target)) { throw 'Unsafe file preflight deleted credentials' }
+    }
+    Write-Output 'PASS configuration file replaced by a directory rejects cleanup before credentials'
+
+    $fixture = New-Fixture 'configuration-junction'
+    $exe = Compile-Fixture $fixture
+    Run-Fixture $exe
+    New-Item -ItemType Directory -Path "$($fixture.Root)\outside" | Out-Null
+    [IO.File]::WriteAllText("$($fixture.Root)\outside\settings.txt", 'outside stays')
+    New-Item -ItemType Junction -Path "$($fixture.Root)\config" -Target "$($fixture.Root)\outside" | Out-Null
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments '/S /DELETECONFIG=1'
+    Assert-Text "$($fixture.Root)\outside\settings.txt" 'outside stays'
+    Assert-Installed $fixture
+    Write-Output 'PASS redirected configuration rejected before product deletion'
+
+    $fixture = New-Fixture 'configuration-locked'
+    $exe = Compile-Fixture $fixture
+    Run-Fixture $exe
+    New-Item -ItemType Directory -Path "$($fixture.Root)\config" | Out-Null
+    [IO.File]::WriteAllText("$($fixture.Root)\config\settings.txt", 'settings stay')
+    $locked = [IO.File]::Open("$($fixture.Root)\config\settings.txt", 'Open', 'Read', 'Read')
+    try { Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments '/S /DELETECONFIG=1' } finally { $locked.Dispose() }
+    Assert-Text "$($fixture.Root)\config\settings.txt" 'settings stay'
+    Assert-Installed $fixture
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=1'
+    if (Test-Path -LiteralPath "$($fixture.Root)\config") { throw 'Empty configuration directory survived' }
+    Write-Output 'PASS occupied configuration retains product and supports retry'
+
     $fixture = New-Fixture 'install-update-repair-uninstall'
     $exe = Compile-Fixture $fixture
     Run-Fixture $exe
@@ -134,7 +267,7 @@ try {
     if (!(Test-Path -LiteralPath "$($fixture.Root)\app\.usb-vault-update\backup\F0000")) { throw 'Foreign package lost backup' }
     # The NSIS launcher returns zero after its temporary child exits. Assert
     # refusal by retained registration and backup, not the launcher's status.
-    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe"
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10
     if (!(Test-Path -LiteralPath $fixture.Key)) { throw 'Pending update uninstall removed registration' }
     if (!(Test-Path -LiteralPath "$($fixture.Root)\app\.usb-vault-update\backup\F0000")) { throw 'Pending uninstall removed recovery backup' }
     [IO.File]::WriteAllText("$($fixture.Root)\app\.usb-vault-update\unknown", 'keep unknown')
@@ -177,5 +310,9 @@ try {
     if (Test-Path -LiteralPath "$($fixture.Root)\app\.usb-vault-update") { throw 'Nonempty folder modified' }
     Write-Output 'PASS unregistered nonempty directory rejected'
 } finally {
+    foreach ($key in $keys) {
+        $id = Split-Path -Leaf $key
+        foreach ($target in @(Configuration-Targets @{ Id = $id })) { [InstallerTestCredentials]::Delete($target) }
+    }
     foreach ($key in $keys) { if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key } }
 }

@@ -94,6 +94,7 @@ FunctionEnd
 !macroend
 !insertmacro SetupCommonFunctions ""
 !insertmacro SetupCommonFunctions "un."
+!include "${__FILEDIR__}\uninstall-configuration.nsh"
 
 ; Build a protected descriptor owned by the actual token user. Restrict the
 ; transaction tree to that user and SYSTEM, with inherited child permissions.
@@ -448,6 +449,10 @@ Function un.UninstallPackage
   ${If} $UpdateFailed == 1
     Goto engine_uninstall_failed
   ${EndIf}
+  Call un.CleanUserConfiguration
+  ${If} $UpdateFailed == 1
+    Goto engine_uninstall_failed
+  ${EndIf}
   !insertmacro PackageDelete
   Call un.ReleaseFileLeases
   ${If} $UpdateFailed == 1
@@ -463,6 +468,10 @@ Function un.UninstallPackage
   ${EndIf}
   Delete "$INSTDIR\卸载 USB Vault.exe"
   Call un.ReleaseSetup
+  ${If} $UninstallDeleteConfiguration == 1
+    ; Remove only an empty configuration directory, after releasing its guards.
+    RMDir "${ProductConfigurationDirectory}"
+  ${EndIf}
   !insertmacro PackageRemoveDirectories
   RMDir "$INSTDIR"
   Goto engine_uninstall_done

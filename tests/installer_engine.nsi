@@ -16,6 +16,8 @@ Unicode true
 !define UninstallKey "Software\USBVaultInstallerTests\${TestId}"
 !define ProductMenu "${TestRoot}\menu"
 !define ProductWindowClass "USBVaultInstallerTest_${TestId}"
+!define ProductConfigurationDirectory "${TestRoot}\config"
+!define ProductCredentialPrefix "usb-vault-installer-test-${TestId}"
 !include "${__FILEDIR__}\..\packaging\windows\installer-engine.nsh"
 Name "USB Vault isolated installer test"
 OutFile "${TestOutput}"
@@ -38,6 +40,12 @@ Section
   ${EndIf}
 SectionEnd
 Section "Uninstall"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/DELETECONFIG=" $1
+  ${IfNot} ${Errors}
+    StrCpy $UninstallDeleteConfiguration $1
+  ${EndIf}
   Call un.AcquireSetupMutex
   ${If} $UpdateFailed != 1
     Call un.UninstallPackage
