@@ -489,6 +489,116 @@ void test_single_password_and_legacy_client_rejection() {
   storage.sentinel();
 }
 
+void test_initialization_publication_and_restart() {
+  Memory base;
+  auto marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(base, marker.bytes());
+  base.online();
+  auto plan = prepare_card_journal_v2_initialization(base, marker.bytes(), text(kPasswords[0]));
+  expect(base.writes == 0, "initialization preparation wrote card");
+  Memory completed = base;
+  auto root = commit_card_journal_v2_initialization(completed, plan);
+  auto record = snapshot_card_record_journal_v2(completed);
+  expect(completed.writes == 12, "initialization publication changed write count");
+  expect_password(record, kPasswords[0], root);
+  verify_card_record_journal_v2_anchor(completed, record.bytes(), root);
+  completed.sentinel();
+
+  for (std::size_t call = 0; call < 12; ++call) {
+    for (const std::size_t mode : {0U, 2U, 1U}) {
+      Memory interrupted = base;
+      interrupted.cut_write = call;
+      interrupted.tear_mode = mode;
+      rejects<std::system_error>([&] {
+        static_cast<void>(commit_card_journal_v2_initialization(interrupted, plan));
+      }, "initialization power loss reported completion");
+      interrupted.online();
+      auto resumed_root = commit_card_journal_v2_initialization(interrupted, plan);
+      expect(same(resumed_root.bytes(), root.bytes()), "retained initialization changed root");
+      expect(same(snapshot_card_record_journal_v2(interrupted).bytes(), record.bytes()),
+          "initialization retry changed logical record");
+      interrupted.sentinel();
+    }
+  }
+  // Filler-only staging cannot recover a lost root; a complete record can.
+  for (const std::size_t mode : {2U, 1U}) {
+    Memory restart = base;
+    restart.cut_write = mode == 2 ? 4 : 5;
+    restart.tear_mode = mode;
+    rejects<std::system_error>([&] {
+      static_cast<void>(commit_card_journal_v2_initialization(restart, plan));
+    }, "missing initialization staging interruption");
+    restart.online();
+    if (mode == 2) {
+      const auto before = restart.data;
+      rejects<std::system_error>([&] {
+        static_cast<void>(prepare_card_journal_v2_initialization(restart, marker.bytes(), text(kPasswords[0])));
+      }, "lost initialization root guessed from incomplete credential");
+      expect(restart.writes == 0 && restart.data == before, "incomplete initialization was overwritten");
+    } else {
+      rejects<CardCredentialRejected>([&] {
+        static_cast<void>(prepare_card_journal_v2_initialization(restart, marker.bytes(), text("wrong-password")));
+      }, "staged initialization accepted wrong password");
+      auto fresh = prepare_card_journal_v2_initialization(restart, marker.bytes(), text(kPasswords[0]));
+      auto restored = commit_card_journal_v2_initialization(restart, fresh);
+      expect(same(restored.bytes(), root.bytes()), "process restart changed staged initialization root");
+      expect(same(snapshot_card_record_journal_v2(restart).bytes(), record.bytes()),
+          "process restart changed staged credential record");
+    }
+    restart.sentinel();
+  }
+  Memory foreign = base;
+  std::ranges::copy(record.bytes(), foreign.data.begin() + 1040);
+  const auto before = foreign.data;
+  rejects<std::system_error>([&] {
+    static_cast<void>(prepare_card_journal_v2_initialization(foreign, marker.bytes(), text(kPasswords[0])));
+  }, "unreserved complete initialization credential was accepted");
+  expect(foreign.writes == 0 && foreign.data == before, "foreign initialization evidence changed");
+  completed.online();
+  rejects<std::system_error>([&] { commit_card_record_journal_v1(completed, marker.bytes()); },
+      "old client overwrote directly initialized card");
+  expect(completed.writes == 0, "old client rejection wrote initialized card");
+  std::cout << "initialization publication faults: 36; lost-plan checks: 2\n";
+}
+
+class AcceptedPasswordPolicy final : public usb_vault::security::IPasswordStrengthPolicy {
+ public:
+  usb_vault::security::PasswordStrength assess(const SecureBuffer&) const noexcept override {
+    return usb_vault::security::PasswordStrength::acceptable;
+  }
+};
+
+void test_application_initialization_adapter() {
+  Memory base;
+  auto marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(base, marker.bytes());
+  base.online();
+  AcceptedPasswordPolicy policy;
+  UpgradeTransport transport(base), other(base);
+  vikey::VikeyCardJournalStore store(transport), other_store(other);
+  const auto snapshot = store.snapshot_provisioning();
+  auto confirmed = usb_vault::security::confirm_password(policy, text(kPasswords[0]), text(kPasswords[0]));
+  auto plan = store.prepare_initialization(snapshot.bytes(), std::move(confirmed));
+  expect(transport.media.writes == 0, "application initialization preparation wrote card");
+  rejects<std::system_error>([&] { static_cast<void>(other_store.initialize(plan)); },
+      "initialization plan accepted another store");
+  expect(other.media.writes == 0, "cross-store initialization wrote card");
+  transport.media.cut_write = 4;
+  transport.media.tear_mode = 2;
+  rejects<std::system_error>([&] { static_cast<void>(store.initialize(plan)); },
+      "application initialization accepted partial postimage");
+  expect(transport.media.writes == 5, "application initialization retried uncertain write");
+  transport.media.online();
+  auto root = store.initialize(plan);
+  auto selected = store.snapshot();
+  expect_password(selected, kPasswords[0], root);
+  auto repeated = store.initialize(plan);
+  expect(same(repeated.bytes(), root.bytes()), "verified initialization retry changed root");
+  rejects<std::system_error>([&] { static_cast<void>(store.snapshot_provisioning()); },
+      "published initialization was exposed as a provisioning marker");
+  transport.media.sentinel();
+}
+
 } // namespace
 
 int main() {
@@ -496,7 +606,9 @@ int main() {
     test_migration_faults_and_restart();
     test_unowned_data_capacity_short_reads_and_expired_migration();
     test_single_password_and_legacy_client_rejection();
-    std::cout << "card_record_journal_v2_migration_tests: PASS (3 core groups plus application upgrade)\n";
+    test_initialization_publication_and_restart();
+    test_application_initialization_adapter();
+    std::cout << "card_record_journal_v2_migration_tests: PASS (migration and initialization)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "FAILED: " << error.what() << '\n';

@@ -2,6 +2,7 @@
 
 #include "card/vikey/vikey_helper_backend.h"
 #include "card/card_record_journal_v2.h"
+#include "usb_vault/security/confirmed_password.h"
 
 #include <memory>
 #include <utility>
@@ -50,6 +51,22 @@ class PreparedVikeyCardUpgrade final {
   std::shared_ptr<const std::byte> owner_;
 };
 
+// Opaque initialization material retained only for an uncertain write retry.
+class PreparedVikeyCardInitialization final {
+ public:
+  PreparedVikeyCardInitialization(PreparedVikeyCardInitialization&&) noexcept = default;
+  PreparedVikeyCardInitialization& operator=(PreparedVikeyCardInitialization&&) noexcept = default;
+  PreparedVikeyCardInitialization(const PreparedVikeyCardInitialization&) = delete;
+  PreparedVikeyCardInitialization& operator=(const PreparedVikeyCardInitialization&) = delete;
+ private:
+  friend class VikeyCardJournalStore;
+  PreparedVikeyCardInitialization(PreparedCardJournalV2Initialization plan,
+      std::shared_ptr<const std::byte> owner)
+      : plan_(std::move(plan)), owner_(std::move(owner)) {}
+  PreparedCardJournalV2Initialization plan_;
+  std::shared_ptr<const std::byte> owner_;
+};
+
 // Application-process adapter. Each method holds a complete operation lease,
 // including verification and cleanup. Authenticate snapshot() via the v2 logical
 // API first; recover/commit verify the root and anchor before any write. Legacy
@@ -74,6 +91,13 @@ class VikeyCardJournalStore final {
   // adapter entry. Every attempt consumes the plan; failures require fresh
   // authentication/preparation, or v2 authentication/recovery after publication.
   void commit_upgrade(PreparedVikeyCardUpgrade&& prepared);
+  [[nodiscard]] security::SecureBuffer snapshot_provisioning();
+  [[nodiscard]] PreparedVikeyCardInitialization prepare_initialization(
+      std::span<const std::byte> expected_marker, security::ConfirmedPassword password);
+  // Retain the locked plan across uncertain writes so retry keeps the same root.
+  // Lifecycle/confirmation ownership remains with the application caller.
+  [[nodiscard]] security::SecureBuffer initialize(
+      const PreparedVikeyCardInitialization& prepared);
  private:
   IVikeyCardJournalTransport& transport_;
   const std::shared_ptr<const std::byte> owner_{std::make_shared<const std::byte>()};

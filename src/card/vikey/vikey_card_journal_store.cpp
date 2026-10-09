@@ -167,4 +167,36 @@ void VikeyCardJournalStore::commit_upgrade(PreparedVikeyCardUpgrade&& prepared) 
   storage.verify_current();
 }
 
+security::SecureBuffer VikeyCardJournalStore::snapshot_provisioning() {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto selected = detail::snapshot_legacy_card_journal(storage);
+  if (inspect_card_record(selected.record.bytes()) != CardRecordState::provisioned_uninitialized) {
+    fail(CardError::invalid_operation, "initialization requires provisioning marker");
+  }
+  storage.verify_current();
+  return std::move(selected.record);
+}
+
+PreparedVikeyCardInitialization VikeyCardJournalStore::prepare_initialization(
+    const std::span<const std::byte> expected, security::ConfirmedPassword password) {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto plan = prepare_card_journal_v2_initialization(storage, expected, std::move(password).take());
+  storage.verify_current();
+  return PreparedVikeyCardInitialization(std::move(plan), owner_);
+}
+
+security::SecureBuffer VikeyCardJournalStore::initialize(
+    const PreparedVikeyCardInitialization& prepared) {
+  if (prepared.owner_ != owner_) {
+    fail(CardError::invalid_operation, "initialization preparation belongs to another store or was moved");
+  }
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto root = commit_card_journal_v2_initialization(storage, prepared.plan_);
+  storage.verify_current();
+  return root;
+}
+
 } // namespace usb_vault::card::vikey

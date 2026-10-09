@@ -13,8 +13,8 @@ struct LegacyCardJournalSnapshot final {
 
 [[nodiscard]] LegacyCardJournalSnapshot snapshot_legacy_card_journal(
     ICardRecordJournalStorage& storage);
-// Narrow migration transition: only an unchanged initialized record (intent)
-// or a strictly framed v2 anchor may replace the expected legacy record.
+// Narrow publication transition: only an unchanged initialized/provisioning
+// record (intent) or a strictly framed v2 anchor may replace the exact source.
 void commit_legacy_card_journal_transition(ICardRecordJournalStorage& storage,
     std::span<const std::byte> expected_record,
     const std::array<std::byte, 16>& expected_commit,

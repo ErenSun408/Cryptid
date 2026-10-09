@@ -614,7 +614,9 @@ void commit_legacy_card_journal_transition(ICardRecordJournalStorage& storage,
     const std::array<std::byte, 16>& expected_commit,
     const std::span<const std::byte> replacement,
     const std::array<std::byte, 16>& new_commit) {
-  if (inspect_card_record(expected_record) != CardRecordState::initialized_v1 ||
+  const auto source_state = inspect_card_record(expected_record);
+  if ((source_state != CardRecordState::initialized_v1 &&
+       source_state != CardRecordState::provisioned_uninitialized) ||
       (!equal_bytes(expected_record, replacement) &&
        !is_card_record_v2_anchor(replacement))) {
     fail(CardError::invalid_configuration, "invalid legacy migration transition");
