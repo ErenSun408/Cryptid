@@ -2,6 +2,7 @@
 
 #include "card/card_record_journal_v1.h"
 #include "card/card_record_journal_v2_anchor.h"
+#include "usb_vault/card/card_product_record_state.h"
 
 #include <array>
 #include <utility>
@@ -86,6 +87,10 @@ void commit_card_journal_v2_migration(ICardRecordJournalStorage& storage,
     const PreparedCardJournalV2Migration& prepared);
 
 [[nodiscard]] security::SecureBuffer snapshot_card_record_journal_v2(
+    ICardRecordJournalStorage& storage);
+// Application-only, unauthenticated admission. Reads the selected journal and
+// known-version staging without repair; legacy inspectors remain unchanged.
+[[nodiscard]] CardProductRecordState inspect_card_record_journal_product_v2(
     ICardRecordJournalStorage& storage);
 // Verify the immutable anchor after the application has authenticated the
 // selected logical record. The journal's public checksums are not MACs.

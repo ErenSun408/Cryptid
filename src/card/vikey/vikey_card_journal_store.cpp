@@ -120,6 +120,13 @@ security::SecureBuffer VikeyCardJournalStore::snapshot() {
   storage.verify_current();
   return record;
 }
+CardProductRecordState VikeyCardJournalStore::inspect_entry() {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  const auto state = inspect_card_record_journal_product_v2(storage);
+  storage.verify_current();
+  return state;
+}
 void VikeyCardJournalStore::recover(const std::span<const std::byte> expected,
     const security::SecureBuffer& root) {
   CardOperationLease lease;

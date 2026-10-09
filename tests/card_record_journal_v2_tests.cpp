@@ -643,6 +643,75 @@ void test_application_reset_adapter(const Memory& base) {
   }
 }
 
+void test_read_only_product_entry(const Memory& base) {
+  Memory legacy_media;
+  auto old_marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(legacy_media, old_marker.bytes());
+  SnapshotTransport legacy(legacy_media);
+  vikey::VikeyCardJournalStore legacy_store(legacy);
+  expect(legacy_store.inspect_entry() == CardProductRecordState::provisioned_uninitialized && legacy.media.writes == 0,
+      "old provisioning entry changed during v2 classification");
+  std::ranges::copy(crypto::kCardV2AnchorMagic, legacy.media.data.begin() + 1040);
+  crypto::card_journal_store_u32(std::span(legacy.media.data), 1040 + 8, 9);
+  expect(legacy_store.inspect_entry() == CardProductRecordState::unsupported_version && legacy.media.writes == 0,
+      "old marker bypassed future staging rejection");
+  std::ranges::fill(std::span(legacy.media.data).subspan(736, 1072), std::byte{});
+  SecureBuffer old_record(216);
+  std::ranges::copy(std::span(base.data).subspan(1040 + 32, 64), old_record.bytes().begin());
+  commit_card_record_journal_v1(legacy.media, old_record.bytes());
+  legacy.media.online();
+  expect(legacy_store.inspect_entry() == CardProductRecordState::initialized_v1 && legacy.media.writes == 0,
+      "old initialized entry was misclassified as v2");
+  SnapshotTransport transport(base);
+  vikey::VikeyCardJournalStore store(transport);
+  expect(store.inspect_entry() == CardProductRecordState::initialized_v2,
+      "supported entry did not recognize v2 journal");
+  transport.media.data[888] ^= std::byte{1};
+  const auto before = transport.media.data;
+  expect(store.inspect_entry() == CardProductRecordState::initialized_v2 &&
+      transport.media.writes == 0 && transport.media.data == before, "entry inspection normalized journal");
+  transport.media.data[1040 + 140] ^= std::byte{1};
+  rejects<std::system_error>([&] { static_cast<void>(store.inspect_entry()); },
+      "damaged selected v2 record was admitted");
+  expect(transport.media.writes == 0, "damaged entry inspection wrote card");
+
+  SnapshotTransport reset(base);
+  vikey::VikeyCardJournalStore reset_store(reset);
+  auto reset_plan = reset_store.prepare_reset(reset_store.snapshot_for_reset().bytes());
+  reset_store.reset(reset_plan);
+  reset.media.online();
+  expect(reset_store.inspect_entry() == CardProductRecordState::provisioned_uninitialized,
+      "strict v2 marker did not reach initialization contract");
+  auto marker = reset_store.snapshot_provisioning();
+  expect(inspect_card_record(marker.bytes()) == CardRecordState::unsupported_version,
+      "new entry evidence weakened legacy version rejection");
+  const auto saved = reset.media.data;
+  std::ranges::copy(crypto::kCardV2AnchorMagic, reset.media.data.begin() + 1040);
+  crypto::card_journal_store_u32(std::span(reset.media.data), 1040 + 8, 9);
+  expect(reset_store.inspect_entry() == CardProductRecordState::unsupported_version && reset.media.writes == 0,
+      "future staged record reached initialization route");
+  reset.media.data = saved;
+  reset.media.data[304 + 32] = std::byte{1};
+  const auto digest = sha256(std::span(reset.media.data).subspan(304, 216));
+  for (const auto offset : {0U, 152U}) {
+    std::ranges::copy(digest, reset.media.data.begin() + offset + 56);
+    rehash_descriptor(reset.media, offset);
+  }
+  expect(reset_store.inspect_entry() == CardProductRecordState::unsupported_version && reset.media.writes == 0,
+      "noncanonical future marker reached initialization");
+  for (const bool short_read : {true, false}) {
+    SnapshotTransport unstable(base);
+    if (short_read) unstable.short_snapshot = 0;
+    else unstable.change_on_snapshot = 1;
+    vikey::VikeyCardJournalStore unstable_store(unstable);
+    rejects<std::system_error>([&] { static_cast<void>(unstable_store.inspect_entry()); },
+        "entry admitted short or changed full snapshot");
+    expect(unstable.media.writes == 0, "unstable entry inspection wrote card");
+  }
+  transport.media.sentinel();
+  reset.media.sentinel();
+}
+
 } // namespace
 
 int main() {
@@ -659,7 +728,8 @@ int main() {
     test_application_transport_faults(initial, base, replacement);
     test_full_reserved_reset(initial, base);
     test_application_reset_adapter(base);
-    std::cout << "card_record_journal_v2_tests: PASS (8 scenario groups)\n";
+    test_read_only_product_entry(base);
+    std::cout << "card_record_journal_v2_tests: PASS (9 scenario groups)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "FAILED: " << error.what() << '\n';

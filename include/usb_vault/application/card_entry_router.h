@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/card/card_product_record_state.h"
 #include "usb_vault/card/failure_diagnostic.h"
 
 namespace usb_vault::application {
@@ -43,11 +44,20 @@ class IReadOnlyCardEntryInspection {
 
   [[nodiscard]] virtual CardEntryMediaEvidence inspect_media() = 0;
 
-  // Called exactly once and only after inspect_media() reports product_record.
+  // Legacy classification used by the default supported-format implementation,
+  // exactly once and only after inspect_media() reports product_record.
   // This method must classify the selected logical record without repairing,
   // normalizing, or otherwise writing the card.
   [[nodiscard]] virtual card::CardRecordState
   inspect_product_record_read_only() = 0;
+
+  // New adapters explicitly opt in after validating the selected v2 journal.
+  // Existing adapters retain their exact legacy interpretation; unsupported
+  // evidence cannot implicitly become an initialized v2 route.
+  [[nodiscard]] virtual card::CardProductRecordState
+  inspect_supported_product_record_read_only() {
+    return card::product_state_from_legacy(inspect_product_record_read_only());
+  }
 
  protected:
   IReadOnlyCardEntryInspection() noexcept = default;

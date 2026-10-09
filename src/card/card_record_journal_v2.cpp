@@ -605,6 +605,27 @@ security::SecureBuffer snapshot_card_record_journal_v2(ICardRecordJournalStorage
   return std::move(load_card(storage).journal.record);
 }
 
+CardProductRecordState inspect_card_record_journal_product_v2(ICardRecordJournalStorage& storage) {
+  require_capacity(storage);
+  const auto selected = detail::snapshot_legacy_card_journal(storage);
+  const auto legacy_state = inspect_card_record(selected.record.bytes());
+  if (legacy_state == CardRecordState::provisioned_uninitialized ||
+      detail::is_card_record_v2_provisioning_marker(selected.record.bytes())) {
+    const auto extension = read_extension(storage);
+    for (const auto offset : {304U, 688U}) {
+      if (inspect_card_record_v2(extension.bytes.bytes().subspan(offset, 384)) == CardRecordV2State::unsupported_version) {
+        return CardProductRecordState::unsupported_version;
+      }
+    }
+    return CardProductRecordState::provisioned_uninitialized;
+  }
+  if (detail::is_card_record_v2_anchor(selected.record.bytes())) {
+    static_cast<void>(snapshot_card_record_journal_v2(storage));
+    return CardProductRecordState::initialized_v2;
+  }
+  return product_state_from_legacy(legacy_state);
+}
+
 void verify_card_record_journal_v2_anchor(ICardRecordJournalStorage& storage,
     const std::span<const std::byte> expected_record,
     const security::SecureBuffer& authenticated_root) {

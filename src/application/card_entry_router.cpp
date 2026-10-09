@@ -24,16 +24,17 @@ CardEntryRoute CardEntryRouter::route(
         return unavailable(4005);
     }
 
-    switch (inspection.inspect_product_record_read_only()) {
-      case card::CardRecordState::provisioned_uninitialized:
+    switch (inspection.inspect_supported_product_record_read_only()) {
+      case card::CardProductRecordState::provisioned_uninitialized:
         return CardEntryRoute::initialization_required;
-      case card::CardRecordState::initialized_v1:
+      case card::CardProductRecordState::initialized_v1:
+      case card::CardProductRecordState::initialized_v2:
         return CardEntryRoute::login_required;
-      case card::CardRecordState::legacy_p1_blob:
+      case card::CardProductRecordState::legacy_p1_blob:
         return unavailable(4001);
-      case card::CardRecordState::unsupported_version:
+      case card::CardProductRecordState::unsupported_version:
         return unavailable(4002);
-      case card::CardRecordState::malformed:
+      case card::CardProductRecordState::malformed:
         return unavailable(4003);
       default:
         return unavailable(4005);

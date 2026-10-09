@@ -4,6 +4,7 @@
 #include "card/card_record_journal_v2.h"
 #include "card/card_record_journal_v2_reset.h"
 #include "usb_vault/security/confirmed_password.h"
+#include "usb_vault/card/card_product_record_state.h"
 
 #include <memory>
 #include <utility>
@@ -94,6 +95,9 @@ class VikeyCardJournalStore final {
   VikeyCardJournalStore(const VikeyCardJournalStore&) = delete;
   VikeyCardJournalStore& operator=(const VikeyCardJournalStore&) = delete;
   [[nodiscard]] security::SecureBuffer snapshot();
+  // Strictly read-only, unauthenticated admission evidence for the new entry
+  // contract. No slot/cursor/root information is returned to the caller.
+  [[nodiscard]] CardProductRecordState inspect_entry();
   void recover(std::span<const std::byte> expected_record,
       const security::SecureBuffer& authenticated_root);
   void commit(std::span<const std::byte> expected_record,
