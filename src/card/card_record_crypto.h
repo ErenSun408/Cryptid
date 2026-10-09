@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <span>
+#include <string_view>
 
 namespace usb_vault::card::detail {
 
@@ -34,6 +35,11 @@ void encrypt_card_envelope_v1(std::span<const std::byte> context,
 
 [[nodiscard]] security::SecureBuffer derive_card_ring_metadata_key_v2(
     const security::SecureBuffer& root, std::span<const std::byte> context);
+[[nodiscard]] security::SecureBuffer derive_card_record_domain_key(
+    const security::SecureBuffer& root, std::span<const std::byte> context,
+    std::string_view domain);
+[[nodiscard]] security::SecureBuffer card_hmac_sha256(
+    const security::SecureBuffer& key, std::span<const std::byte> input);
 // Output is nonce(12), ciphertext(plaintext.size()), tag(16). Open always
 // returns a locked output buffer and clears it on an authentication mismatch.
 void seal_card_aead(const security::SecureBuffer& key,

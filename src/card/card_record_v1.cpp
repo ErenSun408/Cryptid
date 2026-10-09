@@ -600,11 +600,18 @@ CardEnvelopeResult decrypt_card_envelope_v1(
 security::SecureBuffer derive_card_ring_metadata_key_v2(
     const security::SecureBuffer& root,
     const std::span<const std::byte> context) {
+  return derive_card_record_domain_key(root, context,
+      "usb-vault:card-ring-metadata:v2");
+}
+
+security::SecureBuffer derive_card_record_domain_key(
+    const security::SecureBuffer& root,
+    const std::span<const std::byte> context, const std::string_view domain) {
   if (root.size() != kCardRecordV1RootSecretSize) {
     throw std::invalid_argument("invalid card metadata root size");
   }
+  if (domain.empty()) throw std::invalid_argument("empty card key domain");
   const auto record = context_record(context);
-  constexpr std::string_view domain = "usb-vault:card-ring-metadata:v2";
   const auto algorithm = open_sha256_hmac();
   security::SecureBuffer object(object_length(algorithm.get()));
   HashHandle hash;
@@ -620,6 +627,17 @@ security::SecureBuffer derive_card_ring_metadata_key_v2(
   security::SecureBuffer result(32);
   require_success(::BCryptFinishHash(hash.get(), mutable_bytes(result),
       checked_ulong(result.size()), 0), "finish card metadata HMAC");
+  return result;
+}
+
+security::SecureBuffer card_hmac_sha256(const security::SecureBuffer& key,
+    const std::span<const std::byte> input) {
+  if (key.size() != 32) throw std::invalid_argument("invalid card HMAC key size");
+  const auto algorithm = open_sha256_hmac();
+  security::SecureBuffer result(32);
+  require_success(::BCryptHash(algorithm.get(), mutable_bytes(key),
+      checked_ulong(key.size()), mutable_bytes(input), checked_ulong(input.size()),
+      mutable_bytes(result), checked_ulong(result.size())), "hash card binding");
   return result;
 }
 
