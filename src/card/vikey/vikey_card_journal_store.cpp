@@ -1,6 +1,7 @@
 #include "card/vikey/vikey_card_journal_store.h"
 
 #include "card/vikey/card_journal_block.h"
+#include "card/card_record_journal_v1_internal.h"
 #include "card/vikey/card_operation_lease.h"
 #include "card/vikey/vikey_helper_client.h"
 #include "usb_vault/card/card_error.h"
@@ -133,4 +134,37 @@ void VikeyCardJournalStore::commit(const std::span<const std::byte> expected,
   commit_card_record_journal_v2(storage, expected, replacement, root);
   storage.verify_current();
 }
+security::SecureBuffer VikeyCardJournalStore::snapshot_legacy() {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto selected = detail::snapshot_legacy_card_journal(storage);
+  if (inspect_card_record(selected.record.bytes()) != CardRecordState::initialized_v1) {
+    fail(CardError::invalid_operation, "upgrade requires initialized legacy record");
+  }
+  storage.verify_current();
+  return std::move(selected.record);
+}
+
+PreparedVikeyCardUpgrade VikeyCardJournalStore::prepare_upgrade(
+    const std::span<const std::byte> expected_v1, security::SecureBuffer password) {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto plan = prepare_card_journal_v2_migration(storage, expected_v1, std::move(password));
+  storage.verify_current();
+  return PreparedVikeyCardUpgrade(std::move(plan), owner_);
+}
+
+void VikeyCardJournalStore::commit_upgrade(PreparedVikeyCardUpgrade&& prepared) {
+  // Consume even a rejected attempt; never leave a stale confirmation object
+  // available for implicit retry or use by a different card/store instance.
+  auto attempt = std::move(prepared);
+  if (attempt.owner_ != owner_) {
+    fail(CardError::invalid_operation, "upgrade preparation belongs to another store or was consumed");
+  }
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  commit_card_journal_v2_migration(storage, attempt.plan_);
+  storage.verify_current();
+}
+
 } // namespace usb_vault::card::vikey

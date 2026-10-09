@@ -1,4 +1,6 @@
 #include "card/card_record_journal_v2.h"
+#include "card/vikey/vikey_card_journal_store.h"
+#include "card/vikey/card_operation_lease.h"
 
 #include "card/card_record_crypto.h"
 #include "card/card_record_journal_v1_internal.h"
@@ -17,6 +19,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -149,12 +152,106 @@ void replace_legacy_anchor_and_rehash(Memory& storage, const SecureBuffer& ancho
   }
 }
 
+class UpgradeTransport final : public vikey::IVikeyCardJournalTransport {
+ public:
+  explicit UpgradeTransport(const Memory& source) : media(source) {}
+  SecureBuffer snapshot_reserved() override {
+    require_lease();
+    if (media.offline) throw std::system_error(make_error_code(CardError::communication_failed));
+    return copy(std::span(media.data).first(1808));
+  }
+  void write_block(const SecureBuffer& expected, std::size_t offset, const SecureBuffer& block) override {
+    require_lease();
+    if (!same(expected.bytes(), std::span(media.data).first(1808))) {
+      throw std::system_error(make_error_code(CardError::invalid_operation));
+    }
+    media.write(offset, block.bytes());
+  }
+  Memory media;
+ private:
+  void require_lease() {
+    bool blocked = false;
+    std::thread competitor([&] {
+      try { vikey::CardOperationLease lease; }
+      catch (const std::system_error& error) { blocked = error.code().value() == ERROR_BUSY; }
+    });
+    competitor.join();
+    expect(blocked, "migration transport call escaped whole operation lease");
+  }
+};
+
+void test_application_upgrade_adapter(const InitializedCardRecordV1& initial,
+    const SecureBuffer& legacy, const Memory& base) {
+  UpgradeTransport transport(base);
+  vikey::VikeyCardJournalStore store(transport);
+  expect(same(store.snapshot_legacy().bytes(), legacy.bytes()), "upgrade adapter changed legacy selection");
+  auto prepared = store.prepare_upgrade(legacy.bytes(), text(kPasswords[0]));
+  expect(transport.media.writes == 0, "upgrade preparation wrote physical storage");
+  store.commit_upgrade(std::move(prepared));
+  const auto record = store.snapshot();
+  expect_password(record, kPasswords[0], initial.root_secret);
+  expect_password(record, kPasswords[1], initial.root_secret);
+  expect(same(record.bytes().subspan(32, 64), legacy.bytes().first(64)) &&
+         same(record.bytes().subspan(96, 152), legacy.bytes().subspan(64, 152)),
+         "application upgrade changed retained context or envelopes");
+  const auto writes = transport.media.writes;
+  rejects<std::system_error>([&] { store.commit_upgrade(std::move(prepared)); },
+      "consumed upgrade preparation was replayed");
+  rejects<std::system_error>([&] { static_cast<void>(store.snapshot_legacy()); },
+      "published application upgrade fell back to legacy selection");
+  expect(transport.media.writes == writes, "consumed or published legacy rejection wrote card");
+  transport.media.sentinel();
+
+  UpgradeTransport first(base), other(base);
+  vikey::VikeyCardJournalStore first_store(first), other_store(other);
+  auto bound = first_store.prepare_upgrade(legacy.bytes(), text(kPasswords[0]));
+  rejects<std::system_error>([&] { other_store.commit_upgrade(std::move(bound)); },
+      "upgrade preparation accepted another card/store with identical bytes");
+  rejects<std::system_error>([&] { first_store.commit_upgrade(std::move(bound)); },
+      "rejected cross-store attempt remained reusable");
+  expect(first.media.writes == 0 && other.media.writes == 0, "cross-store upgrade rejection wrote card");
+  auto expired = first_store.prepare_upgrade(legacy.bytes(), text(kPasswords[1]));
+  for (const auto offset : {0U, 152U}) {
+    first.media.data[offset + 16] ^= std::byte{1};
+    auto digest = sha256(std::span(first.media.data).subspan(offset, 120));
+    std::ranges::copy(digest, first.media.data.begin() + offset + 120);
+  }
+  rejects<std::system_error>([&] { first_store.commit_upgrade(std::move(expired)); },
+      "upgrade preparation survived a changed source commit");
+  expect(first.media.writes == 0, "expired application upgrade wrote card");
+
+  for (std::size_t call = 0; call < 12; ++call) {
+    UpgradeTransport interrupted(base);
+    vikey::VikeyCardJournalStore interrupted_store(interrupted);
+    auto attempt = interrupted_store.prepare_upgrade(legacy.bytes(), text(kPasswords[0]));
+    interrupted.media.cut_write = call;
+    interrupted.media.tear_mode = 2;
+    rejects<std::system_error>([&] { interrupted_store.commit_upgrade(std::move(attempt)); },
+        "interrupted application migration reported completion");
+    expect(interrupted.media.writes == call + 1, "application upgrade retried an indeterminate write");
+    interrupted.media.online();
+    auto visible = snapshot_card_record_journal_v1(interrupted.media);
+    if (crypto::is_card_record_v2_anchor(visible.bytes())) {
+      auto selected = interrupted_store.snapshot();
+      auto root = unlock_card_record_v2(selected.bytes(), text(kPasswords[1]));
+      interrupted_store.recover(selected.bytes(), root);
+    } else {
+      auto fresh = interrupted_store.prepare_upgrade(legacy.bytes(), text(kPasswords[1]));
+      interrupted_store.commit_upgrade(std::move(fresh));
+    }
+    expect(same(interrupted_store.snapshot().bytes().subspan(96, 152), legacy.bytes().subspan(64, 152)),
+           "application restart changed old encrypted envelopes");
+    interrupted.media.sentinel();
+  }
+}
+
 void test_migration_faults_and_restart() {
   auto initial = initialize_card_record_and_root_v1(text(kPasswords[0]));
   auto legacy = rewrap_card_record_v1(initial.record.bytes(), text(kPasswords[0]),
       text(kPasswords[1]), text(kPasswords[0]));
   Memory base;
   provision(base, legacy);
+  test_application_upgrade_adapter(initial, legacy, base);
   auto plan = prepare_card_journal_v2_migration(base, legacy.bytes(), text(kPasswords[0]));
   expect(base.writes == 0, "migration preparation wrote storage");
   Memory completed = base;
@@ -399,7 +496,7 @@ int main() {
     test_migration_faults_and_restart();
     test_unowned_data_capacity_short_reads_and_expired_migration();
     test_single_password_and_legacy_client_rejection();
-    std::cout << "card_record_journal_v2_migration_tests: PASS (3 scenario groups)\n";
+    std::cout << "card_record_journal_v2_migration_tests: PASS (3 core groups plus application upgrade)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "FAILED: " << error.what() << '\n';
