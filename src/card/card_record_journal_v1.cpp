@@ -603,6 +603,26 @@ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
 
 namespace detail {
 
+security::SecureBuffer make_v2_provisioning_journal_image() {
+  security::SecureBuffer image(kCardRecordJournalV1StorageSize);
+  auto marker = image.bytes().subspan(304, 216);
+  std::ranges::copy(kCardV2AnchorMagic, marker.begin());
+  card_journal_store_u32(marker, 8, 2);
+  card_journal_store_u32(marker, 12, 216);
+  card_journal_store_u32(marker, 16, 736);
+  card_journal_store_u32(marker, 20, 1072);
+  card_journal_store_u32(marker, 24, 384);
+  card_journal_store_u32(marker, 28, 2);
+  auto filler = image.bytes().subspan(520, 216);
+  fill_random(filler);
+  const auto commit = random_commit_id();
+  const auto descriptor = make_descriptor(commit, distinct_commit_id(commit, commit),
+      0, marker, filler);
+  std::ranges::copy(descriptor, image.bytes().begin());
+  std::ranges::copy(descriptor, image.bytes().begin() + 152);
+  return image;
+}
+
 LegacyCardJournalSnapshot snapshot_legacy_card_journal(
     ICardRecordJournalStorage& storage) {
   auto selected = load_journal(storage);
@@ -616,7 +636,8 @@ void commit_legacy_card_journal_transition(ICardRecordJournalStorage& storage,
     const std::array<std::byte, 16>& new_commit) {
   const auto source_state = inspect_card_record(expected_record);
   if ((source_state != CardRecordState::initialized_v1 &&
-       source_state != CardRecordState::provisioned_uninitialized) ||
+       source_state != CardRecordState::provisioned_uninitialized &&
+       !is_card_record_v2_provisioning_marker(expected_record)) ||
       (!equal_bytes(expected_record, replacement) &&
        !is_card_record_v2_anchor(replacement))) {
     fail(CardError::invalid_configuration, "invalid legacy migration transition");

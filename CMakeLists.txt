@@ -156,6 +156,7 @@ add_library(usb_vault_core STATIC
   src/card/card_initialization_service.cpp
   src/card/card_record_journal_v1.cpp
   src/card/card_record_journal_v2.cpp
+  src/card/card_record_journal_v2_reset.cpp
   src/card/card_record_service.cpp
   src/card/card_record_v1.cpp
   src/card/card_record_v1_inspection.cpp

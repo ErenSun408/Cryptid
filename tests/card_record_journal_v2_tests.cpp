@@ -501,6 +501,148 @@ void test_application_transport_faults(const InitializedCardRecordV2& initial,
   }
 }
 
+void test_full_reserved_reset(const InitializedCardRecordV2& initial, const Memory& base) {
+  Memory source = base;
+  const auto expected = copy(std::span(source.data).first(1808));
+  auto plan = prepare_card_journal_v2_reset(source, expected.bytes());
+  expect(source.writes == 0, "reset preparation wrote card");
+  Memory completed = source;
+  reset_card_journal_v2(completed, plan);
+  expect(completed.writes == 10, "reset did not revoke, replace, clear, and publish every block");
+  const auto target = copy(std::span(completed.data).first(1808));
+  auto marker = snapshot_card_record_journal_v1(completed);
+  expect(crypto::is_card_record_v2_provisioning_marker(marker.bytes()) &&
+      inspect_card_record(marker.bytes()) == CardRecordState::unsupported_version,
+      "reset exposed a legacy-compatible marker");
+  expect(std::ranges::all_of(std::span(completed.data).subspan(736, 1072),
+      [](std::byte b) { return b == std::byte{}; }), "reset left extension credential copies");
+  completed.online();
+  reset_card_journal_v2(completed, plan);
+  expect(completed.writes == 0, "completed reset wrote again");
+  rejects<std::system_error>([&] { reset_card_record_journal_v1(completed, initial.record.bytes()); },
+      "legacy reset accepted the v2 reset marker");
+  auto old_marker = provision_uninitialized_card_record_v1();
+  rejects<std::system_error>([&] { bootstrap_uninitialized_card_record_journal_v1(completed, old_marker.bytes()); },
+      "legacy bootstrap accepted the v2 reset marker");
+  rejects<std::system_error>([&] { commit_card_record_journal_v1(completed, old_marker.bytes()); },
+      "legacy writer accepted the v2 reset marker");
+  expect(completed.writes == 0, "legacy reset-marker rejection wrote card");
+  completed.sentinel();
+
+  for (std::size_t call = 0; call < 10; ++call) {
+    for (const std::size_t mode : {0U, 2U, 1U}) {
+      Memory interrupted = source;
+      interrupted.cut_write = call;
+      interrupted.tear_mode = mode;
+      rejects<std::system_error>([&] { reset_card_journal_v2(interrupted, plan); },
+          "reset interruption reported success");
+      expect(interrupted.writes == call + 1, "reset blindly retried uncertain write");
+      interrupted.online();
+      Memory reopened = interrupted;
+      auto freshly_confirmed = prepare_card_journal_v2_reset(reopened, std::span(reopened.data).first(1808));
+      reset_card_journal_v2(reopened, freshly_confirmed);
+      expect(crypto::is_card_record_v2_provisioning_marker(snapshot_card_record_journal_v1(reopened).bytes()),
+          "freshly confirmed reset could not discard interrupted residue");
+      reopened.sentinel();
+      reset_card_journal_v2(interrupted, plan);
+      expect(same(std::span(interrupted.data).first(1808), target.bytes()), "reset retry changed target");
+      interrupted.sentinel();
+    }
+    Memory reported = source;
+    reported.report_error_after_write = call;
+    reset_card_journal_v2(reported, plan);
+    expect(same(std::span(reported.data).first(1808), target.bytes()), "complete reset write error lost target");
+  }
+  Memory changed = source;
+  changed.data[1807] ^= std::byte{1};
+  rejects<std::system_error>([&] { reset_card_journal_v2(changed, plan); }, "stale reset snapshot accepted");
+  expect(changed.writes == 0, "stale reset wrote card");
+  rejects<std::system_error>([&] {
+    static_cast<void>(prepare_card_journal_v2_reset(changed, expected.bytes()));
+  }, "stale reset preparation accepted a different full snapshot");
+  Memory small = source;
+  small.reported_capacity = 1807;
+  rejects<std::system_error>([&] { static_cast<void>(prepare_card_journal_v2_reset(small, expected.bytes())); },
+      "reset accepted insufficient capacity");
+  Memory short_read = source;
+  short_read.short_read = 0;
+  rejects<std::system_error>([&] { static_cast<void>(prepare_card_journal_v2_reset(short_read, expected.bytes())); },
+      "reset accepted short full snapshot");
+  expect(small.writes == 0 && short_read.writes == 0, "reset shape rejection wrote card");
+  Memory legacy;
+  auto legacy_marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(legacy, legacy_marker.bytes());
+  SecureBuffer legacy_record(216);
+  std::ranges::copy(initial.record.bytes().subspan(32, 64), legacy_record.bytes().begin());
+  commit_card_record_journal_v1(legacy, legacy_record.bytes());
+  const auto inactive = crypto::card_journal_u32(std::span(legacy.data), 48) == 0 ? 520U : 304U;
+  std::ranges::copy(legacy_marker.bytes(), legacy.data.begin() + inactive);
+  const auto inactive_hash = sha256(legacy_marker.bytes());
+  for (const auto offset : {0U, 152U}) {
+    std::ranges::copy(inactive_hash, legacy.data.begin() + offset + 88);
+    rehash_descriptor(legacy, offset);
+  }
+  legacy.online();
+  rejects<std::system_error>([&] {
+    static_cast<void>(prepare_card_journal_v2_reset(legacy, std::span(legacy.data).first(1808)));
+  }, "v2 reset accepted an active old initialized journal");
+  expect(legacy.writes == 0, "active legacy reset rejection wrote card");
+  for (const auto offset : {736U, 1040U}) {
+    Memory future = source;
+    crypto::card_journal_store_u32(std::span(future.data), offset + 8, 9);
+    rejects<std::system_error>([&] {
+      static_cast<void>(prepare_card_journal_v2_reset(future, std::span(future.data).first(1808)));
+    }, "reset accepted future extension format");
+    expect(future.writes == 0, "future reset rejection wrote card");
+  }
+  auto new_plan = prepare_card_journal_v2_initialization(completed, marker.bytes(), text(kPasswords[2]));
+  auto new_root = commit_card_journal_v2_initialization(completed, new_plan);
+  expect(!same(new_root.bytes(), initial.root_secret.bytes()), "reset initialization reused old root");
+  const auto record = snapshot_card_record_journal_v2(completed);
+  expect(same(unlock_card_record_v2(record.bytes(), text(kPasswords[2])).bytes(), new_root.bytes()),
+      "reset initialization credential failed");
+  rejects<CardCredentialRejected>([&] {
+    static_cast<void>(unlock_card_record_v2(record.bytes(), text(kPasswords[0])));
+  }, "old password survived reset initialization");
+  completed.online();
+  rejects<std::system_error>([&] { reset_card_journal_v2(completed, plan); },
+      "old reset plan erased the freshly initialized card");
+  expect(completed.writes == 0, "expired reset plan wrote the new card");
+  completed.sentinel();
+  std::cout << "reset faults: 30; complete-write error checks: 10; fresh-root check passed\n";
+}
+
+void test_application_reset_adapter(const Memory& base) {
+  SnapshotTransport corrupt(base);
+  vikey::VikeyCardJournalStore corrupt_store(corrupt);
+  auto corrupt_plan = corrupt_store.prepare_reset(corrupt_store.snapshot_for_reset().bytes());
+  corrupt.corrupt_after_write = true;
+  rejects<std::system_error>([&] { corrupt_store.reset(corrupt_plan); },
+      "reset accepted corruption outside its complete postimage");
+  expect(corrupt.media.writes == 1, "corrupted reset continued writing");
+  for (std::size_t call = 0; call < 10; ++call) {
+    SnapshotTransport transport(base), other(base);
+    vikey::VikeyCardJournalStore store(transport), other_store(other);
+    auto snapshot = store.snapshot_for_reset();
+    auto plan = store.prepare_reset(snapshot.bytes());
+    expect(transport.media.writes == 0, "application reset preparation wrote card");
+    rejects<std::system_error>([&] { other_store.reset(plan); }, "reset accepted a different store instance");
+    expect(other.media.writes == 0, "cross-store reset wrote card");
+    transport.media.cut_write = call;
+    transport.media.tear_mode = 2;
+    rejects<std::system_error>([&] { store.reset(plan); }, "application reset accepted incomplete postimage");
+    expect(transport.media.writes == call + 1, "application reset retried uncertain write");
+    transport.media.online();
+    store.reset(plan);
+    auto marker = store.snapshot_provisioning();
+    expect(crypto::is_card_record_v2_provisioning_marker(marker.bytes()), "application reset failed marker publication");
+    const auto writes = transport.media.writes;
+    store.reset(plan);
+    expect(transport.media.writes == writes, "application reset was repeated after completion");
+    transport.media.sentinel();
+  }
+}
+
 } // namespace
 
 int main() {
@@ -515,7 +657,9 @@ int main() {
     test_corruption_stale_snapshots_and_limits(initial, base, replacement);
     test_application_journal_adapter(initial, base, replacement);
     test_application_transport_faults(initial, base, replacement);
-    std::cout << "card_record_journal_v2_tests: PASS (6 scenario groups)\n";
+    test_full_reserved_reset(initial, base);
+    test_application_reset_adapter(base);
+    std::cout << "card_record_journal_v2_tests: PASS (8 scenario groups)\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "FAILED: " << error.what() << '\n';

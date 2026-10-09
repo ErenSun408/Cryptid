@@ -11,6 +11,9 @@ struct LegacyCardJournalSnapshot final {
   std::array<std::byte, 16> commit_id{};
 };
 
+// Ciphertext-free future-version marker journal used only after explicit reset.
+[[nodiscard]] security::SecureBuffer make_v2_provisioning_journal_image();
+
 [[nodiscard]] LegacyCardJournalSnapshot snapshot_legacy_card_journal(
     ICardRecordJournalStorage& storage);
 // Narrow publication transition: only an unchanged initialized/provisioning

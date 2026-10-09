@@ -2,6 +2,7 @@
 
 #include "card/vikey/vikey_helper_backend.h"
 #include "card/card_record_journal_v2.h"
+#include "card/card_record_journal_v2_reset.h"
 #include "usb_vault/security/confirmed_password.h"
 
 #include <memory>
@@ -67,6 +68,21 @@ class PreparedVikeyCardInitialization final {
   std::shared_ptr<const std::byte> owner_;
 };
 
+// Ciphertext-only reset material, bound to one store instance and source image.
+class PreparedVikeyCardReset final {
+ public:
+  PreparedVikeyCardReset(PreparedVikeyCardReset&&) noexcept = default;
+  PreparedVikeyCardReset& operator=(PreparedVikeyCardReset&&) noexcept = default;
+  PreparedVikeyCardReset(const PreparedVikeyCardReset&) = delete;
+  PreparedVikeyCardReset& operator=(const PreparedVikeyCardReset&) = delete;
+ private:
+  friend class VikeyCardJournalStore;
+  PreparedVikeyCardReset(PreparedCardJournalV2Reset plan, std::shared_ptr<const std::byte> owner)
+      : plan_(std::move(plan)), owner_(std::move(owner)) {}
+  PreparedCardJournalV2Reset plan_;
+  std::shared_ptr<const std::byte> owner_;
+};
+
 // Application-process adapter. Each method holds a complete operation lease,
 // including verification and cleanup. Authenticate snapshot() via the v2 logical
 // API first; recover/commit verify the root and anchor before any write. Legacy
@@ -98,6 +114,11 @@ class VikeyCardJournalStore final {
   // Lifecycle/confirmation ownership remains with the application caller.
   [[nodiscard]] security::SecureBuffer initialize(
       const PreparedVikeyCardInitialization& prepared);
+  [[nodiscard]] security::SecureBuffer snapshot_for_reset();
+  [[nodiscard]] PreparedVikeyCardReset prepare_reset(std::span<const std::byte> expected_reserved);
+  // Native destructive confirmation is required before this private entry.
+  // Retain the plan across uncertain writes; lifecycle wiring remains in 4c.
+  void reset(const PreparedVikeyCardReset& prepared);
  private:
   IVikeyCardJournalTransport& transport_;
   const std::shared_ptr<const std::byte> owner_{std::make_shared<const std::byte>()};

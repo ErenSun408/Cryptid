@@ -171,7 +171,8 @@ security::SecureBuffer VikeyCardJournalStore::snapshot_provisioning() {
   CardOperationLease lease;
   TransactionStorage storage(transport_);
   auto selected = detail::snapshot_legacy_card_journal(storage);
-  if (inspect_card_record(selected.record.bytes()) != CardRecordState::provisioned_uninitialized) {
+  if (inspect_card_record(selected.record.bytes()) != CardRecordState::provisioned_uninitialized &&
+      !detail::is_card_record_v2_provisioning_marker(selected.record.bytes())) {
     fail(CardError::invalid_operation, "initialization requires provisioning marker");
   }
   storage.verify_current();
@@ -197,6 +198,30 @@ security::SecureBuffer VikeyCardJournalStore::initialize(
   auto root = commit_card_journal_v2_initialization(storage, prepared.plan_);
   storage.verify_current();
   return root;
+}
+
+security::SecureBuffer VikeyCardJournalStore::snapshot_for_reset() {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto snapshot = storage.read(0, kCardRecordJournalV2StorageSize);
+  storage.verify_current();
+  return snapshot;
+}
+
+PreparedVikeyCardReset VikeyCardJournalStore::prepare_reset(std::span<const std::byte> expected) {
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  auto plan = prepare_card_journal_v2_reset(storage, expected);
+  storage.verify_current();
+  return PreparedVikeyCardReset(std::move(plan), owner_);
+}
+
+void VikeyCardJournalStore::reset(const PreparedVikeyCardReset& prepared) {
+  if (prepared.owner_ != owner_) fail(CardError::invalid_operation, "reset preparation belongs to another store or was moved");
+  CardOperationLease lease;
+  TransactionStorage storage(transport_);
+  reset_card_journal_v2(storage, prepared.plan_);
+  storage.verify_current();
 }
 
 } // namespace usb_vault::card::vikey

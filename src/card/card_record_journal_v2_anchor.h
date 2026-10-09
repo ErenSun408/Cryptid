@@ -45,4 +45,14 @@ inline void card_journal_store_u32(const std::span<std::byte> bytes,
       card_journal_u32(bytes, 28) == 1;
 }
 
+[[nodiscard]] inline bool is_card_record_v2_provisioning_marker(
+    const std::span<const std::byte> bytes) noexcept {
+  return bytes.size() == kCardV2AnchorSize &&
+      std::ranges::equal(bytes.first(8), kCardV2AnchorMagic) &&
+      card_journal_u32(bytes, 8) == 2 && card_journal_u32(bytes, 12) == 216 &&
+      card_journal_u32(bytes, 16) == 736 && card_journal_u32(bytes, 20) == 1072 &&
+      card_journal_u32(bytes, 24) == 384 && card_journal_u32(bytes, 28) == 2 &&
+      std::ranges::all_of(bytes.subspan(32), [](std::byte b) { return b == std::byte{}; });
+}
+
 } // namespace usb_vault::card::detail

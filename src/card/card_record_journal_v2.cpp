@@ -469,7 +469,8 @@ PreparedCardJournalV2Initialization prepare_card_journal_v2_initialization(
     security::SecureBuffer password) {
   require_capacity(storage);
   auto source = detail::snapshot_legacy_card_journal(storage);
-  if (inspect_card_record(expected_marker) != CardRecordState::provisioned_uninitialized ||
+  if ((inspect_card_record(expected_marker) != CardRecordState::provisioned_uninitialized &&
+       !detail::is_card_record_v2_provisioning_marker(expected_marker)) ||
       !equal(source.record.bytes(), expected_marker)) {
     fail(CardError::invalid_operation, "initialization requires exact provisioning snapshot");
   }
@@ -535,7 +536,8 @@ void commit_card_journal_v2_migration(ICardRecordJournalStorage& storage,
   require_capacity(storage);
   // Reject default/moved-from state and malformed prepared material before IO.
   const bool valid_source = plan.initializing_
-      ? inspect_card_record(plan.expected_.bytes()) == CardRecordState::provisioned_uninitialized &&
+      ? (inspect_card_record(plan.expected_.bytes()) == CardRecordState::provisioned_uninitialized ||
+         detail::is_card_record_v2_provisioning_marker(plan.expected_.bytes())) &&
         inspect_card_record_v2(plan.replacement_.bytes()) == CardRecordV2State::initialized
       : preserves_source(plan.expected_.bytes(), plan.replacement_.bytes());
   if (plan.root_.size() != 32 || plan.expected_.size() != 216 || !valid_source ||
