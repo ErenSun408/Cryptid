@@ -37,6 +37,10 @@ class Handle final {
   Handle(Handle&& other) noexcept
       : value_(std::exchange(other.value_, INVALID_HANDLE_VALUE)) {}
   [[nodiscard]] HANDLE get() const noexcept { return value_; }
+  void close() noexcept {
+    if (value_ != INVALID_HANDLE_VALUE) ::CloseHandle(value_);
+    value_ = INVALID_HANDLE_VALUE;
+  }
 
  private:
   HANDLE value_;
@@ -613,6 +617,66 @@ void test_card_record_response_round_trip() {
                       "card record response changed caller data");
 }
 
+void test_card_journal_snapshot_protocol() {
+  const auto op = Operation::card_journal_snapshot;
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const Pipe request_pipe = make_pipe();
+  Request request{};
+  request.operation = op;
+  request.payload_bytes = kCardRecordReadPayloadBytes;
+  write_card_record_read_request(request_pipe.write.get(), request, {}, 42, user_sn, api_key, pin);
+  const auto header = read_request(request_pipe.read.get());
+  const auto body = read_card_record_read_request(request_pipe.read.get(), header);
+  expect(body.expected_hardware_id == 42, "journal snapshot lost expected identity");
+  expect_protocol_error([&] {
+    write_card_record_read_request(request_pipe.write.get(), request, {}, 0, user_sn, api_key, pin);
+  }, "journal snapshot accepted zero identity");
+  request.version = kVersion - 1;
+  expect(!valid_request(request), "journal snapshot accepted previous protocol");
+  request.version = kVersion;
+  ++request.payload_bytes;
+  expect(!valid_request(request), "journal snapshot accepted arbitrary request size");
+
+  const Pipe response_pipe = make_pipe();
+  Response response{};
+  response.security_properties = kDevelopmentCompatibilitySecurityProperties;
+  response.payload_bytes = static_cast<std::uint32_t>(usb_vault::card::kCardRecordJournalV2StorageSize);
+  const auto bytes = fixed_secret(response.payload_bytes, std::byte{0x73});
+  expect(!valid_response(response, Operation::card_record_read), "legacy read accepted full journal");
+  write_card_record_response(response_pipe.write.get(), response, bytes, op);
+  const auto received = read_response(response_pipe.read.get(), response.nonce, op);
+  const auto snapshot = read_card_record_response_payload(response_pipe.read.get(), received, op);
+  expect(snapshot.size() == bytes.size(), "journal snapshot length changed");
+  expect_fixed_secret(snapshot, std::byte{0x73}, "journal snapshot response changed");
+  for (const auto size : {215u, 216u, 384u, 1807u, 1809u}) {
+    response.payload_bytes = size;
+    expect(!valid_response(response, op), "journal snapshot accepted wrong response size");
+  }
+  response.payload_bytes = static_cast<std::uint32_t>(bytes.size());
+  response.version = kVersion - 1;
+  expect(!valid_response(response, op), "journal snapshot accepted previous response protocol");
+  response.version = kVersion;
+  response.status = static_cast<std::int32_t>(CardError::device_failure);
+  expect(!valid_response(response, op), "failure response leaked journal payload");
+  expect_protocol_error([&] {
+    static_cast<void>(read_card_record_response_payload(response_pipe.read.get(), received, Operation::card_record_write));
+  }, "write operation accepted record response payload");
+  Pipe truncated = make_pipe();
+  write_card_record_response(truncated.write.get(), received, bytes, op);
+  const auto truncated_header = read_response(truncated.read.get(), received.nonce, op);
+  // Consume one byte, then close the writer: fixed-length read must reject EOF.
+  std::byte discarded{};
+  DWORD transferred{};
+  expect(::ReadFile(truncated.read.get(), &discarded, 1, &transferred, nullptr) && transferred == 1,
+         "could not prepare truncated journal response");
+  truncated.write.close();
+  expect_protocol_error([&] {
+    static_cast<void>(read_card_record_response_payload(truncated.read.get(), truncated_header, op));
+  }, "truncated journal response was accepted");
+}
+
 void test_response_validation() {
   Response response{};
   response.security_properties = kRequiredSecurityProperties;
@@ -883,6 +947,7 @@ int main() {
     test_card_media_response_round_trip();
     test_development_blob_response_round_trip();
     test_card_record_response_round_trip();
+    test_card_journal_snapshot_protocol();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
     test_diagnostic_round_trip();

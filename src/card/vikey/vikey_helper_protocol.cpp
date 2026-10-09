@@ -126,7 +126,7 @@ bool valid_response(const Response& response,
     if (expected_operation == Operation::development_blob_read) {
       required_payload = static_cast<std::uint32_t>(kVikeyBlobBytes);
     } else if (is_record_read(expected_operation)) {
-      required_payload = static_cast<std::uint32_t>(kCardRecordV1Size);
+      required_payload = static_cast<std::uint32_t>(record_response_size(expected_operation));
     }
     if (response.payload_bytes != required_payload) return false;
     if (expected_operation == Operation::development_session_probe) {
@@ -621,9 +621,9 @@ void write_development_blob_response(
 
 void write_card_record_response(
     const HANDLE pipe, const Response& response,
-    const security::SecureBuffer& record) {
-  if (!valid_response(response, Operation::card_record_read) ||
-      response.status != 0 || record.size() != kCardRecordV1Size) {
+    const security::SecureBuffer& record, const Operation operation) {
+  if (!is_record_read(operation) || !valid_response(response, operation) ||
+      response.status != 0 || record.size() != record_response_size(operation)) {
     throw_protocol("refuse invalid ViKey card record response");
   }
   write_exact(pipe, message_bytes(response));
@@ -655,12 +655,12 @@ security::SecureBuffer read_development_blob_response_payload(
 }
 
 security::SecureBuffer read_card_record_response_payload(
-    const HANDLE pipe, const Response& response) {
-  if (!valid_response(response, Operation::card_record_read) ||
+    const HANDLE pipe, const Response& response, const Operation operation) {
+  if (!is_record_read(operation) || !valid_response(response, operation) ||
       response.status != 0) {
     throw_protocol("reject invalid ViKey card record response");
   }
-  security::SecureBuffer record(kCardRecordV1Size);
+  security::SecureBuffer record(record_response_size(operation));
   read_exact(pipe, record.bytes());
   return record;
 }

@@ -945,7 +945,7 @@ void cleanup_development_directory(
     }
     if (available >= expected_bytes) {
       return helper::is_record_read(operation)
-                 ? helper::read_card_record_response_payload(pipe, response)
+                 ? helper::read_card_record_response_payload(pipe, response, operation)
                  : helper::read_development_blob_response_payload(pipe,
                                                                     response);
     }
@@ -967,7 +967,7 @@ void cleanup_development_directory(
           available >= expected_bytes) {
         return helper::is_record_read(operation)
                    ? helper::read_card_record_response_payload(pipe,
-                                                                response)
+                                                                response, operation)
                    : helper::read_development_blob_response_payload(
                          pipe, response);
       }
@@ -1478,7 +1478,7 @@ namespace {
     if (blob_response != nullptr) {
       const DWORD expected_bytes =
           helper::is_record_read(operation)
-              ? static_cast<DWORD>(kCardRecordV1Size)
+              ? static_cast<DWORD>(helper::record_response_size(operation))
               : static_cast<DWORD>(kVikeyBlobBytes);
       *blob_response = read_secret_payload_until(
           response_pipe.parent_end.get(), process.get(), response, operation,
@@ -1903,6 +1903,34 @@ read_vikey_development_card_record_with_network_access(
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
       (snapshot ? helper::Operation::card_record_snapshot : helper::Operation::card_record_read), &vendor_path,
+      &expected_vendor_digest, &inputs, nullptr,
+      HelperBoundary::network_enabled_development, timeout, &record));
+  return record;
+}
+
+security::SecureBuffer
+snapshot_vikey_development_card_journal_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = nullptr,
+      .expected_hardware_id = expected_hardware_id};
+  security::SecureBuffer record;
+  static_cast<void>(probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::card_journal_snapshot, &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout, &record));
   return record;

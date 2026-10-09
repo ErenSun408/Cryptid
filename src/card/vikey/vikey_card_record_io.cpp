@@ -2,6 +2,7 @@
 #include "usb_vault/diagnostics/debug_log.h"
 
 #include "card/card_record_journal_v1.h"
+#include "card/card_record_journal_v2.h"
 #include "card/vikey/vikey_session.h"
 #include "card/diagnostic_error.h"
 #include "usb_vault/card/card_error.h"
@@ -44,6 +45,15 @@ class VikeyCardRecordStorage final : public ICardRecordJournalStorage {
   VikeySession& session_;
   std::optional<std::size_t> capacity_;
 };
+
+security::SecureBuffer snapshot_vikey_card_journal(VikeySession& session) {
+  VikeyCardRecordStorage storage(session);
+  if (storage.capacity() < kCardRecordJournalV2StorageSize) {
+    throw DiagnosticError(make_error_code(CardError::invalid_configuration),
+        DiagnosticStage::sdk_capacity, "ViKey user area is too small for journal snapshot");
+  }
+  return storage.read(0, kCardRecordJournalV2StorageSize);
+}
 
 namespace {
 

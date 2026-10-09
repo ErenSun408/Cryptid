@@ -290,7 +290,7 @@ VikeyReadData(const WORD index, const DWORD address, const DWORD length,
     return ERROR_INVALID_PARAMETER;
   }
   if (session_state == SessionState::initial_data_size_read && address == 0 &&
-      length == kDescriptorSize) {
+      (length == kDescriptorSize || length == 1808)) {
     if (legacy_media_session && !journal_initialized) {
       journal_data.fill(0);
       std::fill_n(journal_data.begin(), 32, static_cast<BYTE>(0x3c));

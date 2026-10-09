@@ -1,4 +1,5 @@
 #include "card/card_record_journal_v1.h"
+#include "card/card_record_journal_v2.h"
 #include "card/vikey/vikey_card_record_io.h"
 #include "card/vikey/vikey_session.h"
 
@@ -45,6 +46,7 @@ using usb_vault::security::SecureBuffer;
 constexpr std::size_t kVikeyTestUserDataSize = 8192;
 
 struct FakeSdk final {
+  std::uint32_t hardware_id{0x12345678U};
   std::array<std::byte, kVikeyTestUserDataSize> data{};
   sdk::Length reported_capacity{
       static_cast<sdk::Length>(kVikeyTestUserDataSize)};
@@ -84,7 +86,7 @@ sdk::Status __stdcall uninitialization() { return sdk::kSuccess; }
 
 sdk::Status __stdcall get_hid(sdk::Index,
                               std::uint32_t* const hardware_id) {
-  if (hardware_id != nullptr) *hardware_id = 0x12345678U;
+  if (hardware_id != nullptr) *hardware_id = fake().hardware_id;
   return sdk::kSuccess;
 }
 
@@ -539,11 +541,55 @@ void test_development_legacy_reset_is_explicit_and_recoverable() {
   active_fake = nullptr;
 }
 
+void test_reserved_journal_snapshot_is_read_only() {
+  FakeSdk state;
+  state.data.fill(std::byte{0xa5});
+  state.data[0] = std::byte{0x11};
+  state.data[735] = std::byte{0x22};
+  state.data[736] = std::byte{0x33};
+  state.data[1807] = std::byte{0x44};
+  state.data[1808] = std::byte{0x55};
+  active_fake = &state;
+  SecureBuffer user_sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer api_key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(user_sn.bytes(), std::byte{'A'});
+  std::ranges::fill(api_key.bytes(), std::byte{'B'});
+  std::ranges::fill(pin.bytes(), std::byte{'P'});
+  auto session = VikeySession::open(functions(), user_sn, api_key, pin);
+  const auto before = state.data;
+  const auto snapshot = usb_vault::card::vikey::snapshot_vikey_card_journal(session);
+  constexpr auto size = usb_vault::card::kCardRecordJournalV2StorageSize;
+  require(snapshot.size() == size && std::ranges::equal(snapshot.bytes(), std::span(state.data).first(size)),
+          "reserved journal snapshot did not preserve ciphertext bytes");
+  require(state.reads == 1 && state.writes == 0 && state.data == before,
+          "reserved journal snapshot normalized or modified media");
+  state.reported_capacity = static_cast<sdk::Length>(size - 1);
+  require_card_error([&] {
+    static_cast<void>(usb_vault::card::vikey::snapshot_vikey_card_journal(session));
+  }, CardError::invalid_configuration, "undersized snapshot was accepted");
+  require(state.reads == 1 && state.writes == 0, "undersized snapshot accessed card bytes");
+  state.reported_capacity = static_cast<sdk::Length>(size);
+  require(usb_vault::card::vikey::snapshot_vikey_card_journal(session).size() == size,
+          "exactly sized journal area was rejected");
+  require(state.writes == 0 && state.data == before, "snapshot changed out-of-region bytes");
+  ++state.hardware_id;
+  const auto reads_before_swap = state.reads;
+  require_card_error([&] {
+    static_cast<void>(usb_vault::card::vikey::snapshot_vikey_card_journal(session));
+  }, CardError::device_failure, "journal snapshot accepted swapped hardware identity");
+  require(state.reads == reads_before_swap && state.writes == 0,
+          "swapped card was read or written");
+  require(!session.close(), "journal snapshot session failed to close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
   try {
     test_random_access_card_record_path();
+    test_reserved_journal_snapshot_is_read_only();
     test_read_only_media_classification();
     test_media_bootstrap_revalidates_before_writing();
     test_development_legacy_reset_is_explicit_and_recoverable();

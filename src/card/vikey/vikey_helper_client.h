@@ -227,6 +227,21 @@ read_vikey_development_card_record_with_network_access(
     std::chrono::milliseconds timeout = std::chrono::seconds(5),
     const bool snapshot = false);
 
+// Fixed [0,1808) read-only ciphertext snapshot, bound to expected hardware ID.
+// Does not select, authenticate or recover a record. The same development-only
+// network boundary applies; no application passwords or roots are accepted.
+[[nodiscard]] security::SecureBuffer
+snapshot_vikey_development_card_journal_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
 void write_vikey_development_card_record_with_network_access(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_helper_digest,

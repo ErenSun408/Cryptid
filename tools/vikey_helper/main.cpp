@@ -609,7 +609,7 @@ bootstrap_media_state(const CardMediaState state) {
 }
 
 [[nodiscard]] BlobReadResult card_record_read(
-    const CardRecordSessionRequest& request, bool snapshot) {
+    const CardRecordSessionRequest& request, const Operation operation) {
   try {
     const std::filesystem::path staged = staged_vendor_dll();
     auto verified = usb_vault::card::vikey::verify_vikey_dll(
@@ -625,8 +625,13 @@ bootstrap_media_state(const CardMediaState state) {
     usb_vault::security::SecureBuffer record;
     OperationResult result{};
     try {
-      record = snapshot ? usb_vault::card::vikey::snapshot_vikey_card_record(session)
-                        : usb_vault::card::vikey::read_vikey_card_record(session);
+      if (operation == Operation::card_journal_snapshot) {
+        record = usb_vault::card::vikey::snapshot_vikey_card_journal(session);
+      } else {
+        record = operation == Operation::card_record_snapshot
+            ? usb_vault::card::vikey::snapshot_vikey_card_record(session)
+            : usb_vault::card::vikey::read_vikey_card_record(session);
+      }
     } catch (const std::system_error& error) {
       result.status = error.code().category() == card_error_category()
                           ? error.code().value()
@@ -645,7 +650,7 @@ bootstrap_media_state(const CardMediaState state) {
     if (close_error) {
       return {.operation = {.status = close_error.value()}};
     }
-    if (record.size() != usb_vault::card::kCardRecordV1Size) {
+    if (record.size() != record_response_size(operation)) {
       return {.operation = {.status = static_cast<std::int32_t>(
                                 CardError::device_failure)}};
     }
@@ -758,6 +763,7 @@ bootstrap_media_state(const CardMediaState state) {
     case Operation::development_blob_write:
     case Operation::card_record_read:
     case Operation::card_record_snapshot:
+    case Operation::card_journal_snapshot:
     case Operation::card_record_write:
     case Operation::card_record_reset:
     case Operation::card_media_bootstrap:
@@ -864,7 +870,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                 CardRecordSessionRequest record_request =
                     read_card_record_read_request(request_handle, request);
                 BlobReadResult read_result =
-                    card_record_read(record_request, request.operation == Operation::card_record_snapshot);
+                    card_record_read(record_request, request.operation);
                 result = read_result.operation;
                 response_blob = std::move(read_result.blob);
               } else {
@@ -923,7 +929,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR,
                                       response_blob);
     } else if (is_record_read(request.operation) &&
                response.status == 0) {
-      write_card_record_response(response_handle, response, response_blob);
+      write_card_record_response(response_handle, response, response_blob, request.operation);
     } else {
       write_response(response_handle, response, request.operation);
     }

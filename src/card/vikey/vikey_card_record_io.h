@@ -52,6 +52,9 @@ void write_vikey_card_record(VikeySession& session,
                              const security::SecureBuffer& record);
 
 [[nodiscard]] security::SecureBuffer snapshot_vikey_card_record(VikeySession& session);
+// Fixed reserved ciphertext region only. No normalization, authentication or
+// writes; callers must authenticate selected records in the application.
+[[nodiscard]] security::SecureBuffer snapshot_vikey_card_journal(VikeySession& session);
 void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected);
 
 }  // namespace usb_vault::card::vikey

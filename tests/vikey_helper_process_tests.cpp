@@ -636,6 +636,27 @@ void test_formal_card_record_backend_staging(
                                        media.hardware_id);
   VikeyCardRecordStore store(backend);
 
+  const auto journal = usb_vault::card::vikey::snapshot_vikey_development_card_journal_with_network_access(
+      helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
+      media.hardware_id, user_sn, api_key, user_pin, 5s);
+  expect(journal.size() == usb_vault::card::kCardRecordJournalV2StorageSize,
+         "helper journal snapshot returned wrong size");
+  expect(std::ranges::all_of(journal.bytes().subspan(usb_vault::card::kCardRecordJournalV1StorageSize),
+                            [](std::byte b) { return b == std::byte{}; }),
+         "helper journal snapshot lost the blank extension");
+  for (const auto identity : {0u, media.hardware_id + 1u}) {
+    try {
+      static_cast<void>(usb_vault::card::vikey::snapshot_vikey_development_card_journal_with_network_access(
+          helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
+          identity, user_sn, api_key, user_pin, 5s));
+      fail("helper journal snapshot accepted wrong identity");
+    } catch (const std::system_error& error) {
+      expect(error.code() == usb_vault::card::make_error_code(identity == 0
+                 ? CardError::invalid_configuration : CardError::device_failure),
+             "journal snapshot identity rejection returned wrong error");
+    }
+  }
+
   SecureBuffer observed = store.get_blob();
   expect(observed.size() == usb_vault::card::kCardRecordV1Size,
          "development card-record read returned the wrong size");
