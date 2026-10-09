@@ -53,6 +53,9 @@ struct DevelopmentSessionInputs final {
   const security::SecureBuffer* blob{};
   std::uint32_t expected_hardware_id{};
   helper::CardMediaState expected_media_state{};
+  const security::SecureBuffer* expected_journal{};
+  const security::SecureBuffer* journal_replacement{};
+  std::uint32_t journal_offset{};
 };
 
 constexpr DWORD64 kHelperMitigations =
@@ -1101,6 +1104,7 @@ namespace {
                "ViKey helper timeout must be positive");
   }
   const bool session_required =
+      operation == helper::Operation::card_journal_block_write ||
       operation == helper::Operation::development_session_probe ||
       operation == helper::Operation::card_identity_probe ||
       operation == helper::Operation::card_media_probe ||
@@ -1123,6 +1127,7 @@ namespace {
       operation == helper::Operation::vendor_runtime_probe ||
       session_required;
   const bool expected_identity_required =
+      operation == helper::Operation::card_journal_block_write ||
       helper::is_record_read(operation) ||
       helper::is_record_write(operation) ||
       operation == helper::Operation::card_media_bootstrap ||
@@ -1173,6 +1178,14 @@ namespace {
                  ? kCardRecordV1Size
                  : kVikeyBlobBytes)))) {
     throw_card(CardError::invalid_configuration, "ViKey development session credential size is invalid", DiagnosticStage::input_shape);
+  }
+  const bool journal_write = operation == helper::Operation::card_journal_block_write;
+  if (session_inputs &&
+      ((journal_write ? (session_inputs->expected_journal == nullptr || session_inputs->journal_replacement == nullptr)
+                      : (session_inputs->expected_journal != nullptr || session_inputs->journal_replacement != nullptr)) ||
+       (journal_write && (session_inputs->expected_journal->size() != kCardRecordJournalV2StorageSize ||
+           !valid_card_journal_block(session_inputs->journal_offset, session_inputs->journal_replacement->size()))))) {
+    throw_card(CardError::invalid_configuration, "invalid conditional journal input", DiagnosticStage::input_shape);
   }
   VerifiedLocalArtifact executable_artifact = verify_local_artifact(
       helper_path, expected_digest, kMaximumHelperBytes);
@@ -1379,6 +1392,12 @@ namespace {
             request_pipe.parent_end.get(), request, *vendor_digest,
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin, *session_inputs->blob);
+      } else if (operation == helper::Operation::card_journal_block_write) {
+        request.payload_bytes = helper::kCardJournalBlockWritePayloadBytes;
+        helper::write_card_journal_block_request(request_pipe.parent_end.get(), request, *vendor_digest,
+            session_inputs->expected_hardware_id, session_inputs->user_sn, session_inputs->api_key,
+            session_inputs->user_pin, *session_inputs->expected_journal,
+            session_inputs->journal_offset, *session_inputs->journal_replacement);
       } else if (helper::is_record_read(operation)) {
         request.payload_bytes = helper::kCardRecordReadPayloadBytes;
         helper::write_card_record_read_request(
@@ -1934,6 +1953,24 @@ snapshot_vikey_development_card_journal_with_network_access(
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout, &record));
   return record;
+}
+
+void write_vikey_development_card_journal_block_with_network_access(
+    const std::filesystem::path& helper_path, const Sha256Digest& helper_digest,
+    const std::filesystem::path& vendor_directory, const Sha256Digest& vendor_digest,
+    const std::uint32_t expected_hardware_id, const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key, const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& expected_snapshot, const std::uint32_t offset,
+    const security::SecureBuffer& replacement, const std::chrono::milliseconds timeout) {
+  const auto vendor_path = vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn, .api_key = api_key, .user_pin = user_pin,
+      .expected_hardware_id = expected_hardware_id,
+      .expected_journal = &expected_snapshot, .journal_replacement = &replacement,
+      .journal_offset = offset};
+  static_cast<void>(probe_vikey_helper_operation(helper_path, helper_digest,
+      helper::Operation::card_journal_block_write, &vendor_path, &vendor_digest,
+      &inputs, nullptr, HelperBoundary::network_enabled_development, timeout));
 }
 
 void write_vikey_development_card_record_with_network_access(

@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 #include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -677,6 +678,68 @@ void test_card_journal_snapshot_protocol() {
   }, "truncated journal response was accepted");
 }
 
+void test_conditional_journal_protocol() {
+  const auto op = Operation::card_journal_block_write;
+  Request request{};
+  request.operation = op;
+  request.payload_bytes = kCardJournalBlockWritePayloadBytes;
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto expected = fixed_secret(usb_vault::card::kCardRecordJournalV2StorageSize, std::byte{0x71});
+  const std::array<std::pair<std::uint32_t, std::size_t>, 8> blocks{{
+      {0, 152}, {152, 152}, {304, 216}, {520, 216},
+      {736, 152}, {888, 152}, {1040, 384}, {1424, 384}}};
+  for (const auto [offset, length] : blocks) {
+    const Pipe pipe = make_pipe();
+    const auto replacement = fixed_secret(length, std::byte{0x37});
+    write_card_journal_block_request(pipe.write.get(), request, {}, 42,
+        user_sn, api_key, pin, expected, offset, replacement);
+    const auto header = read_request(pipe.read.get());
+    const auto body = read_card_journal_block_request(pipe.read.get(), header);
+    expect(body.session.expected_hardware_id == 42 && body.offset == offset && body.length == length,
+           "conditional journal fields changed in IPC");
+    expect_fixed_secret(body.expected_snapshot, std::byte{0x71}, "conditional snapshot changed in IPC");
+    expect(std::ranges::equal(body.replacement.bytes().first(length), replacement.bytes()),
+           "conditional block changed in IPC");
+  }
+  const auto replacement = fixed_secret(152, std::byte{0x37});
+  const Pipe source = make_pipe();
+  write_card_journal_block_request(source.write.get(), request, {}, 42,
+      user_sn, api_key, pin, expected, 0, replacement);
+  std::array<std::byte, sizeof(Request) + kCardJournalBlockWritePayloadBytes> wire{};
+  DWORD transferred{};
+  expect(::ReadFile(source.read.get(), wire.data(), static_cast<DWORD>(wire.size()), &transferred, nullptr) &&
+         transferred == wire.size(), "could not capture journal request fixture");
+  constexpr auto offset_field = sizeof(Request) + kCardRecordReadPayloadBytes + usb_vault::card::kCardRecordJournalV2StorageSize;
+  for (const auto field : {offset_field, offset_field + 4, wire.size() - 1}) {
+    const Pipe malformed = make_pipe();
+    auto damaged = wire;
+    damaged[field] = std::byte{1};
+    expect(::WriteFile(malformed.write.get(), damaged.data(), static_cast<DWORD>(damaged.size()), &transferred, nullptr) &&
+           transferred == damaged.size(), "could not send malformed journal request");
+    const auto header = read_request(malformed.read.get());
+    expect_protocol_error([&] { static_cast<void>(read_card_journal_block_request(malformed.read.get(), header)); },
+                          "invalid journal range or padding accepted by receiver");
+  }
+  expect_protocol_error([&] {
+    write_card_journal_block_request(source.write.get(), request, {}, 0, user_sn, api_key, pin, expected, 0, replacement);
+  }, "conditional write accepted zero identity");
+  expect_protocol_error([&] {
+    write_card_journal_block_request(source.write.get(), request, {}, 42, user_sn, api_key, pin, expected, 1, replacement);
+  }, "conditional write accepted arbitrary range");
+  --request.payload_bytes;
+  expect(!valid_request(request), "conditional write accepted wrong payload length");
+  request.payload_bytes = kCardJournalBlockWritePayloadBytes;
+  --request.version;
+  expect(!valid_request(request), "conditional write accepted old protocol");
+  Response response{};
+  response.security_properties = kRequiredSecurityProperties;
+  expect(valid_response(response, op), "conditional write acknowledgement rejected");
+  response.payload_bytes = 1;
+  expect(!valid_response(response, op), "conditional write acknowledged unexpected payload");
+}
+
 void test_response_validation() {
   Response response{};
   response.security_properties = kRequiredSecurityProperties;
@@ -948,6 +1011,7 @@ int main() {
     test_development_blob_response_round_trip();
     test_card_record_response_round_trip();
     test_card_journal_snapshot_protocol();
+    test_conditional_journal_protocol();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
     test_diagnostic_round_trip();

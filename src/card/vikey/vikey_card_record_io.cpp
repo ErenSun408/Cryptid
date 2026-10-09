@@ -3,6 +3,7 @@
 
 #include "card/card_record_journal_v1.h"
 #include "card/card_record_journal_v2.h"
+#include "card/vikey/card_journal_block.h"
 #include "card/vikey/vikey_session.h"
 #include "card/diagnostic_error.h"
 #include "usb_vault/card/card_error.h"
@@ -53,6 +54,29 @@ security::SecureBuffer snapshot_vikey_card_journal(VikeySession& session) {
         DiagnosticStage::sdk_capacity, "ViKey user area is too small for journal snapshot");
   }
   return storage.read(0, kCardRecordJournalV2StorageSize);
+}
+
+void write_vikey_card_journal_block(VikeySession& session,
+    const security::SecureBuffer& expected_snapshot, const std::size_t offset,
+    const security::SecureBuffer& replacement) {
+  if (expected_snapshot.size() != kCardRecordJournalV2StorageSize ||
+      !valid_card_journal_block(offset, replacement.size())) {
+    throw std::system_error(make_error_code(CardError::invalid_configuration),
+        "invalid conditional journal block shape");
+  }
+  auto observed = snapshot_vikey_card_journal(session);
+  if (!std::ranges::equal(observed.bytes(), expected_snapshot.bytes())) {
+    throw std::system_error(make_error_code(CardError::invalid_operation),
+        "conditional journal snapshot expired");
+  }
+  VikeyCardRecordStorage storage(session);
+  storage.write(offset, replacement.bytes());
+  std::ranges::copy(replacement.bytes(), observed.bytes().begin() + offset);
+  const auto verified = snapshot_vikey_card_journal(session);
+  if (!std::ranges::equal(observed.bytes(), verified.bytes())) {
+    throw std::system_error(make_error_code(CardError::device_failure),
+        "conditional journal block did not verify");
+  }
 }
 
 namespace {

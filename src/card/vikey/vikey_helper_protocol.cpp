@@ -72,6 +72,7 @@ bool valid_request(const Request& request) noexcept {
       request.operation == Operation::development_blob_round_trip_probe ||
       request.operation == Operation::development_blob_read ||
       request.operation == Operation::development_blob_write ||
+      request.operation == Operation::card_journal_block_write ||
       is_record_read(request.operation) ||
       is_record_write(request.operation) ||
       request.operation == Operation::card_identity_probe ||
@@ -88,6 +89,8 @@ bool valid_request(const Request& request) noexcept {
                  Operation::development_blob_round_trip_probe ||
              request.operation == Operation::development_blob_write) {
     required_payload = kDevelopmentBlobRoundTripPayloadBytes;
+  } else if (request.operation == Operation::card_journal_block_write) {
+    required_payload = kCardJournalBlockWritePayloadBytes;
   } else if (is_record_read(request.operation)) {
     required_payload = kCardRecordReadPayloadBytes;
   } else if (is_record_write(request.operation)) {
@@ -595,6 +598,56 @@ CardRecordWriteRequest read_card_record_write_request(
   read_exact(pipe, result.record.bytes());
   if (result.expected_hardware_id == 0) {
     throw_protocol("reject zero ViKey card record identity");
+  }
+  return result;
+}
+
+void write_card_journal_block_request(const HANDLE pipe, const Request& request,
+    const Sha256Digest& digest, const std::uint32_t hardware_id,
+    const security::SecureBuffer& user_sn, const security::SecureBuffer& api_key,
+    const security::SecureBuffer& pin, const security::SecureBuffer& expected,
+    const std::uint32_t offset, const security::SecureBuffer& replacement) {
+  if (!valid_request(request) || request.operation != Operation::card_journal_block_write ||
+      hardware_id == 0 || user_sn.size() != kVikeyUserSnBytes || api_key.size() != kVikeyApiKeyBytes ||
+      pin.size() != kVikeyUserPinBytes || expected.size() != kCardRecordJournalV2StorageSize ||
+      !valid_card_journal_block(offset, replacement.size())) {
+    throw_protocol("refuse invalid conditional journal request");
+  }
+  const auto length = static_cast<std::uint32_t>(replacement.size());
+  security::SecureBuffer padded(kCardRecordV2Size);
+  std::ranges::copy(replacement.bytes(), padded.bytes().begin());
+  write_exact(pipe, message_bytes(request));
+  write_exact(pipe, digest);
+  write_exact(pipe, message_bytes(hardware_id));
+  write_exact(pipe, user_sn.bytes());
+  write_exact(pipe, api_key.bytes());
+  write_exact(pipe, pin.bytes());
+  write_exact(pipe, expected.bytes());
+  write_exact(pipe, message_bytes(offset));
+  write_exact(pipe, message_bytes(length));
+  write_exact(pipe, padded.bytes());
+}
+
+CardJournalBlockWriteRequest read_card_journal_block_request(
+    const HANDLE pipe, const Request& request) {
+  if (!valid_request(request) || request.operation != Operation::card_journal_block_write) {
+    throw_protocol("reject invalid conditional journal request");
+  }
+  CardJournalBlockWriteRequest result;
+  // Reuse only the fixed credential body reader, after validating the actual
+  // operation and full payload length above. It does not consume a header.
+  Request credential_header = request;
+  credential_header.operation = Operation::card_journal_snapshot;
+  credential_header.payload_bytes = kCardRecordReadPayloadBytes;
+  result.session = read_card_record_read_request(pipe, credential_header);
+  read_exact(pipe, result.expected_snapshot.bytes());
+  read_exact(pipe, mutable_message_bytes(result.offset));
+  read_exact(pipe, mutable_message_bytes(result.length));
+  read_exact(pipe, result.replacement.bytes());
+  if (!valid_card_journal_block(result.offset, result.length) ||
+      !std::ranges::all_of(result.replacement.bytes().subspan(result.length),
+          [](std::byte b) { return b == std::byte{}; })) {
+    throw_protocol("reject invalid conditional journal block or padding");
   }
   return result;
 }

@@ -242,6 +242,18 @@ snapshot_vikey_development_card_journal_with_network_access(
     const security::SecureBuffer& user_pin,
     std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
+// Development-only conditional ciphertext transport; application authentication
+// and a lease spanning every call are required before using it for a transaction.
+// A reported write failure may already have changed the card; never retry blindly.
+void write_vikey_development_card_journal_block_with_network_access(
+    const std::filesystem::path& helper_path, const Sha256Digest& helper_digest,
+    const std::filesystem::path& vendor_directory, const Sha256Digest& vendor_digest,
+    std::uint32_t expected_hardware_id, const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key, const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& expected_snapshot, std::uint32_t offset,
+    const security::SecureBuffer& replacement,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
 void write_vikey_development_card_record_with_network_access(
     const std::filesystem::path& helper_path,
     const Sha256Digest& expected_helper_digest,

@@ -54,6 +54,8 @@ struct FakeSdk final {
   std::size_t writes{};
   bool ranges_valid{true};
   bool mutate_write_arguments{true};
+  bool swap_after_read{};
+  bool corrupt_other_byte{};
   std::size_t fail_write_call{std::numeric_limits<std::size_t>::max()};
   std::size_t bytes_before_failure{};
   std::vector<sdk::Address> write_addresses;
@@ -129,6 +131,7 @@ sdk::Status __stdcall read_data(const sdk::Index index,
     destination[offset] =
         std::to_integer<sdk::Byte>(state.data[address + offset]);
   }
+  if (state.swap_after_read) ++state.hardware_id;
   return sdk::kSuccess;
 }
 
@@ -154,6 +157,7 @@ sdk::Status __stdcall write_data(const sdk::Index index,
   }
   if (call == state.fail_write_call) return sdk::kCommunication;
   if (state.mutate_write_arguments && length != 0) source[0] ^= 0xffU;
+  if (state.corrupt_other_byte) state.data[1807] ^= std::byte{1};
   return sdk::kSuccess;
 }
 
@@ -584,12 +588,93 @@ void test_reserved_journal_snapshot_is_read_only() {
   active_fake = nullptr;
 }
 
+void test_conditional_journal_blocks() {
+  using usb_vault::card::vikey::write_vikey_card_journal_block;
+  FakeSdk state;
+  state.data.fill(std::byte{0xa5});
+  active_fake = &state;
+  SecureBuffer user_sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer api_key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(user_sn.bytes(), std::byte{'A'});
+  std::ranges::fill(api_key.bytes(), std::byte{'B'});
+  std::ranges::fill(pin.bytes(), std::byte{'P'});
+  auto session = VikeySession::open(functions(), user_sn, api_key, pin);
+  const auto snapshot = [&] {
+    SecureBuffer bytes(1808);
+    std::ranges::copy_n(state.data.begin(), bytes.size(), bytes.bytes().begin());
+    return bytes;
+  };
+  constexpr std::array<std::pair<std::size_t, std::size_t>, 8> blocks{{
+      {0, 152}, {152, 152}, {304, 216}, {520, 216},
+      {736, 152}, {888, 152}, {1040, 384}, {1424, 384}}};
+  for (const auto [offset, size] : blocks) {
+    const auto expected = snapshot();
+    auto result = state.data;
+    SecureBuffer replacement(size);
+    std::ranges::fill(replacement.bytes(), std::byte{0x39});
+    std::ranges::copy(replacement.bytes(), result.begin() + offset);
+    const auto writes = state.writes;
+    write_vikey_card_journal_block(session, expected, offset, replacement);
+    require(state.writes == writes + 1 && state.data == result &&
+                state.write_addresses.back() == offset && state.write_lengths.back() == size,
+            "conditional write changed more than its fixed block");
+    require(replacement.bytes().front() == std::byte{0x39}, "vendor mutated caller replacement");
+  }
+  const auto expected = snapshot();
+  SecureBuffer replacement(152);
+  std::ranges::fill(replacement.bytes(), std::byte{0x42});
+  auto writes = state.writes;
+  state.data[1807] ^= std::byte{1};
+  require_card_error([&] { write_vikey_card_journal_block(session, expected, 0, replacement); },
+      CardError::invalid_operation, "change outside target did not expire snapshot");
+  state.data[1807] ^= std::byte{1};
+  SecureBuffer short_snapshot(1807);
+  require_card_error([&] { write_vikey_card_journal_block(session, short_snapshot, 0, replacement); },
+      CardError::invalid_configuration, "short conditional snapshot accepted");
+  for (const auto offset : {1u, 304u, 735u, 1808u, std::numeric_limits<unsigned int>::max()}) {
+    require_card_error([&] { write_vikey_card_journal_block(session, expected, offset, replacement); },
+        CardError::invalid_configuration, "arbitrary journal write range accepted");
+  }
+  state.reported_capacity = 1807;
+  require_card_error([&] { write_vikey_card_journal_block(session, expected, 0, replacement); },
+      CardError::invalid_configuration, "undersized conditional storage accepted");
+  state.reported_capacity = static_cast<sdk::Length>(state.data.size());
+  state.swap_after_read = true;
+  require_card_error([&] { write_vikey_card_journal_block(session, expected, 0, replacement); },
+      CardError::device_failure, "swap after comparison was accepted");
+  state.swap_after_read = false;
+  --state.hardware_id;
+  require(state.writes == writes, "rejected conditional writes touched media");
+  const auto before = state.data;
+  for (const auto length : {0u, 76u, 152u}) {
+    state.data = before;
+    state.fail_write_call = state.writes;
+    state.bytes_before_failure = length;
+    writes = state.writes;
+    require_card_error([&] { write_vikey_card_journal_block(session, expected, 0, replacement); },
+        CardError::communication_failed, "indeterminate write was reported as successful");
+    auto partial = before;
+    std::ranges::copy_n(replacement.bytes().begin(), length, partial.begin());
+    require(state.writes == writes + 1 && state.data == partial,
+            "indeterminate write retried or changed unexpected bytes");
+  }
+  state.fail_write_call = std::numeric_limits<std::size_t>::max();
+  state.data = before;
+  state.corrupt_other_byte = true;
+  require_card_error([&] { write_vikey_card_journal_block(session, expected, 0, replacement); },
+      CardError::device_failure, "full-region readback missed corruption outside target");
+  require(!session.close(), "conditional journal session failed to close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
   try {
     test_random_access_card_record_path();
     test_reserved_journal_snapshot_is_read_only();
+    test_conditional_journal_blocks();
     test_read_only_media_classification();
     test_media_bootstrap_revalidates_before_writing();
     test_development_legacy_reset_is_explicit_and_recoverable();

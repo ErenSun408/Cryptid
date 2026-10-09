@@ -2,6 +2,7 @@
 
 #include "card/verified_local_artifact.h"
 #include "card/card_record_journal_v2.h"
+#include "card/vikey/card_journal_block.h"
 #include "card/vikey/vikey_session.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/secure_buffer.h"
@@ -15,7 +16,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 15;
+constexpr std::uint16_t kVersion = 16;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -35,6 +36,8 @@ constexpr std::uint32_t kCardRecordReadPayloadBytes =
 constexpr std::uint32_t kCardRecordWritePayloadBytes =
     kCardRecordReadPayloadBytes +
     static_cast<std::uint32_t>(kCardRecordV1Size);
+constexpr std::uint32_t kCardJournalBlockWritePayloadBytes =
+    kCardRecordReadPayloadBytes + static_cast<std::uint32_t>(kCardRecordJournalV2StorageSize + 8 + kCardRecordV2Size);
 constexpr std::uint32_t kCardIdentityProbePayloadBytes =
     kDevelopmentSessionPayloadBytes;
 constexpr std::uint32_t kCardMediaProbePayloadBytes =
@@ -62,6 +65,7 @@ enum class Operation : std::uint32_t {
   card_record_snapshot = 14,
   card_record_reset = 15,
   card_journal_snapshot = 16,
+  card_journal_block_write = 17,
 };
 
 [[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
@@ -267,6 +271,15 @@ struct CardRecordSessionRequest final {
   security::SecureBuffer user_pin;
 };
 
+struct CardJournalBlockWriteRequest final {
+  CardRecordSessionRequest session;
+  security::SecureBuffer expected_snapshot{kCardRecordJournalV2StorageSize};
+  std::uint32_t offset{};
+  std::uint32_t length{};
+  // Always 384 bytes on the wire; unused suffix must be zero.
+  security::SecureBuffer replacement{kCardRecordV2Size};
+};
+
 struct CardMediaBootstrapRequest final {
   CardMediaBootstrapRequest();
 
@@ -453,6 +466,14 @@ void write_card_record_write_request(
     const security::SecureBuffer& user_pin,
     const security::SecureBuffer& record);
 [[nodiscard]] CardRecordWriteRequest read_card_record_write_request(
+    HANDLE pipe, const Request& request);
+void write_card_journal_block_request(HANDLE pipe, const Request& request,
+    const Sha256Digest& vendor_digest, std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn, const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const security::SecureBuffer& expected_snapshot, std::uint32_t offset,
+    const security::SecureBuffer& replacement);
+[[nodiscard]] CardJournalBlockWriteRequest read_card_journal_block_request(
     HANDLE pipe, const Request& request);
 void write_response(HANDLE pipe, const Response& response,
                     Operation expected_operation);
