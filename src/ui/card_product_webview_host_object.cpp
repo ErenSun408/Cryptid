@@ -1209,7 +1209,11 @@ class CardProductWebViewHostObject final : public IDispatch {
         std::uint32_t id = 0;
         if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
         if (creation_work_->interrupted.load()) return E_ACCESSDENIED;
-        try { return complete_selection(controller_.decoy_maintenance_write_blocked(id), result); }
+        try {
+          const bool blocked = controller_.decoy_maintenance_write_blocked(id);
+          if (blocked) warn_capacity_once(id, true);
+          return complete_selection(blocked, result);
+        }
         catch (...) { USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return E_FAIL; }
       }
       case kDecoySpaceId: {
@@ -1463,6 +1467,18 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!external_drop_sink_) return E_ACCESSDENIED;
         try {
           const ExternalDropStatus status = external_drop_sink_->status();
+          if (!creation_work_->running.load() && !creation_work_->interrupted.load() &&
+              status.state == 3 && status.capacity_limited && status.run_id != 0 &&
+              status.run_id != warned_import_run_ &&
+              status.card_epoch == creation_work_->card_epoch.load() &&
+              controller_.state() == CardProductUiState::authenticated) {
+            // Retire the event before any modal loop can reenter the bridge.
+            warned_import_run_ = status.run_id;
+            try {
+              static_cast<void>(controller_.decoy_maintenance_write_blocked(status.container_id));
+              warn_capacity_once(status.container_id, false);
+            } catch (...) {} // A stale target must not produce a new warning.
+          }
           const std::wstring packed = std::to_wstring(status.state) + L"," +
               std::to_wstring(status.total) + L"," +
               std::to_wstring(status.completed) + L"," +
@@ -1564,6 +1580,21 @@ class CardProductWebViewHostObject final : public IDispatch {
   }
 
  private:
+  // COM/window thread only. Both failure sources share one warning per mount.
+  void warn_capacity_once(const std::uint32_t id, const bool protection) noexcept {
+    if (!external_drop_sink_) return;
+    try {
+      const auto epoch = creation_work_->card_epoch.load();
+      if (warning_epoch_ != epoch) {
+        warned_capacity_ids_.clear();
+        warning_epoch_ = epoch;
+      }
+      if (std::find(warned_capacity_ids_.begin(), warned_capacity_ids_.end(), id) != warned_capacity_ids_.end()) return;
+      warned_capacity_ids_.push_back(id);
+      external_drop_sink_->show_capacity_warning(protection);
+    } catch (...) {} // Notification failure must not change protection facts.
+  }
+
   struct BatchItem {
     application::ContainerOperationTarget target;
     unsigned int outcome{};
@@ -2129,6 +2160,11 @@ class CardProductWebViewHostObject final : public IDispatch {
         clear_space();
       }
       last_volume_member_ = member;
+      if (member == kBeginOpenDecoyMaintenanceId) {
+        std::erase(warned_capacity_ids_, id);
+        // Even an unpolled failure belongs to the mount being retired.
+        if (external_drop_sink_) warned_import_run_ = external_drop_sink_->status().run_id;
+      }
       last_volume_id_ = id;
       last_volume_epoch_ = creation_work_->card_epoch.load();
       const std::uint64_t operation_epoch = last_volume_epoch_;
@@ -3453,6 +3489,9 @@ class CardProductWebViewHostObject final : public IDispatch {
   IUiWindowSizeSink* window_size_sink_{};
   IUiExitHotkeySink* exit_hotkey_sink_{};
   IUiExternalDropTargetSink* external_drop_sink_{};
+  std::vector<std::uint32_t> warned_capacity_ids_;
+  std::uint64_t warning_epoch_{};
+  std::uint64_t warned_import_run_{};
   CreationWorkState local_creation_work_;
   CreationWorkState* creation_work_;
   std::thread creation_thread_;

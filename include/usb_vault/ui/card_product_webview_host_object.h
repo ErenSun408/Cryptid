@@ -100,6 +100,11 @@ struct ExternalDropStatus final {
   unsigned int total{};
   unsigned int completed{};
   unsigned int failed{};
+  // Native-only failure facts; the page still receives exactly four counts.
+  bool capacity_limited{};
+  std::uint32_t container_id{};
+  std::uint64_t card_epoch{};
+  std::uint64_t run_id{};
 };
 
 // The verified page may name only the maintenance destination it is showing.
@@ -116,6 +121,7 @@ class IUiExternalDropTargetSink {
   virtual bool set_drop_bounds(int, int, int, int) noexcept { return false; }
   virtual bool set_drop_button_bounds(int, int, int, int) noexcept { return false; }
   virtual unsigned int file_progress() const noexcept { return 0; }
+  virtual void show_capacity_warning(bool /* protection_triggered */) noexcept {}
   [[nodiscard]] virtual ExternalDropStatus status() const noexcept = 0;
 
  protected:

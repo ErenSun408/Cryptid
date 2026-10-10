@@ -82,6 +82,7 @@ class ExternalDropTarget final : public IDropTarget,
   void clear_target() noexcept override;
   bool request_cancel() noexcept override;
   bool select_files() noexcept override;
+  void show_capacity_warning(bool protection_triggered) noexcept override;
   bool attach_window(HWND parent) noexcept;
   void set_hover_callback(std::function<void(unsigned)> callback) { hover_callback_ = std::move(callback); }
   bool set_drop_button_bounds(int x, int y, int width, int height) noexcept override;
@@ -129,6 +130,10 @@ class ExternalDropTarget final : public IDropTarget,
   std::atomic<unsigned int> completed_{0};
   std::atomic<unsigned int> failed_{0};
   std::atomic<unsigned int> file_percent_{0};
+  std::atomic<bool> capacity_limited_{false};
+  std::atomic<std::uint32_t> run_container_id_{0};
+  std::atomic<std::uint64_t> run_epoch_{0};
+  std::atomic<std::uint64_t> run_id_{0};
   std::thread worker_;
 };
 

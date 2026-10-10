@@ -1,4 +1,5 @@
 #include "usb_vault/ui/external_drop_target.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -490,10 +491,52 @@ void test_native_drop_region_is_bounded_and_disarmed() {
   ::OleUninitialize();
 }
 
+void test_capacity_failure_is_typed_and_scoped_to_the_run() {
+  using namespace usb_vault::volume_creation;
+  const std::vector<std::error_code> codes{
+      make_error_code(CreationError::insufficient_tail_space),
+      make_error_code(CreationError::destination_full),
+      std::make_error_code(std::errc::no_space_on_device),
+      {ERROR_DISK_FULL, std::system_category()},
+      {ERROR_HANDLE_DISK_FULL, std::system_category()},
+      make_error_code(CreationError::io_error),
+      make_error_code(CreationError::operation_cancelled),
+      {ERROR_DISK_FULL, creation_error_category()},
+      std::make_error_code(std::errc::permission_denied)};
+  for (std::size_t index = 0; index < codes.size(); ++index) {
+    CreationWorkState work;
+    work.card_epoch.store(42);
+    bool fail = true;
+    TargetHolder target([&](auto, auto, auto, const auto&, const auto&) {
+      if (fail) throw std::system_error(codes[index]);
+    }, work);
+    FakeDataObject data({L"C:\\a\\large.bin", L"C:\\a\\next.bin"});
+    require(target->set_target(7, L""), "capacity target rejected");
+    require(drop(*target, data) == DROPEFFECT_COPY, "capacity drop rejected");
+    wait_until_idle(work);
+    const auto status = target->status();
+    require(status.state == 3 && status.failed == 1 && status.completed == 0,
+            "failed import continued after the first source");
+    require(status.capacity_limited == (index < 5), "capacity error misclassified");
+    require(status.container_id == 7 && status.card_epoch == 42 && status.run_id != 0,
+            "capacity event lost its native identity");
+    require(target->set_target(7, L"") && !target->status().capacity_limited,
+            "retired capacity failure remained active");
+    fail = false;
+    FakeDataObject next_data({L"C:\\a\\next.bin"});
+    require(drop(*target, next_data) == DROPEFFECT_COPY, "subsequent drop rejected");
+    wait_until_idle(work);
+    require(target->status().state == 2 && !target->status().capacity_limited &&
+                target->status().run_id != status.run_id,
+            "subsequent run reused a capacity event");
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_capacity_failure_is_typed_and_scoped_to_the_run();
     test_native_drop_region_is_bounded_and_disarmed();
     test_a_drop_carries_every_path_the_shell_named();
     test_the_window_takes_a_drop_only_when_the_page_armed_it();

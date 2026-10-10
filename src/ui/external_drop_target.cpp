@@ -1,5 +1,6 @@
 #include "usb_vault/ui/external_drop_target.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "usb_vault/volume_creation/volume_creator.h"
 
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <system_error>
 
 namespace usb_vault::ui {
 namespace {
@@ -20,6 +22,15 @@ constexpr unsigned int kRunning = 1;
 constexpr unsigned int kSucceeded = 2;
 constexpr unsigned int kFailed = 3;
 constexpr unsigned int kCancelled = 4;
+
+bool capacity_failure(const std::error_code& code) noexcept {
+  using namespace volume_creation;
+  return code == make_error_code(CreationError::insufficient_tail_space) ||
+         code == make_error_code(CreationError::destination_full) ||
+         code == std::errc::no_space_on_device ||
+         (code.category() == std::system_category() &&
+          (code.value() == ERROR_DISK_FULL || code.value() == ERROR_HANDLE_DISK_FULL));
+}
 
 // One drag can name a great many files. The limit is not a storage bound --
 // the copy would handle them -- but a bound on how long the window can stay
@@ -295,6 +306,10 @@ bool ExternalDropTarget::start_sources(std::vector<std::wstring> sources) noexce
   completed_.store(0);
   failed_.store(0);
   file_percent_.store(0);
+  capacity_limited_.store(false);
+  run_container_id_.store(id);
+  run_epoch_.store(work_.card_epoch.load());
+  run_id_.fetch_add(1);
   work_.finish();  // A drop is not the creation gate's kind of cancellable.
   work_.volume_operation.store(true);
   work_.running.store(true);
@@ -316,7 +331,7 @@ void ExternalDropTarget::run(const std::uint32_t id,
                              const std::wstring relative_directory,
                              const std::vector<std::wstring> sources) noexcept {
   const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-  const std::uint64_t epoch = work_.card_epoch.load();
+  const std::uint64_t epoch = run_epoch_.load();
   const auto stop = [this, epoch] {
     return cancelled_.load() || work_.interrupted.load() ||
            work_.card_epoch.load() != epoch;
@@ -332,6 +347,9 @@ void ExternalDropTarget::run(const std::uint32_t id,
           [this](unsigned int percent) { file_percent_.store((std::min)(percent,99U)); });
       ++completed;
     } catch (...) {
+      try { throw; }
+      catch (const std::system_error& error) { capacity_limited_.store(capacity_failure(error.code())); }
+      catch (...) {}
       USB_VAULT_TRACE_FAILURE("ui/external_drop_target", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       // A failed protected write may leave metadata awaiting recovery.
       // Never advance to another source on the same maintenance mount.
@@ -409,7 +427,21 @@ ExternalDropStatus ExternalDropTarget::status() const noexcept {
   return ExternalDropStatus{.state = state,
                             .total = total,
                             .completed = (std::min)(completed, total),
-                            .failed = (std::min)(failed, total)};
+                            .failed = (std::min)(failed, total),
+                            .capacity_limited = state == kFailed && capacity_limited_.load(),
+                            .container_id = run_container_id_.load(),
+                            .card_epoch = run_epoch_.load(),
+                            .run_id = run_id_.load()};
+}
+
+void ExternalDropTarget::show_capacity_warning(const bool protection_triggered) noexcept {
+  const HWND owner = drop_window_ ? ::GetParent(drop_window_) : nullptr;
+  if (!owner || !::IsWindow(owner)) return;
+  const wchar_t* text = protection_triggered
+      ? L"高级更新的安全写入范围已触发保护，后续写入已被阻止。\n\n请停止复制，返回 USB Vault 卸载该安全盘，再重新进入高级更新。"
+      : L"高级更新的可用安全空间不足，文件未能全部导入。\n\n请停止复制，返回 USB Vault 卸载该安全盘，再重新进入高级更新并减少导入内容。";
+  ::MessageBoxW(owner, text, L"USB Vault — 高级更新提醒",
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
 }
 
 void ExternalDropTarget::close() noexcept {

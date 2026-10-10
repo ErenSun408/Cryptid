@@ -3557,6 +3557,12 @@ class RecordingDropSink final : public usb_vault::ui::IUiExternalDropTargetSink 
   }
 
   bool select_files() noexcept override { ++select_calls; return armed_id != 0; }
+  void show_capacity_warning(bool protection) noexcept override {
+    ++warning_calls;
+    last_protection = protection;
+  }
+  int warning_calls{};
+  bool last_protection{};
   unsigned int file_progress() const noexcept override { return 142; }
   bool set_drop_bounds(int, int, int, int) noexcept override { ++bounds_calls; return true; }
   int bounds_calls{};
@@ -3753,8 +3759,9 @@ void test_a_running_drop_answers_only_about_itself() {
 void test_protection_query_is_boolean_scoped_and_serialized() {
   Fixture fixture;
   usb_vault::ui::CreationWorkState work;
+  RecordingDropSink sink;
   ComPtr<IDispatch> host;
-  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work)), "host failed");
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work, &sink)), "host failed");
   VARIANT result{};
   const auto query = [&](unsigned int id) { return invoke_with_number(*host.Get(), L"getDecoyMaintenanceWriteBlocked", id, &result, nullptr); };
   require(FAILED(query(7)), "unauthenticated status leaked");
@@ -3762,6 +3769,8 @@ void test_protection_query_is_boolean_scoped_and_serialized() {
   require(SUCCEEDED(query(7)) && result.vt == VT_BOOL && result.boolVal == VARIANT_FALSE, "normal state not boolean");
   fixture.volume.maintenance_blocked = true;
   require(SUCCEEDED(query(7)) && result.boolVal == VARIANT_TRUE, "blocked state not projected");
+  require(sink.warning_calls == 1 && sink.last_protection, "native protection warning missing");
+  require(SUCCEEDED(query(7)) && sink.warning_calls == 1, "protection polling repeated native warning");
   require(FAILED(query(0)) && FAILED(query(8)), "invalid container accepted");
   work.running.store(true);
   work.volume_operation.store(true);
@@ -3769,6 +3778,70 @@ void test_protection_query_is_boolean_scoped_and_serialized() {
   work.running.store(false);
   work.interrupted.store(true);
   require(FAILED(query(7)), "interrupted card state leaked");
+  require(sink.warning_calls == 1, "refused query raised a warning");
+  work.interrupted.store(false);
+  work.card_epoch.fetch_add(1);
+  require(SUCCEEDED(query(7)) && sink.warning_calls == 2, "new session inherited warning latch");
+}
+
+void test_import_capacity_warning_rejects_stale_events_and_shares_protection_latch() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  work.card_epoch.store(42);
+  RecordingDropSink sink;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work, &sink)), "host failed");
+  const auto poll = [&] {
+    DISPPARAMS parameters{};
+    VARIANT result{};
+    const HRESULT hr = host->Invoke(member_id(*host.Get(), L"getExternalDropStatus"),
+        IID_NULL, LOCALE_INVARIANT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
+    require(SUCCEEDED(hr) && result.vt == VT_BSTR && std::wstring(result.bstrVal) == L"3,2,0,1",
+            "native metadata changed page status protocol");
+    ::VariantClear(&result);
+  };
+  sink.reported = {.state=3, .total=2, .failed=1, .capacity_limited=true,
+                   .container_id=7, .card_epoch=42, .run_id=1};
+  poll();
+  require(sink.warning_calls == 0, "unauthenticated import warned");
+  fixture.authentication.establish(root_secret());
+  work.running.store(true);
+  work.volume_operation.store(true);
+  poll();
+  require(sink.warning_calls == 0, "warning queried a worker-owned session");
+  work.running.store(false);
+  sink.reported.card_epoch = 41;
+  poll();
+  sink.reported.card_epoch = 42;
+  sink.reported.container_id = 8;
+  poll();
+  sink.reported.container_id = 7;
+  poll();
+  require(sink.warning_calls == 0, "stale target event was replayed");
+  sink.reported.run_id = 2;
+  sink.reported.capacity_limited = false;
+  poll();
+  require(sink.warning_calls == 0, "generic failure became capacity warning");
+  sink.reported.capacity_limited = true;
+  work.interrupted.store(true);
+  poll();
+  require(sink.warning_calls == 0, "interrupted session warned");
+  work.interrupted.store(false);
+  poll(); poll();
+  require(sink.warning_calls == 1 && !sink.last_protection, "capacity warning missing or repeated");
+  fixture.volume.maintenance_blocked = true;
+  VARIANT result{};
+  require(SUCCEEDED(invoke_with_number(*host.Get(), L"getDecoyMaintenanceWriteBlocked", 7, &result, nullptr)) &&
+              sink.warning_calls == 1, "protection path repeated import warning");
+  sink.reported.run_id = 3; // Completed failure not yet polled by the page.
+  require(SUCCEEDED(invoke_with_number(*host.Get(), L"beginOpenDecoyMaintenance", 7, nullptr, nullptr)), "reopen failed");
+  for (int spin=0; spin<5000 && work.running.load(); ++spin)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  require(!work.running.load(), "reopen did not finish");
+  poll();
+  require(sink.warning_calls == 1, "reopen replayed old import failure");
+  require(SUCCEEDED(invoke_with_number(*host.Get(), L"getDecoyMaintenanceWriteBlocked", 7, &result, nullptr)) &&
+              sink.warning_calls == 2, "reopen did not rearm protection warning");
 }
 
 class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
@@ -4242,6 +4315,7 @@ int main() {
     test_partition_creation_snapshot_and_epoch(L"beginPartitionConversion");
     test_login_reset_bridge_lifecycle();
     test_protection_query_is_boolean_scoped_and_serialized();
+    test_import_capacity_warning_rejects_stale_events_and_shares_protection_latch();
     test_leave_application_routes();
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
