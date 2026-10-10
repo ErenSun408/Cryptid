@@ -161,7 +161,14 @@ VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
 CardRecordState inspect_vikey_card_record_state_read_only(
     VikeySession& session) {
   VikeyCardRecordStorage storage(session);
-  return inspect_card_record_journal_logical_state_v1_read_only(storage);
+  try {
+    return inspect_card_record_journal_logical_state_v1_read_only(storage);
+  } catch (const std::system_error& error) {
+    // Revoked/torn descriptors cannot authenticate or initialize. Preserve a
+    // read-only context so separately validated v2 residue can be destroyed.
+    if (error.code() != make_error_code(CardError::device_failure)) throw;
+    return CardRecordState::malformed;
+  }
 }
 
 void bootstrap_vikey_card_media(

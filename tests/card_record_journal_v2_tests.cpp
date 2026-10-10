@@ -814,14 +814,14 @@ class LoginConsumer final : public usb_vault::application::ICardLoginSuccessCons
   }
 };
 
-security::ConfirmedPassword confirmed_initial_password() {
+security::ConfirmedPassword confirmed_initial_password(std::string_view password = kPasswords[0]) {
   class Policy final : public security::IPasswordStrengthPolicy {
    public:
     security::PasswordStrength assess(const SecureBuffer&) const noexcept override {
       return security::PasswordStrength::acceptable;
     }
   } policy;
-  return security::confirm_password(policy, text(kPasswords[0]), text(kPasswords[0]));
+  return security::confirm_password(policy, text(password), text(password));
 }
 
 void test_enrollment_login_composition(const InitializedCardRecordV2& initial, const Memory& base) {
@@ -920,6 +920,15 @@ void test_enrollment_initialization_composition(const Memory& base) {
       io.observed.logical_state = CardRecordState::unsupported_version;
       expect(source.inspect_entry()->inspect_supported_product_record_read_only() ==
           CardProductRecordState::initialized_v2, "initialized card did not reopen as v2");
+    } else {
+      io.media.media.online();
+      io.observed = {0x55AA, 1, vikey::VikeyCardMediaState::product_evidence,
+          CardRecordState::provisioned_uninitialized};
+      app::CardEntryContextController cleanup(source, {}, [] { return true; });
+      static_cast<void>(cleanup.handle_arrival());
+      expect(cleanup.can_login_reset() && io.media.media.writes == 0,
+          "failed initialization prevented explicit destruction or repaired during inspection");
+      cleanup.confirm_login_reset(cleanup.prepare_login_reset());
     }
     io.media.media.sentinel();
   }
@@ -1030,6 +1039,92 @@ void test_product_legacy_upgrade_and_append() {
   }
 }
 
+void test_product_reset_composition(const InitializedCardRecordV2& initial, const Memory& base) {
+  namespace app = usb_vault::application;
+  for (int scenario = 0; scenario < 12; ++scenario) {
+    NoCredentials credentials;
+    EnrollmentIo io(base);
+    vikey::VikeyHelperCardEnrollment source({}, credentials, &io);
+    int confirmations = 0;
+    app::CardEntryContextController controller(source, {}, [&] {
+      ++confirmations;
+      if (scenario == 10) io.actual_id = 2;
+      return scenario != 8;
+    });
+    if (scenario == 11) io.media.media.data[1040 + 383] ^= std::byte{1};
+    expect(controller.handle_arrival() == (scenario == 11 ? app::CardEntryRoute::unavailable : app::CardEntryRoute::login_required),
+        "reset source lost v2 login route");
+    const auto ticket = controller.prepare_login_reset();
+    expect(io.media.media.writes == 0 && confirmations == 0 && controller.login_reset_pending(ticket),
+        "reset preparation wrote card or confirmed destruction");
+    if (scenario == 1) controller.cancel_login_reset();
+    if (scenario == 2) controller.handle_removal();
+    if (scenario == 3) static_cast<void>(controller.handle_arrival());
+    if (scenario == 4) io.actual_id = 2;
+    if (scenario == 5) io.media.media.data[1424 + 383] ^= std::byte{1};
+    if (scenario == 6) { io.media.media.cut_write = 1; io.media.media.tear_mode = 2; }
+    if (scenario == 7) io.media.reported_error = 9;
+    if (scenario == 9) {
+      crypto::card_journal_store_u32(std::span(io.media.media.data), 1040 + 8, 9);
+      static_cast<void>(controller.handle_arrival());
+      expect(!controller.can_login_reset(), "future record offered destructive reset");
+    }
+    bool success = false;
+    try { controller.confirm_login_reset(ticket); success = true; } catch (const std::exception&) {}
+    if (success != (scenario == 0 || scenario == 7 || scenario == 11))
+      std::cerr << "reset scenario " << scenario << "; success " << success << '\n';
+    expect(success == (scenario == 0 || scenario == 7 || scenario == 11),
+        "product reset accepted stale confirmation or misreported verified write");
+    expect(!controller.login_reset_pending(ticket), "reset retained a consumed preparation");
+    const auto writes = io.media.media.writes;
+    rejects<std::system_error>([&] { controller.confirm_login_reset(ticket); }, "reset ticket replay succeeded");
+    expect(io.media.media.writes == writes, "reset ticket replay wrote card");
+    if (scenario != 0 && scenario != 6 && scenario != 7 && scenario != 11)
+      expect(writes == 0, "rejected product reset wrote card");
+    if (scenario == 6) {
+      io.media.media.online();
+      io.observed.logical_state = CardRecordState::malformed;
+      expect(controller.handle_arrival() == app::CardEntryRoute::unavailable && controller.can_login_reset(),
+          "lost reset plan promoted residue or prevented newly confirmed cleanup");
+      const auto fresh = controller.prepare_login_reset();
+      expect(io.media.media.writes == 0, "residue inspection repaired before confirmation");
+      controller.confirm_login_reset(fresh);
+      expect(confirmations == 2, "residue cleanup reused destructive authorization");
+    }
+    if (scenario == 0 || scenario == 6 || scenario == 7 || scenario == 11) {
+      io.observed = {0x55AA, 1, vikey::VikeyCardMediaState::product_evidence, CardRecordState::unsupported_version};
+      expect(controller.handle_arrival() == app::CardEntryRoute::initialization_required,
+          "complete reset failed strict marker admission");
+      if (scenario == 0) {
+        app::CardAuthenticationSession authentication;
+        controller.initialize_and_authenticate(authentication, confirmed_initial_password("initial-password-strong"));
+        vikey::VikeyCardJournalStore reopened(io.media);
+        auto record = reopened.snapshot();
+        auto root = unlock_card_record_v2(record.bytes(), text("initial-password-strong"));
+        expect(!same(root.bytes(), initial.root_secret.bytes()), "reinitialization retained destroyed root");
+        rejects<CardCredentialRejected>([&] { static_cast<void>(unlock_card_record_v2(record.bytes(), text(kPasswords[0]))); },
+            "reset retained an old password");
+      }
+    }
+    io.media.media.sentinel();
+  }
+  NoCredentials credentials;
+  EnrollmentIo io(base);
+  vikey::VikeyHelperCardEnrollment source({}, credentials, &io);
+  app::CardEntryContextController no_confirmation(source);
+  static_cast<void>(no_confirmation.handle_arrival());
+  const auto ticket = no_confirmation.prepare_login_reset();
+  rejects<std::system_error>([&] { no_confirmation.confirm_login_reset(ticket); }, "missing native reset confirmation accepted");
+  expect(io.media.media.writes == 0, "missing native confirmation wrote card");
+  app::CardAuthenticationSession authentication;
+  authentication.establish(copy(initial.root_secret.bytes()));
+  app::CardEntryContextController authenticated(source, {}, [] { return true; });
+  authenticated.reset_card_record(authentication);
+  expect(!authenticated.has_context() && io.media.media.writes == 10,
+      "authenticated reset did not use full reserved-region transaction");
+  io.media.media.sentinel();
+}
+
 } // namespace
 
 int main() {
@@ -1037,6 +1132,7 @@ int main() {
     auto initial = initialize_card_record_and_root_v2(text(kPasswords[0]));
     Memory base;
     fixture(base, initial);
+    test_product_reset_composition(initial, base);
     auto replacement = append_card_password_v2(initial.record.bytes(), text(kPasswords[0]), text(kPasswords[1]));
     test_append_faults_and_retry(initial, base, replacement);
     test_recovery_faults(initial, base, replacement);

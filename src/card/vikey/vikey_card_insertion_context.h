@@ -24,6 +24,7 @@ class VikeyCardInsertionContext final
 
   [[nodiscard]] application::CardEntryMediaEvidence
   inspect_media() override;
+  [[nodiscard]] bool destructive_reset_available() const noexcept override { return reset_available_; }
 
   [[nodiscard]] CardRecordState
   inspect_product_record_read_only() override;
@@ -40,6 +41,7 @@ class VikeyCardInsertionContext final
   const VikeyCardMediaProbe probe_;
   const std::optional<CardProductRecordState> journal_state_;
   std::shared_ptr<const std::byte> insertion_identity_;
+  bool reset_available_{};
 };
 
 }  // namespace usb_vault::card::vikey

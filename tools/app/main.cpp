@@ -568,6 +568,14 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
         return accepted && ::IsWindow(window) && !g_creation_work.interrupted.load() &&
             !g_creation_work.cancellation_requested() &&
             g_creation_work.card_epoch.load() == epoch;
+      }, [window] {
+        const auto epoch = g_creation_work.card_epoch.load();
+        const bool accepted = ::MessageBoxW(window,
+            L"重置将销毁安全卡上所有应用密码。重新初始化后，旧容器将无法凭此卡打开。\n是否永久重置？",
+            kWindowTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+        return accepted && ::IsWindow(window) && !g_creation_work.interrupted.load() &&
+            !g_creation_work.cancellation_requested() &&
+            g_creation_work.card_epoch.load() == epoch;
       });
   auto authentication = std::make_unique<
       usb_vault::application::CardAuthenticationSession>();

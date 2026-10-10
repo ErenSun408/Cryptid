@@ -122,7 +122,8 @@ class VikeyCardJournalStore final {
   [[nodiscard]] security::SecureBuffer snapshot_for_reset();
   [[nodiscard]] PreparedVikeyCardReset prepare_reset(std::span<const std::byte> expected_reserved);
   // Native destructive confirmation is required before this private entry.
-  // Retain the plan across uncertain writes; lifecycle wiring remains in 4c.
+  // Low-level callers may retain the plan across uncertain writes. Product
+  // targets discard it after one attempt and require a freshly confirmed image.
   void reset(const PreparedVikeyCardReset& prepared);
  private:
   IVikeyCardJournalTransport& transport_;

@@ -39,8 +39,10 @@ namespace {
 }  // namespace
 
 CardEntryContextController::CardEntryContextController(
-    ICardEntryInspectionSource& source, std::function<bool()> confirm_password_update) noexcept
-    : source_(source), confirm_password_update_(std::move(confirm_password_update)) {}
+    ICardEntryInspectionSource& source, std::function<bool()> confirm_password_update,
+    std::function<bool()> confirm_reset) noexcept
+    : source_(source), confirm_password_update_(std::move(confirm_password_update)),
+      confirm_reset_(std::move(confirm_reset)) {}
 
 CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
   entry_format_ = card::CardProductRecordState::malformed;
@@ -178,9 +180,10 @@ void CardEntryContextController::reset_card_record(
   // receives a new adapter-authenticated observation and binds the write to
   // that exact card.
   route_ = CardEntryRoute::unavailable;
+  entry_format_ = card::CardProductRecordState::malformed;
   context_.reset();
   std::unique_ptr<IReadOnlyCardEntryInspection> context;
-  std::unique_ptr<card::ICardUpdateTarget> target;
+  std::unique_ptr<card::ICardResetTarget> target;
   try {
     context = source_.inspect_inserted_card();
     if (!context || CardEntryRouter::route(*context) !=
@@ -189,14 +192,16 @@ void CardEntryContextController::reset_card_record(
           card::make_error_code(card::CardError::invalid_operation),
           "card reset requires a fresh initialized insertion");
     }
-    target = source_.make_update_target(*context);
+    target = source_.make_reset_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),
           "card adapter cannot update this insertion");
     }
-    card::CardRecordService service(target->card_store());
-    service.reset_to_provisioning();
+    auto snapshot = target->snapshot();
+    if (target->uses_reserved_snapshot() && (!confirm_reset_ || !confirm_reset_()))
+      throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
+    target->reset(snapshot);
   } catch (...) {
     target.reset();
     // The card may hold either record after a failed write, so the insertion
@@ -307,7 +312,7 @@ void CardEntryContextController::authenticate_login(
 
 std::uint32_t CardEntryContextController::prepare_login_reset() {
   cancel_login_reset();
-  if (route_ != CardEntryRoute::login_required || !context_)
+  if (!can_login_reset())
     throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
   try {
     auto lease = source_.acquire_operation();
@@ -315,7 +320,9 @@ std::uint32_t CardEntryContextController::prepare_login_reset() {
     if (!target)
       throw std::system_error(card::make_error_code(card::CardError::backend_unavailable));
     auto snapshot = target->snapshot();
-    if (card::inspect_card_record(snapshot.bytes()) != card::CardRecordState::initialized_v1)
+    if (target->uses_reserved_snapshot()
+        ? (!context_->destructive_reset_available() || snapshot.size() != 1808)
+        : card::inspect_card_record(snapshot.bytes()) != card::CardRecordState::initialized_v1)
       throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
     const auto ticket = reset_confirmation_.prepare();
     reset_target_ = std::move(target);
@@ -324,6 +331,7 @@ std::uint32_t CardEntryContextController::prepare_login_reset() {
   } catch (...) {
     cancel_login_reset();
     route_ = CardEntryRoute::unavailable;
+    entry_format_ = card::CardProductRecordState::malformed;
     context_.reset();
     throw;
   }
@@ -332,11 +340,16 @@ std::uint32_t CardEntryContextController::prepare_login_reset() {
 void CardEntryContextController::cancel_login_reset() noexcept {
   reset_confirmation_.cancel();
   reset_target_.reset();
-  reset_snapshot_.clear();
+  reset_snapshot_ = {};
+}
+
+bool CardEntryContextController::can_login_reset() const noexcept {
+  return context_ && (route_ == CardEntryRoute::login_required ||
+      context_->destructive_reset_available());
 }
 
 bool CardEntryContextController::login_reset_pending(const std::uint32_t ticket) const noexcept {
-  return route_ == CardEntryRoute::login_required && context_ && reset_target_ &&
+  return can_login_reset() && reset_target_ &&
          reset_confirmation_.matches(ticket);
 }
 
@@ -349,8 +362,11 @@ void CardEntryContextController::confirm_login_reset(const std::uint32_t ticket)
   auto target = std::move(reset_target_);
   auto snapshot = std::move(reset_snapshot_);
   route_ = CardEntryRoute::unavailable;
+  entry_format_ = card::CardProductRecordState::malformed;
   context_.reset();
   auto lease = source_.acquire_operation();
+  if (target->uses_reserved_snapshot() && (!confirm_reset_ || !confirm_reset_()))
+    throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
   target->reset(snapshot);
 }
 

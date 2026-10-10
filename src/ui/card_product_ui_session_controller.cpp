@@ -853,7 +853,14 @@ void CardProductUiSessionController::reset_card_record() {
         "the card cannot be reset while a volume is still mounted");
   }
 
-  entry_.reset_card_record(authentication_);
+  try {
+    entry_.reset_card_record(authentication_);
+  } catch (...) {
+    volume_session_.release_session_secrets();
+    volume_session_.clear_operation_history();
+    authentication_.clear_authentication();
+    throw;
+  }
 
   // Nothing derived from the destroyed identity may outlive it.
   volume_session_.release_session_secrets();
@@ -950,7 +957,7 @@ void CardProductUiSessionController::set_operation_logging_enabled(bool enabled)
 namespace usb_vault::ui {
 bool CardProductUiSessionController::can_login_reset() const noexcept {
   return !authentication_.authenticated() && !login_reset_completed_ &&
-         entry_.current_route() == application::CardEntryRoute::login_required;
+         entry_.can_login_reset();
 }
 LoginResetPreparation CardProductUiSessionController::prepare_login_reset() {
   cancel_login_reset();
@@ -996,7 +1003,14 @@ void CardProductUiSessionController::force_login_reset_mounts(std::uint32_t tick
 void CardProductUiSessionController::confirm_login_reset(std::uint32_t ticket) {
   if (!login_reset_pending(ticket)) { cancel_login_reset(); throw std::logic_error("confirmation expired"); }
   reset_mounts_.clear(); reset_mounts_known_ = false;
-  entry_.confirm_login_reset(ticket);
+  try {
+    entry_.confirm_login_reset(ticket);
+  } catch (...) {
+    volume_session_.release_session_secrets();
+    volume_session_.clear_operation_history();
+    authentication_.clear_authentication();
+    throw;
+  }
   login_reset_completed_ = true;
   volume_session_.release_session_secrets();
   volume_session_.clear_operation_history();

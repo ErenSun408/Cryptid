@@ -94,6 +94,36 @@ class VikeyHelperCardResetTarget final : public ICardResetTarget {
   std::uint32_t hardware_id_;
 };
 
+class JournalResetTarget final : public ICardResetTarget {
+ public:
+  explicit JournalResetTarget(std::unique_ptr<IVikeyCardJournalTransport> transport)
+      : transport_(std::move(transport)), store_(*transport_) {}
+  bool uses_reserved_snapshot() const noexcept override { return true; }
+  security::SecureBuffer snapshot() override {
+    CardOperationLease lease;
+    if (prepared_ || attempted_) throw std::system_error(make_error_code(CardError::invalid_operation));
+    expected_ = store_.snapshot_for_reset();
+    prepared_.emplace(store_.prepare_reset(expected_.bytes()));
+    security::SecureBuffer result(expected_.size());
+    std::ranges::copy(expected_.bytes(), result.bytes().begin());
+    return result;
+  }
+  void reset(const security::SecureBuffer& expected) override {
+    CardOperationLease lease;
+    if (attempted_) throw std::system_error(make_error_code(CardError::invalid_operation));
+    attempted_ = true;
+    if (!prepared_ || !std::ranges::equal(expected.bytes(), expected_.bytes()))
+      throw std::system_error(make_error_code(CardError::invalid_operation));
+    store_.reset(*prepared_);
+  }
+ private:
+  std::unique_ptr<IVikeyCardJournalTransport> transport_;
+  VikeyCardJournalStore store_;
+  security::SecureBuffer expected_;
+  std::optional<PreparedVikeyCardReset> prepared_;
+  bool attempted_{};
+};
+
 class JournalLoginTarget final : public ICardLoginTarget {
  public:
   explicit JournalLoginTarget(std::unique_ptr<IVikeyCardJournalTransport> transport)
@@ -207,17 +237,37 @@ VikeyHelperCardEnrollment::inspect_entry() {
   insertion_identity_.reset(); // A failed replacement inspection also expires the old context.
   CardOperationLease lease;
   auto candidate = std::make_unique<VikeyCardInsertionContext>(probe());
-  const auto& observed = candidate->probe();
+  const auto observed = candidate->probe();
   if (observed.media_state == VikeyCardMediaState::product_evidence &&
       (observed.logical_state == CardRecordState::unsupported_version ||
        observed.logical_state == CardRecordState::provisioned_uninitialized)) {
     auto bound_transport = transport(observed.hardware_id);
     VikeyCardJournalStore store(*bound_transport);
-    const auto state = store.inspect_entry();
+    auto state = CardProductRecordState::malformed;
+    try { state = store.inspect_entry(); }
+    catch (const std::system_error& error) {
+      if (error.code() != make_error_code(CardError::device_failure)) throw;
+    }
     if (observed.logical_state == CardRecordState::unsupported_version) {
       candidate = std::make_unique<VikeyCardInsertionContext>(observed, state);
     } else if (state != CardProductRecordState::provisioned_uninitialized) {
       throw std::system_error(make_error_code(CardError::invalid_configuration));
+    }
+  }
+  // Eligibility never grants authentication or initialization. The actual
+  // reset prepares again against the image shown by its one-shot ticket.
+  if (observed.logical_state != CardRecordState::initialized_v1 &&
+      (observed.media_state == VikeyCardMediaState::product_evidence ||
+       observed.media_state == VikeyCardMediaState::conflicting_evidence)) {
+    auto bound_transport = transport(observed.hardware_id);
+    VikeyCardJournalStore store(*bound_transport);
+    try {
+      auto image = store.snapshot_for_reset();
+      auto preparation = store.prepare_reset(image.bytes());
+      candidate->reset_available_ = true;
+    } catch (const std::system_error& error) {
+      if (error.code() != make_error_code(CardError::invalid_operation) &&
+          error.code() != make_error_code(CardError::device_failure)) throw;
     }
   }
   insertion_identity_ = std::make_shared<const std::byte>();
@@ -300,6 +350,8 @@ VikeyHelperCardEnrollment::acquire_operation() {
 std::unique_ptr<ICardResetTarget> VikeyHelperCardEnrollment::make_reset_target(
     const application::IReadOnlyCardEntryInspection& context) {
   const auto& insertion = require_context(context);
+  if (insertion.reset_available_)
+    return std::make_unique<JournalResetTarget>(transport(insertion.probe().hardware_id));
   return std::make_unique<VikeyHelperCardResetTarget>(config_, credential_provider_, insertion.probe());
 }
 

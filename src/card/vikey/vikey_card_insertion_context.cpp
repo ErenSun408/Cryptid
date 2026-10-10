@@ -76,6 +76,8 @@ VikeyCardInsertionContext::VikeyCardInsertionContext(
 
 application::CardEntryMediaEvidence
 VikeyCardInsertionContext::inspect_media() {
+  if (reset_available_ && probe_.media_state != VikeyCardMediaState::product_evidence)
+    return application::CardEntryMediaEvidence::blocked;
   switch (probe_.media_state) {
     case VikeyCardMediaState::blank:
     case VikeyCardMediaState::provisioning_interrupted:

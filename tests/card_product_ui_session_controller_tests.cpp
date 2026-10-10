@@ -1716,6 +1716,14 @@ void test_capacity_rounds_the_attached_volume_to_whole_mib() {
 }
 
 void test_card_reset_releases_the_session_and_refuses_while_mounted() {
+  Fixture failed;
+  failed.authentication.establish(root_secret());
+  failed.entry.reject_reset = true;
+  require_throws<std::runtime_error>([&] { failed.controller.reset_card_record(); },
+      "an uncertain reset was reported successful");
+  require(!failed.authentication.authenticated() && failed.volume.release_secrets_calls == 1 &&
+      failed.volume.clear_operation_history_calls >= 1,
+      "an uncertain reset retained the old session identity");
   Fixture unauthenticated;
   require(!unauthenticated.controller.can_reset_card_record(),
           "an unauthenticated session offered the reset");

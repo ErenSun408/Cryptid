@@ -43,6 +43,8 @@ class IReadOnlyCardEntryInspection {
       delete;
 
   [[nodiscard]] virtual CardEntryMediaEvidence inspect_media() = 0;
+  // Known interrupted v2 footprints permit only a newly confirmed destruction.
+  [[nodiscard]] virtual bool destructive_reset_available() const noexcept { return false; }
 
   // Legacy classification used by the default supported-format implementation,
   // exactly once and only after inspect_media() reports product_record.

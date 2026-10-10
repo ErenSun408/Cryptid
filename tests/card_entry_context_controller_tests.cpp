@@ -164,11 +164,13 @@ class FakeSource final : public ICardEntryInspectionSource {
 
   std::unique_ptr<usb_vault::card::ICardResetTarget> make_reset_target(
       const IReadOnlyCardEntryInspection&) override {
+    ++reset_target_calls;
     if (!support_updates) return nullptr;
     return std::make_unique<FakeResetTarget>(record);
   }
 
   Lifetime lifetime;
+  int reset_target_calls{};
   std::vector<InspectionSpec> specs;
   std::size_t next{};
   bool throw_on_call{false};
@@ -344,7 +346,7 @@ void test_reset_requires_authentication_and_reinspects() {
   authentication.establish(std::move(root));
   controller.reset_card_record(authentication);
   require(source.lifetime.source_calls == 1 &&
-              source.update_target_calls == 1 &&
+              source.reset_target_calls == 1 && source.update_target_calls == 0 &&
               source.record.put_calls == 1 &&
               usb_vault::card::inspect_card_record(source.record.blob) ==
                   CardRecordState::provisioned_uninitialized &&

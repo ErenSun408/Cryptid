@@ -344,6 +344,15 @@ void test_read_only_media_classification() {
   require(state.writes == writes_before,
           "ViKey media or logical-state inspection wrote through the SDK");
 
+  std::ranges::fill(std::span(state.data).first(304), std::byte{});
+  const std::array<std::byte, 6> anchor_prefix{
+      std::byte{'U'}, std::byte{'V'}, std::byte{'C'}, std::byte{'R'}, std::byte{'D'}, std::byte{'2'}};
+  std::ranges::copy(anchor_prefix, state.data.begin() + kCardRecordJournalV1Slot0Offset);
+  require(inspect_vikey_card_media(session) == VikeyCardMediaState::product_evidence &&
+      inspect_vikey_card_record_state_read_only(session) == CardRecordState::malformed &&
+      state.writes == writes_before,
+      "revoked v2 descriptors blocked read-only context or promoted residue");
+
   state.reported_capacity =
       static_cast<sdk::Length>(kCardRecordJournalV1StorageSize - 1);
   const std::size_t reads_before = state.reads;
