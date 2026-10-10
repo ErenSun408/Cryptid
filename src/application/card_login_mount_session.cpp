@@ -286,6 +286,12 @@ class ProductionCardLoginMountSessionRuntime final
   bool container_file_hidden(std::wstring_view path) override {
     return application::container_file_hidden(path);
   }
+  void create_protected_directory(std::wstring_view path) override {
+    application::create_protected_directory(path);
+  }
+  void remove_empty_directory(std::wstring_view path) override {
+    application::remove_empty_directory(path);
+  }
   void set_container_file_hidden(std::wstring_view path, bool hidden) override {
     set_container_file_visibility(path, hidden);
   }
@@ -608,6 +614,33 @@ std::uint32_t CardLoginMountSession::create_container_b(
       [&] {
         return impl_->core.create_container_b(path, outer_size_bytes, hidden_size_bytes,
                                               decoy_password_utf8);
+      });
+}
+
+std::uint32_t CardLoginMountSession::create_protected_container(
+    const std::wstring_view path, const std::uint64_t size_bytes,
+    const std::wstring_view display_name) {
+  if (display_name.empty()) throw std::invalid_argument("protected container needs a display name");
+  return traced_call("创建受保护文件安全盘",
+      [&] { return "路径 " + call_text(path) + "；容量 " + std::to_string(size_bytes) + " 字节"; },
+      [&] { return impl_->core.create_container(path, size_bytes, display_name); });
+}
+
+std::uint32_t CardLoginMountSession::create_protected_container_b(
+    const std::wstring_view path,
+    const std::uint64_t outer_size_bytes,
+    const std::uint64_t hidden_size_bytes,
+    const security::SecureBuffer& decoy_password_utf8,
+    const std::wstring_view display_name) {
+  if (display_name.empty()) throw std::invalid_argument("protected container needs a display name");
+  return traced_call("创建受保护的含隐藏卷文件安全盘",
+      [&] {
+        return "路径 " + call_text(path) + "；外层 " + std::to_string(outer_size_bytes) +
+               " 字节；隐藏卷 " + std::to_string(hidden_size_bytes) + " 字节";
+      },
+      [&] {
+        return impl_->core.create_container_b(path, outer_size_bytes, hidden_size_bytes,
+                                              decoy_password_utf8, display_name);
       });
 }
 
@@ -1079,6 +1112,41 @@ void throw_if_creation_cancelled(
   std::rethrow_exception(operation_failure);
 }
 
+// The folder a protected container lives in; it holds nothing else.
+[[nodiscard]] std::wstring protected_directory_of(const std::wstring_view container_path) {
+  const std::size_t separator = container_path.find_last_of(L"\\/");
+  if (separator == std::wstring_view::npos || separator == 0 ||
+      container_path[separator - 1] == L':' || separator + 1 == container_path.size())
+    throw std::invalid_argument("protected container path needs its own folder");
+  return std::wstring(container_path.substr(0, separator));
+}
+
+// Call inside the creation's catch block, before publication. The staging
+// file goes as before; a folder this creation made goes too once it is empty,
+// and failing to remove it never replaces the error being reported.
+[[noreturn]] void abandon_unpublished_container(
+    CardLoginMountSessionRuntime& runtime, const std::wstring_view staging_path,
+    const bool staging_owned, const std::wstring_view owned_directory) {
+  const std::exception_ptr failure = std::current_exception();
+  std::exception_ptr outcome = failure;
+  if (staging_owned) {
+    try {
+      cleanup_incomplete_container(runtime, staging_path, failure);
+    } catch (...) {
+      outcome = std::current_exception();
+    }
+  }
+  if (!owned_directory.empty()) {
+    try {
+      runtime.remove_empty_directory(owned_directory);
+      SESSION_TRACE("已移除未发布安全盘的目录", "目录 " + wide_text(owned_directory));
+    } catch (...) {
+      SESSION_TRACE_FAILURE("移除未发布安全盘的目录失败", "目录 " + wide_text(owned_directory));
+    }
+  }
+  std::rethrow_exception(outcome);
+}
+
 // Drive letters are compared with this and nothing here wants a locale
 // involved in that. The volume layer has its own copy behind a private header;
 // duplicating four lines is cheaper than reaching across that boundary.
@@ -1401,7 +1469,7 @@ security::SecureBuffer CardLoginMountSessionCore::container_index_key() {
 }
 
 void CardLoginMountSessionCore::remember_container_path(
-    const std::wstring_view path) noexcept {
+    const std::wstring_view path, const std::wstring_view alias) noexcept {
   // Every failure here is swallowed on purpose. The container file already
   // exists; refusing the whole operation because its path could not be written
   // down would throw away a finished container to protect a convenience. The
@@ -1416,6 +1484,11 @@ void CardLoginMountSessionCore::remember_container_path(
     std::vector<std::byte> file = runtime_.read_container_index();
     const ContainerIndexWriteV1 written =
         prepend_container_index_path_v1(key.bytes(), file, path);
+    // A new record and its alias are written together, so a remembered
+    // protected container never comes back under its private file name.
+    if (written == ContainerIndexWriteV1::added && !alias.empty() &&
+        !set_container_index_name(key.bytes(), file, ContainerIndexRef{.path = std::wstring(path)}, alias))
+      throw std::logic_error("new container record vanished");
     if (written == ContainerIndexWriteV1::already_present) {
       const ContainerIndexRef reference{.path = std::wstring(path)};
       for (const auto& saved : list_container_index_entries_v1(key.bytes(), file)) {
@@ -1945,7 +2018,8 @@ void CardLoginMountSessionCore::format_partition(
 }
 
 std::uint32_t CardLoginMountSessionCore::create_container(
-    const std::wstring_view path, const std::uint64_t size_bytes) {
+    const std::wstring_view path, const std::uint64_t size_bytes,
+    const std::wstring_view display_name) {
   if (!authentication_.authenticated()) {
     throw std::logic_error(
         "container creation requires an authenticated card session");
@@ -1965,11 +2039,19 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                             "container creation target already exists");
   }
 
-  const std::wstring container_name = file_name_of(path);
+  // A protected container is shown by its display name; its folder and file
+  // names are random and stay off every surface the user reads.
+  if (!display_name.empty() && !valid_container_index_name(display_name))
+    throw std::invalid_argument("invalid container display name");
+  const std::wstring protected_directory =
+      display_name.empty() ? std::wstring{} : protected_directory_of(path);
+  const std::wstring container_name =
+      display_name.empty() ? file_name_of(path) : std::wstring(display_name);
   SESSION_TRACE("开始创建文件安全盘", "路径 " + wide_text(path) + "；暂存路径 " +
                                         wide_text(staging_path) + "；容量 " + bytes_text(size_bytes));
   security::SecureBuffer volume_password;
-  const bool hide_file = runtime_.hide_new_file_containers();
+  const bool hide_file = !display_name.empty() || runtime_.hide_new_file_containers();
+  bool directory_owned = false;
   bool staging_owned = false;
   bool published = false;
   bool listed = false;
@@ -1980,6 +2062,10 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     // the idle helper pipe; keep the protected mount and its identity intact.
     if (std::ranges::any_of(state_.containers, [](const auto& entry) { return entry.maintenance; }))
       runtime_.end_measurements();
+    if (!protected_directory.empty()) {
+      runtime_.create_protected_directory(protected_directory);
+      directory_owned = true;
+    }
     runtime_.create_standard(staging_path, size_bytes, volume_password);
     staging_owned = true;
     SESSION_TRACE("暂存安全盘已生成", "暂存路径 " + wide_text(staging_path));
@@ -1998,8 +2084,9 @@ std::uint32_t CardLoginMountSessionCore::create_container(
     // before mounting, or a mount failure leaves a real file off the list.
     const std::uint32_t id = retain_published_container(state_, path, false);
     listed = true;
+    if (!display_name.empty()) find_by_id(state_, id)->display_alias = display_name;
     SESSION_TRACE("安全盘已收录", "安全盘 #" + std::to_string(id));
-    remember_container_path(path);
+    remember_container_path(path, display_name);
 
     const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
                                        .prf = volume::Pkcs5Prf::sha512,
@@ -2038,9 +2125,10 @@ std::uint32_t CardLoginMountSessionCore::create_container(
                        OperationOutcome::failed,
                        container_name);
     }
-    if (staging_owned && !published) {
-      cleanup_incomplete_container(runtime_, staging_path,
-                                   std::current_exception());
+    if (!published) {
+      abandon_unpublished_container(
+          runtime_, staging_path, staging_owned,
+          directory_owned ? std::wstring_view(protected_directory) : std::wstring_view{});
     }
     throw;
   }
@@ -2050,7 +2138,8 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     const std::wstring_view path,
     const std::uint64_t outer_size_bytes,
     const std::uint64_t hidden_size_bytes,
-    const security::SecureBuffer& decoy_password_utf8) {
+    const security::SecureBuffer& decoy_password_utf8,
+    const std::wstring_view display_name) {
   if (!authentication_.authenticated()) {
     throw std::logic_error(
         "container creation requires an authenticated card session");
@@ -2084,7 +2173,14 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     throw std::system_error(std::make_error_code(std::errc::file_exists),
                             "container creation target already exists");
   }
-  const std::wstring container_name = file_name_of(path);
+  // A protected container is shown by its display name; its folder and file
+  // names are random and stay off every surface the user reads.
+  if (!display_name.empty() && !valid_container_index_name(display_name))
+    throw std::invalid_argument("invalid container display name");
+  const std::wstring protected_directory =
+      display_name.empty() ? std::wstring{} : protected_directory_of(path);
+  const std::wstring container_name =
+      display_name.empty() ? file_name_of(path) : std::wstring(display_name);
   SESSION_TRACE("开始创建含隐藏卷的文件安全盘", "路径 " + wide_text(path) + "；暂存路径 " +
                                                   wide_text(staging_path) + "；外层容量 " +
                                                   bytes_text(outer_size_bytes) + "；隐藏卷容量 " +
@@ -2096,7 +2192,8 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
   // the two the caller "really" uses. Both derivations are shared by every
   // container of this kind, so a second one costs no extra key material.
   security::SecureBuffer outer_password;
-  const bool hide_file = runtime_.hide_new_file_containers();
+  const bool hide_file = !display_name.empty() || runtime_.hide_new_file_containers();
+  bool directory_owned = false;
   bool staging_owned = false;
   bool published = false;
   bool listed = false;
@@ -2113,6 +2210,10 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     // the idle helper pipe; keep the protected mount and its identity intact.
     if (std::ranges::any_of(state_.containers, [](const auto& entry) { return entry.maintenance; }))
       runtime_.end_measurements();
+    if (!protected_directory.empty()) {
+      runtime_.create_protected_directory(protected_directory);
+      directory_owned = true;
+    }
     runtime_.create_with_hidden(staging_path,
                                 outer_size_bytes,
                                 hidden_size_bytes,
@@ -2136,6 +2237,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
     // volume with the login derivation.
     const std::uint32_t id = retain_published_container(state_, path, true);
     listed = true;
+    if (!display_name.empty()) find_by_id(state_, id)->display_alias = display_name;
     // Creation proves both headers without disturbing the newly mounted volume.
     // Compare the full derived value; never retain the supplied clear password.
     if (!state_.decoy_outer_password.empty() &&
@@ -2147,7 +2249,7 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
       if (difference == 0) state_.decoy_candidates.push_back(id);
     }
     SESSION_TRACE("安全盘已收录", "安全盘 #" + std::to_string(id));
-    remember_container_path(path);
+    remember_container_path(path, display_name);
 
     const volume::MountOptions options{.drive_letter = reserve_drive_letter(),
                                        .prf = volume::Pkcs5Prf::sha512,
@@ -2186,9 +2288,10 @@ std::uint32_t CardLoginMountSessionCore::create_container_b(
                        OperationOutcome::failed,
                        container_name);
     }
-    if (staging_owned && !published) {
-      cleanup_incomplete_container(runtime_, staging_path,
-                                   std::current_exception());
+    if (!published) {
+      abandon_unpublished_container(
+          runtime_, staging_path, staging_owned,
+          directory_owned ? std::wstring_view(protected_directory) : std::wstring_view{});
     }
     throw;
   }

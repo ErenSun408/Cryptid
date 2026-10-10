@@ -168,6 +168,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (hiding_fails) throw std::runtime_error("attribute update failed");
     actual_hidden = hidden;
   }
+  std::vector<std::wstring> protected_directories;
+  bool protect_directory_fails{};
+  bool remove_directory_fails{};
+  void create_protected_directory(std::wstring_view path) override {
+    events.emplace_back("directory:create");
+    if (protect_directory_fails) throw std::runtime_error("directory unavailable");
+    protected_directories.emplace_back(path);
+  }
+  void remove_empty_directory(std::wstring_view path) override {
+    events.emplace_back("directory:remove");
+    if (remove_directory_fails) throw std::runtime_error("directory busy");
+    std::erase(protected_directories, std::wstring(path));
+  }
   bool partition_mount_fail{};
   bool partition_pair{};
   std::function<void()> after_partition_mount;
@@ -4127,6 +4140,109 @@ void test_display_alias_persistence_and_export_identity() {
   require_throws<std::logic_error>([&] { next.rename_container(restored[0].id,L"revoked"); }, "revoked rename accepted");
 }
 
+void test_protected_creation_shows_only_the_display_name() {
+  const std::wstring folder = L"C:\\vault\\0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const std::wstring path = folder + L"\\{73DC3809-D909-431A-9807-1F8CDAD47A1F}";
+  const auto before = [](const FakeRuntime& runtime, const char* first, const char* second) {
+    const auto a = std::ranges::find(runtime.events, first);
+    return a != runtime.events.end() && a < std::ranges::find(runtime.events, second);
+  };
+  for (const bool pair : {false, true}) for (const bool remember : {true, false}) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    runtime.remember_paths = remember;
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    establish_empty_authenticated_session(authentication, runtime, session);
+    const int writes = runtime.index_writes;
+    const auto id = pair
+        ? session.create_container_b(path, 64ULL*1024*1024, 16ULL*1024*1024, bytes("decoy-password"), L"TEST")
+        : session.create_container(path, 64ULL*1024*1024, L"TEST");
+    require(runtime.protected_directories == std::vector<std::wstring>{folder}, "protected folder was not created once");
+    require(before(runtime, "directory:create", "file-attributes") && before(runtime, "file-attributes", "publish:other"),
+            "folder, attributes and publication ran out of order");
+    require(runtime.visibility_path == path + L".preparing", "protected file was not hidden regardless of the setting");
+    require(runtime.last_mount_label == L"TEST", "volume label exposed the private file name");
+    const auto rows = session.container_statuses();
+    require(rows.size() == 1 && rows[0].id == id && rows[0].mounted && rows[0].name == L"TEST", "list exposed the private file name");
+    int named = 0;
+    for (const auto& record : session.operation_history()) {
+      if (record.container_name.empty()) continue;  // Session events name no container.
+      require(record.container_name == L"TEST", "operation record exposed the private file name");
+      ++named;
+    }
+    require(named == 2, "creation and mount were not both recorded");
+    require(runtime.index_writes == writes + (remember ? 1 : 0), "path and alias were not written in exactly one index save");
+    CardAuthenticationSession next_auth;
+    CardLoginMountSessionCore next(next_auth, runtime, layout());
+    next.consume_authenticated_login(root_secret(), bytes("other-login"));
+    const auto restored = next.container_statuses();
+    if (remember)
+      require(restored.size() == 1 && restored[0].name == L"TEST", "remembered protected container lost its display name");
+    else
+      require(restored.empty(), "disabled persistence still remembered the protected container");
+  }
+
+  // Before publication nothing stays behind; a folder that cannot be removed
+  // never replaces the error being reported.
+  for (const int failure : {0, 1, 2, 3}) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    establish_empty_authenticated_session(authentication, runtime, session);
+    runtime.fail_create = failure == 0 || failure == 3;
+    runtime.fail_publish = failure == 1;
+    runtime.hiding_fails = failure == 2;
+    runtime.remove_directory_fails = failure == 3;
+    try {
+      static_cast<void>(session.create_container(path, 64ULL*1024*1024, L"TEST"));
+      require(false, "failed protected creation reported success");
+    } catch (const std::runtime_error& error) {
+      const std::string expected = failure == 1 ? "publish failed" : failure == 2 ? "attribute update failed" : "create failed";
+      require(error.what() == expected, "folder cleanup replaced the creation error");
+    }
+    require(std::ranges::count(runtime.events, "directory:remove") == 1, "unpublished folder was not removed exactly once");
+    require(runtime.protected_directories.size() == (failure == 3 ? 1u : 0u), "unpublished folder outlived its creation");
+    require(runtime.other_existing.empty() && session.container_statuses().empty(), "failed protected creation was listed");
+    require(session.operation_history().back().container_name == L"TEST", "failure record exposed the private file name");
+  }
+
+  {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    establish_empty_authenticated_session(authentication, runtime, session);
+    runtime.protect_directory_fails = true;
+    require_throws<std::runtime_error>([&] { session.create_container(path, 64ULL*1024*1024, L"TEST"); },
+                                       "unprotected folder was used");
+    require(std::ranges::find(runtime.events, "create:other") == runtime.events.end() &&
+                std::ranges::find(runtime.events, "directory:remove") == runtime.events.end(),
+            "a folder this creation did not make was touched");
+    runtime.protect_directory_fails = false;
+    runtime.events.clear();
+    runtime.fail_created_mount = true;
+    require_throws<std::runtime_error>([&] { session.create_container(path, 64ULL*1024*1024, L"TEST"); },
+                                       "failed mount reported success");
+    require(runtime.protected_directories.size() == 1 && runtime.other_existing.size() == 1 &&
+                std::ranges::find(runtime.events, "directory:remove") == runtime.events.end(),
+            "a published container lost its folder");
+    require(session.container_statuses().size() == 1 && session.container_statuses()[0].name == L"TEST",
+            "published container was not kept under its display name");
+  }
+
+  {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    establish_empty_authenticated_session(authentication, runtime, session);
+    for (const auto& name : {std::wstring(L"a/b"), std::wstring(L"  "), std::wstring(101, L'x')})
+      require_throws<std::invalid_argument>([&] { session.create_container(path, 64ULL*1024*1024, name); },
+                                            "invalid display name accepted");
+    require_throws<std::invalid_argument>([&] { session.create_container(L"C:\\{73DC3809-D909-431A-9807-1F8CDAD47A1F}", 64ULL*1024*1024, L"TEST"); },
+                                          "protected container accepted a drive root as its folder");
+    require(std::ranges::find(runtime.events, "directory:create") == runtime.events.end(), "rejected input created a folder");
+  }
+}
+
 void test_alias_save_repairs_missing_file_records_and_restores_imports() {
   using namespace usb_vault::application;
   CardAuthenticationSession auth;
@@ -4834,6 +4950,7 @@ void test_monitor_releases_maintenance_facts_without_unmount() {
 int main() {
   try {
     test_display_alias_persistence_and_export_identity();
+    test_protected_creation_shows_only_the_display_name();
     test_alias_save_repairs_missing_file_records_and_restores_imports();
     test_partition_alias_survives_conversion_and_restart();
     test_partition_conversion_lifecycle();

@@ -337,6 +337,35 @@ int main() {
   {
     using namespace usb_vault::application;
     const TemporaryDirectory directory;
+    const auto folder = (directory.root() / L"0f1e2d3c4b5a69788796a5b4c3d2e1f0").wstring();
+    const auto refused = [](const auto& action) {
+      try { action(); } catch (...) { return true; }
+      return false;
+    };
+    create_protected_directory(folder);
+    constexpr DWORD protected_folder = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+    const DWORD attributes = ::GetFileAttributesW(folder.c_str());
+    expect(attributes != INVALID_FILE_ATTRIBUTES && (attributes & protected_folder) == protected_folder,
+           "protected directory lacks Hidden and System");
+    expect(refused([&] { create_protected_directory(folder); }), "an existing directory was reused");
+    const auto inner = folder + L"\\{73DC3809-D909-431A-9807-1F8CDAD47A1F}";
+    write_raw(inner, "ciphertext sentinel");
+    expect(refused([&] { remove_empty_directory(folder); }) && std::filesystem::exists(inner),
+           "a directory holding a container was removed");
+    expect(::DeleteFileW(inner.c_str()), "remove container fixture");
+    remove_empty_directory(folder);
+    expect(::GetFileAttributesW(folder.c_str()) == INVALID_FILE_ATTRIBUTES, "empty protected directory remained");
+    expect(refused([&] { create_protected_directory((directory.root() / L"missing" / L"child").wstring()); }) &&
+               !std::filesystem::exists(directory.root() / L"missing"),
+           "a protected directory created its missing parents");
+    expect(refused([] { create_protected_directory(L"relative"); }) &&
+               refused([&] { create_protected_directory(folder + L":stream"); }),
+           "unsafe protected directory target accepted");
+  }
+
+  {
+    using namespace usb_vault::application;
+    const TemporaryDirectory directory;
     const auto path = directory.settings_path();
     expect(product_preference_v1(path, ProductPreference::container_extension) == 3, "extension policy is not random");
     for (unsigned int value = 0; value < 4; ++value) {

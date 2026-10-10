@@ -209,6 +209,22 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
       std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8) = 0;
 
+  // Product creation. Same contracts as the two calls above, except that the
+  // parent folder of `path` must not exist yet: the session creates it with
+  // Hidden and System for this container alone, removes it again if the
+  // container is never published, and shows the container as `display_name`
+  // (in the list, the volume label, operation records and, when container
+  // paths are remembered, the encrypted index). The file name stays private.
+  virtual std::uint32_t create_protected_container(std::wstring_view,
+      std::uint64_t, std::wstring_view) {
+    throw std::logic_error("protected container creation unavailable");
+  }
+  virtual std::uint32_t create_protected_container_b(std::wstring_view,
+      std::uint64_t, std::uint64_t, const security::SecureBuffer&,
+      std::wstring_view) {
+    throw std::logic_error("protected container creation unavailable");
+  }
+
   // Returns a copy of the password this session was opened under. It exists
   // for the single operation that needs the password itself rather than
   // something derived from it: rewriting the card record so a second password
@@ -560,6 +576,12 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,
       const security::SecureBuffer& decoy_password_utf8) override;
+  std::uint32_t create_protected_container(std::wstring_view path,
+      std::uint64_t size_bytes, std::wstring_view display_name) override;
+  std::uint32_t create_protected_container_b(std::wstring_view path,
+      std::uint64_t outer_size_bytes, std::uint64_t hidden_size_bytes,
+      const security::SecureBuffer& decoy_password_utf8,
+      std::wstring_view display_name) override;
   [[nodiscard]] security::SecureBuffer copy_session_password() override;
   void complete_initialization(security::SecureBuffer password_utf8) override;
   std::uint32_t mount_container(std::wstring_view path) override;

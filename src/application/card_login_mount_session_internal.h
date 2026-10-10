@@ -132,6 +132,9 @@ class CardLoginMountSessionRuntime {
   virtual void set_hide_new_file_containers(bool) { throw std::logic_error("preferences unavailable"); }
   virtual bool container_file_hidden(std::wstring_view) { throw std::logic_error("file visibility unavailable"); }
   virtual void set_container_file_hidden(std::wstring_view, bool) { throw std::logic_error("file visibility unavailable"); }
+  // The folder a protected file container is created in: new, Hidden+System.
+  virtual void create_protected_directory(std::wstring_view) { throw std::logic_error("protected directories unavailable"); }
+  virtual void remove_empty_directory(std::wstring_view) { throw std::logic_error("protected directories unavailable"); }
   virtual unsigned int container_extension_preference() { return 0; }
   virtual void set_container_extension_preference(unsigned int) { throw std::logic_error("preferences unavailable"); }
   virtual bool auto_mount_enabled() { return false; }
@@ -262,8 +265,11 @@ class CardLoginMountSessionCore final {
       const std::function<bool(const volume::PartitionCandidate&)>& confirm_erase,
       std::uint64_t hidden_bytes = 0, const security::SecureBuffer* decoy = nullptr);
   void create_container_a(std::uint64_t size_bytes);
+  // A non-empty display name selects the protected layout: the parent folder
+  // of `path` is created for this container alone, and the name is shown.
   std::uint32_t create_container(std::wstring_view path,
-                                 std::uint64_t size_bytes);
+                                 std::uint64_t size_bytes,
+                                 std::wstring_view display_name = {});
   void mount_adopted_container(std::uint32_t id);
   [[nodiscard]] wchar_t open_decoy_maintenance(
       std::uint32_t id,
@@ -289,7 +295,8 @@ class CardLoginMountSessionCore final {
   std::uint32_t create_container_b(
       std::wstring_view path, std::uint64_t outer_size_bytes,
       std::uint64_t hidden_size_bytes,
-      const security::SecureBuffer& decoy_password_utf8);
+      const security::SecureBuffer& decoy_password_utf8,
+      std::wstring_view display_name = {});
   [[nodiscard]] security::SecureBuffer copy_session_password();
   void complete_initialization(security::SecureBuffer password_utf8);
   std::uint32_t mount_container(std::wstring_view path);
@@ -396,7 +403,7 @@ class CardLoginMountSessionCore final {
   // mounted has been created whether or not the index could be reached, so
   // neither of these reports a failure and neither can fail an operation.
   [[nodiscard]] security::SecureBuffer container_index_key();
-  void remember_container_path(std::wstring_view path) noexcept;
+  void remember_container_path(std::wstring_view path, std::wstring_view alias = {}) noexcept;
   void forget_container_path(std::wstring_view path) noexcept;
   // Adopts every remembered path whose file is where it was left. Reading is
   // as best-effort as writing: a login that cannot reach the index simply
