@@ -7,7 +7,12 @@ const wait=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await 
  try{
  w.eval(fs.readFileSync('tests/card_product_ui_navigation_mock.js','utf8'));let pending=[];w.chrome.webview.hostObjects.nativeBridge.exportContainerEntry=(...args)=>new Promise((resolve,reject)=>pending.push({resolve,reject,args}));
  w.eval(fs.readFileSync('ui/card_session.js','utf8'));await tick();const d=w.document,$=id=>d.getElementById(id);
- d.querySelector('[data-section=backup]').click();d.querySelector('[data-export-select-all="1"]').click();await tick();$('backup-export-location').click();await tick();$('backup-export-confirm').click();$('export-confirm-phrase').value='明文导出';$('export-confirm-phrase').dispatchEvent(new w.Event('input'));$('export-confirm-run').click();
+ d.querySelector('[data-section=backup]').click();
+ $('backup-export-confirm').dispatchEvent(new w.Event('click'));await tick();assert.equal(pending.length,0);
+ d.querySelector('[data-export-select-all="1"]').click();await tick();
+ $('backup-export-confirm').dispatchEvent(new w.Event('click'));await tick();assert.equal(pending.length,0);
+ $('backup-export-location').click();await tick();assert.equal($('export-confirm-dialog'),null);
+ $('backup-export-confirm').click();$('backup-export-confirm').dispatchEvent(new w.Event('click'));
  await wait(()=>pending.length===1);assert.equal($('export-result-dialog').hidden,false);assert.equal($('export-result-confirm').disabled,true);assert.equal(d.querySelectorAll('#export-result-list [data-state=running]').length,2);assert.match($('export-result-summary').textContent,/0\/2/);
  $('export-result-dialog').dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal($('export-result-dialog').hidden,false);
  if(mode==='session'){

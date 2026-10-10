@@ -1159,14 +1159,6 @@
       color: var(--text-2); font-family: var(--mono); font-size: .75rem;
       overflow-wrap: anywhere;
     }
-    .export-confirm-field { margin: 1.1rem 0 0; }
-    #export-confirm-phrase {
-      width: 14rem; max-width: 100%; height: 2.25rem; padding: 0 .7rem;
-      border: 1px solid var(--line-2); border-radius: .5rem;
-      background: var(--ink-850); color: var(--text); font: inherit; letter-spacing: .04em;
-    }
-    #export-confirm-phrase::placeholder { color: var(--text-3); letter-spacing: 0; }
-    #export-confirm-phrase:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
     #create-type-note { margin-top: 1.1rem; }
     .creation-check {
       display: flex; align-items: flex-start; gap: .6rem; margin-top: .9rem;
@@ -1871,35 +1863,6 @@
       <div class="modal-footer"><button id="export-result-confirm" class="shell-button" type="button">确定</button></div>
     </div>
   </div>
-  <div id="export-confirm-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="export-confirm-title" hidden>
-    <div class="modal">
-      <div class="modal-header">
-        <h3 id="export-confirm-title">确认明文导出</h3>
-        <button id="export-confirm-close" class="modal-close" type="button" aria-label="关闭">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <p>即将把 <strong id="export-confirm-count"></strong> 以明文写入：</p>
-        <p id="export-confirm-summary" class="export-confirm-path"></p>
-        <div class="creation-note danger">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
-          <span>写出去的是<b>解密后的原始文件</b>。</span>
-        </div>
-        <div class="field export-confirm-field">
-          <label for="export-confirm-phrase">请键入 <b>明文导出</b> 以确认</label>
-          <input id="export-confirm-phrase" type="text" autocomplete="off"
-                 autocapitalize="off" spellcheck="false" placeholder="明文导出">
-        </div>
-        <output id="export-confirm-status" class="creation-status" aria-live="polite"></output>
-      </div>
-      <div class="modal-footer">
-        <button id="export-confirm-cancel" class="modal-button" type="button">取消</button>
-        <button id="export-confirm-run" class="modal-button danger" type="button" disabled>开始导出</button>
-      </div>
-    </div>
-  </div>
-
   <div id="decoy-empty-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="decoy-empty-title" hidden>
     <div class="modal">
       <div class="modal-header"><h3 id="decoy-empty-title">无可更新安全盘</h3></div>
@@ -1985,9 +1948,8 @@
       </div>
       <div class="modal-body">
         <div id="create-storage-switch" class="storage-switch" role="group" aria-label="安全盘存储方式">
-          <button type="button" class="modal-button" data-create-storage="disk" aria-pressed="true">磁盘安全盘</button>
-          <button type="button" class="modal-button" data-create-storage="file" aria-pressed="false">文件安全盘</button>
-          <p id="create-volume-description">安全盘为物理硬盘上已有的独立数据分区</p>
+          <button type="button" class="modal-button" data-create-storage="file" aria-pressed="true">文件安全盘</button>
+          <p id="create-volume-description">安全盘为一个加密文件，挂载后显示为普通磁盘</p>
         </div>
         <div id="create-type-step" class="type-picks" role="radiogroup" aria-label="安全盘类型">
           <button class="type-pick" type="button" role="radio" aria-checked="true" data-create-kind="encrypted">

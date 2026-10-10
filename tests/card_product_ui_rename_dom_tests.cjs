@@ -117,7 +117,7 @@ const scenarios = ['enter', 'blur', 'escape', 'unchanged', 'empty', 'invalid', '
     assert.match(d.getElementById('dashboard-status').textContent,/已保存.*刷新失败/); continue;
    }
    for (const label of d.querySelectorAll('[data-container-list] [data-row-container="1"] .container-name')) {
-    assert.equal(label.textContent,wanted || 'original.hc'); assert.equal(label.querySelector('img'),null);
+    assert.equal(label.textContent,wanted || 'original'); assert.equal(label.querySelector('img'),null);
    }
    assert.equal(fixture.containers[0].mounted,true,'renaming changed mount state');
    assert.equal(JSON.stringify(fixture.pageEvents).includes(wanted), wanted === '', 'alias leaked into page diagnostics');

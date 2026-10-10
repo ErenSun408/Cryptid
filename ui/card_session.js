@@ -149,7 +149,7 @@
   const pageErrorSurfaces = [
     "dashboard-status", "card-session-status", "card-session-error", "setup-status", "password-strength-description",
     "create-volume-status", "partition-status", "forgot-password-status", "reset-card-status",
-    "export-confirm-status", "forget-container-status", "file-name-status", "file-list-status",
+    "forget-container-status", "file-name-status", "file-list-status",
     "backup-export-status", "backup-migrate-status", "settings-window-size-status",
     "decoy-verify-status", "decoy-results-status", "decoy-maintenance-status", "decoy-drop-status",
     "decoy-protection-status", "batch-result-setting-status",
@@ -384,15 +384,6 @@
   const backupExportStatus = document.getElementById("backup-export-status");
   const migrateContainerList =
     document.getElementById("migrate-container-list");
-  const exportConfirmDialog = document.getElementById("export-confirm-dialog");
-  const exportConfirmSummary =
-    document.getElementById("export-confirm-summary");
-  const exportConfirmCount = document.getElementById("export-confirm-count");
-  const exportConfirmPhrase = document.getElementById("export-confirm-phrase");
-  const exportConfirmStatus = document.getElementById("export-confirm-status");
-  const exportConfirmClose = document.getElementById("export-confirm-close");
-  const exportConfirmCancel = document.getElementById("export-confirm-cancel");
-  const exportConfirmRun = document.getElementById("export-confirm-run");
   const exportModePlain = document.getElementById("export-mode-plain");
   const exportModeMigrate = document.getElementById("export-mode-migrate");
   const exportPlainPane = document.getElementById("export-plain-pane");
@@ -988,7 +979,7 @@
   document.addEventListener("click", (event) => {
     if (!batchControls.some((control) => control.split.contains(event.target))) closeBatchMenus();
   });
-  let creationStorage = "disk";
+  let creationStorage = "file";
   let creationKind = null;
   // The dialog is one flow in two steps: "type" picks the container shape,
   // "params" collects what that shape needs.
@@ -1118,6 +1109,9 @@
   const kMaximumNameLength = 96;
   const kMaximumPathLength = 259;
   const kContainerExtensions = [".hc", ".sys", ".dat", ".bin"];
+  // Presentation only: identities, native aliases and exported paths stay native.
+  const displayContainerName = (name, partition = false) => partition
+    ? name : name.replace(/^(.+)\.(?:hc|sys|dat|bat|bin)$/i, "$1");
 
   const containerNameProblem = (input) => {
     const value = input.value;
@@ -2714,38 +2708,6 @@
     void toggleExportContainer(container.id);
   };
 
-  // 🔴 The plaintext export asks before it runs, and asks for something that
-  // cannot be clicked through: the user has to type the words. Q-04 calls for
-  // a non-skippable confirmation of exactly this kind, and with nothing about
-  // an export written down anywhere, this screen is the only place the user is
-  // ever told what is about to happen.
-  const kExportConfirmPhrase = "明文导出";
-
-  const updateExportConfirmAvailability = () => {
-    exportConfirmRun.disabled =
-      busy || exportConfirmPhrase.value.trim() !== kExportConfirmPhrase;
-  };
-
-  const closeExportConfirm = () => {
-    exportConfirmDialog.hidden = true;
-    exportConfirmPhrase.value = "";
-    exportConfirmStatus.textContent = "";
-    exportConfirmStatus.dataset.tone = "";
-    updateExportConfirmAvailability();
-  };
-
-  const openExportConfirm = () => {
-    if (busy || exportSelection.size === 0 || exportLocation === "") return;
-    exportConfirmCount.textContent = `${exportSelection.size} 项`;
-    exportConfirmSummary.textContent = exportLocation;
-    exportConfirmPhrase.value = "";
-    exportConfirmStatus.textContent = "";
-    exportConfirmStatus.dataset.tone = "";
-    exportConfirmDialog.hidden = false;
-    updateExportConfirmAvailability();
-    exportConfirmPhrase.focus();
-  };
-
   const exportResultDialog = document.getElementById("export-result-dialog");
   const exportResultTitle = document.getElementById("export-result-title");
   const exportResultSummary = document.getElementById("export-result-summary");
@@ -2820,8 +2782,7 @@
   // asynchronous path and its cancellation are still not built; this panel
   // makes that gap easier to reach, and nothing here hides it.
   const runExport = async () => {
-    if (busy || exportSelection.size === 0 || exportLocation === "" || !exportResultDialog.hidden) return;
-    closeExportConfirm();
+    if (busy || currentState !== nativeState.authenticated || exportSelection.size === 0 || exportLocation === "" || !exportResultDialog.hidden) return;
     const requests = [...exportSelection.values()];
     const location = exportLocation;
     const revision = batchSessionRevision;
@@ -4217,13 +4178,13 @@
     renderContainers();
   };
 
-  const openCreationFlow = (refreshDisk = true) => {
+  const openCreationFlow = () => {
     if (busy || currentState !== nativeState.authenticated) {
       return;
     }
     // The flow always opens on the same step with the same preselection, so
     // opening it says nothing about which password is logged in.
-    creationStorage = "disk";
+    creationStorage = "file";
     creationInplace = false; partitionPreserve.checked = false; updatePartitionMode();
     discardPartitions();
     creationKind = "encrypted";
@@ -4237,7 +4198,6 @@
     updateCreationAvailability();
     renderPartitions();
     creationStorageButtons[0].focus();
-    if (refreshDisk) void refreshPartitions();
   };
 
   const enterCreationParameters = () => {
@@ -5178,7 +5138,8 @@
             typeof unavailable !== "boolean" || (unavailable && (!mounted || sizeMib !== 0))) {
           throw new Error("invalid container status");
         }
-        nextContainers.push({ id, name, mounted, sizeMib, drive, partition, conversion, unavailable });
+        nextContainers.push({ id, name: displayContainerName(name, partition), sourceName: name,
+          mounted, sizeMib, drive, partition, conversion, unavailable });
       }
 
     return nextContainers;
@@ -5249,7 +5210,8 @@
           throw new Error("invalid operation event");
         }
         nextOperationEvents.push(
-          { completedAtUnixMs, kind, outcome, name, drive });
+          { completedAtUnixMs, kind, outcome,
+            name: displayContainerName(name, nextContainers.find(item => item.sourceName === name)?.partition), drive });
       }
     }
     if (revision !== batchSessionRevision) throw new Error("session changed during refresh");
@@ -6496,7 +6458,10 @@
       creationStatus.textContent = "请先在系统设置开启“持久化安全盘列表”，再开始分区加密。";
       creationStatus.dataset.tone = "error"; return;
     }
-    if (resume) openCreationFlow(false);
+    if (resume) {
+      openCreationFlow();
+      creationStorage = "disk"; // Existing conversions retain their resume path.
+    }
     creationInplace = true; partitionErase.checked = false; busy = true;
     creationStatus.textContent = resume ? "正在认证并继续加密，正在使用本次管理员授权。" : "正在准备原地加密，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
@@ -6723,20 +6688,7 @@
     setBackupStatus("");
     renderBackupCentre();
   });
-  // The section button opens the confirmation; only the dialog runs the export.
-  backupExportConfirm.addEventListener("click", () => { openExportConfirm(); });
-  exportConfirmPhrase.addEventListener("input", updateExportConfirmAvailability);
-  exportConfirmPhrase.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter" || exportConfirmRun.disabled) return;
-    event.preventDefault();
-    await runExport();
-  });
-  exportConfirmRun.addEventListener("click", async () => { await runExport(); });
-  exportConfirmClose.addEventListener("click", closeExportConfirm);
-  exportConfirmCancel.addEventListener("click", closeExportConfirm);
-  exportConfirmDialog.addEventListener("pointerdown", (event) => {
-    if (event.button === 0 && event.target === exportConfirmDialog) closeExportConfirm();
-  });
+  backupExportConfirm.addEventListener("click", async () => { await runExport(); });
   const chooseExportMode = (mode) => {
     if (busy || exportMode === mode) return;
     exportMode = mode;
@@ -7202,10 +7154,6 @@
         if (target !== null && row.dataset.fileDrag === target.name) row.focus();
       }
       event.preventDefault();
-      return;
-    }
-    if (event.key === "Escape" && !exportConfirmDialog.hidden) {
-      closeExportConfirm();
       return;
     }
     if (event.key === "Escape" && !forgetDialog.hidden) {

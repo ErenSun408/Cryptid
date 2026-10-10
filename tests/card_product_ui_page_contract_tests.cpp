@@ -240,8 +240,8 @@ void test_page_has_route_specific_password_surfaces() {
   // section 8.4 forbids, so browser assistance is off on those too; a file
   // name inside a container is the content of an encrypted volume, which is at
   // least as good a reason.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 12 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 12,
+  require(count_occurrences(page, "autocomplete=\"off\"") == 11 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 11,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
@@ -648,8 +648,7 @@ void test_container_collection_replaces_the_single_container_display() {
               script.find("加密盘已创建") == std::string::npos,
           "the page still tracks one fixed container");
   require(script.find("let containers = []") != std::string::npos &&
-              script.find("nextContainers.push({ id, name, mounted, sizeMib,"
-                          " drive, partition, conversion, unavailable })") != std::string::npos &&
+              script.find("nextContainers.push({ id, name: displayContainerName(name, partition), sourceName: name,") != std::string::npos &&
               script.find("typeof partition !== \"boolean\"") != std::string::npos &&
               script.find("(unavailable && (!mounted || sizeMib !== 0))") !=
                   std::string::npos &&
@@ -883,6 +882,10 @@ void test_card_reset_is_gated_and_states_its_cost() {
 void test_container_creation_form_is_bounded() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
+  require(page.find("data-create-storage=\"disk\"") == std::string::npos &&
+              page.find("data-create-storage=\"file\" aria-pressed=\"true\"") != std::string::npos &&
+              script.find("let creationStorage = \"file\";") != std::string::npos,
+          "new container creation still exposes disk storage or defaults to it");
   require(page.find("id=\"create-container-capacity\"") !=
               std::string::npos &&
               page.find("min=\"20\" max=\"1048576\" step=\"1\" value=\"64\"") !=
@@ -1435,28 +1438,11 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
                   std::string::npos,
           "the migration export does not say what it is and is not");
 
-  // 🔴 The plaintext export asks before it runs, and the question cannot be
-  // clicked through: the user types the words. Q-04 acceptance item 1 asks
-  // for a non-skippable confirmation, and with nothing about an export
-  // written down anywhere this screen is the only place the user is told
-  // what is about to happen. It came back on 2026-09-10, after the
-  // 2026-09-09 decision had removed both screens Q-04 asked for.
-  require(page.find("id=\"export-confirm-dialog\"") != std::string::npos &&
-              page.find("请键入 <b>明文导出</b> 以确认") != std::string::npos &&
-              script.find("const kExportConfirmPhrase = \"明文导出\";") !=
-                  std::string::npos &&
-              script.find(
-                  "exportConfirmPhrase.value.trim() !== kExportConfirmPhrase") !=
-                  std::string::npos,
-          "the plaintext export can be confirmed without typing");
-
-  // 🔴 Only the dialog runs it. The section button opens the question, so no
-  // path reaches an export that was never asked about.
-  require(script.find("backupExportConfirm.addEventListener(\"click\", () => { openExportConfirm(); });") !=
-              std::string::npos &&
-              script.find("closeExportConfirm();") != std::string::npos,
-          "an export can start without the confirmation");
-
+  // The section action directly starts export after content and destination selection.
+  require(page.find("id=\"export-confirm-dialog\"") == std::string::npos &&
+              script.find("exportConfirmPhrase") == std::string::npos &&
+              script.find("backupExportConfirm.addEventListener(\"click\", async () => { await runExport(); });") != std::string::npos,
+          "plaintext export retained its retired confirmation page");
   require(count_occurrences(script, "bridge.exportContainerFile") == 1 &&
               script.find("await bridge.exportContainerFile(id, location);") !=
                   std::string::npos,
