@@ -388,15 +388,19 @@ decrypt_envelope(const std::span<const std::byte> record,
   return result;
 }
 
+// Unused envelopes are random, so a fresh card looks the same however many
+// passwords are later set. Initialization builds the three-envelope record;
+// the legacy rewrap still builds the two-envelope one.
 [[nodiscard]] security::SecureBuffer
 build_record(const security::SecureBuffer &root_secret,
              const security::SecureBuffer &primary_password_utf8,
-             const security::SecureBuffer *const secondary_password_utf8) {
+             const security::SecureBuffer *const secondary_password_utf8,
+             const std::size_t record_size = kCardRecordV1Size) {
   if (root_secret.size() != kCardRecordV1RootSecretSize) {
     throw std::invalid_argument("card root secret has an invalid size");
   }
 
-  security::SecureBuffer result(kCardRecordV1Size);
+  security::SecureBuffer result(record_size);
   fill_random(result.bytes());
   write_header(result.bytes());
   encrypt_envelope(result.bytes(), kCardRecordV1PrimaryEnvelopeOffset,
@@ -504,7 +508,8 @@ InitializedCardRecordV1 initialize_card_record_and_root_v1(
   fill_random(root_secret.bytes());
   try {
     security::SecureBuffer record =
-        build_record(root_secret, password_utf8, nullptr);
+        build_record(root_secret, password_utf8, nullptr,
+                     kCardRecordV1ThreeSlotSize);
     password_utf8.clear();
     return {.record = std::move(record),
             .root_secret = std::move(root_secret)};

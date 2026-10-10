@@ -25,6 +25,7 @@ using usb_vault::card::ICardStore;
 using usb_vault::card::UnexpectedCardRecordState;
 using usb_vault::card::kCardRecordV1RootSecretSize;
 using usb_vault::card::kCardRecordV1Size;
+using usb_vault::card::kCardRecordV1ThreeSlotSize;
 using usb_vault::card::make_error_code;
 using usb_vault::card::provision_uninitialized_card_record_v1;
 using usb_vault::security::SecureBuffer;
@@ -201,8 +202,8 @@ void test_second_password_opens_the_same_record() {
 
   service.set_second_password(secure_text("service-daily-password-v1"),
                               secure_text("service-second-password-v1"));
-  require(store.blob.size() == kCardRecordV1Size,
-          "the rewritten record changed size");
+  require(store.blob.size() == kCardRecordV1ThreeSlotSize,
+          "the rewritten record is not a three-envelope record");
   require(store.blob != initialized,
           "the rewritten record is byte-identical to the previous one");
   require(service.inspect() == CardRecordState::initialized_v1,
@@ -215,6 +216,30 @@ void test_second_password_opens_the_same_record() {
   require(std::ranges::equal(root.bytes(), existing_root.bytes()) &&
               std::ranges::equal(root.bytes(), second_root.bytes()),
           "the two passwords no longer open the same root");
+
+  // A third password keeps both earlier ones; a fourth set from the newest
+  // keeps it and the login password, dropping the least recent one.
+  service.set_second_password(secure_text("service-second-password-v1"),
+                              secure_text("service-third-password-v1"));
+  for (const char* password : {"service-daily-password-v1",
+                               "service-second-password-v1",
+                               "service-third-password-v1"}) {
+    SecureBuffer opened = service.authenticate(secure_text(password));
+    require(std::ranges::equal(root.bytes(), opened.bytes()),
+            "a third password dropped an earlier one");
+  }
+  service.set_second_password(secure_text("service-third-password-v1"),
+                              secure_text("service-fourth-password-v1"));
+  bool dropped = false;
+  try {
+    static_cast<void>(service.authenticate(secure_text("service-daily-password-v1")));
+  } catch (const usb_vault::card::CardCredentialRejected&) {
+    dropped = true;
+  }
+  require(dropped, "a fourth password kept the least recent one");
+  SecureBuffer kept = service.authenticate(secure_text("service-second-password-v1"));
+  require(std::ranges::equal(root.bytes(), kept.bytes()),
+          "a fourth password dropped the most recent other password");
 }
 
 void test_reset_returns_the_card_to_the_provisioning_marker() {

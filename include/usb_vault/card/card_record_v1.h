@@ -53,8 +53,8 @@ inspect_card_record(std::span<const std::byte> record) noexcept;
 // provisioning process before a user initializes the product.
 [[nodiscard]] security::SecureBuffer provision_uninitialized_card_record_v1();
 
-// Creates a fixed-size record with one encrypted primary envelope and a
-// random, indistinguishable secondary envelope. The password is consumed and
+// Creates a three-envelope record with one encrypted primary envelope and two
+// random, indistinguishable envelopes. The password is consumed and
 // wiped; the generated root secret only leaves this function encrypted.
 [[nodiscard]] security::SecureBuffer
 initialize_card_record_v1(security::SecureBuffer password_utf8);
@@ -75,8 +75,10 @@ initialize_card_record_and_root_v1(
 unlock_card_record_v1(std::span<const std::byte> record,
                       security::SecureBuffer password_utf8);
 
-// Re-encrypts the existing root into both envelopes. This generic operation
-// stores no semantic slot label or activation field.
+// Legacy two-envelope rewrap, kept to describe cards written before the third
+// slot; product code appends with append_card_password_v1 instead. It
+// re-encrypts the existing root into both envelopes and stores no semantic
+// slot label or activation field.
 // Existing and replacement passwords are consumed and wiped.
 [[nodiscard]] security::SecureBuffer
 rewrap_card_record_v1(std::span<const std::byte> record,

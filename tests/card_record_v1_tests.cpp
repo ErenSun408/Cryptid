@@ -116,8 +116,8 @@ void test_initialization_and_primary_unlock() {
       initialize_card_record_and_root_v1(
           secure_text("daily-password-v1"));
   SecureBuffer &initialized = material.record;
-  expect(initialized.size() == kCardRecordV1Size,
-         "initialized record has wrong size");
+  expect(initialized.size() == kCardRecordV1ThreeSlotSize,
+         "initialized record is not a three-envelope record");
   expect(inspect_card_record(initialized.bytes()) ==
              CardRecordState::initialized_v1,
          "initialized record framing was rejected");
@@ -126,8 +126,12 @@ void test_initialization_and_primary_unlock() {
       kCardRecordV1PrimaryEnvelopeOffset, kCardRecordV1EnvelopeSize);
   const auto secondary = initialized.bytes().subspan(
       kCardRecordV1SecondaryEnvelopeOffset, kCardRecordV1EnvelopeSize);
-  expect(!std::ranges::equal(primary, secondary),
-         "primary and random secondary envelopes are identical");
+  const auto tertiary = initialized.bytes().subspan(
+      kCardRecordV1TertiaryEnvelopeOffset, kCardRecordV1EnvelopeSize);
+  expect(!std::ranges::equal(primary, secondary) &&
+             !std::ranges::equal(primary, tertiary) &&
+             !std::ranges::equal(secondary, tertiary),
+         "primary and random unused envelopes are not distinct");
 
   SecureBuffer root = unlock_card_record_v1(initialized.bytes(),
                                             secure_text("daily-password-v1"));
@@ -166,7 +170,8 @@ void test_dual_rewrap_accepts_both_credentials_without_shape_change() {
   SecureBuffer dual = rewrap_card_record_v1(
       initialized.bytes(), secure_text("daily-password-v2"),
       secure_text("lure-password-v2"), secure_text("daily-password-v2"));
-  expect(dual.size() == initialized.size(), "rewrap changed fixed record size");
+  expect(dual.size() == kCardRecordV1Size,
+         "legacy rewrap did not build the two-envelope record");
   expect(inspect_card_record(dual.bytes()) == CardRecordState::initialized_v1,
          "rewrapped record framing was rejected");
   expect(std::ranges::equal(
