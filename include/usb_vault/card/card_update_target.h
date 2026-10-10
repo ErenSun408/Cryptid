@@ -1,8 +1,6 @@
 #pragma once
 
 #include "usb_vault/card/card_store.h"
-#include "usb_vault/card/card_product_record_state.h"
-#include <functional>
 
 namespace usb_vault::card {
 
@@ -23,12 +21,7 @@ class ICardUpdateTarget {
   ICardUpdateTarget(ICardUpdateTarget&&) = delete;
   ICardUpdateTarget& operator=(ICardUpdateTarget&&) = delete;
 
-  [[nodiscard]] virtual ICardStore& card_store();
-  [[nodiscard]] virtual CardProductRecordState record_format() const noexcept {
-    return CardProductRecordState::initialized_v1;
-  }
-  virtual void append_password(security::SecureBuffer existing_password,
-      security::SecureBuffer new_password, const std::function<bool()>& confirm);
+  [[nodiscard]] virtual ICardStore& card_store() noexcept = 0;
 
  protected:
   ICardUpdateTarget() noexcept = default;

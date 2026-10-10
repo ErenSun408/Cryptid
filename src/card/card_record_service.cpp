@@ -1,5 +1,4 @@
 #include "usb_vault/card/card_record_service.h"
-#include "usb_vault/card/card_update_target.h"
 #include "usb_vault/diagnostics/debug_log.h"
 
 #include "usb_vault/card/card_error.h"
@@ -10,16 +9,6 @@
 #include <utility>
 
 namespace usb_vault::card {
-ICardStore& ICardUpdateTarget::card_store() {
-  throw std::logic_error("legacy card update store is unavailable");
-}
-
-void ICardUpdateTarget::append_password(security::SecureBuffer existing,
-    security::SecureBuffer password, const std::function<bool()>& confirm) {
-  if (!confirm || !confirm()) throw std::system_error(make_error_code(CardError::invalid_operation));
-  CardRecordService service(card_store());
-  service.set_second_password(std::move(existing), std::move(password));
-}
 namespace {
 
 [[nodiscard]] bool equal_bytes(

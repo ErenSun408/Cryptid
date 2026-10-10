@@ -33,7 +33,7 @@ class IVolatileCardAuthenticationSession {
 };
 
 // Owns one unlocked Card Record root secret only in page-locked process
-// memory. Establishment consumes an exact 32-byte card root and refuses to replace an
+// memory. Establishment consumes an exact v1 root and refuses to replace an
 // active session. No byte accessor is exposed at this boundary; later mount
 // and volume operations must receive a separately reviewed scoped consumer.
 class CardAuthenticationSession final

@@ -164,13 +164,11 @@ class FakeSource final : public ICardEntryInspectionSource {
 
   std::unique_ptr<usb_vault::card::ICardResetTarget> make_reset_target(
       const IReadOnlyCardEntryInspection&) override {
-    ++reset_target_calls;
     if (!support_updates) return nullptr;
     return std::make_unique<FakeResetTarget>(record);
   }
 
   Lifetime lifetime;
-  int reset_target_calls{};
   std::vector<InspectionSpec> specs;
   std::size_t next{};
   bool throw_on_call{false};
@@ -258,7 +256,7 @@ void test_second_card_password_rewrites_the_record_once() {
       secure_text("entry-daily-password"));
   source.record.blob.assign(initialized.bytes().begin(),
                             initialized.bytes().end());
-  CardEntryContextController controller(source, [] { return true; });
+  CardEntryContextController controller(source);
 
   controller.set_second_card_password(secure_text("entry-daily-password"),
                                       secure_text("entry-second-password"));
@@ -289,7 +287,7 @@ void test_initialization_retires_then_update_reinspects() {
   SecureBuffer marker =
       usb_vault::card::provision_uninitialized_card_record_v1();
   source.record.blob.assign(marker.bytes().begin(), marker.bytes().end());
-  CardEntryContextController controller(source, [] { return true; });
+  CardEntryContextController controller(source);
   require(controller.handle_arrival() ==
               CardEntryRoute::initialization_required,
           "a provisioning card did not route to initialization");
@@ -346,7 +344,7 @@ void test_reset_requires_authentication_and_reinspects() {
   authentication.establish(std::move(root));
   controller.reset_card_record(authentication);
   require(source.lifetime.source_calls == 1 &&
-              source.reset_target_calls == 1 && source.update_target_calls == 0 &&
+              source.update_target_calls == 1 &&
               source.record.put_calls == 1 &&
               usb_vault::card::inspect_card_record(source.record.blob) ==
                   CardRecordState::provisioned_uninitialized &&
@@ -504,11 +502,66 @@ void test_login_reset_confirmation_lifecycle() {
   require(!accepted, "no-card reset preparation accepted");
 }
 
+// A card holding a record of an earlier, incompatible format (the withdrawn
+// P5.4 layout) cannot log in; a login reset is the only action it is offered.
+void test_earlier_format_card_offers_only_reset() {
+  auto future = usb_vault::card::initialize_card_record_v1(secure_text("earlier-format"));
+  future.bytes()[8] = std::byte{2};
+  require(usb_vault::card::inspect_card_record(future.bytes()) ==
+              CardRecordState::unsupported_version,
+          "fixture is not a future-version record");
+  {
+    FakeSource source;
+    source.support_updates = true;
+    source.specs.push_back({CardEntryMediaEvidence::product_record,
+                            CardRecordState::unsupported_version});
+    source.record.blob.assign(future.bytes().begin(), future.bytes().end());
+    CardEntryContextController controller(source);
+    require(controller.handle_arrival() == CardEntryRoute::unavailable &&
+                controller.can_login_reset(),
+            "earlier-format card was not offered a reset");
+    const auto ticket = controller.prepare_login_reset();
+    require(source.record.put_calls == 0 && controller.login_reset_pending(ticket),
+            "earlier-format reset preparation wrote or lost confirmation");
+    controller.confirm_login_reset(ticket);
+    const auto marker = usb_vault::card::provision_uninitialized_card_record_v1();
+    require(source.record.put_calls == 1 &&
+                std::ranges::equal(source.record.blob, marker.bytes()),
+            "earlier-format reset did not restore the provisioning marker");
+  }
+  {
+    // The route says earlier format but the card now holds a v1 record.
+    const auto initialized = usb_vault::card::initialize_card_record_v1(secure_text("changed"));
+    FakeSource source;
+    source.support_updates = true;
+    source.specs.push_back({CardEntryMediaEvidence::product_record,
+                            CardRecordState::unsupported_version});
+    source.record.blob.assign(initialized.bytes().begin(), initialized.bytes().end());
+    CardEntryContextController controller(source);
+    static_cast<void>(controller.handle_arrival());
+    bool accepted = false;
+    try { static_cast<void>(controller.prepare_login_reset()); accepted = true; }
+    catch (const std::exception&) {}
+    require(!accepted && source.record.put_calls == 0 && !controller.can_login_reset(),
+            "changed earlier-format card reached reset");
+  }
+  {
+    FakeSource source;
+    source.support_updates = true;
+    source.specs.push_back({CardEntryMediaEvidence::product_record,
+                            CardRecordState::malformed});
+    CardEntryContextController controller(source);
+    static_cast<void>(controller.handle_arrival());
+    require(!controller.can_login_reset(), "malformed card was offered a reset");
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
     test_login_reset_confirmation_lifecycle();
+    test_earlier_format_card_offers_only_reset();
     test_second_card_password_requires_a_fresh_initialized_inspection();
     test_second_card_password_rejects_empty_input_without_retiring();
     test_second_card_password_retires_the_insertion_on_failure();

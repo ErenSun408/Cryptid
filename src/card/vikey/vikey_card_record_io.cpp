@@ -2,8 +2,6 @@
 #include "usb_vault/diagnostics/debug_log.h"
 
 #include "card/card_record_journal_v1.h"
-#include "card/card_record_journal_v2.h"
-#include "card/vikey/card_journal_block.h"
 #include "card/vikey/vikey_session.h"
 #include "card/diagnostic_error.h"
 #include "usb_vault/card/card_error.h"
@@ -46,38 +44,6 @@ class VikeyCardRecordStorage final : public ICardRecordJournalStorage {
   VikeySession& session_;
   std::optional<std::size_t> capacity_;
 };
-
-security::SecureBuffer snapshot_vikey_card_journal(VikeySession& session) {
-  VikeyCardRecordStorage storage(session);
-  if (storage.capacity() < kCardRecordJournalV2StorageSize) {
-    throw DiagnosticError(make_error_code(CardError::invalid_configuration),
-        DiagnosticStage::sdk_capacity, "ViKey user area is too small for journal snapshot");
-  }
-  return storage.read(0, kCardRecordJournalV2StorageSize);
-}
-
-void write_vikey_card_journal_block(VikeySession& session,
-    const security::SecureBuffer& expected_snapshot, const std::size_t offset,
-    const security::SecureBuffer& replacement) {
-  if (expected_snapshot.size() != kCardRecordJournalV2StorageSize ||
-      !valid_card_journal_block(offset, replacement.size())) {
-    throw std::system_error(make_error_code(CardError::invalid_configuration),
-        "invalid conditional journal block shape");
-  }
-  auto observed = snapshot_vikey_card_journal(session);
-  if (!std::ranges::equal(observed.bytes(), expected_snapshot.bytes())) {
-    throw std::system_error(make_error_code(CardError::invalid_operation),
-        "conditional journal snapshot expired");
-  }
-  VikeyCardRecordStorage storage(session);
-  storage.write(offset, replacement.bytes());
-  std::ranges::copy(replacement.bytes(), observed.bytes().begin() + offset);
-  const auto verified = snapshot_vikey_card_journal(session);
-  if (!std::ranges::equal(observed.bytes(), verified.bytes())) {
-    throw std::system_error(make_error_code(CardError::device_failure),
-        "conditional journal block did not verify");
-  }
-}
 
 namespace {
 
@@ -161,14 +127,7 @@ VikeyCardMediaState inspect_vikey_card_media(VikeySession& session) {
 CardRecordState inspect_vikey_card_record_state_read_only(
     VikeySession& session) {
   VikeyCardRecordStorage storage(session);
-  try {
-    return inspect_card_record_journal_logical_state_v1_read_only(storage);
-  } catch (const std::system_error& error) {
-    // Revoked/torn descriptors cannot authenticate or initialize. Preserve a
-    // read-only context so separately validated v2 residue can be destroyed.
-    if (error.code() != make_error_code(CardError::device_failure)) throw;
-    return CardRecordState::malformed;
-  }
+  return inspect_card_record_journal_logical_state_v1_read_only(storage);
 }
 
 void bootstrap_vikey_card_media(

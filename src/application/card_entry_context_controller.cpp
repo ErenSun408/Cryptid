@@ -5,7 +5,6 @@
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_service.h"
 #include "usb_vault/card/card_record_v1.h"
-#include "usb_vault/card/card_record_v2.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -39,13 +38,10 @@ namespace {
 }  // namespace
 
 CardEntryContextController::CardEntryContextController(
-    ICardEntryInspectionSource& source, std::function<bool()> confirm_password_update,
-    std::function<bool()> confirm_reset) noexcept
-    : source_(source), confirm_password_update_(std::move(confirm_password_update)),
-      confirm_reset_(std::move(confirm_reset)) {}
+    ICardEntryInspectionSource& source) noexcept
+    : source_(source) {}
 
 CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
-  entry_format_ = card::CardProductRecordState::malformed;
   cancel_login_reset();
   startup_failure_ = {};
   context_.reset();
@@ -59,7 +55,7 @@ CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
       return *route_;
     }
 
-    route_ = CardEntryRouter::route(*candidate, &startup_failure_, &entry_format_);
+    route_ = CardEntryRouter::route(*candidate, &startup_failure_);
     context_ = std::move(candidate);
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("application/card_entry_context_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
@@ -69,7 +65,6 @@ CardEntryRoute CardEntryContextController::handle_arrival() noexcept {
 }
 
 void CardEntryContextController::handle_removal() noexcept {
-  entry_format_ = card::CardProductRecordState::malformed;
   cancel_login_reset();
   startup_failure_ = {};
   context_.reset();
@@ -93,7 +88,6 @@ void CardEntryContextController::initialize_and_authenticate(
   // initialization tore halfway is in a state nobody knows, and no retry may
   // run against it.
   route_ = CardEntryRoute::unavailable;
-  entry_format_ = card::CardProductRecordState::malformed;
   std::unique_ptr<IReadOnlyCardEntryInspection> context =
       std::move(context_);
   std::unique_ptr<card::ICardInitializationTarget> target =
@@ -104,12 +98,9 @@ void CardEntryContextController::initialize_and_authenticate(
         "card adapter cannot initialize this insertion");
   }
 
-  auto root =
+  authentication.establish(
       card::CardInitializationService::initialize_and_authenticate(
-          *target, std::move(confirmed_daily_password));
-  target.reset();
-  context.reset();
-  authentication.establish(std::move(root));
+          *target, std::move(confirmed_daily_password)));
 }
 
 void CardEntryContextController::set_second_card_password(
@@ -128,30 +119,26 @@ void CardEntryContextController::set_second_card_password(
   // later record update starts from a new read-only inspection and binds its
   // write target to the card that is physically present at that moment.
   route_ = CardEntryRoute::unavailable;
-  entry_format_ = card::CardProductRecordState::malformed;
   context_.reset();
   std::unique_ptr<IReadOnlyCardEntryInspection> context;
   std::unique_ptr<card::ICardUpdateTarget> target;
   try {
     context = source_.inspect_inserted_card();
-    auto format = card::CardProductRecordState::malformed;
-    if (!context || CardEntryRouter::route(*context, nullptr, &format) !=
+    if (!context || CardEntryRouter::route(*context) !=
                         CardEntryRoute::login_required) {
       throw std::system_error(
           card::make_error_code(card::CardError::invalid_operation),
           "card record update requires a fresh initialized insertion");
     }
-    target = source_.make_password_update_target(*context);
+    target = source_.make_update_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),
           "card adapter cannot update this insertion");
     }
-    if (target->record_format() != format) {
-      throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
-    }
-    target->append_password(std::move(existing_password_utf8),
-                           std::move(second_password_utf8), confirm_password_update_);
+    card::CardRecordService service(target->card_store());
+    service.set_second_password(std::move(existing_password_utf8),
+                                std::move(second_password_utf8));
   } catch (...) {
     existing_password_utf8.clear();
     second_password_utf8.clear();
@@ -180,10 +167,9 @@ void CardEntryContextController::reset_card_record(
   // receives a new adapter-authenticated observation and binds the write to
   // that exact card.
   route_ = CardEntryRoute::unavailable;
-  entry_format_ = card::CardProductRecordState::malformed;
   context_.reset();
   std::unique_ptr<IReadOnlyCardEntryInspection> context;
-  std::unique_ptr<card::ICardResetTarget> target;
+  std::unique_ptr<card::ICardUpdateTarget> target;
   try {
     context = source_.inspect_inserted_card();
     if (!context || CardEntryRouter::route(*context) !=
@@ -192,16 +178,14 @@ void CardEntryContextController::reset_card_record(
           card::make_error_code(card::CardError::invalid_operation),
           "card reset requires a fresh initialized insertion");
     }
-    target = source_.make_reset_target(*context);
+    target = source_.make_update_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),
           "card adapter cannot update this insertion");
     }
-    auto snapshot = target->snapshot();
-    if (target->uses_reserved_snapshot() && (!confirm_reset_ || !confirm_reset_()))
-      throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
-    target->reset(snapshot);
+    card::CardRecordService service(target->card_store());
+    service.reset_to_provisioning();
   } catch (...) {
     target.reset();
     // The card may hold either record after a failed write, so the insertion
@@ -232,7 +216,6 @@ void CardEntryContextController::authenticate_login(
   auto operation_lease = source_.acquire_operation();
 
   std::unique_ptr<card::ICardLoginTarget> target;
-  auto format = card::CardProductRecordState::initialized_v1;
   security::SecureBuffer record;
   try {
     target = source_.make_login_target(*context_);
@@ -241,15 +224,9 @@ void CardEntryContextController::authenticate_login(
           card::make_error_code(card::CardError::backend_unavailable),
           "card adapter cannot authenticate this insertion");
     }
-    format = target->record_format();
-    if (format != entry_format_ || (format != card::CardProductRecordState::initialized_v1 &&
-        format != card::CardProductRecordState::initialized_v2)) {
-      throw std::system_error(card::make_error_code(card::CardError::invalid_operation), "unsupported login target format");
-    }
     record = target->read_record();
   } catch (...) {
     target.reset();
-    entry_format_ = card::CardProductRecordState::malformed;
     route_ = CardEntryRoute::unavailable;
     context_.reset();
     throw;
@@ -257,21 +234,19 @@ void CardEntryContextController::authenticate_login(
 
   security::SecureBuffer root_secret;
   try {
-    if (format == card::CardProductRecordState::initialized_v1) {
-      const auto state = card::inspect_card_record(record.bytes());
-      if (state != card::CardRecordState::initialized_v1) throw card::UnexpectedCardRecordState(state);
-    } else if (card::inspect_card_record_v2(record.bytes()) != card::CardRecordV2State::initialized) {
-      throw std::system_error(card::make_error_code(card::CardError::invalid_operation), "invalid v2 login framing");
+    const card::CardRecordState state =
+        card::inspect_card_record(record.bytes());
+    if (state != card::CardRecordState::initialized_v1) {
+      throw card::UnexpectedCardRecordState(state);
     }
-    auto authentication_password = duplicate_secret(login_password_utf8);
-    root_secret = format == card::CardProductRecordState::initialized_v1
-        ? card::unlock_card_record_v1(record.bytes(), std::move(authentication_password))
-        : card::unlock_card_record_v2(record.bytes(), std::move(authentication_password));
+    security::SecureBuffer authentication_password =
+        duplicate_secret(login_password_utf8);
+    root_secret = card::unlock_card_record_v1(
+        record.bytes(), std::move(authentication_password));
   } catch (const card::CardCredentialRejected&) {
     throw;
   } catch (...) {
     target.reset();
-    entry_format_ = card::CardProductRecordState::malformed;
     route_ = CardEntryRoute::unavailable;
     context_.reset();
     throw;
@@ -285,15 +260,8 @@ void CardEntryContextController::authenticate_login(
           card::make_error_code(card::CardError::device_failure),
           "card record changed during login");
     }
-    // The final I/O must verify the anchor and exact logical record, including
-    // authenticated recovery's complete postimage. A later unauthenticated read
-    // must not hide an anchor-only change. Every gate error retires the context.
-    if (format == card::CardProductRecordState::initialized_v2) {
-      target->complete_authenticated_read(record.bytes(), root_secret);
-    }
   } catch (...) {
     target.reset();
-    entry_format_ = card::CardProductRecordState::malformed;
     route_ = CardEntryRoute::unavailable;
     context_.reset();
     throw;
@@ -302,7 +270,6 @@ void CardEntryContextController::authenticate_login(
   target.reset();
   record.clear();
   verified_record.clear();
-  entry_format_ = card::CardProductRecordState::malformed;
   route_ = CardEntryRoute::unavailable;
   context_.reset();
   success_consumer.consume_authenticated_login(
@@ -310,19 +277,35 @@ void CardEntryContextController::authenticate_login(
 }
 
 
+namespace {
+
+// The router reports a future-version record, such as one left by the
+// withdrawn P5.4 card format, as unavailable with this code.
+constexpr std::uint32_t kUnsupportedVersionCode = 4002;
+
+}  // namespace
+
+bool CardEntryContextController::can_login_reset() const noexcept {
+  return context_ && (route_ == CardEntryRoute::login_required ||
+                      (route_ == CardEntryRoute::unavailable &&
+                       startup_failure_.primary.code == kUnsupportedVersionCode));
+}
+
 std::uint32_t CardEntryContextController::prepare_login_reset() {
   cancel_login_reset();
   if (!can_login_reset())
     throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
+  const card::CardRecordState expected_state =
+      route_ == CardEntryRoute::login_required
+          ? card::CardRecordState::initialized_v1
+          : card::CardRecordState::unsupported_version;
   try {
     auto lease = source_.acquire_operation();
     auto target = source_.make_reset_target(*context_);
     if (!target)
       throw std::system_error(card::make_error_code(card::CardError::backend_unavailable));
     auto snapshot = target->snapshot();
-    if (target->uses_reserved_snapshot()
-        ? (!context_->destructive_reset_available() || snapshot.size() != 1808)
-        : card::inspect_card_record(snapshot.bytes()) != card::CardRecordState::initialized_v1)
+    if (card::inspect_card_record(snapshot.bytes()) != expected_state)
       throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
     const auto ticket = reset_confirmation_.prepare();
     reset_target_ = std::move(target);
@@ -331,7 +314,6 @@ std::uint32_t CardEntryContextController::prepare_login_reset() {
   } catch (...) {
     cancel_login_reset();
     route_ = CardEntryRoute::unavailable;
-    entry_format_ = card::CardProductRecordState::malformed;
     context_.reset();
     throw;
   }
@@ -340,17 +322,11 @@ std::uint32_t CardEntryContextController::prepare_login_reset() {
 void CardEntryContextController::cancel_login_reset() noexcept {
   reset_confirmation_.cancel();
   reset_target_.reset();
-  reset_snapshot_ = {};
-}
-
-bool CardEntryContextController::can_login_reset() const noexcept {
-  return context_ && (route_ == CardEntryRoute::login_required ||
-      context_->destructive_reset_available());
+  reset_snapshot_.clear();
 }
 
 bool CardEntryContextController::login_reset_pending(const std::uint32_t ticket) const noexcept {
-  return can_login_reset() && reset_target_ &&
-         reset_confirmation_.matches(ticket);
+  return can_login_reset() && reset_target_ && reset_confirmation_.matches(ticket);
 }
 
 void CardEntryContextController::confirm_login_reset(const std::uint32_t ticket) {
@@ -362,11 +338,8 @@ void CardEntryContextController::confirm_login_reset(const std::uint32_t ticket)
   auto target = std::move(reset_target_);
   auto snapshot = std::move(reset_snapshot_);
   route_ = CardEntryRoute::unavailable;
-  entry_format_ = card::CardProductRecordState::malformed;
   context_.reset();
   auto lease = source_.acquire_operation();
-  if (target->uses_reserved_snapshot() && (!confirm_reset_ || !confirm_reset_()))
-    throw std::system_error(card::make_error_code(card::CardError::invalid_operation));
   target->reset(snapshot);
 }
 

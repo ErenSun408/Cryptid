@@ -3,7 +3,6 @@
 #include "card/vikey/vikey_helper_card_enrollment.h"
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_protocol.h"
-#include "card/vikey/vikey_card_journal_store.h"
 #include "vikey_network_probe.h"
 
 #include "usb_vault/application/card_entry_router.h"
@@ -599,55 +598,6 @@ void store_u32(SecureBuffer& destination, const std::size_t offset,
   return record;
 }
 
-void test_conditional_journal_inputs_before_launch(
-    const std::filesystem::path& helper, const std::filesystem::path& vendor) {
-  const auto user_sn = fixed_secret(usb_vault::card::vikey::kVikeyUserSnBytes, std::byte{'A'});
-  const auto api_key = fixed_secret(usb_vault::card::vikey::kVikeyApiKeyBytes, std::byte{'B'});
-  const auto pin = fixed_secret(usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'P'});
-  const auto directories = development_helper_directory_count();
-  for (unsigned int scenario = 0; scenario < 4; ++scenario) {
-    const auto expected = fixed_secret(scenario == 1 ? 1807 : 1808, std::byte{0x71});
-    const auto block = fixed_secret(scenario == 2 ? 151 : 152, std::byte{0x37});
-    try {
-      usb_vault::card::vikey::write_vikey_development_card_journal_block_with_network_access(
-          helper, {}, vendor.parent_path(), {}, scenario == 0 ? 0 : 1,
-          user_sn, api_key, pin, expected, scenario == 3 ? 1 : 0, block, 5s);
-      fail("invalid conditional journal input reached helper launch");
-    } catch (const std::system_error& error) {
-      expect(error.code() == usb_vault::card::make_error_code(CardError::invalid_configuration),
-             "conditional journal input was not rejected before artifact verification");
-    }
-  }
-  expect(development_helper_directory_count() == directories,
-         "invalid conditional input created staging directory");
-  CountingCredentialProvider provider;
-  provider.fail_load = true;
-  usb_vault::card::vikey::VikeyHelperBackendConfig config{};
-  try {
-    usb_vault::card::vikey::VikeyHelperCardJournalTransport invalid(config, provider, 0);
-    fail("journal transport accepted zero bound identity");
-  } catch (const std::system_error& error) {
-    expect(error.code() == usb_vault::card::make_error_code(CardError::invalid_configuration),
-           "journal transport identity rejection returned wrong error");
-  }
-  usb_vault::card::vikey::VikeyHelperCardJournalTransport transport(config, provider, 1);
-  const auto expected = fixed_secret(1808, std::byte{0x71});
-  const auto replacement = fixed_secret(152, std::byte{0x37});
-  for (bool write : {false, true}) {
-    try {
-      if (write) transport.write_block(expected, 0, replacement);
-      else static_cast<void>(transport.snapshot_reserved());
-      fail("journal credential provider failure escaped its boundary");
-    } catch (const std::system_error& error) {
-      expect(error.code() == usb_vault::card::make_error_code(CardError::backend_unavailable),
-             "journal credential provider failure returned wrong error");
-    }
-  }
-  expect(provider.loads == 2 && development_helper_directory_count() == directories,
-         "journal transport retained credentials or staged failed provider input");
-  std::cout << "conditional journal prelaunch checks passed\n";
-}
-
 void test_formal_card_record_backend_staging(
     const std::filesystem::path& helper,
     const std::filesystem::path& vendor) {
@@ -685,44 +635,6 @@ void test_formal_card_record_backend_staging(
   VikeyHelperCardRecordBackend backend(config, provider,
                                        media.hardware_id);
   VikeyCardRecordStore store(backend);
-
-  const auto journal = usb_vault::card::vikey::snapshot_vikey_development_card_journal_with_network_access(
-      helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
-      media.hardware_id, user_sn, api_key, user_pin, 5s);
-  expect(journal.size() == usb_vault::card::kCardRecordJournalV2StorageSize,
-         "helper journal snapshot returned wrong size");
-  SecureBuffer unchanged_descriptor(152);
-  std::ranges::copy(journal.bytes().first(152), unchanged_descriptor.bytes().begin());
-  usb_vault::card::vikey::write_vikey_development_card_journal_block_with_network_access(
-      helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
-      media.hardware_id, user_sn, api_key, user_pin, journal, 0, unchanged_descriptor, 5s);
-  SecureBuffer stale(journal.size());
-  std::ranges::copy(journal.bytes(), stale.bytes().begin());
-  stale.bytes().back() ^= std::byte{1};
-  try {
-    usb_vault::card::vikey::write_vikey_development_card_journal_block_with_network_access(
-        helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
-        media.hardware_id, user_sn, api_key, user_pin, stale, 0, unchanged_descriptor, 5s);
-    fail("helper conditional block accepted stale snapshot");
-  } catch (const std::system_error& error) {
-    expect(error.code() == usb_vault::card::make_error_code(CardError::invalid_operation),
-           "helper conditional stale snapshot returned wrong error");
-  }
-  expect(std::ranges::all_of(journal.bytes().subspan(usb_vault::card::kCardRecordJournalV1StorageSize),
-                            [](std::byte b) { return b == std::byte{}; }),
-         "helper journal snapshot lost the blank extension");
-  for (const auto identity : {0u, media.hardware_id + 1u}) {
-    try {
-      static_cast<void>(usb_vault::card::vikey::snapshot_vikey_development_card_journal_with_network_access(
-          helper, config.helper_digest, vendor.parent_path(), config.vendor_digest,
-          identity, user_sn, api_key, user_pin, 5s));
-      fail("helper journal snapshot accepted wrong identity");
-    } catch (const std::system_error& error) {
-      expect(error.code() == usb_vault::card::make_error_code(identity == 0
-                 ? CardError::invalid_configuration : CardError::device_failure),
-             "journal snapshot identity rejection returned wrong error");
-    }
-  }
 
   SecureBuffer observed = store.get_blob();
   expect(observed.size() == usb_vault::card::kCardRecordV1Size,
@@ -1350,9 +1262,6 @@ int wmain(const int argc, wchar_t** const argv) {
         std::filesystem::absolute(argv[4]).lexically_normal();
     const std::filesystem::path vendor =
         std::filesystem::absolute(argv[5]).lexically_normal();
-    run_test("conditional journal prelaunch inputs", [&] {
-      test_conditional_journal_inputs_before_launch(helper, vendor);
-    });
     if (!elevated_development) {
       run_test("restricted helper probe",
                [&] { test_restricted_helper_probe(helper); });

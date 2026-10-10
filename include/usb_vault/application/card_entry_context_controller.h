@@ -63,11 +63,6 @@ class ICardEntryInspectionSource {
     return nullptr;
   }
 
-  [[nodiscard]] virtual std::unique_ptr<card::ICardUpdateTarget>
-  make_password_update_target(const IReadOnlyCardEntryInspection& context) {
-    return make_update_target(context);
-  }
-
   [[nodiscard]] virtual std::unique_ptr<card::ICardResetTarget>
   make_reset_target(const IReadOnlyCardEntryInspection&) { return nullptr; }
 
@@ -106,10 +101,13 @@ class ICardEntryActions {
   // revived. The fresh insertion is retired on every outcome.
   virtual void reset_card_record(
       const IVolatileCardAuthenticationSession& authentication) = 0;
-  virtual std::uint32_t prepare_login_reset() { throw std::logic_error("login reset unsupported"); }
+  // A login reset is offered for an initialized card, and for a card holding
+  // a record written by an earlier, incompatible format, which can only be
+  // reset and initialized again.
   [[nodiscard]] virtual bool can_login_reset() const noexcept {
     return current_route() == CardEntryRoute::login_required;
   }
+  virtual std::uint32_t prepare_login_reset() { throw std::logic_error("login reset unsupported"); }
   virtual void cancel_login_reset() noexcept {}
   [[nodiscard]] virtual bool login_reset_pending(std::uint32_t) const noexcept { return false; }
   virtual void confirm_login_reset(std::uint32_t) { throw std::logic_error("login reset unsupported"); }
@@ -126,11 +124,8 @@ class ICardEntryActions {
 // failures and null contexts fail closed without an automatic retry.
 class CardEntryContextController final : public ICardEntryActions {
  public:
-  [[nodiscard]] bool can_login_reset() const noexcept override;
   explicit CardEntryContextController(
-      ICardEntryInspectionSource& source,
-      std::function<bool()> confirm_password_update = {},
-      std::function<bool()> confirm_reset = {}) noexcept;
+      ICardEntryInspectionSource& source) noexcept;
 
   [[nodiscard]] CardEntryRoute handle_arrival() noexcept;
   void handle_removal() noexcept;
@@ -158,6 +153,7 @@ class CardEntryContextController final : public ICardEntryActions {
   void reset_card_record(
       const IVolatileCardAuthenticationSession& authentication) override;
 
+  bool can_login_reset() const noexcept override;
   std::uint32_t prepare_login_reset() override;
   void cancel_login_reset() noexcept override;
   bool login_reset_pending(std::uint32_t ticket) const noexcept override;
@@ -174,12 +170,9 @@ class CardEntryContextController final : public ICardEntryActions {
 
  private:
   ICardEntryInspectionSource& source_;
-  std::function<bool()> confirm_password_update_;
   std::unique_ptr<IReadOnlyCardEntryInspection> context_;
   std::optional<CardEntryRoute> route_;
   card::FailureDiagnostic startup_failure_{};
-  std::function<bool()> confirm_reset_;
-  card::CardProductRecordState entry_format_{card::CardProductRecordState::malformed};
   CardResetConfirmation reset_confirmation_;
   std::unique_ptr<card::ICardResetTarget> reset_target_;
   security::SecureBuffer reset_snapshot_;

@@ -1,8 +1,6 @@
 #pragma once
 
 #include "card/verified_local_artifact.h"
-#include "card/card_record_journal_v2.h"
-#include "card/vikey/card_journal_block.h"
 #include "card/vikey/vikey_session.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/secure_buffer.h"
@@ -40,8 +38,6 @@ constexpr std::uint32_t kCardRecordWritePayloadBytes =
 constexpr std::uint32_t kCardRecordThreeSlotWritePayloadBytes =
     kCardRecordReadPayloadBytes +
     static_cast<std::uint32_t>(kCardRecordV1ThreeSlotSize);
-constexpr std::uint32_t kCardJournalBlockWritePayloadBytes =
-    kCardRecordReadPayloadBytes + static_cast<std::uint32_t>(kCardRecordJournalV2StorageSize + 8 + kCardRecordV2Size);
 constexpr std::uint32_t kCardIdentityProbePayloadBytes =
     kDevelopmentSessionPayloadBytes;
 constexpr std::uint32_t kCardMediaProbePayloadBytes =
@@ -68,21 +64,15 @@ enum class Operation : std::uint32_t {
   development_media_reset = 13,
   card_record_snapshot = 14,
   card_record_reset = 15,
-  card_journal_snapshot = 16,
-  card_journal_block_write = 17,
 };
 
 [[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
-  return op == Operation::card_record_read || op == Operation::card_record_snapshot ||
-         op == Operation::card_journal_snapshot;
+  return op == Operation::card_record_read || op == Operation::card_record_snapshot;
 }
-// Logical records are exchanged at their own length, two or three envelopes;
-// the journal snapshot has its fixed size.
-[[nodiscard]] constexpr bool valid_record_payload(Operation op,
+// Logical records are exchanged at their own length, two or three envelopes.
+[[nodiscard]] constexpr bool valid_record_payload(Operation,
                                                   std::size_t bytes) noexcept {
-  return op == Operation::card_journal_snapshot
-             ? bytes == kCardRecordJournalV2StorageSize
-             : bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
+  return bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
 }
 [[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
   return op == Operation::card_record_write || op == Operation::card_record_reset;
@@ -280,15 +270,6 @@ struct CardRecordSessionRequest final {
   security::SecureBuffer user_pin;
 };
 
-struct CardJournalBlockWriteRequest final {
-  CardRecordSessionRequest session;
-  security::SecureBuffer expected_snapshot{kCardRecordJournalV2StorageSize};
-  std::uint32_t offset{};
-  std::uint32_t length{};
-  // Always 384 bytes on the wire; unused suffix must be zero.
-  security::SecureBuffer replacement{kCardRecordV2Size};
-};
-
 struct CardMediaBootstrapRequest final {
   CardMediaBootstrapRequest();
 
@@ -476,29 +457,19 @@ void write_card_record_write_request(
     const security::SecureBuffer& record);
 [[nodiscard]] CardRecordWriteRequest read_card_record_write_request(
     HANDLE pipe, const Request& request);
-void write_card_journal_block_request(HANDLE pipe, const Request& request,
-    const Sha256Digest& vendor_digest, std::uint32_t expected_hardware_id,
-    const security::SecureBuffer& user_sn, const security::SecureBuffer& api_key,
-    const security::SecureBuffer& user_pin,
-    const security::SecureBuffer& expected_snapshot, std::uint32_t offset,
-    const security::SecureBuffer& replacement);
-[[nodiscard]] CardJournalBlockWriteRequest read_card_journal_block_request(
-    HANDLE pipe, const Request& request);
 void write_response(HANDLE pipe, const Response& response,
                     Operation expected_operation);
 void write_development_blob_response(
     HANDLE pipe, const Response& response,
     const security::SecureBuffer& blob);
 void write_card_record_response(HANDLE pipe, const Response& response,
-                                const security::SecureBuffer& record,
-                                Operation operation = Operation::card_record_read);
+                                const security::SecureBuffer& record);
 [[nodiscard]] Response read_response(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce,
     Operation expected_operation);
 [[nodiscard]] security::SecureBuffer read_development_blob_response_payload(
     HANDLE pipe, const Response& response);
 [[nodiscard]] security::SecureBuffer read_card_record_response_payload(
-    HANDLE pipe, const Response& response,
-    Operation operation = Operation::card_record_read);
+    HANDLE pipe, const Response& response);
 
 }  // namespace usb_vault::card::vikey::helper

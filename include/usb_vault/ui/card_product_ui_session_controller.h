@@ -155,9 +155,8 @@ class CardProductUiSessionController final {
   // Creates one hidden-volume container at the same kind of caller-named
   // location and commits the second card password that opens its outer volume.
   // An out-of-range shape, a rejected location, or a wrong route throws. Any
-  // number of these containers may exist; each confirmed creation appends its
-  // password to the card's three-entry ring, including a retry after a later
-  // volume failure. The prompt is unconditional on every attempt. The
+  // number of these containers may exist and they all share one password pair,
+  // so the prompt is unconditional and asks for it again every time. The
   // caller supplies only the new password twice; the password the session was
   // opened under comes from the session itself, so it is never retyped and
   // never crosses the page. Both buffers are wiped on every path. The location

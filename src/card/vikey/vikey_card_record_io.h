@@ -52,15 +52,6 @@ void write_vikey_card_record(VikeySession& session,
                              const security::SecureBuffer& record);
 
 [[nodiscard]] security::SecureBuffer snapshot_vikey_card_record(VikeySession& session);
-// Fixed reserved ciphertext region only. No normalization, authentication or
-// writes; callers must authenticate selected records in the application.
-[[nodiscard]] security::SecureBuffer snapshot_vikey_card_journal(VikeySession& session);
-// Private ciphertext transport primitive. Compare the entire reserved snapshot
-// before one fixed-block write; errors remain indeterminate, with no retries.
-// Authentication and the whole transaction lease belong to the application.
-void write_vikey_card_journal_block(VikeySession& session,
-    const security::SecureBuffer& expected_snapshot, std::size_t offset,
-    const security::SecureBuffer& replacement);
 void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected);
 
 }  // namespace usb_vault::card::vikey

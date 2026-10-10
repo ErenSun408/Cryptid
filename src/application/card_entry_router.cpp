@@ -6,9 +6,8 @@ namespace usb_vault::application {
 
 CardEntryRoute CardEntryRouter::route(
     IReadOnlyCardEntryInspection& inspection,
-    card::FailureDiagnostic* failure, card::CardProductRecordState* product_state) noexcept {
+    card::FailureDiagnostic* failure) noexcept {
   if (failure) *failure = {};
-  if (product_state) *product_state = card::CardProductRecordState::malformed;
   const auto unavailable = [failure](const std::uint32_t code) {
     if (failure) failure->primary.code = code;
     return CardEntryRoute::unavailable;
@@ -25,19 +24,16 @@ CardEntryRoute CardEntryRouter::route(
         return unavailable(4005);
     }
 
-    const auto state = inspection.inspect_supported_product_record_read_only();
-    if (product_state) *product_state = state;
-    switch (state) {
-      case card::CardProductRecordState::provisioned_uninitialized:
+    switch (inspection.inspect_product_record_read_only()) {
+      case card::CardRecordState::provisioned_uninitialized:
         return CardEntryRoute::initialization_required;
-      case card::CardProductRecordState::initialized_v1:
-      case card::CardProductRecordState::initialized_v2:
+      case card::CardRecordState::initialized_v1:
         return CardEntryRoute::login_required;
-      case card::CardProductRecordState::legacy_p1_blob:
+      case card::CardRecordState::legacy_p1_blob:
         return unavailable(4001);
-      case card::CardProductRecordState::unsupported_version:
+      case card::CardRecordState::unsupported_version:
         return unavailable(4002);
-      case card::CardProductRecordState::malformed:
+      case card::CardRecordState::malformed:
         return unavailable(4003);
       default:
         return unavailable(4005);

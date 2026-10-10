@@ -155,12 +155,9 @@ add_library(usb_vault_core STATIC
   src/card/card_error.cpp
   src/card/card_initialization_service.cpp
   src/card/card_record_journal_v1.cpp
-  src/card/card_record_journal_v2.cpp
-  src/card/card_record_journal_v2_reset.cpp
   src/card/card_record_service.cpp
   src/card/card_record_v1.cpp
   src/card/card_record_v1_inspection.cpp
-  src/card/card_record_v2.cpp
   src/security/argon2id_runtime.cpp
   src/security/confirmed_password.cpp
   src/security/kdf_v1.cpp
@@ -342,7 +339,6 @@ usb_vault_configure_target(usb_vault_vikey_helper_protocol)
 
 add_library(usb_vault_vikey_helper_client STATIC
   src/card/vikey/vikey_helper_client.cpp
-  src/card/vikey/vikey_card_journal_store.cpp
 )
 
 target_include_directories(usb_vault_vikey_helper_client

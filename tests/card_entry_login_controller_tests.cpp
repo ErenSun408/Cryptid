@@ -3,7 +3,6 @@
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_service.h"
 #include "usb_vault/card/card_record_v1.h"
-#include "usb_vault/card/card_record_v2.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -61,10 +60,6 @@ struct State final {
   bool return_null_target{};
   bool throw_on_read{};
   std::vector<std::byte> second_read_record;
-  bool v2_entry{};
-  usb_vault::card::CardProductRecordState target_format{usb_vault::card::CardProductRecordState::initialized_v1};
-  int completion_calls{};
-  int completion_failure{};
 };
 
 class FakeInspection final : public IReadOnlyCardEntryInspection {
@@ -82,10 +77,6 @@ class FakeInspection final : public IReadOnlyCardEntryInspection {
   [[nodiscard]] CardRecordState inspect_product_record_read_only() override {
     return logical_;
   }
-  usb_vault::card::CardProductRecordState inspect_supported_product_record_read_only() override {
-    return state_.v2_entry ? usb_vault::card::CardProductRecordState::initialized_v2 :
-        IReadOnlyCardEntryInspection::inspect_supported_product_record_read_only();
-  }
 
  private:
   State& state_;
@@ -97,14 +88,6 @@ class FakeLoginTarget final : public ICardLoginTarget {
  public:
   explicit FakeLoginTarget(State& state) noexcept : state_(state) {}
   ~FakeLoginTarget() noexcept override { ++state_.targets_destroyed; }
-  usb_vault::card::CardProductRecordState record_format() const noexcept override { return state_.target_format; }
-  void complete_authenticated_read(std::span<const std::byte> expected, const SecureBuffer& root) override {
-    ++state_.completion_calls;
-    require(root.size() == 32 && copy_bytes(expected) == state_.record, "v2 gate received wrong root shape or record");
-    if (state_.completion_failure == 1) throw CardCredentialRejected();
-    if (state_.completion_failure == 2) ICardLoginTarget::complete_authenticated_read(expected, root);
-    if (state_.completion_failure == 3) throw std::system_error(usb_vault::card::make_error_code(CardError::communication_failed));
-  }
 
   [[nodiscard]] SecureBuffer read_record() override {
     ++local_reads_;
@@ -210,7 +193,6 @@ class RecordingConsumer final : public ICardLoginSuccessConsumer {
         !controller_.has_context();
     root = copy_bytes(root_secret.bytes());
     password = copy_bytes(login_password_utf8.bytes());
-    session.establish(std::move(root_secret));
   }
 
   CardEntryContextController& controller_;
@@ -218,7 +200,6 @@ class RecordingConsumer final : public ICardLoginSuccessConsumer {
   bool invalid_before_call{};
   std::vector<std::byte> root;
   std::vector<std::byte> password;
-  usb_vault::application::CardAuthenticationSession session;
 };
 
 template <typename Action>
@@ -359,7 +340,7 @@ void test_login_update_uses_a_fresh_inspection(
     const InitializedCardRecordV1& initialized) {
   FakeSource source;
   source.state.record = copy_bytes(initialized.record.bytes());
-  CardEntryContextController controller(source, [] { return true; });
+  CardEntryContextController controller(source);
   source.state.controller = &controller;
   RecordingConsumer consumer(controller);
   require(controller.handle_arrival() == CardEntryRoute::login_required,
@@ -414,68 +395,6 @@ void test_wrong_routes_reject_without_target_creation() {
   }
 }
 
-void test_v2_login_handoff_and_failure_boundaries(const InitializedCardRecordV1& legacy) {
-  using namespace usb_vault::card;
-  auto initial = initialize_card_record_and_root_v2(secure_text("correct-login-password"));
-  FakeSource source;
-  source.state.v2_entry = true;
-  source.state.target_format = CardProductRecordState::initialized_v2;
-  source.state.record = copy_bytes(initial.record.bytes());
-  CardEntryContextController controller(source);
-  source.state.controller = &controller;
-  RecordingConsumer consumer(controller);
-  require(controller.handle_arrival() == CardEntryRoute::login_required, "v2 entry did not select login");
-  bool wrong_rejected = false;
-  try { controller.authenticate_login(consumer, secure_text("wrong-password")); }
-  catch (const CardCredentialRejected&) { wrong_rejected = true; }
-  require(wrong_rejected && controller.has_context() && source.state.completion_calls == 0 &&
-      consumer.calls == 0 && !consumer.session.authenticated(), "wrong v2 password reached recovery or session");
-  controller.authenticate_login(consumer, secure_text("correct-login-password"));
-  require(consumer.calls == 1 && consumer.invalid_before_call && consumer.session.authenticated() &&
-      consumer.root == copy_bytes(initial.root_secret.bytes()) && source.state.completion_calls == 1 &&
-      source.state.read_calls == 3 && source.state.targets_destroyed == 2 && source.state.inspections_destroyed == 1,
-      "v2 login did not verify, retire, and hand off once");
-  require(consumer.password == copy_bytes(secure_text("correct-login-password").bytes()), "v2 changed exact login input");
-
-  for (int scenario = 1; scenario <= 4; ++scenario) {
-    FakeSource rejected;
-    rejected.state.v2_entry = true;
-    rejected.state.target_format = CardProductRecordState::initialized_v2;
-    rejected.state.record = copy_bytes(initial.record.bytes());
-    if (scenario <= 3) rejected.state.completion_failure = scenario;
-    else { rejected.state.second_read_record = rejected.state.record; rejected.state.second_read_record.back() ^= std::byte{1}; }
-    CardEntryContextController failed(rejected);
-    rejected.state.controller = &failed;
-    RecordingConsumer unused(failed);
-    static_cast<void>(failed.handle_arrival());
-    bool refused = false;
-    try { failed.authenticate_login(unused, secure_text("correct-login-password")); }
-    catch (const std::exception&) { refused = true; }
-    require(refused && !failed.has_context() && failed.current_route() == CardEntryRoute::unavailable &&
-        unused.calls == 0 && !unused.session.authenticated() && rejected.state.completion_calls == (scenario == 4 ? 0 : 1) &&
-        rejected.state.targets_destroyed == 1 && rejected.state.inspections_destroyed == 1,
-        "v2 anchor, missing gate, recovery or recheck failure remained retryable or delivered root");
-  }
-  for (const auto format : {CardProductRecordState::initialized_v1, static_cast<CardProductRecordState>(999),
-                           CardProductRecordState::initialized_v2}) {
-    FakeSource incompatible;
-    incompatible.state.v2_entry = format != CardProductRecordState::initialized_v2;
-    incompatible.state.target_format = format;
-    incompatible.state.record = copy_bytes(format == CardProductRecordState::initialized_v1 ?
-        legacy.record.bytes() : initial.record.bytes());
-    CardEntryContextController failed(incompatible);
-    incompatible.state.controller = &failed;
-    RecordingConsumer unused(failed);
-    static_cast<void>(failed.handle_arrival());
-    bool refused = false;
-    try { failed.authenticate_login(unused, secure_text("correct-login-password")); }
-    catch (const std::exception&) { refused = true; }
-    require(refused && !failed.has_context() && unused.calls == 0 && incompatible.state.completion_calls == 0,
-        "v2 bytes implicitly promoted an old or unknown target");
-    require(incompatible.state.read_calls == 0, "unknown or mismatched format performed I/O");
-  }
-}
-
 }  // namespace
 
 int main() {
@@ -488,7 +407,6 @@ int main() {
     test_noncredential_failures_invalidate_context();
     test_login_update_uses_a_fresh_inspection(initialized);
     test_wrong_routes_reject_without_target_creation();
-    test_v2_login_handoff_and_failure_boundaries(initialized);
     std::cout << "card_entry_login_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
