@@ -9,6 +9,7 @@
 
 #include "platform/windows/vikey_configuration/installers.h"
 #include "platform/windows/vikey_configuration/driver_deployment.h"
+#include "platform/windows/vikey_configuration/driver_cleanup.h"
 #include "platform/windows/vikey_configuration/setup_policy.h"
 #include "platform/windows/vikey_configuration/webview_cleanup.h"
 #include "usb_vault/volume/volume_provider.h"
@@ -68,6 +69,11 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
       result = configuration::webview_cleanup::clean_profile(application);
     else if (!single_mode) result = Result::bad_arguments;
     else if (mode == L"--probe-uninstall-cleanup") result = Result::ready;
+    else if (mode == L"--probe-driver-cleanup") result = Result::ready;
+    else if (mode == L"--uninstall-veracrypt")
+      result = configuration::driver_cleanup::request_uninstall(directory() / L"usb_vault_setup_helper.exe");
+    else if (mode == L"--uninstall-driver-elevated")
+      result = configuration::driver_cleanup::uninstall_elevated();
     else if (mode == L"--uninstall-webview")
       result = configuration::webview_cleanup::uninstall_runtime();
     else if (mode == L"--webview")

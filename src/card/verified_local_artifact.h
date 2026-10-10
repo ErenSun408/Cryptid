@@ -22,12 +22,14 @@ class VerifiedLocalArtifact final {
   VerifiedLocalArtifact& operator=(VerifiedLocalArtifact&&) = delete;
 
   [[nodiscard]] const std::filesystem::path& path() const noexcept;
+  // Only removal-enabled verification grants DELETE on the pinned file.
+  [[nodiscard]] bool remove_verified_file() noexcept;
 
  private:
   friend VerifiedLocalArtifact verify_local_artifact(
       const std::filesystem::path& path,
       const Sha256Digest& expected_digest,
-      std::uint64_t maximum_bytes);
+      std::uint64_t maximum_bytes, bool allow_delete);
 
   VerifiedLocalArtifact(std::filesystem::path path, void* directory_handle,
                         void* file_handle) noexcept;
@@ -40,6 +42,6 @@ class VerifiedLocalArtifact final {
 [[nodiscard]] VerifiedLocalArtifact verify_local_artifact(
     const std::filesystem::path& path,
     const Sha256Digest& expected_digest,
-    std::uint64_t maximum_bytes);
+    std::uint64_t maximum_bytes, bool allow_delete = false);
 
 }  // namespace usb_vault::card

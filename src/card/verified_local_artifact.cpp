@@ -172,9 +172,9 @@ void require_final_path(const HANDLE handle,
   return handle;
 }
 
-[[nodiscard]] Handle lock_file(const std::filesystem::path& path) {
+[[nodiscard]] Handle lock_file(const std::filesystem::path& path, bool allow_delete) {
   Handle handle(::CreateFileW(
-      path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      path.c_str(), GENERIC_READ | (allow_delete ? DELETE : 0), FILE_SHARE_READ, nullptr, OPEN_EXISTING,
       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN |
           FILE_FLAG_OPEN_REPARSE_POINT,
       nullptr));
@@ -184,7 +184,8 @@ void require_final_path(const HANDLE handle,
 
   const FILE_ATTRIBUTE_TAG_INFO info = attributes(handle.get());
   if ((info.FileAttributes &
-       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+      (allow_delete && (info.FileAttributes & FILE_ATTRIBUTE_READONLY))) {
     fail(CardError::backend_unavailable, "local artifact is not a plain file", DiagnosticStage::path_check);
   }
   require_final_path(handle.get(), path,
@@ -294,13 +295,19 @@ const std::filesystem::path& VerifiedLocalArtifact::path() const noexcept {
   return path_;
 }
 
+bool VerifiedLocalArtifact::remove_verified_file() noexcept {
+  FILE_DISPOSITION_INFO disposition{TRUE};
+  return ::SetFileInformationByHandle(static_cast<HANDLE>(file_handle_),
+      FileDispositionInfo, &disposition, sizeof(disposition)) != FALSE;
+}
+
 VerifiedLocalArtifact verify_local_artifact(
     const std::filesystem::path& input,
     const Sha256Digest& expected_digest,
-    const std::uint64_t maximum_bytes) {
+    const std::uint64_t maximum_bytes, const bool allow_delete) {
   const std::filesystem::path path = normalized_local_file(input);
   Handle directory = lock_directory(path.parent_path());
-  Handle file = lock_file(path);
+  Handle file = lock_file(path, allow_delete);
   const std::uint64_t size = require_bounded_size(file.get(), maximum_bytes);
   const Sha256Digest actual_digest = hash_file(file.get(), size);
   if (!std::equal(actual_digest.begin(), actual_digest.end(),

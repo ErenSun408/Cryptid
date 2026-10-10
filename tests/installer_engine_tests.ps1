@@ -124,17 +124,37 @@ function Configuration-Targets($Fixture) {
 try {
     foreach ($configuration in @(0, 1)) {
         foreach ($runtime in @(0, 1)) {
-            $fixture = New-Fixture "webview-choice-$configuration-$runtime"
-            $exe = Compile-Fixture $fixture
-            Run-Fixture $exe
-            Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments "/S /DELETECONFIG=$configuration /DELETEWEBVIEW=$runtime"
-            $calls = if (Test-Path -LiteralPath "$($fixture.Root)\cleanup-calls.txt") { [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt") } else { '' }
-            if ($calls.Contains('--cleanup-webview-profile') -ne ($configuration -eq 1) -or
-                $calls.Contains('--uninstall-webview') -ne ($runtime -eq 1)) { throw 'WebView/configuration choices are coupled' }
-            if (Test-Path -LiteralPath $fixture.Key) { throw 'Successful WebView choice left registration' }
+            foreach ($driver in @(0, 1)) {
+                $fixture = New-Fixture "cleanup-choice-$configuration-$runtime-$driver"
+                $exe = Compile-Fixture $fixture
+                Run-Fixture $exe
+                [IO.File]::WriteAllText("$($fixture.Root)\app\container.hc", 'container stay')
+                [IO.File]::WriteAllText("$($fixture.Root)\app\self-stored.txt", 'personal stay')
+                Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments "/S /DELETECONFIG=$configuration /DELETEWEBVIEW=$runtime /DELETEDRIVER=$driver"
+                $calls = if (Test-Path -LiteralPath "$($fixture.Root)\cleanup-calls.txt") { [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt") } else { '' }
+                if ($calls.Contains('--cleanup-webview-profile') -ne ($configuration -eq 1) -or
+                    $calls.Contains('--uninstall-webview') -ne ($runtime -eq 1) -or
+                    $calls.Contains('--uninstall-veracrypt') -ne ($driver -eq 1)) { throw 'Cleanup choices are coupled' }
+                if (Test-Path -LiteralPath $fixture.Key) { throw 'Successful cleanup left registration' }
+                Assert-Text "$($fixture.Root)\app\container.hc" 'container stay'
+                Assert-Text "$($fixture.Root)\app\self-stored.txt" 'personal stay'
+            }
         }
     }
-    Write-Output 'PASS four WebView runtime/profile option combinations invoke only selected actions'
+    Write-Output 'PASS eight cleanup option combinations invoke only selected actions and retain user files'
+
+    foreach ($status in @(11, 12, 20, 21, 22)) {
+        $fixture = New-Fixture "driver-failure-$status"
+        $exe = Compile-Fixture $fixture
+        Run-Fixture $exe
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments "/S /DELETECONFIG=1 /DELETEWEBVIEW=1 /DELETEDRIVER=1 /CLEANUPSTATUS=$status"
+        Assert-Installed $fixture
+        $calls = [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt")
+        if (!$calls.Contains('--uninstall-veracrypt') -or $calls.Contains('--cleanup-webview-profile') -or $calls.Contains('--uninstall-webview')) { throw 'Driver failure did not stop later cleanup' }
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=0 /DELETEWEBVIEW=0 /DELETEDRIVER=0'
+        if (Test-Path -LiteralPath $fixture.Key) { throw 'Opting out did not recover driver cleanup failure' }
+    }
+    Write-Output 'PASS blocked, unavailable, restart, cancelled and failed driver cleanup retains application and supports opting out'
 
     foreach ($status in @(12, 21, 22)) {
         $fixture = New-Fixture "webview-failure-$status"

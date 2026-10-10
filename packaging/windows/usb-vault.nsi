@@ -32,7 +32,7 @@ ShowUninstDetails show
 !define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVaultDevelopment"
 !include "${__FILEDIR__}\installer-engine.nsh"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TEXT "该向导将安装 USB Vault。所需的 VeraCrypt 驱动已包含在安装包内，无需另外安装 VeraCrypt 软件；向导会自动检测并按需安装或修复驱动。$\r$\n$\r$\n安装系统组件时会请求管理员授权。卸载时可选择删除用户配置及 WebView2；容器和其他自存文件始终保留。"
+!define MUI_WELCOMEPAGE_TEXT "该向导将安装 USB Vault。所需的 VeraCrypt 驱动已包含在安装包内，无需另外安装 VeraCrypt 软件；向导会自动检测并按需安装或修复驱动。$\r$\n$\r$\n安装系统组件时会请求管理员授权。卸载时可选择删除用户配置、WebView2 及 VeraCrypt 驱动；容器和其他自存文件始终保留。"
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageShow
 !insertmacro MUI_PAGE_WELCOME
 
@@ -87,6 +87,7 @@ Var WelcomeTitleFont
 Var WelcomeTextFont
 Var UninstallConfigurationCheck
 Var UninstallWebViewCheck
+Var UninstallDriverCheck
 
 Function un.ConfigurationPageCreate
   !insertmacro MUI_HEADER_TEXT "卸载选项" "选择需要清理的配置和运行组件"
@@ -97,21 +98,28 @@ Function un.ConfigurationPageCreate
     SetErrorLevel 1603
     Quit
   ${EndIf}
-  ${NSD_CreateCheckbox} 0 8u 100% 14u "删除用户配置"
+  ${NSD_CreateCheckbox} 0 0u 100% 14u "删除用户配置"
   Pop $UninstallConfigurationCheck
   ${If} $UninstallDeleteConfiguration == 1
     ${NSD_Check} $UninstallConfigurationCheck
   ${EndIf}
-  ${NSD_CreateLabel} 0 26u 100% 36u "删除设置、容器位置索引、ViKey 配置凭据及本应用的浏览器数据。重新安装后需重配凭据、导入容器。清理不可撤销。"
+  ${NSD_CreateLabel} 0 14u 100% 24u "删除设置、容器索引、ViKey 凭据及浏览器数据。重装需重配凭据、导入容器。清理不可撤销。"
   Pop $0
-  ${NSD_CreateCheckbox} 0 68u 100% 14u "删除 WebView2"
+  ${NSD_CreateCheckbox} 0 40u 100% 14u "删除 WebView2"
   Pop $UninstallWebViewCheck
   ${If} $UninstallDeleteWebView == 1
     ${NSD_Check} $UninstallWebViewCheck
   ${EndIf}
-  ${NSD_CreateLabel} 0 88u 100% 36u "WebView2 是共享运行组件，卸载会影响其他依赖它的软件。请先关闭所有使用 WebView2 的应用；系统级卸载需要管理员授权。"
+  ${NSD_CreateLabel} 0 54u 100% 24u "共享组件，卸载影响其他依赖软件。请先关闭使用 WebView2 的应用；系统级卸载需管理员授权。"
   Pop $0
-  ${NSD_CreateLabel} 0 130u 100% 24u "容器、安全卡及其他自存文件始终保留。存在保留文件时安装目录不会删除。"
+  ${NSD_CreateCheckbox} 0 80u 100% 14u "删除 VeraCrypt 驱动"
+  Pop $UninstallDriverCheck
+  ${If} $UninstallDeleteDriver == 1
+    ${NSD_Check} $UninstallDriverCheck
+  ${EndIf}
+  ${NSD_CreateLabel} 0 94u 100% 24u "共享驱动，卸载需管理员授权。请先卸载所有挂载卷并关闭相关软件；系统加密及未知安装拒绝清理。"
+  Pop $0
+  ${NSD_CreateLabel} 0 120u 100% 20u "容器、安全卡及其他自存文件始终保留。有保留文件时安装目录不会删除。"
   Pop $0
   nsDialogs::Show
 FunctionEnd
@@ -119,6 +127,7 @@ FunctionEnd
 Function un.ConfigurationPageLeave
   ${NSD_GetState} $UninstallConfigurationCheck $UninstallDeleteConfiguration
   ${NSD_GetState} $UninstallWebViewCheck $UninstallDeleteWebView
+  ${NSD_GetState} $UninstallDriverCheck $UninstallDeleteDriver
 FunctionEnd
 
 Function WelcomePageShow
@@ -401,6 +410,7 @@ FunctionEnd
 Function un.onInit
   StrCpy $UninstallDeleteConfiguration 1
   StrCpy $UninstallDeleteWebView 1
+  StrCpy $UninstallDeleteDriver 1
   ; Destructive choices must be visible; do not accept silent uninstall.
   IfSilent 0 +3
     SetErrorLevel 64
@@ -438,7 +448,9 @@ FunctionEnd
 Section "Uninstall"
   Call un.UninstallPackage
   ${If} $UpdateFailed == 1
-    ${If} $UninstallWebViewFailed == 1
+    ${If} $UninstallDriverFailed == 1
+      MessageBox MB_ICONSTOP "VeraCrypt 驱动卸载未完成。请先卸载所有挂载卷并关闭相关软件，检查管理员授权。系统加密、未知版本、异常安装或占用将拒绝清理；可重试或取消“删除 VeraCrypt 驱动”后继续。所选清理可能已部分完成，应用安装记录仍保留。"
+    ${ElseIf} $UninstallWebViewFailed == 1
       MessageBox MB_ICONSTOP "浏览器数据清理或 WebView2 卸载未完成。请关闭所有使用 WebView2 的应用，并检查管理员授权及系统限制。系统可能不允许卸载内置运行组件；可重新运行并取消“删除 WebView2”以保留它。所选清理可能已部分完成，应用安装记录仍保留。"
     ${Else}
       MessageBox MB_ICONSTOP "卸载未完成。请关闭程序并检查文件占用、权限；如果存在未完成的更新，请先运行对应安装包恢复。所选配置或组件清理可能已部分完成，容器和其他自存文件不会删除。处理后可重新运行卸载程序。"

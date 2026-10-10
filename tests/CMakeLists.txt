@@ -652,6 +652,7 @@ add_test(NAME vikey_development_app_config_tests
 add_executable(configuration_installer_tests
   configuration_installer_tests.cpp
   ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/driver_deployment.cpp
+  ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/driver_cleanup.cpp
   ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/installers.cpp)
 target_include_directories(configuration_installer_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(configuration_installer_tests PRIVATE

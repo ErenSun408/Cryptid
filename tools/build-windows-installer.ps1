@@ -54,6 +54,8 @@ if ((Split-Path -Leaf $helper) -cne 'usb_vault_setup_helper.exe') { throw 'Unexp
 # cleanup commands. This probe does not access credentials or remove anything.
 $cleanupProbe = Start-Process -FilePath $helper -ArgumentList '--probe-uninstall-cleanup' -WindowStyle Hidden -PassThru -Wait
 if ($cleanupProbe.ExitCode -ne 0) { throw 'Setup helper does not support uninstall cleanup; rebuild usb_vault_setup_helper' }
+  $driverCleanupProbe = Start-Process -FilePath $helper -ArgumentList '--probe-driver-cleanup' -WindowStyle Hidden -PassThru -Wait
+  if ($driverCleanupProbe.ExitCode -ne 0) { throw 'Setup helper does not support driver cleanup; rebuild usb_vault_setup_helper' }
 if ($expected.ContainsKey('prerequisites\VeraCrypt_Setup_x64_1.26.29.msi')) {
     throw 'Legacy VeraCrypt MSI must not be included in the driver-only installer'
 }

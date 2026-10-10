@@ -6,7 +6,7 @@ namespace configuration {
 inline constexpr wchar_t kWebViewInstallerDigest[] = L"E7FA35755196AD9223596EF021A1CE6799509142EAA40BA35F634026BE50B831";
 inline constexpr wchar_t kVeraCryptDriverDigest[] = L"1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6";
 usb_vault::card::VerifiedLocalArtifact verify_veracrypt_driver(
-    const std::filesystem::path& path);
+    const std::filesystem::path& path, bool allow_delete = false);
 usb_vault::card::VerifiedLocalArtifact verify_webview_installer(
     const std::filesystem::path& path);
 // Verification only: never starts a process. Keeps the exact reviewed bytes

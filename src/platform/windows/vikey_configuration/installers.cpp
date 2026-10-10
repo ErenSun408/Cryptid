@@ -11,11 +11,11 @@ using namespace usb_vault::card;
 
 namespace configuration {
 static usb_vault::card::VerifiedLocalArtifact verify_installer(
-    const std::filesystem::path& path, const wchar_t* digest) {
+    const std::filesystem::path& path, const wchar_t* digest, bool allow_delete = false) {
   auto artifact = usb_vault::card::verify_local_artifact(path,
       usb_vault::card::vikey::development::parse_deployment_digest(
           digest),
-      512ULL * 1024 * 1024);
+      512ULL * 1024 * 1024, allow_delete);
   WINTRUST_FILE_INFO file{};
   file.cbStruct = sizeof(file);
   file.pcwszFilePath = artifact.path().c_str();
@@ -61,8 +61,8 @@ static InstallResult run_installer(const usb_vault::card::VerifiedLocalArtifact&
   return classify_installer_exit(exit_code);
 }
 
-usb_vault::card::VerifiedLocalArtifact verify_veracrypt_driver(const std::filesystem::path& path) {
-  return verify_installer(path, kVeraCryptDriverDigest);
+usb_vault::card::VerifiedLocalArtifact verify_veracrypt_driver(const std::filesystem::path& path, bool allow_delete) {
+  return verify_installer(path, kVeraCryptDriverDigest, allow_delete);
 }
 usb_vault::card::VerifiedLocalArtifact verify_webview_installer(const std::filesystem::path& path) {
   return verify_installer(path, kWebViewInstallerDigest);

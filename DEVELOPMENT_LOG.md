@@ -5105,3 +5105,17 @@
 - 验证限制：未执行真实运行时卸载、UAC／交互页面实操、全量或实卡验收；不追踪环境／策略覆盖的任意浏览器目录，不接管孤立安装，不保证系统后续不再安装 WebView2；配置删除及两作用域卸载非原子事务，失败可能部分完成，无交付包。
 - 验证证据：out/p55-webview-build.txt、native-tests.txt、signature-tests.txt、profile-tests.txt、installer-tests.txt、compile.txt 均采用 p55-webview- 完整前缀；失败材料另存对应 *failure.txt。
 - 提交：用户已授权以 [P5.5] 提交本片，本条随实现入库；P5.5 余下 P5.5.3 VeraCrypt 驱动清理及整体组合验收一片，禁止推送。
+
+### 2026-10-09 — P5.5.3 / 可选 VeraCrypt 驱动卸载与三项组合验收
+- 范围与审计：用户授权提交前片并继续；P5.5.2 已提交 1dbec38。复核技术清单、阶段表、R-03／8.6 及 bundled-veracrypt-driver-plan；新卸载选项按用户授权替代历史固定保留共享驱动规则，安装时拒绝未知／孤立状态的规则保持。
+- 外部核对：核对上游 [Setup.c](https://github.com/veracrypt/VeraCrypt/blob/VeraCrypt_1.26.24/src/Setup/Setup.c)、[Dlgcode.c](https://github.com/veracrypt/VeraCrypt/blob/VeraCrypt_1.26.24/src/Common/Dlgcode.c) 及 [Apidrvr.h](https://github.com/veracrypt/VeraCrypt/blob/VeraCrypt_1.26.24/src/Common/Apidrvr.h) 的正常停止前挂载／引用检查与公开 ABI；微软 LockServiceDatabase 文档说明 Vista 后无效，未以该接口伪称并发锁定。
+- 检查与实现：检查驱动部署、可信文件、setup helper、NSIS 引擎／页面及既有测试；第三项默认勾选并独立选择，说明共享影响、管理员授权和先卸载挂载卷，按 NSIS 本地文档的 140u 页面范围压缩三项布局，未完成交互目视验收。
+- 驱动边界：仅固定 veracrypt 服务与系统目录 drivers/veracrypt.sys；核对内核类型、SYSTEM_START、三种标准路径表达、既有白名单摘要及 Authenticode，拒绝启动型系统加密、未知配置、过渡状态和重解析；0x126 运行驱动检查任意挂载、其他引用及系统过滤／加密状态，无密码／卡／容器操作或角色持久化。
+- 权限与顺序：普通进程预检，固定自身 helper 及祖先／文件后请求固定 UAC 命令；子进程校验真实提升令牌并重查。驱动先于其他选中清理执行，只请求 SCM 正常停止；服务、设备停止后重新校验可删文件句柄，服务真正消失才删文件，最终复查三者不存在，不强杀／强制卸载卷／改启动项／延迟重启删除。
+- 安全决定：公共可信文件接口仅显式 allow_delete 才取得 DELETE 权限，仍固定校验字节并按同一句柄删除；摘要异常、只读或写占用在服务删除前拒绝。已校验固定路径孤立文件仅在服务与设备均不存在时允许窄恢复，未知孤立文件保留；不卸载完整 VeraCrypt 软件或遍历其他系统路径。
+- 验证：最终 Release helper 与原生目标构建成功，CTest 3/3 通过；45 种策略状态／故障组合覆盖阻断与顺序，实际摘要／只读／写锁／硬链接删除及只读令牌拒删回归通过，官方签名驱动副本验证后删除通过，未加载／停止本机驱动。
+- 脚本与集成：实际 helper 只读探针、额外参数拒绝及未提权直接调用拒绝通过；WebView helper 6 组隔离回归通过；安装引擎 21 组 PASS，含全部八种选项组合的自存文件保留、五种驱动失败状态阻断及取消选项重试，既有更新／恢复回归通过。
+- 编译与证据：最终 helper 嵌入正式 NSIS 占位载荷脚本编译成功，只有两项既有未引用变量警告；PowerShell 语法与 git diff 格式检查通过。证据 out/p55-driver-{build,native-tests,signature-tests,helper-tests,profile-tests,installer-tests,compile}.txt；未制作交付安装包。
+- 剩余风险：清理非原子，失败可能留下已停止服务／标记删除服务／已验证孤立文件或已清理组件；正常停止前检查与第三方再次连接之间存在并发窗口，不能阻止其他管理员并发改配／重启，依赖系统正常卸载保护。共享组件移除会影响其他软件，全部成功也保留容器／自存文件，仅删除空安装目录。
+- 验证限制：真实 SCM 服务停止／删除、驱动卸载、WebView2 卸载、UAC／页面实操、重启和完整 Windows／实卡矩阵仍未验收；策略模拟、签名副本删除及脚本编译不能替代，既有 P5.4 工作区改动不属于本片。
+- 提交：用户已授权提交 P5.5.3，本条随实现入库；P5.5 三个软件实现切片均已完成，剩真实组件／权限／交互专项验收，禁止推送。

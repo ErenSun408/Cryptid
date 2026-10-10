@@ -52,6 +52,11 @@ Section "Uninstall"
   StrCpy $CleanupTestStatus 0
   ${GetParameters} $0
   ClearErrors
+  ${GetOptions} $0 "/DELETEDRIVER=" $1
+  ${IfNot} ${Errors}
+    StrCpy $UninstallDeleteDriver $1
+  ${EndIf}
+  ClearErrors
   ${GetOptions} $0 "/CLEANUPSTATUS=" $1
   ${IfNot} ${Errors}
     StrCpy $CleanupTestStatus $1
