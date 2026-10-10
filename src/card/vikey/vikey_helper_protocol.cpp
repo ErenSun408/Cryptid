@@ -94,7 +94,10 @@ bool valid_request(const Request& request) noexcept {
   } else if (is_record_read(request.operation)) {
     required_payload = kCardRecordReadPayloadBytes;
   } else if (is_record_write(request.operation)) {
-    required_payload = kCardRecordWritePayloadBytes;
+    required_payload =
+        request.payload_bytes == kCardRecordThreeSlotWritePayloadBytes
+            ? kCardRecordThreeSlotWritePayloadBytes
+            : kCardRecordWritePayloadBytes;
   } else if (request.operation == Operation::card_media_bootstrap) {
     required_payload = kCardMediaBootstrapPayloadBytes;
   } else if (request.operation == Operation::development_media_reset) {
@@ -125,13 +128,15 @@ bool valid_response(const Response& response,
   if (response.status == 0) {
     if (response.diagnostic != 0 || response.native_kind != 0) return false;
     if (response.security_properties == 0) return false;
-    std::uint32_t required_payload = 0;
-    if (expected_operation == Operation::development_blob_read) {
-      required_payload = static_cast<std::uint32_t>(kVikeyBlobBytes);
-    } else if (is_record_read(expected_operation)) {
-      required_payload = static_cast<std::uint32_t>(record_response_size(expected_operation));
+    if (is_record_read(expected_operation)) {
+      if (!valid_record_payload(expected_operation, response.payload_bytes))
+        return false;
+    } else if (response.payload_bytes !=
+               (expected_operation == Operation::development_blob_read
+                    ? static_cast<std::uint32_t>(kVikeyBlobBytes)
+                    : 0U)) {
+      return false;
     }
-    if (response.payload_bytes != required_payload) return false;
     if (expected_operation == Operation::development_session_probe) {
       return response.result == 0 && response.logical_state == 0 &&
              valid_development_session_observation(
@@ -209,8 +214,7 @@ CardMediaBootstrapRequest::CardMediaBootstrapRequest()
 CardRecordWriteRequest::CardRecordWriteRequest()
     : user_sn(kVikeyUserSnBytes),
       api_key(kVikeyApiKeyBytes),
-      user_pin(kVikeyUserPinBytes),
-      record(kCardRecordV1Size) {}
+      user_pin(kVikeyUserPinBytes) {}
 
 void write_development_session_request(
     const HANDLE pipe, const Request& request,
@@ -571,7 +575,9 @@ void write_card_record_write_request(
       user_sn.size() != kVikeyUserSnBytes ||
       api_key.size() != kVikeyApiKeyBytes ||
       user_pin.size() != kVikeyUserPinBytes ||
-      record.size() != kCardRecordV1Size) {
+      !valid_record_payload(request.operation, record.size()) ||
+      request.payload_bytes !=
+          kCardRecordReadPayloadBytes + record.size()) {
     throw_protocol("refuse invalid ViKey card record write request");
   }
   write_exact(pipe, message_bytes(request));
@@ -595,6 +601,9 @@ CardRecordWriteRequest read_card_record_write_request(
   read_exact(pipe, result.user_sn.bytes());
   read_exact(pipe, result.api_key.bytes());
   read_exact(pipe, result.user_pin.bytes());
+  // valid_request admitted only the two record lengths.
+  result.record = security::SecureBuffer(request.payload_bytes -
+                                         kCardRecordReadPayloadBytes);
   read_exact(pipe, result.record.bytes());
   if (result.expected_hardware_id == 0) {
     throw_protocol("reject zero ViKey card record identity");
@@ -676,7 +685,7 @@ void write_card_record_response(
     const HANDLE pipe, const Response& response,
     const security::SecureBuffer& record, const Operation operation) {
   if (!is_record_read(operation) || !valid_response(response, operation) ||
-      response.status != 0 || record.size() != record_response_size(operation)) {
+      response.status != 0 || record.size() != response.payload_bytes) {
     throw_protocol("refuse invalid ViKey card record response");
   }
   write_exact(pipe, message_bytes(response));
@@ -713,7 +722,7 @@ security::SecureBuffer read_card_record_response_payload(
       response.status != 0) {
     throw_protocol("reject invalid ViKey card record response");
   }
-  security::SecureBuffer record(record_response_size(operation));
+  security::SecureBuffer record(response.payload_bytes);
   read_exact(pipe, record.bytes());
   return record;
 }

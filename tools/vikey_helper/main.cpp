@@ -650,7 +650,7 @@ bootstrap_media_state(const CardMediaState state) {
     if (close_error) {
       return {.operation = {.status = close_error.value()}};
     }
-    if (record.size() != record_response_size(operation)) {
+    if (!valid_record_payload(operation, record.size())) {
       return {.operation = {.status = static_cast<std::int32_t>(
                                 CardError::device_failure)}};
     }

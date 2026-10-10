@@ -22,6 +22,7 @@ using usb_vault::card::vikey::kVikeyBlobBytes;
 using usb_vault::card::vikey::kVikeyUserPinBytes;
 using usb_vault::card::vikey::kVikeyUserSnBytes;
 using usb_vault::card::kCardRecordV1Size;
+using usb_vault::card::kCardRecordV1ThreeSlotSize;
 using namespace usb_vault::card::vikey::helper;
 
 class Handle final {
@@ -618,6 +619,70 @@ void test_card_record_response_round_trip() {
                       "card record response changed caller data");
 }
 
+// Records travel at their own length: two or three envelopes, nothing else.
+void test_three_slot_record_protocol() {
+  Request request{};
+  request.operation = Operation::card_record_write;
+  request.payload_bytes = kCardRecordThreeSlotWritePayloadBytes;
+  expect(valid_request(request), "three-envelope record write was rejected");
+  request.operation = Operation::card_record_reset;
+  expect(valid_request(request), "three-envelope record reset was rejected");
+  for (const auto record_bytes : {215u, 217u, 291u, 293u, 384u}) {
+    request.payload_bytes = kCardRecordReadPayloadBytes + record_bytes;
+    expect(!valid_request(request), "odd record write length was accepted");
+  }
+
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto record = fixed_secret(kCardRecordV1ThreeSlotSize, std::byte{0x5c});
+  const Pipe write_pipe = make_pipe();
+  Request header{};
+  header.operation = Operation::card_record_write;
+  header.payload_bytes = kCardRecordThreeSlotWritePayloadBytes;
+  write_card_record_write_request(write_pipe.write.get(), header, {}, 7,
+                                  user_sn, api_key, user_pin, record);
+  const Request received_header = read_request(write_pipe.read.get());
+  CardRecordWriteRequest body =
+      read_card_record_write_request(write_pipe.read.get(), received_header);
+  expect(body.record.size() == kCardRecordV1ThreeSlotSize,
+         "three-envelope write changed the record length");
+  expect_fixed_secret(body.record, std::byte{0x5c},
+                      "three-envelope write data did not round-trip");
+  header.payload_bytes = kCardRecordWritePayloadBytes;
+  expect_protocol_error(
+      [&] {
+        write_card_record_write_request(write_pipe.write.get(), header, {}, 7,
+                                        user_sn, api_key, user_pin, record);
+      },
+      "record write header disagreed with its record length");
+
+  const Pipe response_pipe = make_pipe();
+  Response response{};
+  response.security_properties = kDevelopmentCompatibilitySecurityProperties;
+  response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1ThreeSlotSize);
+  response.nonce[9] = std::byte{0x43};
+  write_card_record_response(response_pipe.write.get(), response, record);
+  const Response received = read_response(response_pipe.read.get(),
+                                          response.nonce,
+                                          Operation::card_record_read);
+  const auto read_back =
+      read_card_record_response_payload(response_pipe.read.get(), received);
+  expect(read_back.size() == kCardRecordV1ThreeSlotSize,
+         "three-envelope record response changed length");
+  expect_fixed_secret(read_back, std::byte{0x5c},
+                      "three-envelope record response did not round-trip");
+  for (const auto size : {0u, 215u, 291u, 293u, 384u, 1808u}) {
+    response.payload_bytes = size;
+    expect(!valid_response(response, Operation::card_record_snapshot),
+           "odd record response length was accepted");
+  }
+  response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1Size);
+  expect_protocol_error(
+      [&] { write_card_record_response(response_pipe.write.get(), response, record); },
+      "record response header disagreed with its record length");
+}
+
 void test_card_journal_snapshot_protocol() {
   const auto op = Operation::card_journal_snapshot;
   const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
@@ -1010,6 +1075,7 @@ int main() {
     test_card_media_response_round_trip();
     test_development_blob_response_round_trip();
     test_card_record_response_round_trip();
+    test_three_slot_record_protocol();
     test_card_journal_snapshot_protocol();
     test_conditional_journal_protocol();
     test_response_validation();

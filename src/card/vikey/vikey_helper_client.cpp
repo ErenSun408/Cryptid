@@ -1175,7 +1175,9 @@ namespace {
        (session_inputs->blob != nullptr &&
         session_inputs->blob->size() !=
             (helper::is_record_write(operation)
-                 ? kCardRecordV1Size
+                 ? (session_inputs->blob->size() == kCardRecordV1ThreeSlotSize
+                        ? kCardRecordV1ThreeSlotSize
+                        : kCardRecordV1Size)
                  : kVikeyBlobBytes)))) {
     throw_card(CardError::invalid_configuration, "ViKey development session credential size is invalid", DiagnosticStage::input_shape);
   }
@@ -1406,7 +1408,8 @@ namespace {
             session_inputs->user_sn, session_inputs->api_key,
             session_inputs->user_pin);
       } else if (helper::is_record_write(operation)) {
-        request.payload_bytes = helper::kCardRecordWritePayloadBytes;
+        request.payload_bytes = static_cast<std::uint32_t>(
+            helper::kCardRecordReadPayloadBytes + session_inputs->blob->size());
         helper::write_card_record_write_request(
             request_pipe.parent_end.get(), request, *vendor_digest,
             session_inputs->expected_hardware_id,
@@ -1497,7 +1500,7 @@ namespace {
     if (blob_response != nullptr) {
       const DWORD expected_bytes =
           helper::is_record_read(operation)
-              ? static_cast<DWORD>(helper::record_response_size(operation))
+              ? static_cast<DWORD>(response.payload_bytes)
               : static_cast<DWORD>(kVikeyBlobBytes);
       *blob_response = read_secret_payload_until(
           response_pipe.parent_end.get(), process.get(), response, operation,

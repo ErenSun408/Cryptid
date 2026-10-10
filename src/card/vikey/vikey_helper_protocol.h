@@ -16,7 +16,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 16;
+constexpr std::uint16_t kVersion = 17;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -33,9 +33,13 @@ constexpr std::uint32_t kDevelopmentBlobWritePayloadBytes =
     static_cast<std::uint32_t>(kVikeyBlobBytes);
 constexpr std::uint32_t kCardRecordReadPayloadBytes =
     kDevelopmentSessionPayloadBytes + kHardwareIdentityBytes;
+// A record write carries either the two- or the three-envelope record.
 constexpr std::uint32_t kCardRecordWritePayloadBytes =
     kCardRecordReadPayloadBytes +
     static_cast<std::uint32_t>(kCardRecordV1Size);
+constexpr std::uint32_t kCardRecordThreeSlotWritePayloadBytes =
+    kCardRecordReadPayloadBytes +
+    static_cast<std::uint32_t>(kCardRecordV1ThreeSlotSize);
 constexpr std::uint32_t kCardJournalBlockWritePayloadBytes =
     kCardRecordReadPayloadBytes + static_cast<std::uint32_t>(kCardRecordJournalV2StorageSize + 8 + kCardRecordV2Size);
 constexpr std::uint32_t kCardIdentityProbePayloadBytes =
@@ -72,8 +76,13 @@ enum class Operation : std::uint32_t {
   return op == Operation::card_record_read || op == Operation::card_record_snapshot ||
          op == Operation::card_journal_snapshot;
 }
-[[nodiscard]] constexpr std::size_t record_response_size(Operation op) noexcept {
-  return op == Operation::card_journal_snapshot ? kCardRecordJournalV2StorageSize : kCardRecordV1Size;
+// Logical records are exchanged at their own length, two or three envelopes;
+// the journal snapshot has its fixed size.
+[[nodiscard]] constexpr bool valid_record_payload(Operation op,
+                                                  std::size_t bytes) noexcept {
+  return op == Operation::card_journal_snapshot
+             ? bytes == kCardRecordJournalV2StorageSize
+             : bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
 }
 [[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
   return op == Operation::card_record_write || op == Operation::card_record_reset;

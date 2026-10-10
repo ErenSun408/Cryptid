@@ -737,6 +737,13 @@ void test_formal_card_record_backend_staging(
   store.put_blob(record);
   expect(std::ranges::equal(record.bytes(), original),
          "development card-record write changed caller data");
+  // A three-envelope record travels and commits through the same single
+  // helper operation; the in-process journal commit verifies it.
+  SecureBuffer three_slot(usb_vault::card::kCardRecordV1ThreeSlotSize);
+  std::ranges::fill(three_slot.bytes(), std::byte{0x7c});
+  std::ranges::copy(record.bytes().first(usb_vault::card::kCardRecordV1HeaderSize),
+                    three_slot.bytes().begin());
+  store.put_blob(three_slot);
   const auto initialized_user_pin = fixed_secret(
       usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'R'});
   const auto initialized_media =
@@ -780,7 +787,7 @@ void test_formal_card_record_backend_staging(
                                CardError::invalid_configuration),
            "short development card record returned the wrong error");
   }
-  expect(provider.loads == 2,
+  expect(provider.loads == 3,
          "formal card-record backend cached or reused credentials");
   expect(development_helper_directory_count() == directories_before,
          "development card-record operations left staging residue");
