@@ -659,6 +659,14 @@ target_link_libraries(configuration_installer_tests PRIVATE
 usb_vault_configure_target(configuration_installer_tests)
 add_test(NAME configuration_installer_tests COMMAND configuration_installer_tests)
 
+add_executable(webview_cleanup_tests
+  webview_cleanup_tests.cpp
+  ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/webview_cleanup.cpp)
+target_include_directories(webview_cleanup_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(webview_cleanup_tests PRIVATE Shell32 Ole32 Wintrust Crypt32 Advapi32)
+usb_vault_configure_target(webview_cleanup_tests)
+add_test(NAME webview_cleanup_tests COMMAND webview_cleanup_tests)
+
 add_executable(vikey_module_tests
   vikey_module_tests.cpp
 )

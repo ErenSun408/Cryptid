@@ -5090,3 +5090,18 @@
 - 风险与后续：配置／凭据清理不具备原子回滚，失败可能已部分删除，提示如实说明；主程序采用默认 WebView2 用户数据目录，浏览器缓存未清理，后续组件片需处理清理边界，当前不保证目录为空。
 - 验证证据：out/uninstall-configuration-tests.txt、out/uninstall-configuration-compile.txt；两次测试失败及首次编译失败另存对应 *failure.txt，不能用编译替代实际系统卸载验收。
 - 提交：用户已授权以 [P5.5] 提交本片，本条随实现入库；后续剩 P5.5.2 WebView2 与缓存清理、P5.5.3 VeraCrypt 驱动清理及整体组合验收两片，禁止推送。
+
+### 2026-10-09 — P5.5.2 / 可选 WebView2 卸载与浏览器数据清理
+- 范围与审计：前片已提交 1ffefa4；用户授权下一片，复核默认勾选、共享依赖与容器保留约束，同步技术清单及阶段范围，既有 P5.4 工作区改动保持。
+- 外部核对：核对微软 [运行时分发](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)、[用户数据目录](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/user-data-folder) 及 [部署支持说明](https://techcommunity.microsoft.com/blog/intunecustomersuccess/support-tip-bulk-installing-webview2-runtime-on-windows-10-devices/3678202)，确认两作用域检测、共享运行时、默认目录及关闭浏览器后清理要求。
+- 检查与实现：检查 NSIS 入口／引擎、setup helper、安装部署和测试夹具；新增默认勾选 WebView2 选项，与用户配置选择独立，并常驻说明共享影响、关闭应用及管理员授权要求。
+- 运行时决定：固定 HKCU／HKLM 32 位 EdgeUpdate 版本键及系统已知目录，拒绝版本／路径注入；启动前固定路径与文件、验证 Authenticode 及 Microsoft Corporation 发布者，仅系统作用域提权微软官方 EXE，拒绝任意 WebView2 活动进程，不强杀、不强制删除、不执行注册表卸载命令。
+- 清理决定：浏览器数据跟随用户配置选择，仅清理本应用 USB Vault.exe.WebView2\EBWebView 专用子树；先全树检查并固定普通目录／文件，再按句柄逆序删除，外层未知同级文件与容器保留，重解析／占用／只读／规模或访问异常拒绝。
+- 失败与兼容：两作用域注册版本复查通过才报告运行时卸载成功；取消／拒绝保留应用及安装记录，提示部分清理及取消组件选项后重试；安装构建新增只读能力探针，拒绝误用不支持清理命令的旧 helper。
+- 验证：Release helper 与两个相关原生测试目标构建成功，CTest 2/2 通过；实际 helper 的 6 组隔离命令行／缓存／junction／占用回归通过；安装引擎最终 20 组 PASS，覆盖四种选择组合、失败／取消／不可用及缓存失败阻断组件卸载，并复验既有更新／恢复。
+- 签名与脚本：已有微软官方离线 WebView2 安装器的发布者签名检查通过且未执行；最终 helper 已嵌入正式 NSIS 脚本进行占位载荷编译，成功且仅保留两项既有未引用变量警告；构建脚本 PowerShell 语法及 git diff 格式检查通过。
+- 失败检查：初轮原生夹具常量 lambda 触发 /WX，改为运行时变量；NSIS 测试宏未展开及追加日志未定位文件末尾分别修正，未放宽生产检查，首轮构建和两轮测试失败证据保留。
+- 安全与风险：复核固定命令／Microsoft 发布者／启动前路径固定／最小提权及句柄删除边界，未发现新增未处理越界删除或任意执行问题；共享运行时影响其他依赖软件，Windows 内置保护或权限可能拒绝卸载，检查空闲不能证明不存在未来依赖。
+- 验证限制：未执行真实运行时卸载、UAC／交互页面实操、全量或实卡验收；不追踪环境／策略覆盖的任意浏览器目录，不接管孤立安装，不保证系统后续不再安装 WebView2；配置删除及两作用域卸载非原子事务，失败可能部分完成，无交付包。
+- 验证证据：out/p55-webview-build.txt、native-tests.txt、signature-tests.txt、profile-tests.txt、installer-tests.txt、compile.txt 均采用 p55-webview- 完整前缀；失败材料另存对应 *failure.txt。
+- 提交：用户已授权以 [P5.5] 提交本片，本条随实现入库；P5.5 余下 P5.5.3 VeraCrypt 驱动清理及整体组合验收一片，禁止推送。

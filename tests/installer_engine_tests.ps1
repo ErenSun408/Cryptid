@@ -122,6 +122,43 @@ function Configuration-Targets($Fixture) {
     }
 }
 try {
+    foreach ($configuration in @(0, 1)) {
+        foreach ($runtime in @(0, 1)) {
+            $fixture = New-Fixture "webview-choice-$configuration-$runtime"
+            $exe = Compile-Fixture $fixture
+            Run-Fixture $exe
+            Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments "/S /DELETECONFIG=$configuration /DELETEWEBVIEW=$runtime"
+            $calls = if (Test-Path -LiteralPath "$($fixture.Root)\cleanup-calls.txt") { [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt") } else { '' }
+            if ($calls.Contains('--cleanup-webview-profile') -ne ($configuration -eq 1) -or
+                $calls.Contains('--uninstall-webview') -ne ($runtime -eq 1)) { throw 'WebView/configuration choices are coupled' }
+            if (Test-Path -LiteralPath $fixture.Key) { throw 'Successful WebView choice left registration' }
+        }
+    }
+    Write-Output 'PASS four WebView runtime/profile option combinations invoke only selected actions'
+
+    foreach ($status in @(12, 21, 22)) {
+        $fixture = New-Fixture "webview-failure-$status"
+        $exe = Compile-Fixture $fixture
+        Run-Fixture $exe
+        New-Item -ItemType Directory -Path "$($fixture.Root)\config" | Out-Null
+        [IO.File]::WriteAllText("$($fixture.Root)\config\settings.txt", 'settings stay')
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments "/S /DELETECONFIG=0 /DELETEWEBVIEW=1 /CLEANUPSTATUS=$status"
+        Assert-Installed $fixture
+        Assert-Text "$($fixture.Root)\config\settings.txt" 'settings stay'
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=0 /DELETEWEBVIEW=0'
+        if (Test-Path -LiteralPath $fixture.Key) { throw 'Opting out did not recover failed WebView uninstall' }
+    }
+    Write-Output 'PASS unavailable, cancelled and failed WebView cleanup retains application and supports opting out'
+
+    $fixture = New-Fixture 'profile-failure-stops-runtime'
+    $exe = Compile-Fixture $fixture
+    Run-Fixture $exe
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments '/S /DELETECONFIG=1 /DELETEWEBVIEW=1 /CLEANUPSTATUS=12'
+    Assert-Installed $fixture
+    $calls = [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt")
+    if (!$calls.Contains('--cleanup-webview-profile') -or $calls.Contains('--uninstall-webview')) { throw 'Failed profile cleanup still removed runtime' }
+    Write-Output 'PASS profile cleanup failure stops runtime removal before deleting the product'
+
     foreach ($delete in @(0, 1)) {
         $fixture = New-Fixture "configuration-choice-$delete"
         $exe = Compile-Fixture $fixture

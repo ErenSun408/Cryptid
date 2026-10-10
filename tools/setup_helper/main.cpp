@@ -10,6 +10,7 @@
 #include "platform/windows/vikey_configuration/installers.h"
 #include "platform/windows/vikey_configuration/driver_deployment.h"
 #include "platform/windows/vikey_configuration/setup_policy.h"
+#include "platform/windows/vikey_configuration/webview_cleanup.h"
 #include "usb_vault/volume/volume_provider.h"
 
 namespace {
@@ -58,9 +59,18 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
     int argc{};
     auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv) { CoUninitialize(); return static_cast<int>(Result::bad_arguments); }
-    const std::wstring mode = argc == 2 ? argv[1] : L"";
+    const std::wstring mode = argc >= 2 ? argv[1] : L"";
+    const std::filesystem::path application = argc == 3 ? argv[2] : L"";
+    const bool cleanup_profile = mode == L"--cleanup-webview-profile" && argc == 3;
+    const bool single_mode = argc == 2;
     LocalFree(argv);
-    if (mode == L"--webview")
+    if (cleanup_profile)
+      result = configuration::webview_cleanup::clean_profile(application);
+    else if (!single_mode) result = Result::bad_arguments;
+    else if (mode == L"--probe-uninstall-cleanup") result = Result::ready;
+    else if (mode == L"--uninstall-webview")
+      result = configuration::webview_cleanup::uninstall_runtime();
+    else if (mode == L"--webview")
       result = configuration::setup::ensure_dependency(webview, [] { return install_webview(); });
     else if (mode == L"--veracrypt")
       result = configuration::driver::request_install(directory() / L"usb_vault_setup_helper.exe");

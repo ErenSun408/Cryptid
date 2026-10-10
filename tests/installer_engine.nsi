@@ -18,6 +18,15 @@ Unicode true
 !define ProductWindowClass "USBVaultInstallerTest_${TestId}"
 !define ProductConfigurationDirectory "${TestRoot}\config"
 !define ProductCredentialPrefix "usb-vault-installer-test-${TestId}"
+Var CleanupTestStatus
+!define UninstallCleanupTest EngineCleanupTest
+!macro EngineCleanupTest Mode
+  FileOpen $2 "${TestRoot}\cleanup-calls.txt" a
+  FileSeek $2 0 END
+  FileWrite $2 '${Mode}$\r$\n'
+  FileClose $2
+  StrCpy $0 $CleanupTestStatus
+!macroend
 !include "${__FILEDIR__}\..\packaging\windows\installer-engine.nsh"
 Name "USB Vault isolated installer test"
 OutFile "${TestOutput}"
@@ -40,7 +49,18 @@ Section
   ${EndIf}
 SectionEnd
 Section "Uninstall"
+  StrCpy $CleanupTestStatus 0
   ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/CLEANUPSTATUS=" $1
+  ${IfNot} ${Errors}
+    StrCpy $CleanupTestStatus $1
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $0 "/DELETEWEBVIEW=" $1
+  ${IfNot} ${Errors}
+    StrCpy $UninstallDeleteWebView $1
+  ${EndIf}
   ClearErrors
   ${GetOptions} $0 "/DELETECONFIG=" $1
   ${IfNot} ${Errors}

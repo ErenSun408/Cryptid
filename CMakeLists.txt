@@ -610,6 +610,7 @@ if(USB_VAULT_BUILD_UI)
 
   add_executable(usb_vault_setup_helper WIN32 EXCLUDE_FROM_ALL
     tools/setup_helper/main.cpp
+    src/platform/windows/vikey_configuration/webview_cleanup.cpp
     src/platform/windows/vikey_configuration/driver_deployment.cpp
     src/platform/windows/vikey_configuration/installers.cpp)
   target_include_directories(usb_vault_setup_helper PRIVATE
@@ -617,7 +618,7 @@ if(USB_VAULT_BUILD_UI)
   target_link_libraries(usb_vault_setup_helper PRIVATE usb_vault_core
     usb_vault_vikey_development_credentials usb_vault_verified_local_artifact
     "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-    Ole32 Shell32 Wintrust Advapi32)
+    Ole32 Shell32 Wintrust Advapi32 Crypt32)
   target_compile_definitions(usb_vault_setup_helper PRIVATE UNICODE _UNICODE)
   target_link_options(usb_vault_setup_helper PRIVATE
     "/MANIFESTUAC:level='asInvoker' uiAccess='false'")

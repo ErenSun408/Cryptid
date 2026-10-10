@@ -50,6 +50,10 @@ foreach ($name in @('USB Vault.exe', 'usb_vault_vikey_helper.exe',
     if (!$expected.ContainsKey($name)) { throw "Required package file missing: $name" }
 }
 if ((Split-Path -Leaf $helper) -cne 'usb_vault_setup_helper.exe') { throw 'Unexpected helper name' }
+# Refuse an older helper that cannot implement the embedded uninstaller's
+# cleanup commands. This probe does not access credentials or remove anything.
+$cleanupProbe = Start-Process -FilePath $helper -ArgumentList '--probe-uninstall-cleanup' -WindowStyle Hidden -PassThru -Wait
+if ($cleanupProbe.ExitCode -ne 0) { throw 'Setup helper does not support uninstall cleanup; rebuild usb_vault_setup_helper' }
 if ($expected.ContainsKey('prerequisites\VeraCrypt_Setup_x64_1.26.29.msi')) {
     throw 'Legacy VeraCrypt MSI must not be included in the driver-only installer'
 }

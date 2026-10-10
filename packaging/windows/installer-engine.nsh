@@ -95,6 +95,7 @@ FunctionEnd
 !insertmacro SetupCommonFunctions ""
 !insertmacro SetupCommonFunctions "un."
 !include "${__FILEDIR__}\uninstall-configuration.nsh"
+!include "${__FILEDIR__}\uninstall-webview.nsh"
 
 ; Build a protected descriptor owned by the actual token user. Restrict the
 ; transaction tree to that user and SYSTEM, with inherited child permissions.
@@ -446,6 +447,10 @@ Function un.UninstallPackage
   ${EndIf}
   !insertmacro PackageGuardDirectories "un." 1
   !insertmacro PackageLease "un." 0
+  ${If} $UpdateFailed == 1
+    Goto engine_uninstall_failed
+  ${EndIf}
+  Call un.CleanWebViewData
   ${If} $UpdateFailed == 1
     Goto engine_uninstall_failed
   ${EndIf}
