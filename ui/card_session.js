@@ -3758,6 +3758,69 @@
     }
   };
 
+
+  // Explorer can write straight into the outer volume while it is open here,
+  // and nothing on that path tells the page. Coming back to the window is the
+  // moment a user expects to see what they did, so the listing and capacity
+  // are re-read then. The native side repeats its activation notice every
+  // second while the window stays in front; only a notice after a gap counts.
+  const kDecoyActivationGapMs = 2500;
+  const kDecoyActivationRetryMs = 300;
+  const kDecoyActivationGiveUpMs = 5000;
+  let decoyLastActivationNotice = 0;
+  let decoyActivationTimer = null;
+  let decoyActivationDeadline = 0;
+  let decoyActivationRunning = false;
+  // Anything the user is in the middle of keeps its rows: a refresh would
+  // replace the very element a menu, dialog or drag is pointing at.
+  const decoyActivationBlocked = () =>
+    busy || externalRefreshPending || reorderState !== null || decoyDropWatching ||
+    !fileNameDialog.hidden || !fileContextMenu.hidden || fileDragName !== "";
+  const runDecoyActivationRefresh = async () => {
+    decoyActivationTimer = null;
+    if (decoyActivationRunning || !inDecoyFileView() || bridge === null ||
+        currentState !== nativeState.authenticated || !decoyMounted.has(decoyMaintenanceId)) return;
+    if (decoyActivationBlocked()) {
+      if (Date.now() < decoyActivationDeadline) {
+        decoyActivationTimer = setTimeout(() => { void runDecoyActivationRefresh(); }, kDecoyActivationRetryMs);
+      }
+      return;
+    }
+    const session = batchSessionRevision;
+    const maintenanceId = decoyMaintenanceId;
+    decoyActivationRunning = true;
+    try {
+      await refreshFileManager();
+      if (session !== batchSessionRevision || maintenanceId !== decoyMaintenanceId || !inDecoyFileView()) return;
+      await refreshDecoyMaintenanceFacts();
+    } catch (pageError) { logCaughtPageError("runDecoyActivationRefresh", pageError);
+    } finally {
+      decoyActivationRunning = false;
+    }
+  };
+  const scheduleDecoyActivationRefresh = () => {
+    if (!inDecoyFileView()) return;
+    decoyActivationDeadline = Date.now() + kDecoyActivationGiveUpMs;
+    clearTimeout(decoyActivationTimer);
+    decoyActivationTimer = setTimeout(() => { void runDecoyActivationRefresh(); }, 150);
+  };
+  window.addEventListener("usb-vault-window-activated", () => {
+    const now = Date.now();
+    const edge = now - decoyLastActivationNotice > kDecoyActivationGapMs;
+    decoyLastActivationNotice = now;
+    if (edge) scheduleDecoyActivationRefresh();
+  });
+  window.addEventListener("blur", () => { decoyLastActivationNotice = 0; });
+  window.addEventListener("focus", scheduleDecoyActivationRefresh);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) decoyLastActivationNotice = 0;
+    else scheduleDecoyActivationRefresh();
+  });
+  window.addEventListener("pagehide", () => {
+    clearTimeout(decoyActivationTimer);
+    decoyActivationTimer = null;
+  });
+
   const openDecoyMaintenance = async (id, mount = true) => {
     if (busy || currentState !== nativeState.authenticated) return;
     const revision = batchSessionRevision;
