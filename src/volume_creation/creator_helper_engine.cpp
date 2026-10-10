@@ -501,8 +501,12 @@ void as_caller(const HANDLE pipe, Action&& action) {
   std::forward<Action>(action)();
 }
 
+// The temporary mount is made as the caller, so its drive letter lives in the
+// caller's own DOS device namespace, which this elevated process does not see.
+// A letter defined there, including one left behind by an earlier mount, is
+// as taken as one defined here.
 [[nodiscard]] wchar_t choose_temporary_drive(
-    const volume::VolumeProvider& provider) {
+    const HANDLE pipe, const volume::VolumeProvider& provider) {
   std::uint32_t used = ::GetLogicalDrives();
   if (used == 0) {
     const DWORD error = ::GetLastError();
@@ -510,6 +514,16 @@ void as_caller(const HANDLE pipe, Action&& action) {
                             "inspect temporary drive letters");
   }
   used = volume::occupied_drive_letters(used, provider.mounted_volumes());
+  as_caller(pipe, [&] {
+    for (std::uint32_t index = 0; index < 26; ++index) {
+      if ((used & (1U << index)) != 0) continue;
+      const wchar_t name[] = {static_cast<wchar_t>(L'A' + index), L':', L'\0'};
+      wchar_t target[256]{};
+      if (::QueryDosDeviceW(name, target, 256) != 0 ||
+          ::GetLastError() != ERROR_FILE_NOT_FOUND)
+        used |= 1U << index;
+    }
+  });
   // Randomised for the same reason the session's own allocation is: this mount
   // is brief, but it is still a drive letter the machine saw being used.
   if (const wchar_t letter = volume::choose_free_drive_letter(used)) return letter;
@@ -926,7 +940,7 @@ void create_with_hidden(const HANDLE pipe, Request& request,
                      CreationStage::formatting_outer);
     });
 
-    drive_letter = choose_temporary_drive(provider);
+    drive_letter = choose_temporary_drive(pipe, provider);
     USB_VAULT_TRACE("创建助手进程", "临时挂载外层卷", "盘符 " + usb_vault::diagnostics::drive_text(drive_letter));
     as_caller(pipe, [&] {
       static_cast<void>(provider.mount_file(
@@ -949,13 +963,21 @@ void create_with_hidden(const HANDLE pipe, Request& request,
                         std::to_string(request.hidden_size_bytes) + " 字节；采用 " +
                         std::to_string(hidden_size) + " 字节");
 
+    // Unmount as the caller too: the driver removes the drive letter from the
+    // namespace of whoever asks, and the mount put it in the caller's. The
+    // mount is not announced, but Windows still reports the new volume to
+    // Explorer, so the removal is.
     try {
-      static_cast<void>(volume::unmount_with_retry(
-          provider, drive_letter, {.notify_shell = false}));
+      as_caller(pipe, [&] {
+        static_cast<void>(volume::unmount_with_retry(
+            provider, drive_letter, {.notify_shell = true}));
+      });
     } catch (...) {
       USB_VAULT_TRACE_FAILURE("创建助手进程", "卸下临时外层卷失败，改为强制", "");
-      static_cast<void>(provider.unmount(
-          drive_letter, {.force = true, .notify_shell = false}));
+      as_caller(pipe, [&] {
+        static_cast<void>(provider.unmount(
+            drive_letter, {.force = true, .notify_shell = true}));
+      });
     }
     mounted = false;
 
@@ -970,8 +992,10 @@ void create_with_hidden(const HANDLE pipe, Request& request,
                             "临时挂载中 " + usb_vault::diagnostics::flag_text(mounted));
     if (mounted) {
       try {
-        static_cast<void>(provider.unmount(
-            drive_letter, {.force = true, .notify_shell = false}));
+        as_caller(pipe, [&] {
+          static_cast<void>(provider.unmount(
+              drive_letter, {.force = true, .notify_shell = true}));
+        });
         mounted = false;
       } catch (...) {
         USB_VAULT_TRACE_FAILURE("创建助手进程", "强制卸下临时外层卷失败", "");
