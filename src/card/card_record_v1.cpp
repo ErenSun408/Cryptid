@@ -412,6 +412,80 @@ build_record(const security::SecureBuffer &root_secret,
   return result;
 }
 
+[[nodiscard]] security::SecureBuffer
+duplicate(const security::SecureBuffer &source) {
+  security::SecureBuffer result(source.size());
+  std::ranges::copy(source.bytes(), result.bytes().begin());
+  return result;
+}
+
+// `positions` has bit N set when envelope N matched. It exists only so an
+// append can tell which envelope the caller's password opened; it is never
+// stored, logged or returned through the public interface.
+struct OpenedRecord final {
+  security::SecureBuffer root_secret{kCardRecordV1RootSecretSize};
+  unsigned int positions{0};
+};
+
+// One password-hardening operation, then every envelope under every slot
+// binding with no early exit. A kept envelope is moved without re-encryption,
+// so its binding no longer has to match its position.
+[[nodiscard]] OpenedRecord open_record(const std::span<const std::byte> record,
+                                       security::SecureBuffer password_utf8) {
+  if (inspect_card_record(record) != CardRecordState::initialized_v1) {
+    password_utf8.clear();
+    throw std::invalid_argument("card record is not an initialized v1 record");
+  }
+  try {
+    security::SecureBuffer master_key =
+        derive_master_key(password_utf8, record);
+    password_utf8.clear();
+    OpenedRecord opened;
+    unsigned int matches = 0;
+    unsigned int difference = 0;
+    const std::size_t envelopes =
+        (record.size() - kCardRecordV1HeaderSize) / kCardRecordV1EnvelopeSize;
+    for (std::size_t position = 0; position < envelopes; ++position) {
+      for (unsigned int binding = 0; binding < 3U; ++binding) {
+        EnvelopeResult result = decrypt_envelope(
+            record,
+            kCardRecordV1HeaderSize + (position * kCardRecordV1EnvelopeSize),
+            static_cast<std::byte>(binding), master_key);
+        const unsigned int hit = static_cast<unsigned int>(result.authenticated);
+        const unsigned int first = static_cast<unsigned int>(matches == 0U);
+        const unsigned int take = 0U - (hit & first);
+        const unsigned int check = 0U - (hit & (first ^ 1U));
+        for (std::size_t index = 0; index < kCardRecordV1RootSecretSize;
+             ++index) {
+          const unsigned int kept =
+              std::to_integer<unsigned int>(opened.root_secret.bytes()[index]);
+          const unsigned int found =
+              std::to_integer<unsigned int>(result.root_secret.bytes()[index]);
+          difference |= (kept ^ found) & check;
+          opened.root_secret.bytes()[index] =
+              static_cast<std::byte>((kept & ~take) | (found & take));
+        }
+        matches += hit;
+        opened.positions |= hit << position;
+        result.root_secret.clear();
+      }
+    }
+    master_key.clear();
+    if (matches == 0U) {
+      opened.root_secret.clear();
+      throw CardCredentialRejected();
+    }
+    if (difference != 0U) {
+      opened.root_secret.clear();
+      throw std::runtime_error("card record envelopes disagree on the root");
+    }
+    return opened;
+  } catch (...) {
+    password_utf8.clear();
+    throw;
+  }
+}
+
 } // namespace
 
 CardCredentialRejected::CardCredentialRejected()
@@ -445,51 +519,7 @@ InitializedCardRecordV1 initialize_card_record_and_root_v1(
 security::SecureBuffer
 unlock_card_record_v1(const std::span<const std::byte> record,
                       security::SecureBuffer password_utf8) {
-  if (inspect_card_record(record) != CardRecordState::initialized_v1) {
-    password_utf8.clear();
-    throw std::invalid_argument("card record is not an initialized v1 record");
-  }
-
-  try {
-    security::SecureBuffer master_key =
-        derive_master_key(password_utf8, record);
-    EnvelopeResult primary = decrypt_envelope(
-        record, kCardRecordV1PrimaryEnvelopeOffset, std::byte{0}, master_key);
-    EnvelopeResult secondary = decrypt_envelope(
-        record, kCardRecordV1SecondaryEnvelopeOffset, std::byte{1}, master_key);
-    master_key.clear();
-    password_utf8.clear();
-
-    const unsigned int successful_envelopes =
-        static_cast<unsigned int>(primary.authenticated) +
-        static_cast<unsigned int>(secondary.authenticated);
-    if (successful_envelopes != 1U) {
-      primary.root_secret.clear();
-      secondary.root_secret.clear();
-      if (successful_envelopes == 0U) {
-        throw CardCredentialRejected();
-      }
-      throw std::runtime_error("card record credential is ambiguous");
-    }
-
-    const unsigned int primary_mask =
-        0U - static_cast<unsigned int>(primary.authenticated);
-    security::SecureBuffer result(kCardRecordV1RootSecretSize);
-    for (std::size_t index = 0; index < result.size(); ++index) {
-      const unsigned int primary_byte =
-          std::to_integer<unsigned int>(primary.root_secret.bytes()[index]);
-      const unsigned int secondary_byte =
-          std::to_integer<unsigned int>(secondary.root_secret.bytes()[index]);
-      result.bytes()[index] = static_cast<std::byte>(
-          (primary_byte & primary_mask) | (secondary_byte & ~primary_mask));
-    }
-    primary.root_secret.clear();
-    secondary.root_secret.clear();
-    return result;
-  } catch (...) {
-    password_utf8.clear();
-    throw;
-  }
+  return std::move(open_record(record, std::move(password_utf8)).root_secret);
 }
 
 security::SecureBuffer
@@ -519,6 +549,47 @@ rewrap_card_record_v1(const std::span<const std::byte> record,
     existing_password_utf8.clear();
     primary_password_utf8.clear();
     secondary_password_utf8.clear();
+    throw;
+  }
+}
+
+security::SecureBuffer
+append_card_password_v1(const std::span<const std::byte> record,
+                        security::SecureBuffer existing_password_utf8,
+                        security::SecureBuffer new_password_utf8) {
+  if (constant_time_equal(existing_password_utf8.bytes(),
+                          new_password_utf8.bytes())) {
+    existing_password_utf8.clear();
+    new_password_utf8.clear();
+    throw std::invalid_argument(
+        "new password must differ from the current password");
+  }
+
+  try {
+    OpenedRecord opened =
+        open_record(record, duplicate(existing_password_utf8));
+    // The lowest envelope the existing password opened is "current". Keep the
+    // first envelope unless that is the current one; then keep the second.
+    const std::size_t kept_offset =
+        (opened.positions & 1U) != 0U ? kCardRecordV1SecondaryEnvelopeOffset
+                                       : kCardRecordV1PrimaryEnvelopeOffset;
+    security::SecureBuffer result(kCardRecordV1ThreeSlotSize);
+    std::ranges::copy(record.first(kCardRecordV1HeaderSize),
+                      result.bytes().begin());
+    encrypt_envelope(result.bytes(), kCardRecordV1PrimaryEnvelopeOffset,
+                     std::byte{0}, opened.root_secret, new_password_utf8);
+    encrypt_envelope(result.bytes(), kCardRecordV1SecondaryEnvelopeOffset,
+                     std::byte{1}, opened.root_secret, existing_password_utf8);
+    std::ranges::copy(record.subspan(kept_offset, kCardRecordV1EnvelopeSize),
+                      result.bytes().begin() +
+                          kCardRecordV1TertiaryEnvelopeOffset);
+    opened.root_secret.clear();
+    existing_password_utf8.clear();
+    new_password_utf8.clear();
+    return result;
+  } catch (...) {
+    existing_password_utf8.clear();
+    new_password_utf8.clear();
     throw;
   }
 }

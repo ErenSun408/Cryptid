@@ -40,9 +40,11 @@ constexpr std::uint32_t kArgon2Version13 = 0x13;
              [](const std::byte value) { return value == std::byte{0}; });
 }
 
+// A three-envelope record keeps the v1 header verbatim, length field included.
 [[nodiscard]] bool valid_v1_header(
     const std::span<const std::byte> record) noexcept {
-  return record.size() == kCardRecordV1Size &&
+  return (record.size() == kCardRecordV1Size ||
+          record.size() == kCardRecordV1ThreeSlotSize) &&
          std::ranges::equal(record.first(kInitializedMagic.size()),
                             kInitializedMagic) &&
          read_u32(record, 8) == kCardRecordV1Version &&
