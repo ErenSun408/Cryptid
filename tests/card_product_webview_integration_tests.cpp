@@ -155,6 +155,25 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return copy;
   }
 
+  std::wstring created_display_name;
+  std::wstring created_b_display_name;
+  // Product creation names the container apart from its private path.
+  std::uint32_t create_protected_container(const std::wstring_view path,
+      const std::uint64_t size_bytes, const std::wstring_view display_name) override {
+    created_display_name.assign(display_name);
+    const std::uint32_t id = create_container(path, size_bytes);
+    containers.back().name.assign(display_name);
+    return id;
+  }
+  std::uint32_t create_protected_container_b(const std::wstring_view path,
+      const std::uint64_t outer_size_bytes, const std::uint64_t hidden_size_bytes,
+      const SecureBuffer& decoy_password_utf8, const std::wstring_view display_name) override {
+    created_b_display_name.assign(display_name);
+    const std::uint32_t id = create_container_b(path, outer_size_bytes, hidden_size_bytes,
+                                                decoy_password_utf8);
+    containers.back().name.assign(display_name);
+    return id;
+  }
   std::wstring created_path;
   std::wstring created_b_path;
   std::uint64_t created_b_outer_bytes{};
@@ -557,8 +576,15 @@ class ScopedDirectory final {
 
   [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
 
-  [[nodiscard]] std::wstring target(const std::wstring_view name) const {
-    return wide() + L"\\" + std::wstring(name) + L".hc";
+  // Whether `path` is a protected container directly inside this directory:
+  // a 64-character lowercase hexadecimal folder holding a braced GUID file.
+  [[nodiscard]] bool holds_protected(const std::wstring_view path) const {
+    const std::wstring prefix = wide() + L"\\";
+    if (!path.starts_with(prefix) || path.size() != prefix.size() + 64 + 1 + 38) return false;
+    const std::wstring_view rest = path.substr(prefix.size());
+    return rest.substr(0, 64).find_first_not_of(L"0123456789abcdef") == std::wstring_view::npos &&
+           rest[64] == L'\\' && rest[65] == L'{' && rest.back() == L'}' &&
+           rest.substr(66, 36).find_first_not_of(L"0123456789ABCDEF-") == std::wstring_view::npos;
   }
 
  private:
@@ -647,8 +673,10 @@ void fail_and_close(const HWND window) noexcept {
          g_volume.session_password_calls == 1 && g_volume.b_decoy_matched &&
          g_volume.created_b_outer_bytes == 128ULL * 1024ULL * 1024ULL &&
          g_volume.created_b_hidden_bytes == 96ULL * 1024ULL * 1024ULL &&
-         g_volume.created_b_path == g_directory.target(L"handover") &&
-         g_volume.created_path == g_directory.target(L"integration") &&
+         g_directory.holds_protected(g_volume.created_b_path) &&
+         g_volume.created_b_display_name == L"handover" &&
+         g_directory.holds_protected(g_volume.created_path) &&
+         g_volume.created_display_name == L"integration" &&
          g_volume.create_calls == 2 &&
          // Three browses: the standard form fills the field once, again after
          // the injected failure clears it, and the hidden form once.

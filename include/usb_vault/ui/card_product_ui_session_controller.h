@@ -134,9 +134,10 @@ class CardProductUiSessionController final {
   // a typed directory is, so nothing here is trusted for having been picked.
   [[nodiscard]] std::wstring browse_for_container_directory();
 
-  // Creates one standard container of the requested size, named `name`, inside
-  // `directory`. The two are joined and checked by
-  // `resolve_container_target_path`; a rejected name or location, a directory
+  // Creates one standard container of the requested size inside `directory`,
+  // shown as `name` without a known container suffix. On disk it is a random
+  // GUID file in a random protected folder, built and checked by
+  // `resolve_protected_container_target_path`; a rejected name or location, a directory
   // that does not exist, an out-of-range size, or a wrong route all throw
   // `std::invalid_argument`. There is no cancel outcome any more: the user
   // settles every field before the create button commits.

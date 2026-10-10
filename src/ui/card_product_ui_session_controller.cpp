@@ -123,19 +123,19 @@ class SecureBufferGuard final {
 }
 
 // The one place a page-supplied string becomes a file system path. The syntax
-// rules live in `resolve_container_target_path`; the one fact that cannot be
+// rules live in `resolve_protected_container_target_path`; the one fact that cannot be
 // decided from the string alone is added here, because a save location that
 // does not exist has to be reported as a rejected field and not as the opaque
 // creation failure the volume layer would raise several steps later.
 //
-// The directory is only probed, never created. Creating it would leave exactly
-// the kind of local artifact section 8.4 forbids, on a path the user may have
-// mistyped.
+// The chosen directory is only probed, never created. Creating it would leave
+// exactly the kind of local artifact section 8.4 forbids, on a path the user
+// may have mistyped. The one folder that does get created is the container's
+// own, inside it, and the session makes and removes that one.
 [[nodiscard]] std::wstring resolve_target_path(
     const std::wstring_view directory, const std::wstring_view name,
-    const std::uint64_t required_bytes, const unsigned int extension_preference) {
-  std::wstring path = resolve_container_target_path(directory, name,
-      choose_container_file_extension(extension_preference));
+    const std::uint64_t required_bytes) {
+  std::wstring path = resolve_protected_container_target_path(directory, name);
   const std::wstring location(directory);
   std::error_code probe;
   if (!std::filesystem::is_directory(std::filesystem::path(location), probe)) {
@@ -378,8 +378,9 @@ void CardProductUiSessionController::create_container(
   }
 
   const auto size_bytes = static_cast<std::uint64_t>(size_mib) * kBytesPerMib;
-  const std::wstring path = resolve_target_path(directory, name, size_bytes, container_extension_preference());
-  static_cast<void>(volume_session_.create_container(path, size_bytes));
+  const std::wstring path = resolve_target_path(directory, name, size_bytes);
+  static_cast<void>(volume_session_.create_protected_container(
+      path, size_bytes, container_display_name(name)));
 }
 
 void CardProductUiSessionController::create_container_b(
@@ -408,7 +409,7 @@ void CardProductUiSessionController::create_container_b(
   // The location is settled before anything is derived or committed, so a
   // rejected name leaves the card and the second password untouched.
   const auto outer_size_bytes = static_cast<std::uint64_t>(outer_size_mib) * kBytesPerMib;
-  const std::wstring path = resolve_target_path(directory, name, outer_size_bytes, container_extension_preference());
+  const std::wstring path = resolve_target_path(directory, name, outer_size_bytes);
 
   // The page no longer asks for the password the session was opened under:
   // the session still holds it, and its credential slot stays unknown here
@@ -430,9 +431,10 @@ void CardProductUiSessionController::create_container_b(
   // Append before creating the volume. A later creation failure does not undo
   // the card commit; a user-confirmed retry consumes another append opportunity.
   entry_.set_second_card_password(duplicate(login), duplicate(second));
-  static_cast<void>(volume_session_.create_container_b(
+  static_cast<void>(volume_session_.create_protected_container_b(
       path, outer_size_bytes,
-      static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second));
+      static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second,
+      container_display_name(name)));
 }
 
 void CardProductUiSessionController::create_partition_pair(

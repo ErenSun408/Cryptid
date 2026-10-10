@@ -243,6 +243,25 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return copy;
   }
 
+  std::wstring created_display_name;
+  std::wstring created_b_display_name;
+  // Product creation names the container apart from its private path.
+  std::uint32_t create_protected_container(const std::wstring_view path,
+      const std::uint64_t size_bytes, const std::wstring_view display_name) override {
+    created_display_name.assign(display_name);
+    const std::uint32_t id = create_container(path, size_bytes);
+    containers.back().name.assign(display_name);
+    return id;
+  }
+  std::uint32_t create_protected_container_b(const std::wstring_view path,
+      const std::uint64_t outer_size_bytes, const std::uint64_t hidden_size_bytes,
+      const SecureBuffer& decoy_password_utf8, const std::wstring_view display_name) override {
+    created_b_display_name.assign(display_name);
+    const std::uint32_t id = create_container_b(path, outer_size_bytes, hidden_size_bytes,
+                                                decoy_password_utf8);
+    containers.back().name.assign(display_name);
+    return id;
+  }
   std::wstring created_path;
   std::wstring created_b_path;
   std::uint64_t created_outer_bytes{};
@@ -837,8 +856,15 @@ class ScopedDirectory final {
 
   [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
 
-  [[nodiscard]] std::wstring target(const std::wstring_view name) const {
-    return wide() + L"\\" + std::wstring(name) + L".sys";
+  // Whether `path` is a protected container directly inside this directory:
+  // a 64-character lowercase hexadecimal folder holding a braced GUID file.
+  [[nodiscard]] bool holds_protected(const std::wstring_view path) const {
+    const std::wstring prefix = wide() + L"\\";
+    if (!path.starts_with(prefix) || path.size() != prefix.size() + 64 + 1 + 38) return false;
+    const std::wstring_view rest = path.substr(prefix.size());
+    return rest.substr(0, 64).find_first_not_of(L"0123456789abcdef") == std::wstring_view::npos &&
+           rest[64] == L'\\' && rest[65] == L'{' && rest.back() == L'}' &&
+           rest.substr(66, 36).find_first_not_of(L"0123456789ABCDEF-") == std::wstring_view::npos;
   }
 
  private:
@@ -1710,9 +1736,11 @@ void test_container_extension_preference_is_authenticated_and_bounded() {
   work.running.store(false);
   require(invoke_with_number(*host.Get(), L"setContainerExtension", 0, nullptr, nullptr) == S_OK,
           "fixed sys preference rejected");
+  // The retired preference no longer names files: creation is GUID-named.
   require(create_container_succeeds(*host.Get(), L"cache.hc", fixture.directory.wide(), 64) &&
-          fixture.volume.created_path == fixture.directory.wide() + L"\\cache.sys",
-          "stored extension did not reach standard creation");
+          fixture.directory.holds_protected(fixture.volume.created_path) &&
+          fixture.volume.created_display_name == L"cache",
+          "stored extension leaked into protected creation");
 }
 
 void test_window_size_presets_are_bounded() {
@@ -2049,8 +2077,8 @@ void test_container_collection_is_exposed_by_position_and_route_gated() {
                                     fixture.directory.wide(), 64) &&
               fixture.chooser.directory_calls == 0 &&
               fixture.volume.create_calls == 1 &&
-              fixture.volume.created_path ==
-                  fixture.directory.target(L"work") &&
+              fixture.directory.holds_protected(fixture.volume.created_path) &&
+              fixture.volume.created_display_name == L"work" &&
               fixture.volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL,
           "creation did not carry the named location to the session once");
 
@@ -2058,7 +2086,7 @@ void test_container_collection_is_exposed_by_position_and_route_gated() {
               invoke_container_number(*host.Get(), L"getContainerId", 0) ==
                   1UL &&
               invoke_container_text(*host.Get(), L"getContainerName", 0) ==
-                  L"work.sys" &&
+                  L"work" &&
               invoke_container_mounted(*host.Get(), 0) &&
               invoke_container_number(*host.Get(), L"getContainerSizeMib",
                                       0) == 64UL &&
@@ -2709,8 +2737,8 @@ void test_container_b_creation_consumes_six_reversed_arguments(bool background =
     require(completed, "background hidden creation did not complete");
   }
   require(fixture.chooser.directory_calls == 0 &&
-              fixture.volume.created_b_path ==
-                  fixture.directory.target(L"handover"),
+              fixture.directory.holds_protected(fixture.volume.created_b_path) &&
+              fixture.volume.created_b_display_name == L"handover",
           "container B was not created at the named location");
   require(fixture.entry.second_password_calls == 1 &&
               fixture.entry.existing_password_bytes == login &&

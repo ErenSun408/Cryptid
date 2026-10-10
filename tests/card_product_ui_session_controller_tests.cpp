@@ -526,6 +526,25 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::vector<std::byte> login_bytes;
   std::vector<Adopted> containers;
   std::vector<usb_vault::application::OperationEvent> operation_events;
+  std::wstring created_display_name;
+  std::wstring created_b_display_name;
+  // Product creation names the container apart from its private path.
+  std::uint32_t create_protected_container(const std::wstring_view path,
+      const std::uint64_t size_bytes, const std::wstring_view display_name) override {
+    created_display_name.assign(display_name);
+    const std::uint32_t id = create_container(path, size_bytes);
+    containers.back().name.assign(display_name);
+    return id;
+  }
+  std::uint32_t create_protected_container_b(const std::wstring_view path,
+      const std::uint64_t outer_size_bytes, const std::uint64_t hidden_size_bytes,
+      const SecureBuffer& decoy_password_utf8, const std::wstring_view display_name) override {
+    created_b_display_name.assign(display_name);
+    const std::uint32_t id = create_container_b(path, outer_size_bytes, hidden_size_bytes,
+                                                decoy_password_utf8);
+    containers.back().name.assign(display_name);
+    return id;
+  }
   std::wstring created_path;
   std::wstring mounted_path;
   std::uint64_t created_size_bytes{};
@@ -730,9 +749,15 @@ class ScopedDirectory final {
 
   [[nodiscard]] std::wstring wide() const { return path_.wstring(); }
 
-  // The path the controller must produce for a container named `name`.
-  [[nodiscard]] std::wstring target(const std::wstring_view name) const {
-    return wide() + L"\\" + std::wstring(name) + L".sys";
+  // Whether `path` is a protected container directly inside this directory:
+  // a 64-character lowercase hexadecimal folder holding a braced GUID file.
+  [[nodiscard]] bool holds_protected(const std::wstring_view path) const {
+    const std::wstring prefix = wide() + L"\\";
+    if (!path.starts_with(prefix) || path.size() != prefix.size() + 64 + 1 + 38) return false;
+    const std::wstring_view rest = path.substr(prefix.size());
+    return rest.substr(0, 64).find_first_not_of(L"0123456789abcdef") == std::wstring_view::npos &&
+           rest[64] == L'\\' && rest[65] == L'{' && rest.back() == L'}' &&
+           rest.substr(66, 36).find_first_not_of(L"0123456789ABCDEF-") == std::wstring_view::npos;
   }
 
  private:
@@ -1034,12 +1059,13 @@ void test_container_collection_is_projected_only_when_authenticated() {
   std::vector<ContainerUiStatus> statuses =
       fixture.controller.container_statuses();
   require(statuses.size() == 1 && statuses[0].id != 0 &&
-              statuses[0].name == L"work.sys" && statuses[0].mounted &&
+              statuses[0].name == L"work" && statuses[0].mounted &&
               statuses[0].size_mib == 64 && statuses[0].drive_letter == L'D',
           "container projection lost identity, name, capacity, or drive");
-  // The name is the file name: the extension belongs to this boundary, not to
-  // the page, and the directory is joined here rather than on the page.
-  require(fixture.volume.created_path == fixture.directory.target(L"work") &&
+  // The typed name is only shown; the file lands under random names in the
+  // chosen directory, joined here rather than on the page.
+  require(fixture.directory.holds_protected(fixture.volume.created_path) &&
+              fixture.volume.created_display_name == L"work" &&
               fixture.volume.created_size_bytes == 64ULL * 1024ULL * 1024ULL,
           "the named path or capacity did not reach the session");
   require(fixture.chooser.directory_calls == 0,
@@ -1089,7 +1115,7 @@ void test_a_location_without_room_is_refused_before_anything_is_written() {
             fixture.controller.create_container(L"work", directory, too_large);
           }),
           "a container larger than the location was not refused as such");
-  require(!std::filesystem::exists(fixture.directory.target(L"work")),
+  require(std::filesystem::is_empty(fixture.directory.wide()),
           "a refused creation still left a file behind");
   require(fixture.volume.create_calls == 0,
           "a refused creation still reached the volume session");
@@ -1509,8 +1535,8 @@ void test_container_b_commits_the_card_before_the_volume() {
   // and it is resolved by the same rules. 8.7.2: neither shape asks for
   // anything the other does not.
   require(fixture.chooser.directory_calls == 0 &&
-              fixture.volume.created_b_path ==
-                  fixture.directory.target(L"handover"),
+              fixture.directory.holds_protected(fixture.volume.created_b_path) &&
+              fixture.volume.created_b_display_name == L"handover",
           "container B was not created at the named location");
   // The password that rewraps the card record comes from the session, not
   // from the page: the page never sent one.
@@ -1685,11 +1711,11 @@ void test_container_b_rejects_unusable_requests() {
   // goes through the same unconditional flow.
   auto again_second = bytes("second-password-value");
   auto again_confirmation = bytes("second-password-value");
-  fixture.controller.create_container_b(L"spare", directory, 40, 20,
+  fixture.controller.create_container_b(L"spare.DAT", directory, 40, 20,
                                         again_second, again_confirmation);
   require(fixture.volume.create_b_calls == 2 &&
-              fixture.volume.created_b_path ==
-                  fixture.directory.target(L"spare") &&
+              fixture.directory.holds_protected(fixture.volume.created_b_path) &&
+              fixture.volume.created_b_display_name == L"spare" &&
               fixture.controller.container_statuses().size() == 2,
           "the second hidden-volume container was not adopted separately");
 }
