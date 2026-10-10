@@ -881,7 +881,7 @@
       ["export", "delete"].includes(button.dataset.fileAction) && button.textContent === "" &&
       button.getAttribute("aria-label") && button.querySelector("svg")), "File actions are accessible export and delete icons only");
     check($("#file-list-body .file-glyph.directory") && $("#file-list-body .file-glyph:not(.directory)"), "Folder and file icons appear beside names");
-    const fileRow = $('#file-list-body [data-file-drag="报告.xlsx"]');
+    const fileRow = $('#file-list-body [data-file-entry="报告.xlsx"]');
     fileRow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 20, clientY: 20 }));
     check(!$("#file-context-menu").hidden && all("#file-context-menu [role=menuitem]").length === 1, "Right click opens a rename-only menu");
     $("#file-context-rename").click();
@@ -898,12 +898,12 @@
     window.navigationFixture.listingSuffix = "\u001e外部新增.txt\u001f0\u001f0\u001f10\u001f0";
     $("#file-refresh").click();
     check($("#file-refresh").disabled && $("#file-refresh").getAttribute("aria-busy") === "true", "Refresh is disabled while the directory is loading");
-    await wait(() => $('#file-list-body [data-file-drag="外部新增.txt"]'));
+    await wait(() => $('#file-list-body [data-file-entry="外部新增.txt"]'));
     check(JSON.stringify(window.navigationFixture.calls.at(-1)) === '[1,"文档"]' &&
       $("#file-breadcrumb").textContent.endsWith(">文档"), "Manual refresh reads external changes in the current directory");
     window.navigationFixture.listingSuffix = "";
     $("#file-refresh").click();
-    await wait(() => !$('#file-list-body [data-file-drag="外部新增.txt"]'));
+    await wait(() => !$('#file-list-body [data-file-entry="外部新增.txt"]'));
     check(!$("#file-refresh").disabled, "Refresh removes externally deleted entries and becomes available again");
     $("[data-file-depth='0']").click();
     await wait(() => $("[data-file-enter]"));

@@ -371,6 +371,7 @@
       cursor: pointer; text-align: left;
     }
     .file-name-button:hover:not(:disabled) { text-decoration: underline; }
+    #file-list-body tr[data-file-enter] { cursor: pointer; }
     .file-entry-link {
       margin-left: .4rem; padding: .05rem .3rem; border-radius: .25rem;
       border: 1px solid var(--line-2); color: var(--text-3);
@@ -400,24 +401,11 @@
     .file-glyph { width: 1rem; height: 1rem; flex: 0 0 auto; color: var(--text-3); }
     .file-glyph.directory { color: var(--gold); }
     .file-identity .file-name, .file-identity .file-name-button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    #file-list-body tr[data-file-enter] { cursor: pointer; }
     .file-entry-link { flex: 0 0 auto; }
     .file-context-menu { position: fixed; z-index: 100; min-width: 9rem; padding: .25rem; border: 1px solid var(--line-2); border-radius: .5rem; background: var(--ink-800); box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.35); }
     .file-context-menu button { display: block; width: 100%; padding: .5rem .75rem; border: 0; border-radius: .3rem; background: none; color: var(--text); font: inherit; font-size: .8rem; text-align: left; cursor: pointer; }
     .file-context-menu button:hover, .file-context-menu button:focus-visible { background: rgba(255,255,255,.06); }
-    .file-drop-targets:not(:empty) {
-      display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
-      margin: 0 0 .7rem; padding: .5rem .6rem;
-      border: 1px dashed var(--line-2); border-radius: .5rem;
-    }
-    .file-drop-hint { color: var(--text-3); font-size: .72rem; }
-    .file-drop-chip {
-      padding: .2rem .55rem; border: 1px solid var(--line-2); border-radius: .35rem;
-      color: var(--text-2); font-size: .72rem;
-    }
-    .file-drop-over, tr.file-drop-over > td {
-      border-color: var(--gold); background: rgba(200, 169, 106, .12);
-    }
-    .file-row-dragging { opacity: .5; }
     /* 「导出与迁移」整段照设计稿 usb-vault_ui-design.html 的构件复刻：
        顶部 .picks 选模式，下面是 .list + .row 的安全盘列表，.cbx 是勾选态。 */
     /* 设计稿 .note.gold 的黄底，用在页头右侧承载迁移那句。 */
@@ -1469,7 +1457,6 @@
             </div>
             <button id="file-mount-toggle" class="shell-button" type="button" disabled>挂载</button>
           </div>
-          <div id="file-drop-targets" class="file-drop-targets" hidden></div>
           <div class="files-card">
             <table class="files-table">
               <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>

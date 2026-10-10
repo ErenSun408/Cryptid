@@ -327,7 +327,6 @@
   const fileNameCloseButton = document.getElementById("file-name-close");
   const fileNameCancelButton = document.getElementById("file-name-cancel");
   const fileNameConfirmButton = document.getElementById("file-name-confirm");
-  const fileDropTargets = document.getElementById("file-drop-targets");
   const decoyVerify = document.getElementById("decoy-verify");
   const decoyPassword = document.getElementById("decoy-password");
   const decoyPasswordVisibility = document.getElementById("decoy-password-visibility");
@@ -1519,7 +1518,6 @@
         fileListingRevision += 1;
         renderFileBreadcrumb();
         renderFileList();
-        renderFileDropTargets();
       }
     }
     document.getElementById("management-list-actions").hidden = fileContainerId !== 0;
@@ -1619,14 +1617,9 @@
     for (const entry of fileEntries) {
       const row = document.createElement("tr");
       row.tabIndex = 0;
-      // Dragging carries nothing but a marker: the page never hands the shell
-      // a file, so a drag out of the window cannot become an export by
-      // accident. Where it may land is decided below, in this page only.
-      row.draggable = !busy;
-      row.dataset.fileDrag = entry.name;
-      if (entry.isDirectory && !entry.isLink) {
-        row.dataset.fileDropDirectory = entry.name;
-      }
+      row.draggable = false;
+      row.dataset.fileEntry = entry.name;
+      if (entry.isDirectory) row.dataset.fileEnter = entry.name;
       const name = document.createElement("td");
       const identity = document.createElement("div");
       identity.className = "file-identity";
@@ -1698,8 +1691,8 @@
     const container = selectedFileContainer();
     if (busy || currentState !== nativeState.authenticated ||
         container === null || !container.mounted ||
-        !fileEntries.some((entry) => entry.name === row.dataset.fileDrag)) return;
-    fileContextTarget = { id: container.id, directory: filePath.join("/"), name: row.dataset.fileDrag };
+        !fileEntries.some((entry) => entry.name === row.dataset.fileEntry)) return;
+    fileContextTarget = { id: container.id, directory: filePath.join("/"), name: row.dataset.fileEntry };
     fileContextMenu.hidden = false;
     const bounds = fileContextMenu.getBoundingClientRect();
     fileContextMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - bounds.width - 4))}px`;
@@ -1806,81 +1799,6 @@
       () => bridge.createContainerDirectory(
         container.id, filePath.join("/"), value),
       "无法新建文件夹，这个名字可能不合规或已经存在。");
-  };
-
-  // ---- Dragging ----------------------------------------------------------
-  // The entry being dragged, and whether this page took the drop. Empty means
-  // no drag is in flight, so a stale drop cannot move an entry the user has
-  // since navigated away from.
-  let fileDragName = "";
-  let fileDropHandled = false;
-  let fileDropHighlight = null;
-
-  const clearFileDropHighlight = () => {
-    if (fileDropHighlight === null) return;
-    fileDropHighlight.classList.remove("file-drop-over");
-    fileDropHighlight = null;
-  };
-
-  const highlightFileDrop = (element) => {
-    if (fileDropHighlight === element) return;
-    clearFileDropHighlight();
-    element.classList.add("file-drop-over");
-    fileDropHighlight = element;
-  };
-
-  const transferFileEntry = async (name, destinationId, destinationPath,
-                                   copy) => {
-    const container = selectedFileContainer();
-    if (container === null || !container.mounted || name === "") return;
-    const here = filePath.join("/");
-    if (!copy && destinationId === container.id && destinationPath === here) {
-      return;
-    }
-    await runFileAction(
-      () => (copy
-        ? bridge.copyContainerEntry(
-          container.id, here, name, destinationId, destinationPath)
-        : bridge.moveContainerEntry(
-          container.id, here, name, destinationId, destinationPath)),
-      copy
-        ? "无法复制到那里，目标可能已经有同名条目了。"
-        : "无法移动到那里，目标可能已经有同名条目了。");
-  };
-
-  const renderFileDropTargets = () => {
-    fileDropTargets.hidden = fileDragName === "";
-    while (fileDropTargets.firstChild !== null) {
-      fileDropTargets.removeChild(fileDropTargets.firstChild);
-    }
-    const container = selectedFileContainer();
-    if (container === null || !container.mounted) return;
-    const others = [];
-    for (const other of containers) {
-      if (other.mounted && other.id !== container.id) others.push(other);
-    }
-    if (others.length === 0) return;
-    const hint = document.createElement("span");
-    hint.className = "file-drop-hint";
-    hint.textContent = "拖到这里放进另一个安全盘（按住 Ctrl 拖为复制）：";
-    fileDropTargets.appendChild(hint);
-    for (const other of others) {
-      const chip = document.createElement("span");
-      chip.className = "file-drop-chip";
-      chip.textContent = `${other.name} · ${other.drive}`;
-      chip.dataset.fileDropContainer = String(other.id);
-      fileDropTargets.appendChild(chip);
-    }
-  };
-
-  // 🔴 A drag that landed nowhere this page owns is the one gesture the file
-  // manager has to answer for. Taking a file out of the volume is a plaintext
-  // export, which lives behind the backup centre's confirmations, so the page
-  // says where that is instead of doing it here.
-  const reportFileDropRefused = () => {
-    setFileStatus(
-      "没有移动。文件只能放进本安全盘的文件夹，或另一个已挂载的安全盘。" +
-      "要把文件拿出加密卷，那是明文导出，请到「导出与迁移」做。", "error");
   };
 
   // ---- Backup centre -----------------------------------------------------
@@ -2906,7 +2824,6 @@
     fileRefreshPendingRevision = revision;
     renderManagementView();
     renderFileBreadcrumb();
-    renderFileDropTargets();
     const container = selectedFileContainer();
     if (bridge === null || container === null || !container.mounted || (inDecoyFileView() && !decoyMounted.has(container.id))) {
       fileEntries = [];
@@ -3772,10 +3689,10 @@
   let decoyActivationDeadline = 0;
   let decoyActivationRunning = false;
   // Anything the user is in the middle of keeps its rows: a refresh would
-  // replace the very element a menu, dialog or drag is pointing at.
+  // replace the very element a menu or dialog is pointing at.
   const decoyActivationBlocked = () =>
     busy || externalRefreshPending || reorderState !== null || decoyDropWatching ||
-    !fileNameDialog.hidden || !fileContextMenu.hidden || fileDragName !== "";
+    !fileNameDialog.hidden || !fileContextMenu.hidden;
   const runDecoyActivationRefresh = async () => {
     decoyActivationTimer = null;
     if (decoyActivationRunning || !inDecoyFileView() || bridge === null ||
@@ -4738,7 +4655,6 @@
       fileEntries = [];
       renderFileBreadcrumb();
       renderFileList();
-      renderFileDropTargets();
     }
     if (!containers.some((container) => container.id === expandedContainerId)) {
       expandedContainerId = 0;
@@ -5350,7 +5266,7 @@
       if (removed.has(fileContainerId)) {
         ++fileListingRevision; fileRefreshPendingRevision = 0;
         fileEntries = []; filePath = []; setFileStatus("");
-        renderFileBreadcrumb(); renderFileList(); renderFileDropTargets();
+        renderFileBreadcrumb(); renderFileList();
       }
       if (removed.has(decoyMaintenanceId) || removed.has(decoyProtectionTarget)) {
         clearDecoyMaintenanceFacts();
@@ -6698,7 +6614,8 @@
         currentState !== nativeState.authenticated) {
       return;
     }
-    const open = element.closest("[data-file-enter]");
+    const open = element.closest("[data-file-action]") === null
+      ? element.closest("[data-file-enter]") : null;
     if (open !== null) {
       filePath = [...filePath, open.dataset.fileEnter];
       void refreshFileManager();
@@ -6717,14 +6634,22 @@
     openFileNameFlow("rename", act.dataset.fileName);
   });
   fileListBody.addEventListener("contextmenu", (event) => {
-    const row = event.target instanceof Element ? event.target.closest("[data-file-drag]") : null;
+    const row = event.target instanceof Element ? event.target.closest("[data-file-entry]") : null;
     if (row === null) return;
     event.preventDefault();
     openFileContextMenu(row, event.clientX, event.clientY);
   });
+  // Block browser-native text/image drags as well as entry dragging.
+  fileListBody.addEventListener("dragstart", (event) => event.preventDefault());
   fileListBody.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && event.target instanceof Element &&
+        event.target.matches("tr[data-file-enter]") && !busy && currentState === nativeState.authenticated) {
+      event.preventDefault();
+      event.target.click();
+      return;
+    }
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-    const row = event.target instanceof Element ? event.target.closest("[data-file-drag]") : null;
+    const row = event.target instanceof Element ? event.target.closest("[data-file-entry]") : null;
     if (row === null) return;
     event.preventDefault();
     const bounds = row.getBoundingClientRect();
@@ -6775,120 +6700,6 @@
   backupMigrateConfirm.addEventListener("click", async () => {
     await runMigration();
   });
-  fileListBody.addEventListener("dragstart", (event) => {
-    const row = event.target instanceof Element
-      ? event.target.closest("[data-file-drag]")
-      : null;
-    if (row === null || busy || currentState !== nativeState.authenticated) {
-      event.preventDefault();
-      return;
-    }
-    fileDragName = row.dataset.fileDrag;
-    closeFileContextMenu();
-    renderFileDropTargets();
-    fileDropHandled = false;
-    row.classList.add("file-row-dragging");
-    // Only a marker. No file, no path, and no name goes onto the drag, so
-    // nothing outside this page can be handed the volume's contents.
-    event.dataTransfer.effectAllowed = "copyMove";
-    event.dataTransfer.setData("text/plain", "");
-  });
-  fileListBody.addEventListener("dragend", (event) => {
-    const row = event.target instanceof Element
-      ? event.target.closest("[data-file-drag]")
-      : null;
-    if (row !== null) row.classList.remove("file-row-dragging");
-    clearFileDropHighlight();
-    const dropped = fileDropHandled;
-    fileDragName = "";
-    fileDropHandled = false;
-    renderFileDropTargets();
-    if (!dropped) reportFileDropRefused();
-  });
-
-  const allowFileDrop = (event, element) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = event.ctrlKey ? "copy" : "move";
-    highlightFileDrop(element);
-  };
-
-  fileListBody.addEventListener("dragover", (event) => {
-    const target = event.target instanceof Element
-      ? event.target.closest("[data-file-drop-directory]")
-      : null;
-    if (target === null || fileDragName === "" || busy ||
-        target.dataset.fileDropDirectory === fileDragName) {
-      return;
-    }
-    allowFileDrop(event, target);
-  });
-  fileListBody.addEventListener("drop", async (event) => {
-    const target = event.target instanceof Element
-      ? event.target.closest("[data-file-drop-directory]")
-      : null;
-    if (target === null || fileDragName === "" || busy) return;
-    event.preventDefault();
-    clearFileDropHighlight();
-    fileDropHandled = true;
-    const name = fileDragName;
-    fileDragName = "";
-    const container = selectedFileContainer();
-    if (container === null) return;
-    await transferFileEntry(
-      name, container.id,
-      [...filePath, target.dataset.fileDropDirectory].join("/"),
-      event.ctrlKey);
-  });
-
-  fileBreadcrumb.addEventListener("dragover", (event) => {
-    const crumb = event.target instanceof Element
-      ? event.target.closest("[data-file-depth]")
-      : null;
-    if (crumb === null || fileDragName === "" || busy) return;
-    allowFileDrop(event, crumb);
-  });
-  fileBreadcrumb.addEventListener("drop", async (event) => {
-    const crumb = event.target instanceof Element
-      ? event.target.closest("[data-file-depth]")
-      : null;
-    if (crumb === null || fileDragName === "" || busy) return;
-    event.preventDefault();
-    clearFileDropHighlight();
-    fileDropHandled = true;
-    const name = fileDragName;
-    fileDragName = "";
-    const container = selectedFileContainer();
-    if (container === null) return;
-    await transferFileEntry(
-      name, container.id,
-      filePath.slice(0, Number(crumb.dataset.fileDepth)).join("/"),
-      event.ctrlKey);
-  });
-
-  fileDropTargets.addEventListener("dragover", (event) => {
-    const chip = event.target instanceof Element
-      ? event.target.closest("[data-file-drop-container]")
-      : null;
-    if (chip === null || fileDragName === "" || busy) return;
-    allowFileDrop(event, chip);
-  });
-  fileDropTargets.addEventListener("drop", async (event) => {
-    const chip = event.target instanceof Element
-      ? event.target.closest("[data-file-drop-container]")
-      : null;
-    if (chip === null || fileDragName === "" || busy) return;
-    event.preventDefault();
-    clearFileDropHighlight();
-    fileDropHandled = true;
-    const name = fileDragName;
-    fileDragName = "";
-    // The root of the other container: a drop onto its name says which
-    // container, and says nothing about where inside it.
-    await transferFileEntry(
-      name, Number(chip.dataset.fileDropContainer), "", event.ctrlKey);
-  });
-  fileDropTargets.addEventListener("dragleave", () => clearFileDropHighlight());
-
   fileCreateDirectoryButton.addEventListener(
     "click", () => openFileNameFlow("create", ""));
   fileRefreshButton.addEventListener("click", async () => {
@@ -7213,8 +7024,8 @@
     if (event.key === "Escape" && !fileContextMenu.hidden) {
       const target = fileContextTarget;
       closeFileContextMenu();
-      for (const row of fileListBody.querySelectorAll("[data-file-drag]")) {
-        if (target !== null && row.dataset.fileDrag === target.name) row.focus();
+      for (const row of fileListBody.querySelectorAll("[data-file-entry]")) {
+        if (target !== null && row.dataset.fileEntry === target.name) row.focus();
       }
       event.preventDefault();
       return;
