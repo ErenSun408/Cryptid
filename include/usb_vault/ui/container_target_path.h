@@ -41,4 +41,22 @@ inline constexpr std::size_t kContainerPathMaximumLength = 259;
     std::wstring_view directory, std::wstring_view name,
     std::wstring_view extension = kContainerFileExtension);
 
+// Product creation's on-disk layout. The file lands one level below the
+// chosen directory, in a fresh folder named by 64 lowercase hexadecimal
+// characters, and is itself named as an upper-case braced GUID with no
+// extension. Both names are drawn from the system RNG on every call.
+//
+// `name` is what the user typed. It is validated exactly as above but never
+// reaches the disk: the caller shows it through `container_display_name`.
+// The directory rules and the path limit are the same as above; nothing here
+// touches the file system, so the folder still has to be created.
+[[nodiscard]] std::wstring resolve_protected_container_target_path(
+    std::wstring_view directory, std::wstring_view name);
+
+// The name a container created from `name` is shown under: one trailing
+// .hc/.sys/.dat/.bin/.bat removed, case-insensitively, the same suffixes the
+// page drops from file names it displays. A name that is only a suffix stays
+// whole.
+[[nodiscard]] std::wstring container_display_name(std::wstring_view name);
+
 }  // namespace usb_vault::ui

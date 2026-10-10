@@ -208,4 +208,59 @@ std::wstring resolve_container_target_path(const std::wstring_view directory,
   return path;
 }
 
+namespace {
+
+constexpr std::array<std::wstring_view, 5> kDisplayedSuffixes{L".hc", L".sys", L".dat", L".bin", L".bat"};
+
+template <std::size_t Size>
+[[nodiscard]] std::array<unsigned char, Size> random_bytes() {
+  std::array<unsigned char, Size> bytes{};
+  if (BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(bytes.size()),
+                      BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+    throw std::runtime_error("container name generation failed");
+  return bytes;
+}
+
+void append_hex(std::wstring& text, const unsigned char value, const wchar_t* const digits) {
+  text.push_back(digits[value >> 4]);
+  text.push_back(digits[value & 0x0F]);
+}
+
+}  // namespace
+
+std::wstring resolve_protected_container_target_path(const std::wstring_view directory,
+                                                     const std::wstring_view name) {
+  validate_directory(directory);
+  validate_name(name);
+
+  std::wstring path(directory);
+  std::replace(path.begin(), path.end(), L'/', L'\\');
+  if (!is_separator(path.back())) path.push_back(L'\\');
+  for (const unsigned char value : random_bytes<32>()) append_hex(path, value, L"0123456789abcdef");
+  path.push_back(L'\\');
+
+  // Version 4, RFC 4122 variant: the same shape CoCreateGuid hands out.
+  auto guid = random_bytes<16>();
+  guid[6] = static_cast<unsigned char>((guid[6] & 0x0F) | 0x40);
+  guid[8] = static_cast<unsigned char>((guid[8] & 0x3F) | 0x80);
+  path.push_back(L'{');
+  for (std::size_t index = 0; index < guid.size(); ++index) {
+    if (index == 4 || index == 6 || index == 8 || index == 10) path.push_back(L'-');
+    append_hex(path, guid[index], L"0123456789ABCDEF");
+  }
+  path.push_back(L'}');
+
+  if (path.size() > kContainerPathMaximumLength) reject("container path is too long");
+  return path;
+}
+
+std::wstring container_display_name(const std::wstring_view name) {
+  for (const auto suffix : kDisplayedSuffixes) {
+    if (name.size() > suffix.size() &&
+        equals_ignoring_case(name.substr(name.size() - suffix.size()), suffix))
+      return std::wstring(name.substr(0, name.size() - suffix.size()));
+  }
+  return std::wstring(name);
+}
+
 }  // namespace usb_vault::ui

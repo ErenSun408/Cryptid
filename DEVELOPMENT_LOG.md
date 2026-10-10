@@ -5209,3 +5209,11 @@
 - 安全审查：拖动不再触发复制／移动或携带文件数据，不新增明文出卷路径；整行操作仍复用认证／忙碌门禁，名称用 textContent，路径仍由原生校验；删除／导出按钮独立，未修改数据格式、卷角色或持久化策略。
 - 证据与限制：out/ui-folder-rows-tests.txt、out/ui-folder-rows-build.txt、out/ui-folder-rows-build-retry.txt、out/ui-folder-rows-native-tests.txt；未做真实 WebView2 目视、实卡、外部导入或全量验收。
 - 提交：用户明确授权以 [refactor] 提交本片，本条随实现、测试及对应文档入库；此前未提交历史开发记录保留，禁止推送。
+
+### 2026-10-09 — 文件安全盘随机目录与 GUID 文件名 / 第 1 片：需求增补与路径生成
+- 范围与审计：已确认创建时即用随机名；持久化关闭时不改行为；沿用强制 Hidden＋System；文件名固定为带花括号大写 GUID、无后缀，目录为 64 位小写十六进制；完整容器导出不改；只管新建；移出列表只遗忘路径。需求清单末尾新增增补，替代上一条随机后缀命名规则。分三片：本片纯函数，第 2 片会话层建目录／别名／索引／卷标，第 3 片控制器接入。
+- 检查：创建链路为页面名称＋目录 → 控制器 resolve_target_path → 会话 create_container(path)；显示别名已存于加密索引，挂载卷标与操作记录取 display_name；名称上限 96 小于别名上限 100。
+- 实现：container_target_path 新增 resolve_protected_container_target_path（沿用目录／名称校验与 259 路径上限，系统 RNG 生成目录名与 v4 GUID 文件名，输入名称不进入路径）及 container_display_name（大小写不敏感去掉一个 .hc／.sys／.dat／.bin／.bat 尾缀）。本片尚未接入创建流程，行为不变。
+- 验证：p46 Release 构建 container_target_path_tests 并通过，覆盖形状、唯一性、拒绝项、路径上限与显示名；将 GUID 版本位改坏后 3 项失败，恢复后复测通过。未跑其他套件。
+- 安全与风险：不触碰文件系统、不记录日志；RNG 失败即抛出。暂存路径另加 .preparing 的长度沿用既有口径未单独计入。
+- 提交：以 [P5.6] 单独提交本片，未推送。

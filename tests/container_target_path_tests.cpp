@@ -1,5 +1,6 @@
 #include "usb_vault/ui/container_target_path.h"
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -176,6 +177,82 @@ void test_the_joined_path_stays_inside_the_win32_limit() {
                   "a path past the Win32 limit was accepted");
 }
 
+[[nodiscard]] bool all_of_set(const std::wstring_view text, const std::wstring_view allowed) {
+  return text.find_first_not_of(allowed) == std::wstring_view::npos;
+}
+
+void test_a_protected_path_hides_the_name_under_random_ones() {
+  using usb_vault::ui::resolve_protected_container_target_path;
+  std::vector<std::wstring> folders;
+  std::vector<std::wstring> files;
+  for (const auto directory : {L"D:\\测试", L"D:\\测试\\", L"D:/测试"}) {
+    const std::wstring path = resolve_protected_container_target_path(directory, L"TEST.sys");
+    const std::wstring prefix = L"D:\\测试\\";
+    require(path.starts_with(prefix), "protected path left the chosen directory");
+    const std::wstring_view rest = std::wstring_view(path).substr(prefix.size());
+    require(rest.size() == 64 + 1 + 38, "protected path has the wrong shape");
+    if (rest.size() != 64 + 1 + 38) continue;
+    const std::wstring_view folder = rest.substr(0, 64);
+    const std::wstring_view file = rest.substr(65);
+    require(rest[64] == L'\\', "container is not one level below the directory");
+    require(all_of_set(folder, L"0123456789abcdef"), "folder is not lowercase hexadecimal");
+    require(file.front() == L'{' && file.back() == L'}' && file[9] == L'-' && file[14] == L'-' &&
+                file[19] == L'-' && file[24] == L'-',
+            "file name is not a braced GUID");
+    std::wstring digits(file.substr(1, 36));
+    std::erase(digits, L'-');
+    require(digits.size() == 32 && all_of_set(digits, L"0123456789ABCDEF"), "GUID is not uppercase hexadecimal");
+    require(file[15] == L'4' && std::wstring_view(L"89AB").find(file[20]) != std::wstring_view::npos,
+            "GUID is not a version 4 RFC 4122 value");
+    require(path.find(L"TEST") == std::wstring::npos, "typed name reached the disk path");
+    folders.emplace_back(folder);
+    files.emplace_back(file);
+  }
+  for (int i = 0; i < 61; ++i) {
+    const std::wstring path = resolve_protected_container_target_path(L"D:\\Vault", L"work");
+    folders.push_back(path.substr(9, 64));
+    files.push_back(path.substr(74));
+  }
+  std::ranges::sort(folders);
+  std::ranges::sort(files);
+  require(std::ranges::adjacent_find(folders) == folders.end(), "random folder name repeated");
+  require(std::ranges::adjacent_find(files) == files.end(), "random file name repeated");
+
+  bool rejected = false;
+  for (const auto name : {L"", L"a\\b", L"CON.sys", L"work.", L" work", L"a:b"}) {
+    rejected = false;
+    try { static_cast<void>(resolve_protected_container_target_path(L"D:\\Vault", name)); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "protected path accepted a name the form refuses");
+  }
+  for (const auto directory : {L"Vault", L"\\\\server\\share", L"D:\\a\\..\\b", L"D:\\a."}) {
+    rejected = false;
+    try { static_cast<void>(resolve_protected_container_target_path(directory, L"work")); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "protected path accepted a directory the form refuses");
+  }
+  // 3 + 152 + 1 + 64 + 1 + 38 = 259 fits exactly; one more character does not.
+  const std::wstring fits = L"D:\\" + std::wstring(152, L'a');
+  require(resolve_protected_container_target_path(fits, L"work").size() == kContainerPathMaximumLength,
+          "protected path at the limit was refused");
+  rejected = false;
+  try { static_cast<void>(resolve_protected_container_target_path(fits + L"a", L"work")); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  require(rejected, "protected path past the Win32 limit was accepted");
+}
+
+void test_the_display_name_drops_one_known_suffix() {
+  using usb_vault::ui::container_display_name;
+  require(container_display_name(L"TEST.sys") == L"TEST", ".sys stayed in the display name");
+  require(container_display_name(L"TEST.SYS") == L"TEST", "suffix match was case-sensitive");
+  for (const auto name : {L"a.hc", L"a.dat", L"a.Bin", L"a.bat"})
+    require(container_display_name(name) == L"a", "known suffix stayed in the display name");
+  require(container_display_name(L"TEST.sys.dat") == L"TEST.sys", "more than one suffix was removed");
+  require(container_display_name(L"report.txt") == L"report.txt", "unknown suffix was removed");
+  require(container_display_name(L".sys") == L".sys", "a bare suffix became an empty name");
+  require(container_display_name(L"工作") == L"工作", "plain name was altered");
+}
+
 }  // namespace
 
 int main() {
@@ -205,6 +282,8 @@ int main() {
     test_a_name_that_is_not_a_file_name_is_refused();
     test_only_a_drive_absolute_directory_is_accepted();
     test_the_joined_path_stays_inside_the_win32_limit();
+    test_a_protected_path_hides_the_name_under_random_ones();
+    test_the_display_name_drops_one_known_suffix();
   } catch (const std::exception& error) {
     std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';
     return 1;
