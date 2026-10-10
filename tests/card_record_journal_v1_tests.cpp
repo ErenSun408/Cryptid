@@ -32,7 +32,12 @@ using usb_vault::card::kCardRecordJournalV1Descriptor1Offset;
 using usb_vault::card::kCardRecordJournalV1DescriptorSize;
 using usb_vault::card::kCardRecordJournalV1Slot0Offset;
 using usb_vault::card::kCardRecordJournalV1Slot1Offset;
+using usb_vault::card::kCardRecordJournalV1ReservedSize;
 using usb_vault::card::kCardRecordJournalV1StorageSize;
+using usb_vault::card::kCardRecordJournalV1ThreeSlot0Offset;
+using usb_vault::card::kCardRecordJournalV1ThreeSlot1Offset;
+using usb_vault::card::kCardRecordJournalV1ThreeSlotEnd;
+using usb_vault::card::kCardRecordV1ThreeSlotSize;
 using usb_vault::card::kCardRecordV1Size;
 using usb_vault::card::make_error_code;
 using usb_vault::card::inspect_card_record;
@@ -120,7 +125,7 @@ void store_u32(const std::span<std::byte> bytes, const std::size_t offset,
 }
 
 [[nodiscard]] bool
-same_range(const std::array<std::byte, kCardRecordJournalV1StorageSize> &data,
+same_range(const std::array<std::byte, kCardRecordJournalV1ReservedSize> &data,
            const std::size_t left, const std::size_t right,
            const std::size_t length) noexcept {
   return std::ranges::equal(std::span(data).subspan(left, length),
@@ -128,7 +133,7 @@ same_range(const std::array<std::byte, kCardRecordJournalV1StorageSize> &data,
 }
 
 [[nodiscard]] bool same_record_at(
-    const std::array<std::byte, kCardRecordJournalV1StorageSize> &data,
+    const std::array<std::byte, kCardRecordJournalV1ReservedSize> &data,
     const std::size_t offset, const SecureBuffer &record) noexcept {
   return std::ranges::equal(std::span(data).subspan(offset, record.size()),
                             record.bytes());
@@ -182,8 +187,8 @@ public:
     corrupt_read_call_ = std::numeric_limits<std::size_t>::max();
   }
 
-  std::size_t capacity_{kCardRecordJournalV1StorageSize};
-  std::array<std::byte, kCardRecordJournalV1StorageSize> data_{};
+  std::size_t capacity_{kCardRecordJournalV1ReservedSize};
+  std::array<std::byte, kCardRecordJournalV1ReservedSize> data_{};
   WriteFault write_fault_{};
   std::size_t corrupt_read_call_{std::numeric_limits<std::size_t>::max()};
   std::size_t read_calls_{};
@@ -392,7 +397,7 @@ void test_logical_state_inspection_is_strictly_read_only() {
     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
                CardRecordState::provisioned_uninitialized,
            "stable marker journal returned the wrong logical state");
-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
            "stable logical-state inspection was not one read-only snapshot");
   }
 
@@ -405,7 +410,7 @@ void test_logical_state_inspection_is_strictly_read_only() {
     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
                CardRecordState::initialized_v1,
            "initialized journal returned the wrong logical state");
-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
            "initialized logical-state inspection wrote storage");
   }
 
@@ -454,7 +459,7 @@ void test_logical_state_inspection_selects_without_normalizing() {
     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
                CardRecordState::provisioned_uninitialized,
            "read-only inspection selected partial staging bytes");
-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
            "read-only staging inspection normalized the inactive slot");
   }
 
@@ -471,7 +476,7 @@ void test_logical_state_inspection_selects_without_normalizing() {
     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
                CardRecordState::initialized_v1,
            "read-only inspection did not select the published commit");
-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
+    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
            "read-only published-commit inspection normalized storage");
   }
 }
@@ -643,9 +648,10 @@ void test_staging_failures_preserve_active_commit() {
   {
     FakeStorage storage;
     provision(storage, marker);
-    // A commit first reads two descriptors and two slots. Corrupt only the
-    // immediate staging readback, not the bytes retained by fake storage.
-    storage.corrupt_read_call_ = 4;
+    // A commit first reads two descriptors and four slots, then over the
+    // provisioning marker checks the reserved tail. Corrupt only the staging
+    // readback, not the bytes retained by fake storage.
+    storage.corrupt_read_call_ = 7;
     expect_card_error(
         [&] { commit_card_record_journal_v1(storage, replacement.bytes()); },
         CardError::device_failure, "corrupted staging readback was accepted");
@@ -791,7 +797,7 @@ void test_invalid_inputs_do_not_touch_storage() {
 
   {
     FakeStorage storage;
-    storage.capacity_ = kCardRecordJournalV1StorageSize - 1;
+    storage.capacity_ = kCardRecordJournalV1ThreeSlotEnd - 1;
     expect_card_error(
         [&] { provision_card_record_journal_v1(storage, marker.bytes()); },
         CardError::invalid_configuration,
@@ -826,7 +832,7 @@ void test_invalid_inputs_do_not_touch_storage() {
 void test_reset_preserves_bytes_outside_application_region() {
   class GuardedStorage final : public ICardRecordJournalStorage {
    public:
-    std::array<std::byte, kCardRecordJournalV1StorageSize + 64> data{};
+    std::array<std::byte, kCardRecordJournalV1ReservedSize + 64> data{};
     std::size_t capacity() override { return data.size(); }
     SecureBuffer read(std::size_t offset, std::size_t length) override {
       expect(offset <= data.size() && length <= data.size() - offset, "out-of-range read");
@@ -839,14 +845,14 @@ void test_reset_preserves_bytes_outside_application_region() {
       std::ranges::copy(value, data.begin() + offset);
     }
   } storage;
-  std::ranges::fill(std::span(storage.data).subspan(kCardRecordJournalV1StorageSize), std::byte{0xA5});
+  std::ranges::fill(std::span(storage.data).subspan(kCardRecordJournalV1ReservedSize), std::byte{0xA5});
   const auto marker = provision_uninitialized_card_record_v1();
   provision_card_record_journal_v1(storage, marker.bytes());
   const auto record = framed_record(std::byte{0x37});
   commit_card_record_journal_v1(storage, record.bytes());
   const auto snapshot = usb_vault::card::snapshot_card_record_journal_v1(storage);
   usb_vault::card::reset_card_record_journal_v1(storage, snapshot.bytes());
-  expect(std::ranges::all_of(std::span(storage.data).subspan(kCardRecordJournalV1StorageSize),
+  expect(std::ranges::all_of(std::span(storage.data).subspan(kCardRecordJournalV1ReservedSize),
       [](std::byte value) { return value == std::byte{0xA5}; }), "reset changed unrelated card data");
 }
 
@@ -906,10 +912,193 @@ void test_confirmed_reset_snapshot_and_fault_recovery() {
   }
 }
 
+// A three-envelope record keeps the two-envelope header, length field included.
+[[nodiscard]] SecureBuffer framed_three_slot_record(const std::byte fill) {
+  const SecureBuffer header = framed_record(fill);
+  SecureBuffer result(kCardRecordV1ThreeSlotSize);
+  std::ranges::fill(result.bytes(), fill);
+  std::ranges::copy(header.bytes(), result.bytes().begin());
+  return result;
+}
+
+[[nodiscard]] bool all_zero(
+    const std::array<std::byte, kCardRecordJournalV1ReservedSize> &data,
+    const std::size_t offset, const std::size_t length) noexcept {
+  return std::ranges::all_of(std::span(data).subspan(offset, length),
+                             [](const std::byte value) {
+                               return value == std::byte{};
+                             });
+}
+
+[[nodiscard]] bool holds_record_anywhere(const FakeStorage &storage,
+                                         const SecureBuffer &record) noexcept {
+  for (const std::size_t offset :
+       {kCardRecordJournalV1Slot0Offset, kCardRecordJournalV1Slot1Offset,
+        kCardRecordJournalV1ThreeSlot0Offset,
+        kCardRecordJournalV1ThreeSlot1Offset}) {
+    if (offset + record.size() <= storage.data_.size() &&
+        same_record_at(storage.data_, offset, record))
+      return true;
+  }
+  return false;
+}
+
+void test_length_switch_commits_use_their_own_slots() {
+  const auto marker = provision_uninitialized_card_record_v1();
+  const auto two = framed_record(std::byte{0x21});
+  const auto three = framed_three_slot_record(std::byte{0x31});
+  const auto next = framed_three_slot_record(std::byte{0x32});
+  FakeStorage storage;
+  provision(storage, marker);
+  commit_card_record_journal_v1(storage, two.bytes());
+
+  commit_card_record_journal_v1(storage, three.bytes());
+  // Checked before any read, so read-side normalization cannot hide it.
+  expect(same_record_at(storage.data_, kCardRecordJournalV1ThreeSlot0Offset,
+                        three),
+         "length switch did not start from the first three-envelope slot");
+  expect(all_zero(storage.data_, kCardRecordJournalV1Slot0Offset,
+                  kCardRecordJournalV1StorageSize -
+                      kCardRecordJournalV1Slot0Offset),
+         "length switch left two-envelope slots behind");
+  storage.reset_observation();
+  expect(same(read_card_record_journal_v1(storage), three) &&
+             storage.write_calls_ == 0,
+         "completed length switch was not active and stable");
+  expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+             CardRecordState::initialized_v1,
+         "three-envelope record was not classified as initialized");
+
+  commit_card_record_journal_v1(storage, next.bytes());
+  expect(same(read_card_record_journal_v1(storage), next),
+         "same-length three-envelope commit did not become active");
+  expect(same_record_at(storage.data_, kCardRecordJournalV1ThreeSlot1Offset,
+                        next) &&
+             !holds_record_anywhere(storage, three),
+         "same-length commit kept the previous three-envelope record");
+
+  // Returning to the two-envelope length clears the three-envelope slots.
+  commit_card_record_journal_v1(storage, two.bytes());
+  expect(all_zero(storage.data_, kCardRecordJournalV1ThreeSlot0Offset,
+                  kCardRecordJournalV1ThreeSlotEnd -
+                      kCardRecordJournalV1ThreeSlot0Offset),
+         "switching back left three-envelope slots behind");
+  storage.reset_observation();
+  expect(same(read_card_record_journal_v1(storage), two) &&
+             storage.write_calls_ == 0,
+         "switch back was not active and stable");
+}
+
+void test_initialization_clears_the_reserved_tail() {
+  const auto marker = provision_uninitialized_card_record_v1();
+  const auto three = framed_three_slot_record(std::byte{0x41});
+  FakeStorage storage;
+  provision(storage, marker);
+  std::ranges::fill(std::span(storage.data_).subspan(
+                        kCardRecordJournalV1StorageSize),
+                    std::byte{0x5A});
+  commit_card_record_journal_v1(storage, three.bytes());
+  expect(same(read_card_record_journal_v1(storage), three),
+         "initialization from the marker did not become active");
+  expect(all_zero(storage.data_, kCardRecordJournalV1ThreeSlotEnd,
+                  kCardRecordJournalV1ReservedSize -
+                      kCardRecordJournalV1ThreeSlotEnd),
+         "initialization kept data after the three-envelope slots");
+  expect(all_zero(storage.data_, kCardRecordJournalV1Slot0Offset,
+                  kCardRecordJournalV1StorageSize -
+                      kCardRecordJournalV1Slot0Offset),
+         "initialization kept the provisioning marker slots");
+}
+
+void test_interrupted_length_switch_recovers_one_record() {
+  const auto marker = provision_uninitialized_card_record_v1();
+  const auto two = framed_record(std::byte{0x51});
+  const auto three = framed_three_slot_record(std::byte{0x52});
+  for (std::size_t call = 0; call < 6; ++call) {
+    for (const std::size_t torn : {0U, 64U, 216U}) {
+      FakeStorage storage;
+      provision(storage, marker);
+      commit_card_record_journal_v1(storage, two.bytes());
+      storage.reset_observation();
+      storage.write_fault_ = {call, torn};
+      try {
+        commit_card_record_journal_v1(storage, three.bytes());
+      } catch (const std::system_error &) {
+      }
+      storage.reset_observation();
+      const auto observed = read_card_record_journal_v1(storage);
+      const bool old_active = same(observed, two);
+      expect(old_active || same(observed, three),
+             "interrupted length switch lost both records");
+      expect(!holds_record_anywhere(storage, old_active ? three : two),
+             "recovered journal kept the inactive record");
+      expect(old_active
+                 ? all_zero(storage.data_, kCardRecordJournalV1ThreeSlot0Offset,
+                            kCardRecordJournalV1ThreeSlotEnd -
+                                kCardRecordJournalV1ThreeSlot0Offset)
+                 : all_zero(storage.data_, kCardRecordJournalV1Slot0Offset,
+                            kCardRecordJournalV1StorageSize -
+                                kCardRecordJournalV1Slot0Offset),
+             "recovered journal kept bytes of the other record length");
+      storage.reset_observation();
+      static_cast<void>(read_card_record_journal_v1(storage));
+      expect(storage.write_calls_ == 0, "recovered journal was not stable");
+    }
+  }
+}
+
+void test_reset_clears_any_length_and_earlier_formats() {
+  using usb_vault::card::reset_card_record_journal_v1;
+  using usb_vault::card::snapshot_card_record_journal_v1;
+  const auto marker = provision_uninitialized_card_record_v1();
+
+  FakeStorage three_slot;
+  provision(three_slot, marker);
+  const auto three = framed_three_slot_record(std::byte{0x61});
+  commit_card_record_journal_v1(three_slot, three.bytes());
+  reset_card_record_journal_v1(three_slot, three.bytes());
+  expect(same(snapshot_card_record_journal_v1(three_slot), marker) &&
+             all_zero(three_slot.data_, kCardRecordJournalV1StorageSize,
+                      kCardRecordJournalV1ReservedSize -
+                          kCardRecordJournalV1StorageSize),
+         "three-envelope reset did not restore a provisioned card");
+
+  // An earlier format: a future-version record with its own data after the
+  // two-envelope layout. Reading leaves that data alone; reset removes it.
+  FakeStorage earlier;
+  provision(earlier, marker);
+  const auto future = future_record();
+  replace_active_record_and_rehash_descriptors(earlier, marker, future);
+  std::ranges::fill(std::span(earlier.data_).subspan(
+                        kCardRecordJournalV1StorageSize),
+                    std::byte{0x77});
+  earlier.reset_observation();
+  expect(same(read_card_record_journal_v1(earlier), future) &&
+             earlier.write_calls_ == 0,
+         "reading an earlier format changed its data");
+  expect_card_error(
+      [&] {
+        commit_card_record_journal_v1(earlier,
+                                      framed_record(std::byte{0x62}).bytes());
+      },
+      CardError::invalid_configuration,
+      "an ordinary commit replaced an earlier-format record");
+  reset_card_record_journal_v1(earlier, future.bytes());
+  expect(same(snapshot_card_record_journal_v1(earlier), marker) &&
+             all_zero(earlier.data_, kCardRecordJournalV1StorageSize,
+                      kCardRecordJournalV1ReservedSize -
+                          kCardRecordJournalV1StorageSize),
+         "earlier-format reset did not restore a provisioned card");
+}
+
 } // namespace
 
 int main() {
   try {
+    test_length_switch_commits_use_their_own_slots();
+    test_initialization_clears_the_reserved_tail();
+    test_interrupted_length_switch_recovers_one_record();
+    test_reset_clears_any_length_and_earlier_formats();
     test_media_inspection_is_read_only();
     test_bootstrap_is_resumable_and_non_destructive();
     test_complete_future_record_reaches_product_classification();

@@ -26,6 +26,21 @@ static_assert(kCardRecordJournalV1Slot1Offset ==
 static_assert(kCardRecordJournalV1StorageSize ==
               kCardRecordJournalV1Slot1Offset + 216);
 
+// Three-envelope records use their own pair of slots after the two-envelope
+// layout, so switching lengths never overwrites the active record. The same
+// descriptors select either length. Initialization and reset clear the whole
+// reserved range so a reset card matches a freshly provisioned one.
+inline constexpr std::size_t kCardRecordJournalV1ThreeSlot0Offset = 736;
+inline constexpr std::size_t kCardRecordJournalV1ThreeSlot1Offset = 1028;
+inline constexpr std::size_t kCardRecordJournalV1ThreeSlotEnd = 1320;
+inline constexpr std::size_t kCardRecordJournalV1ReservedSize = 1808;
+static_assert(kCardRecordJournalV1ThreeSlot0Offset ==
+              kCardRecordJournalV1StorageSize);
+static_assert(kCardRecordJournalV1ThreeSlot1Offset ==
+              kCardRecordJournalV1ThreeSlot0Offset + kCardRecordV1ThreeSlotSize);
+static_assert(kCardRecordJournalV1ThreeSlotEnd ==
+              kCardRecordJournalV1ThreeSlot1Offset + kCardRecordV1ThreeSlotSize);
+
 // Read-only evidence visible in the reserved journal range. None is not by
 // itself authorization to erase or adopt a card: a hardware adapter must also
 // prove that the target media is accessible, stable, and contains no legacy
@@ -59,6 +74,9 @@ protected:
 };
 
 // Snapshot and conditional destructive reset used only after native confirmation.
+// Reset accepts an initialized record of either length, or a future-version
+// record left by an earlier format, publishes the provisioning marker and then
+// zeroes the rest of the reserved range.
 [[nodiscard]] security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage& storage);
 void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
     std::span<const std::byte> expected);
@@ -108,7 +126,11 @@ void bootstrap_uninitialized_card_record_journal_v1(
 // Atomically replaces the logical record by writing and verifying the inactive
 // slot, publishing a new descriptor, randomizing the old slot, and mirroring
 // metadata. A write error is accepted only when readback proves the intended
-// bytes landed.
+// bytes landed. The replacement may change between the two- and
+// three-envelope lengths; slots of the length no longer in use are zeroed
+// after publication, and a read treats anything else left there as an
+// interrupted commit to clear. Committing over the provisioning marker first zeroes the
+// reserved range after the two-envelope layout.
 void commit_card_record_journal_v1(
     ICardRecordJournalStorage &storage,
     std::span<const std::byte> replacement_record);

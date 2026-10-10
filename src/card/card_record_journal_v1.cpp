@@ -83,6 +83,7 @@ struct ParsedDescriptor final {
   CommitId commit_id{};
   CommitId previous_id{};
   std::uint32_t slot{};
+  std::size_t length{};
 };
 
 struct LoadedJournal final {
@@ -91,8 +92,15 @@ struct LoadedJournal final {
   CommitId previous_id{};
   std::uint32_t slot{};
   std::uint32_t descriptor{};
+  std::size_t length{};
   bool mirrored{};
+  // Slots of the other record length that still hold an initialized record:
+  // an interrupted length switch, before or after publication.
+  std::array<bool, 2> leftover{};
 };
+
+// Per record length (two envelopes first), the digests of its two slots.
+using SlotDigests = std::array<std::array<Digest, 2>, 2>;
 
 [[noreturn]] void fail(const CardError error, const char *const context) {
   throw std::system_error(make_error_code(error), context);
@@ -195,7 +203,7 @@ void fill_random(const std::span<std::byte> destination) {
 }
 
 void require_capacity(ICardRecordJournalStorage &storage) {
-  if (storage.capacity() < kCardRecordJournalV1StorageSize) {
+  if (storage.capacity() < kCardRecordJournalV1ThreeSlotEnd) {
     fail(CardError::invalid_configuration,
          "card storage is too small for the record journal");
   }
@@ -212,7 +220,21 @@ read_exact(ICardRecordJournalStorage &storage, const std::size_t offset,
   return result;
 }
 
-[[nodiscard]] std::size_t slot_offset(const std::uint32_t slot) noexcept {
+[[nodiscard]] std::size_t length_index(const std::size_t length) noexcept {
+  return length == kCardRecordV1Size ? 0U : 1U;
+}
+
+[[nodiscard]] std::size_t other_length(const std::size_t length) noexcept {
+  return length == kCardRecordV1Size ? kCardRecordV1ThreeSlotSize
+                                     : kCardRecordV1Size;
+}
+
+[[nodiscard]] std::size_t slot_offset(const std::size_t length,
+                                      const std::uint32_t slot) noexcept {
+  if (length == kCardRecordV1ThreeSlotSize) {
+    return slot == 0 ? kCardRecordJournalV1ThreeSlot0Offset
+                     : kCardRecordJournalV1ThreeSlot1Offset;
+  }
   return slot == 0 ? kCardRecordJournalV1Slot0Offset
                    : kCardRecordJournalV1Slot1Offset;
 }
@@ -253,19 +275,22 @@ make_descriptor(const CommitId &commit_id, const CommitId &previous_id,
 
 [[nodiscard]] ParsedDescriptor
 parse_descriptor(const std::span<const std::byte> descriptor,
-                 const std::array<Digest, 2> &slot_digests) {
+                 const SlotDigests &slot_digests) {
   if (descriptor.size() != kCardRecordJournalV1DescriptorSize ||
       !equal_bytes(descriptor.first(kDescriptorMagic.size()),
                    kDescriptorMagic) ||
       load_u32(descriptor, 8) != kDescriptorVersion ||
-      load_u32(descriptor, 12) != descriptor.size() ||
-      load_u32(descriptor, kDescriptorRecordLengthOffset) !=
-          kCardRecordV1Size) {
+      load_u32(descriptor, 12) != descriptor.size()) {
     return {};
   }
+  const std::size_t length =
+      load_u32(descriptor, kDescriptorRecordLengthOffset);
+  if (length != kCardRecordV1Size && length != kCardRecordV1ThreeSlotSize)
+    return {};
   const std::uint32_t slot = load_u32(descriptor, kDescriptorSlotOffset);
   if (slot > 1)
     return {};
+  const auto &digests = slot_digests[length_index(length)];
 
   const Digest expected_descriptor_digest =
       sha256(descriptor.first(kDescriptorPrefixSize));
@@ -288,13 +313,14 @@ parse_descriptor(const std::span<const std::byte> descriptor,
       .valid = true,
       .record_matches = equal_bytes(
           descriptor.subspan(kDescriptorRecordDigestOffset, kDigestSize),
-          slot_digests[slot]),
+          digests[slot]),
       .inactive_matches = equal_bytes(
           descriptor.subspan(kDescriptorInactiveDigestOffset, kDigestSize),
-          slot_digests[slot ^ 1U]),
+          digests[slot ^ 1U]),
       .commit_id = commit_id,
       .previous_id = previous_id,
       .slot = slot,
+      .length = length,
   };
 }
 
@@ -305,11 +331,21 @@ parse_descriptor(const std::span<const std::byte> descriptor,
                  kCardRecordJournalV1DescriptorSize),
       read_exact(storage, kCardRecordJournalV1Descriptor1Offset,
                  kCardRecordJournalV1DescriptorSize)};
-  std::array<security::SecureBuffer, 2> slots{
-      read_exact(storage, kCardRecordJournalV1Slot0Offset, kCardRecordV1Size),
-      read_exact(storage, kCardRecordJournalV1Slot1Offset, kCardRecordV1Size)};
-  const std::array<Digest, 2> slot_digests{sha256(slots[0].bytes()),
-                                           sha256(slots[1].bytes())};
+  // Two-envelope slots are read first, in their original order.
+  std::array<std::array<security::SecureBuffer, 2>, 2> slots{{
+      {read_exact(storage, kCardRecordJournalV1Slot0Offset, kCardRecordV1Size),
+       read_exact(storage, kCardRecordJournalV1Slot1Offset,
+                  kCardRecordV1Size)},
+      {read_exact(storage, kCardRecordJournalV1ThreeSlot0Offset,
+                  kCardRecordV1ThreeSlotSize),
+       read_exact(storage, kCardRecordJournalV1ThreeSlot1Offset,
+                  kCardRecordV1ThreeSlotSize)}}};
+  SlotDigests slot_digests{};
+  for (std::size_t kind = 0; kind < 2; ++kind) {
+    for (std::size_t slot = 0; slot < 2; ++slot) {
+      slot_digests[kind][slot] = sha256(slots[kind][slot].bytes());
+    }
+  }
   const std::array<ParsedDescriptor, 2> parsed{
       parse_descriptor(descriptors[0].bytes(), slot_digests),
       parse_descriptor(descriptors[1].bytes(), slot_digests)};
@@ -326,7 +362,8 @@ parse_descriptor(const std::span<const std::byte> descriptor,
     const bool same_commit =
         equal_bytes(parsed[0].commit_id, parsed[1].commit_id) &&
         equal_bytes(parsed[0].previous_id, parsed[1].previous_id) &&
-        parsed[0].slot == parsed[1].slot;
+        parsed[0].slot == parsed[1].slot &&
+        parsed[0].length == parsed[1].length;
     if (same_commit) {
       if (parsed[0].inactive_matches == parsed[1].inactive_matches) {
         fail(CardError::device_failure,
@@ -342,7 +379,8 @@ parse_descriptor(const std::span<const std::byte> descriptor,
         fail(CardError::device_failure,
              "card record journal has an ambiguous commit chain");
       }
-      if (parsed[0].slot == parsed[1].slot) {
+      if (parsed[0].slot == parsed[1].slot &&
+          parsed[0].length == parsed[1].length) {
         fail(CardError::device_failure,
              "card record journal commit chain reused one slot");
       }
@@ -355,15 +393,68 @@ parse_descriptor(const std::span<const std::byte> descriptor,
          "active card record journal commit is damaged");
   }
   const std::uint32_t selected_slot = parsed[selected].slot;
-  return {.record = std::move(slots[selected_slot]),
+  const std::size_t selected_length = parsed[selected].length;
+  // A finished commit leaves the other length's slots zeroed, so anything else
+  // there is a torn or unpublished copy. Behind a two-envelope record the
+  // three-envelope area may instead hold an earlier format's extension
+  // journal, so it counts only when the first slot starts like one of our
+  // records (a switch always writes that slot first). Future-version records
+  // are not ours to normalize at all; reset removes what they leave.
+  auto &other = slots[length_index(other_length(selected_length))];
+  const CardRecordState selected_state = inspect_card_record(
+      slots[length_index(selected_length)][selected_slot].bytes());
+  const bool ours =
+      selected_length == kCardRecordV1ThreeSlotSize ||
+      starts_with(other[0].bytes(), kInitializedPrefix);
+  const bool normalizable =
+      (selected_state == CardRecordState::initialized_v1 ||
+       selected_state == CardRecordState::provisioned_uninitialized) &&
+      ours;
+  const auto nonzero = [](const security::SecureBuffer &bytes) {
+    return !std::ranges::all_of(bytes.bytes(), [](const std::byte value) {
+      return value == std::byte{};
+    });
+  };
+  const std::array<bool, 2> leftover{normalizable && nonzero(other[0]),
+                                     normalizable && nonzero(other[1])};
+  return {.record =
+              std::move(slots[length_index(selected_length)][selected_slot]),
           .commit_id = parsed[selected].commit_id,
           .previous_id = parsed[selected].previous_id,
           .slot = selected_slot,
           .descriptor = selected,
+          .length = selected_length,
           .mirrored =
               parsed[0].valid && parsed[1].valid &&
               equal_bytes(descriptors[0].bytes(), descriptors[1].bytes()) &&
-              parsed[selected].inactive_matches};
+              parsed[selected].inactive_matches && !leftover[0] &&
+              !leftover[1],
+          .leftover = leftover};
+}
+
+void write_verified(ICardRecordJournalStorage &storage, std::size_t offset,
+                    std::span<const std::byte> intended);
+
+void zero_verified(ICardRecordJournalStorage &storage, const std::size_t offset,
+                   const std::size_t length) {
+  const security::SecureBuffer zeros(length);
+  write_verified(storage, offset, zeros.bytes());
+}
+
+// Everything after the two-envelope layout, up to the reserved size the card
+// actually has. Used only where none of it can hold the active record. An
+// already blank tail is not rewritten.
+void zero_reserved_tail(ICardRecordJournalStorage &storage) {
+  const std::size_t end =
+      std::min(storage.capacity(), kCardRecordJournalV1ReservedSize);
+  const std::size_t length = end - kCardRecordJournalV1StorageSize;
+  const security::SecureBuffer tail =
+      read_exact(storage, kCardRecordJournalV1StorageSize, length);
+  if (std::ranges::all_of(tail.bytes(), [](const std::byte value) {
+        return value == std::byte{};
+      }))
+    return;
+  zero_verified(storage, kCardRecordJournalV1StorageSize, length);
 }
 
 void validate_logical_record(const std::span<const std::byte> record) {
@@ -407,9 +498,15 @@ security::SecureBuffer
 read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
   LoadedJournal journal = load_journal(storage);
   if (!journal.mirrored) {
-    security::SecureBuffer filler(kCardRecordV1Size);
+    security::SecureBuffer filler(journal.length);
     fill_random(filler.bytes());
-    write_verified(storage, slot_offset(journal.slot ^ 1U), filler.bytes());
+    write_verified(storage, slot_offset(journal.length, journal.slot ^ 1U),
+                   filler.bytes());
+    const std::size_t other = other_length(journal.length);
+    for (std::uint32_t slot = 0; slot < 2; ++slot) {
+      if (journal.leftover[slot])
+        zero_verified(storage, slot_offset(other, slot), other);
+    }
     const DescriptorBytes normalized_descriptor =
         make_descriptor(journal.commit_id, journal.previous_id, journal.slot,
                         journal.record.bytes(), filler.bytes());
@@ -422,6 +519,7 @@ read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
     if (!normalized.mirrored ||
         !equal_bytes(normalized.commit_id, journal.commit_id) ||
         normalized.slot != journal.slot ||
+        normalized.length != journal.length ||
         !equal_bytes(normalized.record.bytes(), journal.record.bytes())) {
       fail(CardError::device_failure,
            "card record journal recovery did not normalize storage");
@@ -444,8 +542,9 @@ CardRecordJournalMediaState inspect_card_record_journal_media_v1(
                  kCardRecordV1Size),
       read_exact(storage, kCardRecordJournalV1Slot1Offset,
                  kCardRecordV1Size)};
-  const std::array<Digest, 2> slot_digests{
-      sha256(slots[0].bytes()), sha256(slots[1].bytes())};
+  // Only descriptor validity matters here, which no slot digest affects.
+  const SlotDigests slot_digests{
+      {{sha256(slots[0].bytes()), sha256(slots[1].bytes())}, {}}};
   const std::array<ParsedDescriptor, 2> parsed{
       parse_descriptor(descriptors[0].bytes(), slot_digests),
       parse_descriptor(descriptors[1].bytes(), slot_digests)};
@@ -507,8 +606,10 @@ void provision_card_record_journal_v1(
       std::to_integer<std::uint32_t>(slot_random.front()) & 1U;
   security::SecureBuffer filler(kCardRecordV1Size);
   fill_random(filler.bytes());
-  write_verified(storage, slot_offset(initial_slot ^ 1U), filler.bytes());
-  write_verified(storage, slot_offset(initial_slot), provisioning_record);
+  write_verified(storage, slot_offset(kCardRecordV1Size, initial_slot ^ 1U),
+                 filler.bytes());
+  write_verified(storage, slot_offset(kCardRecordV1Size, initial_slot),
+                 provisioning_record);
   const DescriptorBytes descriptor =
       make_descriptor(commit_id, previous_id, initial_slot, provisioning_record,
                       filler.bytes());
@@ -544,20 +645,34 @@ void bootstrap_uninitialized_card_record_journal_v1(
   }
 }
 
-void commit_card_record_journal_v1(
-    ICardRecordJournalStorage &storage,
-    const std::span<const std::byte> replacement_record) {
+namespace {
+
+void commit_record(ICardRecordJournalStorage &storage,
+                   const std::span<const std::byte> replacement_record,
+                   const bool accept_future_source) {
   validate_logical_record(replacement_record);
   LoadedJournal current = load_journal(storage);
-  validate_logical_record(current.record.bytes());
+  const CardRecordState source = inspect_card_record(current.record.bytes());
+  if (!accept_future_source || source != CardRecordState::unsupported_version)
+    validate_logical_record(current.record.bytes());
+  // Nothing after the two-envelope layout belongs to a provisioned card.
+  if (source == CardRecordState::provisioned_uninitialized)
+    zero_reserved_tail(storage);
 
-  const std::uint32_t target_slot = current.slot ^ 1U;
+  const std::size_t length = replacement_record.size();
+  const bool same_length = length == current.length;
+  // A different length has both of its slots inactive; start from the first.
+  const std::uint32_t target_slot = same_length ? current.slot ^ 1U : 0U;
   const std::uint32_t target_descriptor = current.descriptor ^ 1U;
-  write_verified(storage, slot_offset(target_slot), replacement_record);
+  write_verified(storage, slot_offset(length, target_slot), replacement_record);
   const CommitId commit_id =
       distinct_commit_id(current.commit_id, current.previous_id);
-  security::SecureBuffer filler(kCardRecordV1Size);
+  security::SecureBuffer filler(length);
   fill_random(filler.bytes());
+  if (!same_length) {
+    write_verified(storage, slot_offset(length, target_slot ^ 1U),
+                   filler.bytes());
+  }
   const DescriptorBytes descriptor =
       make_descriptor(commit_id, current.commit_id, target_slot,
                       replacement_record, filler.bytes());
@@ -567,16 +682,36 @@ void commit_card_record_journal_v1(
   // before mirroring metadata so a stable card retains no readable update
   // history. If either cleanup step tears, the random commit link still selects
   // the already-verified new record and a retry can finish normalization.
-  write_verified(storage, slot_offset(current.slot), filler.bytes());
+  if (same_length) {
+    write_verified(storage, slot_offset(length, current.slot), filler.bytes());
+    const std::size_t other = other_length(length);
+    for (std::uint32_t slot = 0; slot < 2; ++slot) {
+      if (current.leftover[slot])
+        zero_verified(storage, slot_offset(other, slot), other);
+    }
+  } else {
+    zero_verified(storage, slot_offset(current.length, current.slot),
+                  current.length);
+    zero_verified(storage, slot_offset(current.length, current.slot ^ 1U),
+                  current.length);
+  }
   write_verified(storage, descriptor_offset(current.descriptor), descriptor);
 
   LoadedJournal committed = load_journal(storage);
   if (!equal_bytes(committed.commit_id, commit_id) ||
-      committed.slot != target_slot ||
+      committed.slot != target_slot || committed.length != length ||
       !equal_bytes(committed.record.bytes(), replacement_record)) {
     fail(CardError::device_failure,
          "card record journal commit did not become active");
   }
+}
+
+} // namespace
+
+void commit_card_record_journal_v1(
+    ICardRecordJournalStorage &storage,
+    const std::span<const std::byte> replacement_record) {
+  commit_record(storage, replacement_record, false);
 }
 
 security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage& storage) {
@@ -586,12 +721,14 @@ security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage
 void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
     const std::span<const std::byte> expected) {
   const auto current = snapshot_card_record_journal_v1(storage);
-  if (inspect_card_record(expected) != CardRecordState::initialized_v1 ||
+  const CardRecordState state = inspect_card_record(expected);
+  if ((state != CardRecordState::initialized_v1 &&
+       state != CardRecordState::unsupported_version) ||
       !equal_bytes(current.bytes(), expected))
     fail(CardError::invalid_operation, "confirmed card record changed");
   const auto marker = provision_uninitialized_card_record_v1();
   std::exception_ptr write_failure;
-  try { commit_card_record_journal_v1(storage, marker.bytes()); }
+  try { commit_record(storage, marker.bytes(), true); }
   catch (...) { USB_VAULT_TRACE_FAILURE("card/card_record_journal_v1", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); write_failure = std::current_exception(); }
   // A read completes cleanup if commit became authoritative before interruption.
   const auto observed = read_card_record_journal_v1(storage);
@@ -599,6 +736,8 @@ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
     if (write_failure) std::rethrow_exception(write_failure);
     fail(CardError::device_failure, "reset did not verify");
   }
+  // The marker is authoritative; an earlier format's data may still follow it.
+  zero_reserved_tail(storage);
 }
 
 namespace detail {
@@ -651,13 +790,13 @@ void commit_legacy_card_journal_transition(ICardRecordJournalStorage& storage,
   }
   const auto target_slot = current.slot ^ 1U;
   const auto target_descriptor = current.descriptor ^ 1U;
-  write_verified(storage, slot_offset(target_slot), replacement);
+  write_verified(storage, slot_offset(kCardRecordV1Size, target_slot), replacement);
   security::SecureBuffer filler(kCardRecordV1Size);
   fill_random(filler.bytes());
   const auto descriptor = make_descriptor(new_commit, current.commit_id,
       target_slot, replacement, filler.bytes());
   write_verified(storage, descriptor_offset(target_descriptor), descriptor);
-  write_verified(storage, slot_offset(current.slot), filler.bytes());
+  write_verified(storage, slot_offset(kCardRecordV1Size, current.slot), filler.bytes());
   write_verified(storage, descriptor_offset(current.descriptor), descriptor);
   auto committed = load_journal(storage);
   if (!equal_bytes(committed.commit_id, new_commit) ||
