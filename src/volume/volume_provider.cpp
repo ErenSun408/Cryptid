@@ -179,14 +179,8 @@ void notify_shell(const LONG event, const std::int32_t drive_number) noexcept {
   ::SHChangeNotify(event, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, root, nullptr);
 }
 
-void notify_unmount(const detail::UnmountNotification notification,
-                    const std::int32_t drive_number) noexcept {
-  const bool restored = notification == detail::UnmountNotification::restored;
-  // Explorer can hold background drive handles without an open folder. Like
-  // VeraCrypt's client, notify Shell BEFORE asking the driver to lock the volume.
-  notify_shell(restored ? SHCNE_DRIVEADD : SHCNE_DRIVEREMOVED, drive_number);
-  // Only undo the Shell hint on failure; no device actually arrived.
-  if (restored) return;
+void broadcast_unmount(const detail::UnmountNotification notification,
+                       const std::int32_t drive_number) noexcept {
   DEV_BROADCAST_VOLUME volume{};
   volume.dbcv_size = sizeof(volume);
   volume.dbcv_devicetype = DBT_DEVTYP_VOLUME;
@@ -199,6 +193,39 @@ void notify_unmount(const detail::UnmountNotification notification,
   ::SendMessageTimeoutW(HWND_BROADCAST, WM_DEVICECHANGE, event,
                         reinterpret_cast<LPARAM>(&volume),
                         SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &ignored);
+}
+
+detail::DrivePresence drive_presence(const std::int32_t drive_number) noexcept {
+  const DWORD drives = ::GetLogicalDrives();
+  if (!drives) return detail::DrivePresence::unknown;
+  if (drives & (DWORD{1} << drive_number)) return detail::DrivePresence::present;
+  const wchar_t name[] = {static_cast<wchar_t>(L'A' + drive_number), L':', L'\0'};
+  wchar_t target[1024]{};
+  if (::QueryDosDeviceW(name, target, 1024)) return detail::DrivePresence::present;
+  return ::GetLastError() == ERROR_FILE_NOT_FOUND
+      ? detail::DrivePresence::absent : detail::DrivePresence::unknown;
+}
+
+void notify_unmount(const detail::UnmountNotification notification,
+                    const std::int32_t drive_number) noexcept {
+  if (notification == detail::UnmountNotification::complete) {
+    detail::refresh_unmounted_drive(
+        [=]() noexcept { return drive_presence(drive_number); },
+        [=]() noexcept { broadcast_unmount(notification, drive_number); },
+        []() noexcept {
+          // Refresh the live drive inventory rather than replaying a removal
+          // for a letter another volume might acquire between probe and delivery.
+          ITEMIDLIST* computer{};
+          if (SUCCEEDED(::SHGetSpecialFolderLocation(nullptr, CSIDL_DRIVES, &computer)) && computer)
+            ::SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, computer, nullptr);
+          ::CoTaskMemFree(computer);
+        }, []() noexcept { ::Sleep(50); });
+    return;
+  }
+  const bool restored = notification == detail::UnmountNotification::restored;
+  // Explorer can hold background handles; release them before the driver lock.
+  notify_shell(restored ? SHCNE_DRIVEADD : SHCNE_DRIVEREMOVED, drive_number);
+  if (!restored) broadcast_unmount(notification, drive_number);
 }
 
 [[nodiscard]] VolumeType to_volume_type(const std::int32_t value) noexcept {

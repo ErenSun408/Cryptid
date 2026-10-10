@@ -7,6 +7,7 @@
 #include "volume/mount_identity.h"
 #include "volume/mount_completion.h"
 #include "volume/unmount_notifications.h"
+#include <array>
 #include "volume/unmount_retry_policy.h"
 #include "volume/veracrypt_driver_abi.h"
 
@@ -437,6 +438,36 @@ void test_driver_error_codes() {
           "busy driver error message changed");
 }
 
+void test_unmount_refresh() {
+  using namespace usb_vault::volume::detail;
+  using P = DrivePresence;
+  struct Scenario {
+    std::array<P, 4> states;
+    int probes, completions, refreshes, pauses;
+  };
+  const Scenario scenarios[] = {
+    {{P::absent, P::absent, P::absent, P::absent}, 4, 1, 4, 3},
+    {{P::present, P::present, P::absent, P::absent}, 4, 1, 2, 3},
+    {{P::present, P::present, P::present, P::present}, 4, 0, 0, 3},
+    {{P::absent, P::present, P::absent, P::absent}, 2, 1, 1, 1},
+    {{P::unknown, P::absent, P::absent, P::absent}, 1, 0, 0, 0},
+    {{P::present, P::unknown, P::absent, P::absent}, 2, 0, 0, 1},
+    {{P::absent, P::unknown, P::absent, P::absent}, 2, 1, 1, 1},
+    {{P::present, P::present, P::present, P::absent}, 4, 1, 1, 3},
+  };
+  for (const auto& scenario : scenarios) {
+    int probes = 0, completions = 0, refreshes = 0, pauses = 0;
+    bool premature = false;
+    refresh_unmounted_drive([&]() noexcept { return scenario.states[probes++]; },
+        [&]() noexcept { ++completions; premature |= scenario.states[probes - 1] != P::absent; },
+        [&]() noexcept { ++refreshes; premature |= scenario.states[probes - 1] != P::absent; },
+        [&]() noexcept { ++pauses; });
+    require(!premature && probes == scenario.probes && completions == scenario.completions &&
+            refreshes == scenario.refreshes && pauses == scenario.pauses,
+            "unmount refresh ignored disappearance, reuse, query failure or retry bound");
+  }
+}
+
 void test_unmount_notifications() {
   using namespace usb_vault::volume;
   using detail::UnmountNotification;
@@ -496,6 +527,28 @@ void test_unmount_notifications() {
     rejected = error.code() == std::make_error_code(std::errc::io_error);
   }
   require(rejected && restores == 1, "transport failure did not restore the remaining drive");
+}
+
+void test_refresh_only_after_successful_notified_unmount() {
+  using namespace usb_vault::volume::detail;
+  for (bool enabled : {false, true}) {
+    for (bool fail : {false, true}) {
+      int probes = 0, completions = 0, refreshes = 0;
+      bool rejected = false;
+      try {
+        unmount_with_notifications(enabled, [&] {
+          if (fail) throw std::runtime_error("unmount failed");
+        }, [&](UnmountNotification event) noexcept {
+          if (event == UnmountNotification::complete)
+            refresh_unmounted_drive([&]() noexcept { ++probes; return DrivePresence::absent; },
+                [&]() noexcept { ++completions; }, [&]() noexcept { ++refreshes; }, []() noexcept {});
+        }, []() noexcept { return true; });
+      } catch (const std::runtime_error&) { rejected = true; }
+      require(rejected == fail && probes == (enabled && !fail ? 4 : 0) &&
+              completions == int(enabled && !fail) && refreshes == probes,
+              "failed or silent unmount entered completion refresh");
+    }
+  }
 }
 
 void test_notification_count_across_actual_retry_policy() {
@@ -587,6 +640,8 @@ int main() {
   try {
     test_notification_count_across_actual_retry_policy();
     test_unmount_notifications();
+    test_unmount_refresh();
+    test_refresh_only_after_successful_notified_unmount();
     test_mount_completion_retains_ownership_and_clears_secrets();
     test_valid_mount_request();
     test_mount_labels();
