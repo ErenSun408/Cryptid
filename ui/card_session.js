@@ -275,54 +275,6 @@
   const dashboardStatus = document.getElementById("dashboard-status");
   const windowSizeSelect = document.getElementById("settings-window-size");
   const windowSizeStatus = document.getElementById("settings-window-size-status");
-  const containerExtensionSelect = document.getElementById("settings-container-extension");
-  const containerExtensionStatus = document.getElementById("settings-container-extension-status");
-  let appliedContainerExtension = "0";
-  let containerExtensionSaving = false;
-  const refreshContainerExtension = async () => {
-    if (!containerExtensionSelect || containerExtensionSaving) return;
-    try {
-      const value = await bridge.getContainerExtension();
-      if (![0, 1, 2, 3].includes(value)) throw new Error("invalid container extension preference");
-      appliedContainerExtension = String(value);
-      containerExtensionSelect.value = appliedContainerExtension;
-      containerExtensionSelect.disabled = false;
-      containerExtensionStatus.textContent = "";
-    } catch (error) {
-      logCaughtPageError("refreshContainerExtension", error);
-      containerExtensionSelect.disabled = true;
-      containerExtensionStatus.textContent = "无法读取文件安全盘后缀设置，请重试。";
-    }
-  };
-  containerExtensionSelect?.addEventListener("change", async () => {
-    if (busy || containerExtensionSaving || externalRefreshPending || currentState !== nativeState.authenticated) {
-      containerExtensionSelect.value = appliedContainerExtension;
-      return;
-    }
-    const value = Number(containerExtensionSelect.value);
-    if (![0, 1, 2, 3].includes(value)) { containerExtensionSelect.value = appliedContainerExtension; return; }
-    containerExtensionSaving = true;
-    containerExtensionSelect.disabled = true;
-    containerExtensionStatus.textContent = "";
-    busy = true;
-    try {
-      await bridge.setContainerExtension(value);
-      const saved = await bridge.getContainerExtension();
-      if (saved !== value) throw new Error("container extension readback mismatch");
-      appliedContainerExtension = String(saved);
-      containerExtensionSelect.value = appliedContainerExtension;
-      containerExtensionStatus.textContent = "已保存，仅对新建文件安全盘生效。";
-    } catch (error) {
-      logCaughtPageError("containerExtension.change", error);
-      containerExtensionSelect.value = appliedContainerExtension;
-      containerExtensionStatus.textContent = "无法保存文件安全盘后缀设置，请重试。";
-    } finally {
-      containerExtensionSaving = false;
-      containerExtensionSelect.disabled = false;
-      busy = false;
-      if (externalRefreshPending) void refreshAfterExternalChange();
-    }
-  });
   let appliedWindowSize = "1";
   if (windowSizeSelect !== null) windowSizeSelect.addEventListener("change", async () => {
     const value = windowSizeSelect.value;
@@ -4352,7 +4304,6 @@
   // The name comes from a file the user picked, so it is only ever written as
   // text. Nothing on this row is built from markup.
   let expandedContainerId = 0;
-  const fileVisibility = new Map();
   let containerRename = null;
   let containerListPersistence = null;
 
@@ -4488,27 +4439,6 @@
     });
     input.focus();
     input.select();
-  };
-
-  const refreshFileVisibility = async (id) => {
-    if (currentState !== nativeState.authenticated) return;
-    const container = containers.find(item => item.id === id);
-    if (!container || container.partition || isMaintenanceContainer(id) || container.conversion) return;
-    const revision = batchSessionRevision;
-    const pending = { value: null };
-    fileVisibility.set(id, pending);
-    renderContainers();
-    try {
-      const hidden = await bridge.getContainerFileHidden(id);
-      if (typeof hidden !== "boolean") throw Error("invalid file visibility");
-      pending.value = hidden;
-    } catch (error) {
-      logCaughtPageError("getContainerFileHidden", error);
-      pending.error = "无法读取文件状态，请重新展开详情重试。";
-    }
-    if (revision !== batchSessionRevision || currentState !== nativeState.authenticated || fileVisibility.get(id) !== pending) return;
-    if (pending.error) setDashboardStatus(pending.error, "error");
-    renderContainers();
   };
 
   const containerActionButton = (container, action, label, disabled = false) => {
@@ -4754,22 +4684,6 @@
       operations.className = "container-detail-actions";
       operations.appendChild(containerActionButton(container, "browse", "浏览文件"));
       operations.appendChild(containerActionButton(container, "export", "导出与迁移"));
-      if (!container.partition) {
-        const state = fileVisibility.get(container.id);
-        const row = document.createElement("div");
-        row.className = "container-file-visibility";
-        const label = document.createElement("label");
-        label.textContent = "隐藏文件";
-        const toggle = containerActionButton(container, "toggle-file-hidden", "", container.mounted || Boolean(container.conversion) || typeof state?.value !== "boolean");
-        toggle.id = `file-hidden-${container.id}`;
-        toggle.className = "settings-switch";
-        toggle.setAttribute("role", "switch");
-        toggle.setAttribute("aria-checked", typeof state?.value === "boolean" ? String(state.value) : "mixed");
-        toggle.setAttribute("aria-label", "隐藏文件");
-        label.htmlFor = toggle.id;
-        row.append(label, toggle);
-        operations.appendChild(row);
-      }
       panel.append(grid, operations);
       group.appendChild(panel);
     }
@@ -4934,7 +4848,6 @@
   };
 
   const render = (message, error = "") => {
-    if (currentState !== nativeState.authenticated) fileVisibility.clear();
     if (currentState !== nativeState.authenticated && partitionRows.length) discardPartitions();
     renderPartitions();
     appExitToggle.disabled = busy || currentState !== nativeState.authenticated;
@@ -5078,7 +4991,6 @@
   // refused or failed write cannot leave the page showing a setting that was
   // not saved.
   const storedSettings = [
-    { setting: "hide-file-containers", read: () => bridge.getHideFileContainers(), write: (value) => bridge.setHideFileContainers(value) },
     {
       setting: "close-to-tray",
       read: () => bridge.getCloseToTrayEnabled(),
@@ -5109,7 +5021,6 @@
     (candidate) => candidate.setting === control.dataset.setting);
 
   const refreshStoredSwitches = async () => {
-    await refreshContainerExtension();
     await refreshExitHotkey();
     const force = await bridge.getForceUnmountEnabled();
     if (typeof force !== "boolean") throw new Error("invalid force preference");
@@ -5351,8 +5262,6 @@
     cardResetAvailable = nextResetAvailable;
     forgotAvailable = nextForgotAvailable;
     containers = nextContainers;
-    fileVisibility.clear();
-    if (expandedContainerId) await refreshFileVisibility(expandedContainerId);
     for (const id of decoyMounted.keys()) {
       if (!containers.some(item => item.id === id && item.mounted)) decoyMounted.delete(id);
     }
@@ -7229,47 +7138,7 @@
       }
       const id = Number(target.dataset.containerId);
       if (!Number.isInteger(id) || id <= 0 || isMaintenanceContainer(id)) return;
-      if (target.dataset.containerAction === "toggle-file-hidden") {
-        const container = containers.find(item => item.id === id);
-        const state = fileVisibility.get(id);
-        if (!container || container.partition || container.mounted || container.conversion || typeof state?.value !== "boolean") return;
-        const revision = batchSessionRevision;
-        const hidden = !state.value;
-        busy = true;
-        target.setAttribute("aria-checked", String(hidden));
-        target.setAttribute("aria-disabled", "true");
-        const isCurrent = () => revision === batchSessionRevision && currentState === nativeState.authenticated && fileVisibility.get(id) === state;
-        let failed = false;
-        try { await bridge.setContainerFileHidden(id, hidden); }
-        catch (error) { failed = true; logCaughtPageError("setContainerFileHidden", error); }
-        try {
-          if (isCurrent()) {
-            try {
-              const actual = await bridge.getContainerFileHidden(id);
-              if (typeof actual !== "boolean") throw Error("invalid file visibility");
-              if (isCurrent()) {
-                state.value = actual;
-                if (failed || actual !== hidden)
-                  setDashboardStatus(`修改失败；当前${actual ? "已隐藏" : "未隐藏"}。`, "error");
-              }
-            } catch (error) {
-              logCaughtPageError("fileVisibilityReadback", error);
-              if (isCurrent()) {
-                state.value = null;
-                setDashboardStatus("无法确认文件状态，请重新展开详情重试。", "error");
-              }
-            }
-          }
-        } finally {
-          busy = false;
-          if (isCurrent() && target.isConnected) {
-            target.setAttribute("aria-checked", typeof state.value === "boolean" ? String(state.value) : "mixed");
-            target.disabled = typeof state.value !== "boolean";
-            target.setAttribute("aria-disabled", String(target.disabled));
-          }
-          if (externalRefreshPending) void refreshAfterExternalChange();
-        }
-      } else if (target.dataset.containerAction === "forget") {
+      if (target.dataset.containerAction === "forget") {
         openForgetFlow(id, target.dataset.containerName ?? "");
       } else if (target.dataset.containerAction === "unmount") {
         await unmountAdoptedContainer(id);
@@ -7282,7 +7151,6 @@
       } else if (target.dataset.containerAction === "details") {
         expandedContainerId = expandedContainerId === id ? 0 : id;
         renderContainers();
-        if (expandedContainerId === id) await refreshFileVisibility(id);
         list.querySelector(`[data-row-container="${id}"] [data-container-action="details"]`)?.focus();
       } else if (target.dataset.containerAction === "export") {
         showDashboardSection("backup");

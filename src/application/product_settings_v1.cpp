@@ -250,6 +250,9 @@ void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings sett
 
 unsigned int product_preference_v1(std::wstring_view path, ProductPreference key) {
   const auto index = preference_index(key);
+  // Retired settings are product policy, including for existing installations.
+  if (key == ProductPreference::container_extension) return 3;
+  if (key == ProductPreference::hide_file_containers) return 1;
   const auto fallback = index == 0 || index == 3 || index == 4 || index == 5 || index == 6 ? 0U : 1U;
   const auto content = read_settings(std::wstring(path));
   if (!content) return fallback;
@@ -276,6 +279,11 @@ unsigned int product_preference_v1(std::wstring_view path, ProductPreference key
 
 void set_product_preference_v1(std::wstring_view path, ProductPreference key, unsigned int value) {
   const auto index = preference_index(key);
+  if (key == ProductPreference::container_extension || key == ProductPreference::hide_file_containers) {
+    const auto fixed = key == ProductPreference::container_extension ? 3U : 1U;
+    if (value != fixed) throw std::invalid_argument("file creation policy is fixed");
+    return;
+  }
   if (value > (index == 2 || index == 5 ? 3U : 1U)) throw std::invalid_argument("invalid preference value");
   auto text = settings_text(remember_container_paths_v1(path), mount_imported_containers_v1(path), path);
   const auto at = text.find(kPreferenceKeys[index]);

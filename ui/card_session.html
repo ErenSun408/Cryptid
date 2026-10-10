@@ -824,7 +824,6 @@
        what is behind an element, and behind this one is one flat card colour,
        so a real blur would cost a compositing layer and show nothing. Layered
        translucency with a rim and an inner shadow reads the same here. */
-    .container-file-visibility { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .settings-switch {
       position: relative; flex: 0 0 auto; width: 2.4rem; height: 1.35rem; padding: 0;
       border: 1px solid var(--line-2); border-radius: 999px;
@@ -870,13 +869,7 @@
       transform: translate(1rem, -50%) scaleX(1.22);
     }
     .settings-switch[aria-disabled="true"] { cursor: default; }
-    .container-file-visibility .settings-switch::after {
-      transition: transform 240ms cubic-bezier(.22, 1, .36, 1), background 200ms ease, box-shadow 200ms ease;
-    }
-    .container-file-visibility .settings-switch:active:not([aria-disabled="true"])::after { transform: translate(0, -50%); }
-    .container-file-visibility .settings-switch[aria-checked="true"]:active:not([aria-disabled="true"])::after { transform: translate(1rem, -50%); }
     @media (prefers-reduced-motion: reduce) {
-      .container-file-visibility .settings-switch::after { transition: none; }
       .settings-switch::after {
         transition: transform 120ms linear, background 120ms linear, box-shadow 120ms linear;
       }
@@ -1705,22 +1698,7 @@
                 <span class="settings-switch" role="switch" aria-checked="true" aria-disabled="true"
                       aria-label="拔出安全卡时立即卸载全部卷"></span>
               </div>
-              <div class="settings-row">
-                <span class="settings-copy"><b>隐藏文件安全盘</b><small> （需开启“隐藏受保护的操作系统文件”）</small></span>
-                <button class="settings-switch" type="button" role="switch" aria-checked="false"
-                        data-setting="hide-file-containers" aria-label="隐藏文件安全盘"></button>
-              </div>
-              <div class="settings-row">
-                <label class="settings-copy" for="settings-container-extension"><b>文件安全盘后缀</b></label>
-                <select id="settings-container-extension" class="shell-button">
-                  <option value="0" selected>.sys</option>
-                  <option value="1">.dat</option>
-                  <option value="2">.bin</option>
-                  <option value="3">随机</option>
-                </select>
-              </div>
             </div>
-            <output id="settings-container-extension-status" class="creation-status" aria-live="polite"></output>
           </div>
           <div class="settings-group">
             <h3>窗口</h3>

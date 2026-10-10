@@ -285,16 +285,20 @@ int main() {
     using namespace usb_vault::application;
     const TemporaryDirectory directory;
     const auto path = directory.settings_path();
-    expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 0, "hiding default must be off");
+    expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 1, "new files must be hidden by default");
     set_product_preference_v1(path, ProductPreference::container_extension, 3);
     set_product_preference_v1(path, ProductPreference::hide_file_containers, 1);
     set_exit_hotkey_settings_v1(path, {true,123,3});
     expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 1 &&
            product_preference_v1(path, ProductPreference::container_extension) == 3, "hiding preference lost neighbors");
-    for (const auto text : {"hide-file-containers=2\n", "hide-file-containers=1\nhide-file-containers=0\n", "hide-file-containers=yes\n"}) {
+    for (const auto text : {"hide-file-containers=0\n", "hide-file-containers=2\n", "hide-file-containers=1\nhide-file-containers=0\n", "hide-file-containers=yes\n"}) {
       write_raw(path, text);
-      expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 0, "invalid hiding preference must fall back off");
+      expect(product_preference_v1(path, ProductPreference::hide_file_containers) == 1, "legacy hiding preference changed fixed policy");
     }
+    bool disabling_rejected = false;
+    try { set_product_preference_v1(path, ProductPreference::hide_file_containers, 0); }
+    catch (const std::invalid_argument&) { disabling_rejected = true; }
+    expect(disabling_rejected, "retired setting disabled file hiding");
     const auto file = (directory.root() / L"cache.sys").wstring();
     write_raw(file, "ciphertext sentinel");
     expect(::SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_READONLY), "set baseline attributes");
@@ -334,19 +338,24 @@ int main() {
     using namespace usb_vault::application;
     const TemporaryDirectory directory;
     const auto path = directory.settings_path();
-    expect(product_preference_v1(path, ProductPreference::container_extension) == 0, "extension default is not sys");
+    expect(product_preference_v1(path, ProductPreference::container_extension) == 3, "extension policy is not random");
     for (unsigned int value = 0; value < 4; ++value) {
-      set_product_preference_v1(path, ProductPreference::container_extension, value);
+      write_raw(path, "container-extension=" + std::to_string(value) + "\nhide-file-containers=0\n");
+      bool fixed_rejected = false;
+      try { set_product_preference_v1(path, ProductPreference::container_extension, value); }
+      catch (const std::invalid_argument&) { fixed_rejected = true; }
+      expect(fixed_rejected == (value != 3), "retired extension setter changed policy");
       set_exit_hotkey_settings_v1(path, {true,123,3});
       set_remember_container_paths_v1(path, false);
       set_product_preference_v1(path, ProductPreference::close_to_tray, 1);
-      expect(product_preference_v1(path, ProductPreference::container_extension) == value &&
+      expect(product_preference_v1(path, ProductPreference::container_extension) == 3 &&
+             product_preference_v1(path, ProductPreference::hide_file_containers) == 1 &&
              exit_hotkey_settings_v1(path).enabled && !remember_container_paths_v1(path), "extension or neighbors lost");
     }
     for (const auto text : {"container-extension=4\n", "container-extension=03\n", "xcontainer-extension=0\n",
                            "container-extension=0\ncontainer-extension=2\n", "container-extension=yes\n"}) {
       write_raw(path, text);
-      expect(product_preference_v1(path, ProductPreference::container_extension) == 0, "damaged extension did not fall back to sys");
+      expect(product_preference_v1(path, ProductPreference::container_extension) == 3, "damaged extension changed random policy");
     }
     bool rejected = false;
     try { set_product_preference_v1(path, ProductPreference::container_extension, 4); } catch (...) { rejected = true; }

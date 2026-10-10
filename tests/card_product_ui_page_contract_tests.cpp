@@ -408,8 +408,8 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
   // guarantee: it is locked on because 8.4 treats the unmount as part of
   // deniability, so it must never be presented as something a user can turn
   // off. Tray closing and the shortcut are independent opt-in settings.
-  require(count_occurrences(settings, "role=\"switch\"") == 8 &&
-              count_occurrences(settings, "data-setting=\"") == 6 &&
+  require(count_occurrences(settings, "role=\"switch\"") == 7 &&
+              count_occurrences(settings, "data-setting=\"") == 5 &&
               settings.find("data-setting=\"close-to-tray\"") != std::string::npos &&
               settings.find("data-setting=\"operation-logging\" "
                             "aria-label=\"开启操作日志\"") != std::string::npos &&
@@ -422,6 +422,9 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
                             "aria-label=\"自动尝试挂载导入的安全盘\"") !=
                   std::string::npos,
           "settings switches do not match the existing settings plus shortcut");
+  require(settings.find("hide-file-containers") == std::string::npos &&
+              settings.find("settings-container-extension") == std::string::npos,
+          "retired file creation settings remain visible");
   require(settings.find("id=\"exit-hotkey-enabled\"") != std::string::npos &&
               settings.find("id=\"exit-hotkey-options\" hidden") != std::string::npos &&
               settings.find("1 秒内连续按下指定键") != std::string::npos,

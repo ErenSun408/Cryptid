@@ -16,7 +16,8 @@ struct ExitHotkeySettings final {
 void set_exit_hotkey_settings_v1(std::wstring_view path, ExitHotkeySettings settings);
 
 enum class ProductPreference { force_unmount, operation_logging, window_size, auto_mount, close_to_tray, container_extension, hide_file_containers };
-// Container extension values: 0=sys (default), 1=dat, 2=bin, 3=random.
+// Retired keys read as fixed policy: extension=3 (random), hiding=1.
+// Legacy setters accept only those values without persisting a choice.
 // Neutral preferences only. Defaults: force/auto-mount/close-to-tray off,
 // logging on, spacious. Malformed opt-ins read as off. Window presets: 0..3.
 [[nodiscard]] unsigned int product_preference_v1(std::wstring_view path, ProductPreference key);
