@@ -149,6 +149,7 @@ class IUiCloseRequestSink {
   virtual bool request_configuration() noexcept { return false; }
   // Rebuilds an authenticated, unmounted session after retiring its bridge.
   virtual bool request_login() noexcept { return false; }
+  virtual bool request_card_backup() noexcept { return false; }
 
  protected:
   IUiCloseRequestSink() noexcept = default;

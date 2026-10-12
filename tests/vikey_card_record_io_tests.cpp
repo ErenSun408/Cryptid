@@ -267,17 +267,24 @@ void test_spare_card_restricted_import() {
   require(writes==state.writes,"unstable source normalized");
   // Exercise every write of blank-media provisioning plus record publication.
   for (std::size_t failure=0; failure<writes; ++failure) {
-    state.data.fill(std::byte{}); state.data.back()=std::byte{0x42};
-    // Outside the reserved region is permitted only for an existing marker;
-    // blank-media foreign detection must refuse before writing.
+    state.data.fill(std::byte{});
     state.writes=0; state.fail_write_call=failure; state.bytes_before_failure=1;
-    state.data.back()=std::byte{};
     try { write_vikey_spare_card(session,record);
       require(same(snapshot_stable_vikey_card_record(session),record),"partial spare reported success");
     } catch (const std::system_error&) {}
     require(state.data.back()==std::byte{},"spare wrote outside reserved region");
   }
   state.fail_write_call=std::numeric_limits<std::size_t>::max();
+  state.data.fill(std::byte{});
+  DirectStorage direct(state); auto marker=provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(direct,marker.bytes());
+  state.data[1808]=std::byte{0x33}; state.data.back()=std::byte{0x42};
+  SecureBuffer three(usb_vault::card::kCardRecordV1ThreeSlotSize);
+  std::ranges::fill(three.bytes(),std::byte{0xa5});
+  std::ranges::copy(record.bytes(),three.bytes().begin());
+  write_vikey_spare_card(session,three);
+  require(same(snapshot_stable_vikey_card_record(session),three),"three-slot spare changed");
+  require(state.data[1808]==std::byte{0x33} && state.data.back()==std::byte{0x42},"spare changed data outside reserved region");
   require(!session.close(),"spare session close failed"); active_fake=nullptr;
 }
 

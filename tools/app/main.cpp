@@ -5,6 +5,10 @@
 #include <wrl.h>
 #include <shellapi.h>
 #include <dbt.h>
+#include <commctrl.h>
+#include <wtsapi32.h>
+#include "card/vikey/vikey_card_backup.h"
+#include "usb_vault/ui/card_backup_exchange.h"
 
 #include "card/vikey/vikey_development_app_config.h"
 #include "card/verified_local_artifact.h"
@@ -87,6 +91,8 @@ constexpr UINT kShowSessionMessage = WM_APP + 2;
 constexpr UINT kExitHotkeyMessage = WM_APP + 3;
 constexpr UINT kExplicitExitMessage = WM_APP + 4;
 constexpr UINT kTrayMessage = WM_APP + 5;
+constexpr UINT kShowCardBackupMessage = WM_APP + 6;
+bool g_backup_requested{};
 const UINT kTaskbarCreatedMessage = ::RegisterWindowMessageW(L"TaskbarCreated");
 WindowTray g_tray(kTrayMessage);
 std::vector<usb_vault::card::VerifiedLocalArtifact> g_deployment_artifacts;
@@ -204,6 +210,7 @@ class MainWindowCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
  public:
   bool request_configuration() noexcept override;
   bool request_login() noexcept override;
+  bool request_card_backup() noexcept override;
   void request_close() noexcept override {
     if (g_main_window != nullptr) {
       static_cast<void>(::PostMessageW(g_main_window, kExplicitExitMessage, 0, 0));
@@ -359,6 +366,18 @@ std::unique_ptr<usb_vault::application::CardDeviceLifecycleController>
 std::unique_ptr<
     usb_vault::platform::windows::HidCardDeviceNotificationRegistration>
     g_card_device_notifications;
+
+std::unique_ptr<usb_vault::card::vikey::VikeyHelperCardBackupBackend> g_backup_backend;
+struct BackupDialogState final {
+  usb_vault::card::vikey::VikeyCardBackup flow;
+  usb_vault::ui::CardBackupExchange exchange;
+  HWND window{};
+  bool success{};
+  bool failed{};
+  bool attempted{};
+  explicit BackupDialogState(usb_vault::card::vikey::IVikeyCardBackupBackend& backend) : flow(backend) {}
+};
+BackupDialogState* g_backup_dialog{};
 
 void show_failure(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
@@ -555,6 +574,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   }
   auto credential_provider = std::make_unique<
       usb_vault::card::vikey::development::WindowsCredentialProvider>();
+  auto backup_backend = std::make_unique<usb_vault::card::vikey::VikeyHelperCardBackupBackend>(config, *credential_provider);
   auto enrollment = std::make_unique<
       usb_vault::card::vikey::VikeyHelperCardEnrollment>(
           std::move(config),
@@ -591,6 +611,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   }
   g_vikey_credential_provider = std::move(credential_provider);
   g_card_enrollment = std::move(enrollment);
+  g_backup_backend = std::move(backup_backend);
   g_card_entry = std::move(entry);
   g_authentication = std::move(authentication);
   g_card_volume_session = std::move(volume_session);
@@ -639,8 +660,20 @@ void clear_application_session() noexcept {
   g_reset_mount_access.reset();
   g_partition_services.reset();
   g_volume_provider.reset();
+  g_backup_backend.reset();
   g_vikey_credential_provider.reset();
   g_deployment_artifacts.clear();
+}
+
+bool MainWindowCloseSink::request_card_backup() noexcept {
+  if (!g_main_window || !g_ui_session || !g_backup_backend || g_backup_requested ||
+      g_backup_dialog || g_view_switch_pending || g_creation_work.running.load() ||
+      g_creation_work.hotkey_exit_pending.load() || g_deferred_removal || g_deferred_arrival ||
+      (g_drop_target && g_drop_target->status().state == 1)) return false;
+  if (!::PostMessageW(g_main_window, kShowCardBackupMessage, 0, 0)) return false;
+  g_backup_requested = true;
+  disarm_external_drops();
+  return true;
 }
 
 bool MainWindowCloseSink::request_login() noexcept {
@@ -1287,6 +1320,104 @@ void show_session(const HWND window) noexcept {
   if (FAILED(navigated)) report_webview_failure(1312, navigated);
 }
 
+// TaskDialog owns the modal input boundary; the retiring WebView bridge has
+// already refused further calls. Card lifecycle messages continue normally.
+LRESULT CALLBACK backup_dialog_subclass(HWND window, UINT message, WPARAM wparam,
+                                       LPARAM lparam, UINT_PTR, DWORD_PTR data) {
+  auto* state = reinterpret_cast<BackupDialogState*>(data);
+  if ((message == WM_WTSSESSION_CHANGE && wparam == WTS_SESSION_LOCK) ||
+      message == WM_QUERYENDSESSION) {
+    state->flow.cancel();
+    ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+  }
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+HRESULT CALLBACK backup_dialog_callback(HWND window, UINT message, WPARAM wparam,
+                                        LPARAM, LONG_PTR data) noexcept {
+  auto& state = *reinterpret_cast<BackupDialogState*>(data);
+  if (message == TDN_CREATED) {
+    state.window = window;
+    ::SendMessageW(window, TDM_ENABLE_BUTTON, 100, FALSE);
+    if (!::SetWindowSubclass(window, backup_dialog_subclass, 1, reinterpret_cast<DWORD_PTR>(&state)) ||
+        !::WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION)) {
+      state.failed = true; state.flow.cancel();
+      ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+    }
+  } else if (message == TDN_TIMER) {
+    if (!state.attempted && !state.flow.pending()) {
+      ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+    } else if (!state.attempted) {
+      const bool available = state.exchange.removed() && g_card_device_notifications &&
+                             g_card_device_notifications->target_present();
+      ::SendMessageW(window, TDM_ENABLE_BUTTON, 100, available ? TRUE : FALSE);
+    }
+  } else if (message == TDN_BUTTON_CLICKED) {
+    if (wparam == 100) {
+      if (!state.exchange.removed() || !state.flow.pending()) return S_FALSE;
+      state.attempted = true;
+      ::SendMessageW(window, TDM_ENABLE_BUTTON, 100, FALSE);
+      ::SendMessageW(window, TDM_ENABLE_BUTTON, IDCANCEL, FALSE);
+      try { state.flow.complete(); state.success = true; }
+      catch (...) { state.flow.cancel(); state.failed = true; }
+    } else { state.flow.cancel(); }
+  } else if (message == TDN_DESTROYED) {
+    ::WTSUnRegisterSessionNotification(window);
+    ::RemoveWindowSubclass(window, backup_dialog_subclass, 1);
+    state.window = nullptr;
+  }
+  return S_OK;
+}
+void show_card_backup(HWND window) noexcept {
+  if (!g_backup_requested || !g_backup_backend) return;
+  BackupDialogState state(*g_backup_backend);
+  g_backup_dialog = &state;
+  try {
+    if (!::WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION))
+      throw std::runtime_error("session lock notifications unavailable");
+    state.flow.prepare();
+    constexpr TASKDIALOG_BUTTON buttons[]{{100, L"已插入备用卡，开始写入"}};
+    TASKDIALOGCONFIG dialog{sizeof(dialog)};
+    dialog.hwndParent = window;
+    dialog.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_CALLBACK_TIMER | TDF_SIZE_TO_CONTENT;
+    dialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    dialog.pszWindowTitle = L"USB Vault · 制作备用卡";
+    dialog.pszMainInstruction = L"原卡记录已读取，请换插备用卡";
+    dialog.pszContent = L"请先保存文件，再拔出原卡。拔卡时会自动卸载安全盘。\n\n"
+                        L"插入一张空白或未初始化的备用卡，然后点击开始写入。\n"
+                        L"请勿同时插入两张卡。该步骤五分钟内有效，取消或锁屏会清除暂存。\n\n"
+                        L"备卡保留当前所有有效密码。以后修改密码或重置原卡不会同步到备卡；它也不能让丢失的原卡失效。";
+    dialog.cButtons = 1; dialog.pButtons = buttons; dialog.nDefaultButton = IDCANCEL;
+    dialog.pfCallback = backup_dialog_callback;
+    dialog.lpCallbackData = reinterpret_cast<LONG_PTR>(&state);
+    if (FAILED(::TaskDialogIndirect(&dialog, nullptr, nullptr, nullptr))) state.failed = true;
+  } catch (...) { state.failed = true; }
+  state.flow.cancel();
+  ::WTSUnRegisterSessionNotification(window);
+  g_backup_dialog = nullptr;
+  g_backup_requested = false;
+  if (state.success) {
+    ::MessageBoxW(window, L"备用卡写入和回读校验完成。\n请用原有有效密码重新登录，并验证已有安全盘可以打开。",
+                  L"USB Vault · 备用卡", MB_OK | MB_ICONINFORMATION);
+  } else if (state.failed) {
+    ::MessageBoxW(window, L"备卡未完成。请确认原卡记录完整、备用卡为空白且供应方凭据有效。\n"
+                         L"若已经开始写入，目标卡可能只完成部分步骤，请勿把它作为有效备卡。原卡未被本流程改写。",
+                  L"USB Vault · 备用卡", MB_OK | MB_ICONERROR);
+  }
+  if (!::IsWindow(window)) return;
+  if (state.exchange.removed()) {
+    // Ordinary removal already revoked keys and released all mounts.
+    show_session(window);
+  } else {
+    // Cancellation before physical removal must preserve the original mounts.
+    begin_webview_watch(window);
+    detach_host_object();
+    const HRESULT attached = attach_host_object();
+    if (FAILED(attached)) { report_webview_failure(1309, attached); return; }
+    const HRESULT navigated = g_webview->Navigate(g_page_uri.c_str());
+    if (FAILED(navigated)) report_webview_failure(1312, navigated);
+  }
+}
+
 // Lifecycle removal has revoked authentication and attempted every mounted
 // volume. The requested policy is to terminate even if a driver refused release.
 // Do not enter window-close guards, navigate, or wait on WebView teardown.
@@ -1297,6 +1428,20 @@ void show_session(const HWND window) noexcept {
       presence != Transition::active_session_unmounted &&
       presence != Transition::active_session_force_unmounted &&
       presence != Transition::active_session_remains) return false;
+  if (g_backup_dialog) {
+    if (g_backup_dialog->flow.pending() &&
+        g_backup_dialog->exchange.allow_removal(presence)) {
+      // Normal removal used to terminate the process. When no volume was
+      // mounted, presence cleanup alone did not release cached login inputs.
+      // A controlled exchange must wipe those too before keeping us alive.
+      if (g_card_volume_session) {
+        g_card_volume_session->release_session_secrets();
+        g_card_volume_session->clear_operation_history();
+      }
+      return false;
+    }
+    g_backup_dialog->flow.cancel();
+  }
   g_tray.remove();
   // Only terminate our own process. Child helpers retain their existing job
   // lifetime policy; do not kill unrelated processes by executable name.
@@ -1347,6 +1492,18 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       if (g_drop_target) static_cast<void>(g_drop_target->request_cancel());
       if (g_creation_work.running.load()) static_cast<void>(g_creation_work.request_cancel());
       USB_VAULT_TRACE("窗口", "快捷键请求强制卸载退出", "");
+      return 0;
+    case WM_WTSSESSION_CHANGE:
+      if (wparam == WTS_SESSION_LOCK && g_backup_dialog) {
+        g_backup_dialog->flow.cancel();
+        if (g_backup_dialog->window) ::PostMessageW(g_backup_dialog->window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+      }
+      return 0;
+    case WM_QUERYENDSESSION:
+      if (g_backup_dialog) g_backup_dialog->flow.cancel();
+      return TRUE;
+    case kShowCardBackupMessage:
+      show_card_backup(window);
       return 0;
     case kShowConfigurationMessage:
       show_configuration(window);
@@ -1407,6 +1564,13 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       if (g_view_switch_pending) return 0;
       if (wparam == 1) service_mount_monitor();
       if (wparam == 1 && g_creation_work.hotkey_exit_pending.load()) {
+        if (g_backup_dialog && g_backup_dialog->window) {
+          g_backup_dialog->flow.cancel();
+          ::SendMessageW(g_backup_dialog->window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+          g_creation_work.hotkey_exit_pending.store(false);
+          ::PostMessageW(window, kExplicitExitMessage, 0, 0);
+          return 0;
+        }
         if (g_hotkey_cleanup_thread.joinable()) {
           const auto result = g_hotkey_cleanup_result.load();
           if (!result) return 0;
@@ -1511,6 +1675,12 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     }
     case WM_CLOSE:
     case kExplicitExitMessage:
+      if (g_backup_dialog && g_backup_dialog->window) {
+        g_backup_dialog->flow.cancel();
+        ::SendMessageW(g_backup_dialog->window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+        ::PostMessageW(window, message, wparam, lparam);
+        return 0;
+      }
       if (g_creation_work.hotkey_exit_pending.load()) return 0;
       if (message == WM_CLOSE && g_close_sink.close_to_tray()) {
         if (!g_tray.hide(window)) show_failure(L"无法创建托盘图标，窗口已保留，请重试。");

@@ -677,6 +677,8 @@ if(USB_VAULT_BUILD_UI)
     Setupapi
     Hid
     Wintrust
+    Comctl32
+    Wtsapi32
   )
   target_compile_definitions(usb_vault_vikey_p2_development_app PRIVATE
     UNICODE

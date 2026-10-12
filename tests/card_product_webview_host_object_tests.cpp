@@ -1015,6 +1015,9 @@ class RecordingCloseSink final : public usb_vault::ui::IUiCloseRequestSink {
 
   bool request_configuration() noexcept override { ++configuration_calls; return allow_configuration; }
   bool request_login() noexcept override { ++login_calls; return allow_login; }
+  bool request_card_backup() noexcept override { ++backup_calls; return allow_backup; }
+  int backup_calls{};
+  bool allow_backup{true};
   int login_calls{};
   bool allow_login{true};
   int configuration_calls{};
@@ -4203,6 +4206,23 @@ void test_leave_application_routes() {
           "retired bridge still accepts calls");
 }
 
+void test_backup_transition_without_login_or_unmount_gate() {
+  for (const bool authenticated : {false,true}) {
+    Fixture fixture; fixture.entry.route=CardEntryRoute::login_required;
+    if (authenticated) fixture.authentication.establish(root_secret());
+    fixture.volume.mounted_state=authenticated;
+    RecordingCloseSink sink; usb_vault::ui::CreationWorkState work; ComPtr<IDispatch> host;
+    require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller,&sink,&host,nullptr,&work)),"backup host failed");
+    auto invoke=[&]{DISPPARAMS args{};return host->Invoke(member_id(*host.Get(),L"openCardBackup"),IID_NULL,LOCALE_INVARIANT,DISPATCH_METHOD,&args,nullptr,nullptr,nullptr);};
+    require(invoke_with_number(*host.Get(),L"openCardBackup",1,nullptr,nullptr)==DISP_E_BADPARAMCOUNT,"backup accepted arguments");
+    work.running.store(true); require(invoke()==E_PENDING && sink.backup_calls==0,"backup interrupted work"); work.running.store(false);
+    sink.allow_backup=false; require(FAILED(invoke()),"backup rejection reported success");
+    sink.allow_backup=true; require(SUCCEEDED(invoke()),"backup required application login or initial unmount");
+    require(fixture.volume.mounted_state==authenticated,"backup entry unmounted volume");
+    require(invoke()==E_PENDING,"backup bridge was not retired");
+    DISPPARAMS args{}; require(host->Invoke(member_id(*host.Get(),L"getSessionState"),IID_NULL,LOCALE_INVARIANT,DISPATCH_METHOD,&args,nullptr,nullptr,nullptr)==E_PENDING,"retired backup bridge accessed context");
+  }
+}
 void test_configuration_transition() {
   Fixture fixture;
   usb_vault::ui::CreationWorkState work;
@@ -4345,6 +4365,7 @@ int main() {
     test_protection_query_is_boolean_scoped_and_serialized();
     test_import_capacity_warning_rejects_stale_events_and_shares_protection_latch();
     test_leave_application_routes();
+    test_backup_transition_without_login_or_unmount_gate();
     test_configuration_transition();
     test_surface_and_state_projection_are_fixed();
     test_window_size_presets_are_bounded();

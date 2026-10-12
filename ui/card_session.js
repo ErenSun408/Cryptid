@@ -206,6 +206,7 @@
   ]);
   const surface = document.getElementById("card-session-surface");
   const configurationButton = document.getElementById("open-configuration");
+  const backupButtons = [document.getElementById("card-backup-login"), document.getElementById("card-backup-settings")];
   const sessionTools = document.getElementById("session-tools");
   const sessionToolsToggle = document.getElementById("session-tools-toggle");
   const sessionToolsMenu = document.getElementById("session-tools-menu");
@@ -4798,6 +4799,7 @@
     if (busy || sessionTools.hidden) closeSessionTools();
     forgotOpen.hidden = !forgotAvailable;
     forgotOpen.disabled = busy || !forgotAvailable;
+    backupButtons.forEach(button => { button.disabled = busy || bridge === null || currentState === null; });
     configurationButton.hidden = bridge === null || currentState === nativeState.authenticated;
     configurationButton.disabled = busy || activeVolumes || currentState === null || bridge === null;
     surface.dataset.sessionState = currentState === null
@@ -7046,6 +7048,19 @@
     }
     closeCreationFlow();
   });
+  backupButtons.forEach(button => button.addEventListener("click", async () => {
+    if (busy || !bridge || currentState === null) return;
+    busy = true;
+    passwordInput.value = "";
+    confirmationInput.value = "";
+    render("正在打开备卡向导…");
+    try { await bridge.openCardBackup(); }
+    catch (pageError) {
+      logCaughtPageError("cardBackup.open", pageError);
+      busy = false;
+      render(messageForCurrentState(), "无法开始备卡，请确认原卡已连接且没有其他任务。");
+    }
+  }));
   configurationButton.addEventListener("click", async () => {
     if (busy || activeVolumes || !bridge || currentState === null || currentState === nativeState.authenticated) return;
     busy = true;

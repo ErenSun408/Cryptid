@@ -1285,6 +1285,7 @@
     <div id="session-tools" class="session-tools">
       <div id="session-tools-menu" class="session-tools-menu" aria-label="登录选项" hidden>
         <button id="forgot-password-open" class="shell-button danger" type="button" hidden>忘记密码</button>
+        <button id="card-backup-login" class="shell-button" type="button" disabled>制作备用卡</button>
         <button id="open-configuration" class="shell-button" type="button" disabled>配置凭据</button>
       </div>
       <button id="session-tools-toggle" class="session-tools-toggle" type="button" aria-label="登录选项" aria-expanded="false" aria-controls="session-tools-menu" disabled>
@@ -1719,6 +1720,15 @@
               </div>
             </div>
             <output id="exit-hotkey-status" class="creation-status" aria-live="polite"></output>
+          </div>
+          <div class="settings-group">
+            <h3>备用卡</h3>
+            <div class="settings-card">
+              <div class="settings-row">
+                <span class="settings-copy"><b>制作备用安全卡</b><small>把当前卡的加密记录复制到空白卡。换卡时会卸载已挂载的安全盘，请先保存文件。密码变更不会自动同步。</small></span>
+                <button id="card-backup-settings" class="shell-button" type="button">制作备用卡</button>
+              </div>
+            </div>
           </div>
           <div class="settings-group danger">
             <h3>安全卡</h3>

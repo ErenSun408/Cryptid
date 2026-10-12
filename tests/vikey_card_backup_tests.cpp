@@ -1,5 +1,6 @@
 #include "card/vikey/vikey_card_backup.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/ui/card_backup_exchange.h"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -37,6 +38,23 @@ struct Backend : IVikeyCardBackupBackend {
 };
 template<class F> void rejects(F f) { bool rejected=false; try { f(); } catch (...) { rejected=true; } check(rejected); }
 void tests() {
+  using T=usb_vault::application::CardPresenceTransition;
+  for (auto outcome : {T::card_unavailable,T::active_session_unmounted,T::active_session_force_unmounted}) {
+    usb_vault::ui::CardBackupExchange exchange;
+    check(!exchange.allow_removal(T::no_change));
+    check(!exchange.allow_removal(T::active_session_remains));
+    check(!exchange.removed()); check(exchange.allow_removal(outcome));
+    check(exchange.removed()); check(!exchange.allow_removal(outcome));
+  }
+  // Real encrypted envelopes must unlock to the original root after copying.
+  {
+    const auto password=[] { constexpr char text[]="Spare-card-pass-2026"; SecureBuffer b(sizeof(text)-1); std::ranges::copy(std::as_bytes(std::span(text,sizeof(text)-1)),b.bytes().begin()); return b; };
+    auto initialized=initialize_card_record_and_root_v1(password());
+    Backend b; b.data=std::move(initialized.record); VikeyCardBackup flow(b);
+    flow.prepare(); b.target(); flow.complete();
+    const auto reopened=unlock_card_record_v1(b.data.bytes(),password());
+    check(std::ranges::equal(reopened.bytes(),initialized.root_secret.bytes()));
+  }
   const auto now=VikeyCardBackup::Clock::now();
   for (auto length : {216u,292u}) {
     Backend b; b.data=framed(length); auto expected=copy(b.data); VikeyCardBackup flow(b);

@@ -64,6 +64,7 @@ constexpr DISPID kBitLockerProgressId = 116;
 constexpr DISPID kBitLockerConfirmId = 117;
 constexpr DISPID kBitLockerHelpId = 118;
 constexpr DISPID kPartitionPairId = 119;
+constexpr DISPID kOpenCardBackupId = 230;
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -547,6 +548,7 @@ class PasswordArgumentsWiper final {
     case kMoveContainerEntryId: return "moveContainerEntry";
     case kBitLockerHelpId: return "openBitLockerHelp";
     case kOpenConfigurationId: return "openConfiguration";
+    case kOpenCardBackupId: return "openCardBackup";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -732,6 +734,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"setContainerFileHidden")) { ids[0] = kSetContainerFileHiddenId; return S_OK; }
     if (matches(names[0], L"getContainerExtension")) { ids[0] = kGetContainerExtensionId; return S_OK; }
     if (matches(names[0], L"setContainerExtension")) { ids[0] = kSetContainerExtensionId; return S_OK; }
+    if (matches(names[0], L"openCardBackup")) { ids[0] = kOpenCardBackupId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1165,6 +1168,12 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!close_sink_) return E_FAIL;
         // The window's normal close guard owns cleanup and can refuse to exit.
         close_sink_->request_close();
+        return S_OK;
+      case kOpenCardBackupId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (!close_sink_ || !close_sink_->request_card_backup()) return E_FAIL;
+        controller_.cancel_login_reset();
+        configuration_pending_ = true;
         return S_OK;
       case kOpenConfigurationId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
