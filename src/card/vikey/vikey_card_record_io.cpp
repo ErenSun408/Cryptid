@@ -215,4 +215,41 @@ void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer
   reset_card_record_journal_v1(storage, expected.bytes());
 }
 
+security::SecureBuffer snapshot_stable_vikey_card_record(VikeySession& session) {
+  VikeyCardRecordStorage storage(session);
+  return snapshot_stable_card_record_journal_v1(storage);
+}
+
+void write_vikey_spare_card(VikeySession& session,
+                            const security::SecureBuffer& record) {
+  if (inspect_card_record(record.bytes()) != CardRecordState::initialized_v1)
+    throw std::system_error(make_error_code(CardError::invalid_configuration),
+                            "spare card requires an initialized v1 record");
+  VikeyCardRecordStorage storage(session);
+  if (storage.capacity() < kCardRecordJournalV1ReservedSize)
+    throw std::system_error(make_error_code(CardError::invalid_configuration),
+                            "spare card capacity is insufficient");
+  const auto media = inspect_vikey_card_media(storage);
+  if (media == VikeyCardMediaState::blank) {
+    bootstrap_vikey_card_media(session, media);
+  } else if (media != VikeyCardMediaState::product_evidence ||
+             inspect_vikey_card_record_state_read_only(session) !=
+                 CardRecordState::provisioned_uninitialized) {
+    throw std::system_error(make_error_code(CardError::invalid_operation),
+                            "spare card target is not empty");
+  }
+  // Both destination authorization and publication happen in this one
+  // hardware-bound session. Never route through an arbitrary update target.
+  const auto expected = provision_uninitialized_card_record_v1();
+  const auto current = snapshot_vikey_card_record(session);
+  if (!std::ranges::equal(current.bytes(), expected.bytes()))
+    throw std::system_error(make_error_code(CardError::invalid_operation),
+                            "spare card target changed");
+  commit_card_record_journal_v1(storage, record.bytes());
+  const auto observed = snapshot_vikey_card_record(session);
+  if (!std::ranges::equal(observed.bytes(), record.bytes()))
+    throw std::system_error(make_error_code(CardError::device_failure),
+                            "spare card readback mismatch");
+}
+
 }  // namespace usb_vault::card::vikey

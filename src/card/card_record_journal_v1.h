@@ -131,6 +131,10 @@ void bootstrap_uninitialized_card_record_journal_v1(
 // after publication, and a read treats anything else left there as an
 // interrupted commit to clear. Committing over the provisioning marker first zeroes the
 // reserved range after the two-envelope layout.
+// Strictly read-only snapshot; interrupted or non-normalized journals reject.
+[[nodiscard]] security::SecureBuffer snapshot_stable_card_record_journal_v1(
+    ICardRecordJournalStorage& storage);
+
 void commit_card_record_journal_v1(
     ICardRecordJournalStorage &storage,
     std::span<const std::byte> replacement_record);

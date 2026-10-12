@@ -54,4 +54,9 @@ void write_vikey_card_record(VikeySession& session,
 [[nodiscard]] security::SecureBuffer snapshot_vikey_card_record(VikeySession& session);
 void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected);
 
+[[nodiscard]] security::SecureBuffer snapshot_stable_vikey_card_record(VikeySession& session);
+
+// Restricted import: initialized v1 logical record to blank/provisioned media only.
+void write_vikey_spare_card(VikeySession& session, const security::SecureBuffer& record);
+
 }  // namespace usb_vault::card::vikey

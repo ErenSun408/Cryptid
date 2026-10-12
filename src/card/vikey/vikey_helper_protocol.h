@@ -14,7 +14,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 17;
+constexpr std::uint16_t kVersion = 18;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -64,10 +64,12 @@ enum class Operation : std::uint32_t {
   development_media_reset = 13,
   card_record_snapshot = 14,
   card_record_reset = 15,
+  card_backup_write = 16,
+  card_backup_snapshot = 17,
 };
 
 [[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
-  return op == Operation::card_record_read || op == Operation::card_record_snapshot;
+  return op == Operation::card_record_read || op == Operation::card_record_snapshot || op == Operation::card_backup_snapshot;
 }
 // Logical records are exchanged at their own length, two or three envelopes.
 [[nodiscard]] constexpr bool valid_record_payload(Operation,
@@ -75,7 +77,7 @@ enum class Operation : std::uint32_t {
   return bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
 }
 [[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
-  return op == Operation::card_record_write || op == Operation::card_record_reset;
+  return op == Operation::card_record_write || op == Operation::card_record_reset || op == Operation::card_backup_write;
 }
 
 enum class CardMediaState : std::uint32_t {

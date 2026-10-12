@@ -706,6 +706,13 @@ void commit_record(ICardRecordJournalStorage &storage,
 
 } // namespace
 
+security::SecureBuffer snapshot_stable_card_record_journal_v1(ICardRecordJournalStorage& storage) {
+  auto current = load_journal(storage);
+  if (!current.mirrored || current.leftover[0] || current.leftover[1])
+    fail(CardError::invalid_operation, "spare card source needs journal recovery");
+  return std::move(current.record);
+}
+
 void commit_card_record_journal_v1(
     ICardRecordJournalStorage &storage,
     const std::span<const std::byte> replacement_record) {

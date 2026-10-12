@@ -1893,7 +1893,7 @@ read_vikey_development_card_record_with_network_access(
     const security::SecureBuffer& api_key,
     const security::SecureBuffer& user_pin,
     const std::chrono::milliseconds timeout,
-    const bool snapshot) {
+    const bool snapshot, const bool stable_snapshot) {
   const std::filesystem::path vendor_path =
       vendor_directory / kVendorDllName;
   const DevelopmentSessionInputs inputs{
@@ -1905,7 +1905,7 @@ read_vikey_development_card_record_with_network_access(
   security::SecureBuffer record;
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
-      (snapshot ? helper::Operation::card_record_snapshot : helper::Operation::card_record_read), &vendor_path,
+      (stable_snapshot ? helper::Operation::card_backup_snapshot : (snapshot ? helper::Operation::card_record_snapshot : helper::Operation::card_record_read)), &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout, &record));
   return record;
@@ -1922,7 +1922,8 @@ void write_vikey_development_card_record_with_network_access(
     const security::SecureBuffer& user_pin,
     const security::SecureBuffer& record,
     const std::chrono::milliseconds timeout,
-    const bool reset) {
+    const bool reset, const bool backup) {
+  if (reset && backup) throw std::invalid_argument("conflicting record operations");
   const std::filesystem::path vendor_path =
       vendor_directory / kVendorDllName;
   const DevelopmentSessionInputs inputs{
@@ -1933,7 +1934,7 @@ void write_vikey_development_card_record_with_network_access(
       .expected_hardware_id = expected_hardware_id};
   static_cast<void>(probe_vikey_helper_operation(
       helper_path, expected_helper_digest,
-      (reset ? helper::Operation::card_record_reset : helper::Operation::card_record_write), &vendor_path,
+      (backup ? helper::Operation::card_backup_write : (reset ? helper::Operation::card_record_reset : helper::Operation::card_record_write)), &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout));
 }

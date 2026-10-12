@@ -242,6 +242,45 @@ void require_card_error(Operation&& operation, const CardError expected,
   throw std::runtime_error(message);
 }
 
+void test_spare_card_restricted_import() {
+  FakeSdk state; active_fake = &state;
+  SecureBuffer sn(usb_vault::card::vikey::kVikeyUserSnBytes), key(usb_vault::card::vikey::kVikeyApiKeyBytes), pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(sn.bytes(), std::byte{'A'}); std::ranges::fill(key.bytes(), std::byte{'B'}); std::ranges::fill(pin.bytes(), std::byte{'P'});
+  auto session=VikeySession::open(functions(),sn,key,pin);
+  auto record=framed_record();
+  using usb_vault::card::vikey::write_vikey_spare_card;
+  using usb_vault::card::vikey::snapshot_stable_vikey_card_record;
+  state.reported_capacity=1807;
+  require_card_error([&]{write_vikey_spare_card(session,record);},CardError::invalid_configuration,"small spare accepted");
+  require(state.writes==0,"small spare was written"); state.reported_capacity=kVikeyTestUserDataSize;
+  state.data.back()=std::byte{0x77};
+  require_card_error([&]{write_vikey_spare_card(session,record);},CardError::invalid_operation,"foreign spare accepted");
+  require(state.writes==0,"foreign spare was written"); state.data.back()=std::byte{};
+  write_vikey_spare_card(session,record);
+  auto writes=state.writes; auto observed=snapshot_stable_vikey_card_record(session);
+  require(same(record,observed)&&writes==state.writes,"snapshot wrote source or changed record");
+  require_card_error([&]{write_vikey_spare_card(session,record);},CardError::invalid_operation,"initialized spare overwritten");
+  require(writes==state.writes,"initialized spare was written");
+  // A damaged descriptor must never be repaired by the backup snapshot.
+  state.data[0]=std::byte{0};
+  require_card_error([&]{static_cast<void>(snapshot_stable_vikey_card_record(session));},CardError::invalid_operation,"unstable source accepted");
+  require(writes==state.writes,"unstable source normalized");
+  // Exercise every write of blank-media provisioning plus record publication.
+  for (std::size_t failure=0; failure<writes; ++failure) {
+    state.data.fill(std::byte{}); state.data.back()=std::byte{0x42};
+    // Outside the reserved region is permitted only for an existing marker;
+    // blank-media foreign detection must refuse before writing.
+    state.writes=0; state.fail_write_call=failure; state.bytes_before_failure=1;
+    state.data.back()=std::byte{};
+    try { write_vikey_spare_card(session,record);
+      require(same(snapshot_stable_vikey_card_record(session),record),"partial spare reported success");
+    } catch (const std::system_error&) {}
+    require(state.data.back()==std::byte{},"spare wrote outside reserved region");
+  }
+  state.fail_write_call=std::numeric_limits<std::size_t>::max();
+  require(!session.close(),"spare session close failed"); active_fake=nullptr;
+}
+
 void test_random_access_card_record_path() {
   FakeSdk state;
   DirectStorage direct(state);
@@ -543,6 +582,7 @@ void test_development_legacy_reset_is_explicit_and_recoverable() {
 
 int main() {
   try {
+    test_spare_card_restricted_import();
     test_random_access_card_record_path();
     test_read_only_media_classification();
     test_media_bootstrap_revalidates_before_writing();
