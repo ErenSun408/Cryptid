@@ -1,0 +1,265 @@
+diff --git a/packaging/windows/usb-vault.nsi b/packaging/windows/usb-vault.nsi
+index ebac6d3..aa7adb2 100644
+--- a/packaging/windows/usb-vault.nsi
++++ b/packaging/windows/usb-vault.nsi
+@@ -16,20 +16,23 @@ Unicode true
+ !ifndef PayloadDirectory
+   !error "Use tools/build-windows-installer.ps1 with a verified package"
+ !endif
+-Name "USB Vault"
++Name "1006兼容测试版"
+ OutFile "${OutputFile}"
+ RequestExecutionLevel user
+-InstallDir "$LOCALAPPDATA\Programs\USB Vault"
++InstallDir "$LOCALAPPDATA\Programs\USB Vault 1006 Compat"
+ CRCCheck force
+ ; The prerequisite installers are already compressed. Non-solid zlib avoids
+ ; exhausting the 32-bit NSIS compiler while embedding the large offline files.
+ SetCompressor zlib
+ ShowInstDetails show
+ ShowUninstDetails show
+-!define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVaultDevelopment"
++!define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\USBVault1006Compat"
++!define ProductDisplayName "1006兼容测试版"
++!define ProductShortcutName "1006兼容测试版"
++!define ProductMenu "$SMPROGRAMS\1006兼容测试版"
+ !include "${__FILEDIR__}\installer-engine.nsh"
+ !define MUI_ABORTWARNING
+-!define MUI_WELCOMEPAGE_TEXT "该向导将安装 USB Vault。所需的 VeraCrypt 驱动已包含在安装包内，无需另外安装 VeraCrypt 软件；向导会自动检测并按需安装或修复驱动。$\r$\n$\r$\n安装系统组件时会请求管理员授权。卸载 USB Vault 会保留共享组件、凭据、设置和容器文件。"
++!define MUI_WELCOMEPAGE_TEXT "该向导将独立安装 1006兼容测试版，不替换现有 USB Vault。两个版本使用各自的快捷方式、设置和凭据，请关闭一个版本后再运行另一个。$\r$\n$\r$\n共享 VeraCrypt 驱动与 WebView2 会按需安装或复用。卸载测试版保留共享组件及用户数据。"
+ !define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageShow
+ !insertmacro MUI_PAGE_WELCOME
+ 
+@@ -53,7 +56,7 @@ Page custom DependencyPageCreate DependencyPageLeave
+ !insertmacro MUI_PAGE_INSTFILES
+ !define MUI_FINISHPAGE_RUN "$INSTDIR\USB Vault.exe"
+ !define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalledApplication
+-!define MUI_FINISHPAGE_RUN_TEXT "打开 USB Vault"
++!define MUI_FINISHPAGE_RUN_TEXT "打开 1006兼容测试版"
+ !define MUI_FINISHPAGE_RUN_NOTCHECKED
+ !insertmacro MUI_PAGE_FINISH
+ !insertmacro MUI_UNPAGE_CONFIRM
+@@ -111,7 +114,7 @@ Function .onInit
+   nsExec::ExecToStack '"$PLUGINSDIR\usb_vault_setup_helper.exe" --probe-veracrypt'
+   Pop $VeraCryptState
+   Pop $0
+-  StrCpy $INSTDIR "$LOCALAPPDATA\Programs\USB Vault"
++  StrCpy $INSTDIR "$LOCALAPPDATA\Programs\USB Vault 1006 Compat"
+   ; Configuration is a page inside the product window now, so the product
+   ; window is the only one to look for.
+   FindWindow $0 "UsbVaultMainWindow"
+diff --git a/packaging/windows/installer-engine.nsh b/packaging/windows/installer-engine.nsh
+index a101522..b50ee27 100644
+--- a/packaging/windows/installer-engine.nsh
++++ b/packaging/windows/installer-engine.nsh
+@@ -10,6 +10,12 @@
+ !ifndef ProductWindowClass
+   !define ProductWindowClass "UsbVaultMainWindow"
+ !endif
++!ifndef ProductDisplayName
++  !define ProductDisplayName "USB Vault"
++!endif
++!ifndef ProductShortcutName
++  !define ProductShortcutName "USB Vault"
++!endif
+ 
+ Var TransactionRoot
+ Var TransactionCommitted
+@@ -172,9 +178,9 @@ Function RegisterProduct
+   ; leaves it in the transaction tree, which is removed before first launch.
+   SetOutPath "$INSTDIR"
+   CreateDirectory "${ProductMenu}"
+-  CreateShortcut "${ProductMenu}\USB Vault.lnk" "$INSTDIR\USB Vault.exe"
+-  CreateShortcut "${ProductMenu}\卸载 USB Vault.lnk" "$INSTDIR\卸载 USB Vault.exe"
+-  WriteRegStr HKCU "${UninstallKey}" "DisplayName" "USB Vault"
++  CreateShortcut "${ProductMenu}\${ProductShortcutName}.lnk" "$INSTDIR\USB Vault.exe"
++  CreateShortcut "${ProductMenu}\卸载 ${ProductShortcutName}.lnk" "$INSTDIR\卸载 USB Vault.exe"
++  WriteRegStr HKCU "${UninstallKey}" "DisplayName" "${ProductDisplayName}"
+   WriteRegStr HKCU "${UninstallKey}" "DisplayVersion" "0.2.0"
+   WriteRegStr HKCU "${UninstallKey}" "UninstallString" '$\"$INSTDIR\卸载 USB Vault.exe$\"'
+   WriteRegStr HKCU "${UninstallKey}" "InstallLocation" "$INSTDIR"
+@@ -454,8 +460,8 @@ Function un.UninstallPackage
+     Goto engine_uninstall_failed
+   ${EndIf}
+   ClearErrors
+-  Delete "${ProductMenu}\USB Vault.lnk"
+-  Delete "${ProductMenu}\卸载 USB Vault.lnk"
++  Delete "${ProductMenu}\${ProductShortcutName}.lnk"
++  Delete "${ProductMenu}\卸载 ${ProductShortcutName}.lnk"
+   ; Menu directories containing unrelated shortcuts are preserved.
+   DeleteRegKey HKCU "${UninstallKey}"
+   ${If} ${Errors}
+diff --git a/tools/app/main.cpp b/tools/app/main.cpp
+index 10b6f23..a02e79c 100644
+--- a/tools/app/main.cpp
++++ b/tools/app/main.cpp
+@@ -55,7 +55,7 @@ using Microsoft::WRL::Callback;
+ using Microsoft::WRL::ComPtr;
+ 
+ constexpr wchar_t kWindowClass[] = L"UsbVaultMainWindow";
+-constexpr wchar_t kWindowTitle[] = L"USB Vault";
++constexpr wchar_t kWindowTitle[] = L"1006兼容测试版";
+ constexpr usb_vault::platform::windows::HidDeviceIdentity
+     kDevelopmentCardIdentity{.vendor_id = 0x1987, .product_id = 0x0331};
+ constexpr wchar_t kHostObjectName[] = L"nativeBridge";
+diff --git a/src/application/product_settings_v1.cpp b/src/application/product_settings_v1.cpp
+index fab0827..fa14791 100644
+--- a/src/application/product_settings_v1.cpp
++++ b/src/application/product_settings_v1.cpp
+@@ -17,7 +17,7 @@
+ namespace usb_vault::application {
+ namespace {
+ 
+-constexpr std::wstring_view kProductDirectory = L"usb-vault";
++constexpr std::wstring_view kProductDirectory = L"usb-vault-1006-compat";
+ constexpr std::wstring_view kSettingsFileName = L"settings.txt";
+ constexpr std::string_view kRememberKey = "remember-container-paths=";
+ constexpr std::string_view kMountImportedKey = "mount-imported-containers=";
+diff --git a/src/application/container_index_store_v1.cpp b/src/application/container_index_store_v1.cpp
+index 18782dd..5674762 100644
+--- a/src/application/container_index_store_v1.cpp
++++ b/src/application/container_index_store_v1.cpp
+@@ -22,7 +22,7 @@
+ namespace usb_vault::application {
+ namespace {
+ 
+-constexpr std::wstring_view kProductDirectory = L"usb-vault";
++constexpr std::wstring_view kProductDirectory = L"usb-vault-1006-compat";
+ constexpr std::wstring_view kIndexFileName = L"container_index.bin";
+ constexpr std::wstring_view kHexDigits = L"0123456789abcdef";
+ constexpr std::size_t kStagingNoiseSize = 8;
+diff --git a/src/card/vikey/vikey_development_credentials.cpp b/src/card/vikey/vikey_development_credentials.cpp
+index 617c80c..55e8ea3 100644
+--- a/src/card/vikey/vikey_development_credentials.cpp
++++ b/src/card/vikey/vikey_development_credentials.cpp
+@@ -17,13 +17,13 @@ namespace usb_vault::card::vikey::development {
+ namespace {
+ 
+ constexpr wchar_t kApiKeyCredentialTarget[] =
+-    L"usb-vault-vikey-dev-api-key";
++    L"usb-vault-1006-compat-vikey-dev-api-key";
+ constexpr wchar_t kUserSnCredentialTarget[] =
+-    L"usb-vault-vikey-dev-user-sn";
++    L"usb-vault-1006-compat-vikey-dev-user-sn";
+ constexpr wchar_t kUserPinCredentialTarget[] =
+-    L"usb-vault-vikey-dev-user-pin";
++    L"usb-vault-1006-compat-vikey-dev-user-pin";
+ constexpr wchar_t kCredentialUserName[] =
+-    L"USB Vault ViKey development";
++    L"1006 compatibility test ViKey development";
+ 
+ static_assert(sizeof(wchar_t) == 2,
+               "Windows credential decoding requires UTF-16 wchar_t");
+@@ -184,7 +184,7 @@ class WindowsCredentialStorage final : public ICredentialStorage {
+  public:
+   std::optional<security::SecureBuffer> read(CredentialEntry entry) override {
+     switch (entry) {
+-      case CredentialEntry::bundle: return read_raw_credential(L"usb-vault-vikey-dev-credentials");
++      case CredentialEntry::bundle: return read_raw_credential(L"usb-vault-1006-compat-vikey-dev-credentials");
+       case CredentialEntry::legacy_sn: return read_raw_credential(kUserSnCredentialTarget);
+       case CredentialEntry::legacy_key: return read_raw_credential(kApiKeyCredentialTarget);
+       case CredentialEntry::legacy_pin: return read_raw_credential(kUserPinCredentialTarget);
+@@ -192,7 +192,7 @@ class WindowsCredentialStorage final : public ICredentialStorage {
+     throw std::invalid_argument("unknown credential entry");
+   }
+   void write_bundle(security::SecureBuffer& value) override {
+-    write_credential(L"usb-vault-vikey-dev-credentials", value);
++    write_credential(L"usb-vault-1006-compat-vikey-dev-credentials", value);
+   }
+ };
+ 
+@@ -278,4 +278,4 @@ void store_credentials(VikeyCredentialSet credentials) {
+   store_credentials(storage, credentials);
+ }
+ 
+-}  // namespace usb_vault::card::vikey::development
+\ No newline at end of file
++}  // namespace usb_vault::card::vikey::development
+diff --git a/tests/product_settings_v1_tests.cpp b/tests/product_settings_v1_tests.cpp
+index e80e7b3..b17d8f0 100644
+--- a/tests/product_settings_v1_tests.cpp
++++ b/tests/product_settings_v1_tests.cpp
+@@ -100,7 +100,7 @@ void test_the_default_path_sits_under_local_app_data() {
+   const std::wstring path = product_settings_v1_default_path();
+   expect(path.size() > 3 && path[1] == L':' && path[2] == L'\\',
+          "the default settings path is not absolute");
+-  expect(path.find(L"\\usb-vault\\") != std::wstring::npos,
++  expect(path.find(L"\\usb-vault-1006-compat\\") != std::wstring::npos,
+          "the default settings path is not under a product directory");
+   expect(path.ends_with(L"settings.txt"),
+          "the default settings path does not name the settings file");
+diff --git a/tests/container_index_store_v1_tests.cpp b/tests/container_index_store_v1_tests.cpp
+index 0256abb..9ce78b2 100644
+--- a/tests/container_index_store_v1_tests.cpp
++++ b/tests/container_index_store_v1_tests.cpp
+@@ -125,7 +125,7 @@ void test_the_default_path_sits_under_local_app_data() {
+   const std::wstring path = container_index_v1_default_path();
+   expect(path.size() > 3 && path[1] == L':' && path[2] == L'\\',
+          "the default index path is not absolute");
+-  expect(path.find(L"\\usb-vault\\") != std::wstring::npos,
++  expect(path.find(L"\\usb-vault-1006-compat\\") != std::wstring::npos,
+          "the default index path is not under a product directory");
+   expect(path.ends_with(L"container_index.bin"),
+          "the default index path does not name the index file");
+diff --git a/tools/build-windows-installer.ps1 b/tools/build-windows-installer.ps1
+index 205f9c5..44a63e2 100644
+--- a/tools/build-windows-installer.ps1
++++ b/tools/build-windows-installer.ps1
+@@ -59,7 +59,7 @@ if ($LASTEXITCODE -ne 0 -or $version -ne 'v3.12') { throw 'NSIS 3.12 is required
+ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+ if (Test-Path -LiteralPath $output) { throw 'Installer bundle timestamp already exists; retry later or choose a new output directory' }
+ New-Item -ItemType Directory -Path $output | Out-Null
+-$target = Join-Path $output 'USB-Vault-Setup.exe'
++$target = Join-Path $output '1006兼容测试版.exe'
+ # Bind recovery to both payload and implementation, including the generated
+ # uninstaller protocol. A changed package must never interpret an old journal.
+ $identityInputs = @((Get-FileHash -LiteralPath "$package.sha256sums.txt").Hash, (Get-FileHash -LiteralPath $helper).Hash)
+diff --git a/tests/installer_engine.nsi b/tests/installer_engine.nsi
+index 60b4ec6..13902ee 100644
+--- a/tests/installer_engine.nsi
++++ b/tests/installer_engine.nsi
+@@ -16,6 +16,8 @@ Unicode true
+ !define UninstallKey "Software\USBVaultInstallerTests\${TestId}"
+ !define ProductMenu "${TestRoot}\menu"
+ !define ProductWindowClass "USBVaultInstallerTest_${TestId}"
++!define ProductDisplayName "1006兼容测试版"
++!define ProductShortcutName "1006兼容测试版"
+ !include "${__FILEDIR__}\..\packaging\windows\installer-engine.nsh"
+ Name "USB Vault isolated installer test"
+ OutFile "${TestOutput}"
+diff --git a/tests/installer_engine_tests.ps1 b/tests/installer_engine_tests.ps1
+index ddcb4c8..8e23442 100644
+--- a/tests/installer_engine_tests.ps1
++++ b/tests/installer_engine_tests.ps1
+@@ -61,13 +61,29 @@ function Assert-Installed($Fixture) {
+     if (Test-Path -LiteralPath "$($Fixture.Root)\app\.usb-vault-update") { throw 'Transaction not cleaned' }
+     if ((Get-ItemProperty -LiteralPath $Fixture.Key).InstallLocation -ne "$($Fixture.Root)\app") { throw 'Registration mismatch' }
+     $shell = New-Object -ComObject WScript.Shell
+-    foreach ($name in @('USB Vault', '卸载 USB Vault')) {
++    foreach ($name in @('1006兼容测试版', '卸载 1006兼容测试版')) {
+         $shortcut = $shell.CreateShortcut("$($Fixture.Root)\menu\$name.lnk")
+         if ($shortcut.WorkingDirectory -ne "$($Fixture.Root)\app") { throw 'Shortcut points to temporary working directory' }
+-        if ($shortcut.TargetPath -ne "$($Fixture.Root)\app\$name.exe" -or $shortcut.Arguments -ne '') { throw 'Shortcut target mismatch' }
++        $targetName = if ($name.StartsWith('卸载 ')) { '卸载 USB Vault.exe' } else { 'USB Vault.exe' }
++        if ($shortcut.TargetPath -ne "$($Fixture.Root)\app\$targetName" -or $shortcut.Arguments -ne '') { throw 'Shortcut target mismatch' }
+     }
++    if ((Get-ItemProperty -LiteralPath $Fixture.Key).DisplayName -ne '1006兼容测试版') { throw 'Wrong independent product display name' }
+ }
+ try {
++    $original = New-Fixture 'coexist-original'
++    $originalExe = Compile-Fixture $original
++    Run-Fixture $originalExe
++    $independent = New-Fixture 'coexist-test'
++    $independentExe = Compile-Fixture $independent
++    Run-Fixture $independentExe
++    Assert-Installed $original
++    Assert-Installed $independent
++    Run-Fixture "$($independent.Root)\app\卸载 USB Vault.exe"
++    Assert-Installed $original
++    if (Test-Path -LiteralPath $independent.Key) { throw 'Independent uninstall left its registration' }
++    if (Test-Path -LiteralPath "$($independent.Root)\menu\1006兼容测试版.lnk") { throw 'Independent uninstall left its shortcut' }
++    Write-Output 'PASS separate directories, registration and menus survive independent uninstall'
++
+     $fixture = New-Fixture 'install-update-repair-uninstall'
+     $exe = Compile-Fixture $fixture
+     Run-Fixture $exe

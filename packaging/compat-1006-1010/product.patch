@@ -1,0 +1,1702 @@
+diff --git a/include/usb_vault/card/card_record_v1.h b/include/usb_vault/card/card_record_v1.h
+index 71f5584..4cd9be0 100644
+--- a/include/usb_vault/card/card_record_v1.h
++++ b/include/usb_vault/card/card_record_v1.h
+@@ -17,6 +17,10 @@ inline constexpr std::size_t kCardRecordV1PrimaryEnvelopeOffset = 64;
+ inline constexpr std::size_t kCardRecordV1SecondaryEnvelopeOffset = 140;
+ inline constexpr std::size_t kCardRecordV1RootSecretSize = 32;
+ inline constexpr std::size_t kLegacyP1CardBlobSize = 32;
++// The same v1 header followed by a third envelope. The header keeps its v1
++// length field; the journal descriptor carries the real record length.
++inline constexpr std::size_t kCardRecordV1TertiaryEnvelopeOffset = 216;
++inline constexpr std::size_t kCardRecordV1ThreeSlotSize = 292;
+ 
+ enum class CardRecordState {
+   provisioned_uninitialized,
+@@ -49,8 +53,8 @@ inspect_card_record(std::span<const std::byte> record) noexcept;
+ // provisioning process before a user initializes the product.
+ [[nodiscard]] security::SecureBuffer provision_uninitialized_card_record_v1();
+ 
+-// Creates a fixed-size record with one encrypted primary envelope and a
+-// random, indistinguishable secondary envelope. The password is consumed and
++// Creates a three-envelope record with one encrypted primary envelope and two
++// random, indistinguishable envelopes. The password is consumed and
+ // wiped; the generated root secret only leaves this function encrypted.
+ [[nodiscard]] security::SecureBuffer
+ initialize_card_record_v1(security::SecureBuffer password_utf8);
+@@ -63,15 +67,18 @@ initialize_card_record_v1(security::SecureBuffer password_utf8);
+ initialize_card_record_and_root_v1(
+     security::SecureBuffer password_utf8);
+ 
+-// Tries both equal-size envelopes after one password-hardening operation and
+-// returns only the common root secret. Slot identity is deliberately not part
+-// of the public result and must not become persistent application state.
++// Accepts a two- or three-envelope record. After one password-hardening
++// operation every envelope is tried under every slot binding, because a kept
++// envelope may have been moved; all matches must hold the same root. Only that
++// root is returned: slot identity must not become persistent application state.
+ [[nodiscard]] security::SecureBuffer
+ unlock_card_record_v1(std::span<const std::byte> record,
+                       security::SecureBuffer password_utf8);
+ 
+-// Re-encrypts the existing root into both envelopes. This generic operation
+-// stores no semantic slot label or activation field.
++// Legacy two-envelope rewrap, kept to describe cards written before the third
++// slot; product code appends with append_card_password_v1 instead. It
++// re-encrypts the existing root into both envelopes and stores no semantic
++// slot label or activation field.
+ // Existing and replacement passwords are consumed and wiped.
+ [[nodiscard]] security::SecureBuffer
+ rewrap_card_record_v1(std::span<const std::byte> record,
+@@ -79,4 +86,15 @@ rewrap_card_record_v1(std::span<const std::byte> record,
+                       security::SecureBuffer primary_password_utf8,
+                       security::SecureBuffer secondary_password_utf8);
+ 
++// v1's [new, existing] rewrap extended by one slot. The result is always the
++// three-envelope record [new, existing, kept]: kept is the old first envelope,
++// or the old second one when the existing password opened the first. The
++// header and the kept envelope's ciphertext are preserved byte for byte, so a
++// two-envelope record expands in place. A new password equal to the existing
++// one is rejected. Both passwords are consumed and wiped.
++[[nodiscard]] security::SecureBuffer
++append_card_password_v1(std::span<const std::byte> record,
++                        security::SecureBuffer existing_password_utf8,
++                        security::SecureBuffer new_password_utf8);
++
+ } // namespace usb_vault::card
+diff --git a/src/card/card_record_journal_v1.cpp b/src/card/card_record_journal_v1.cpp
+index 51128b6..5bc4359 100644
+--- a/src/card/card_record_journal_v1.cpp
++++ b/src/card/card_record_journal_v1.cpp
+@@ -81,6 +81,7 @@ struct ParsedDescriptor final {
+   CommitId commit_id{};
+   CommitId previous_id{};
+   std::uint32_t slot{};
++  std::size_t length{};
+ };
+ 
+ struct LoadedJournal final {
+@@ -89,9 +90,16 @@ struct LoadedJournal final {
+   CommitId previous_id{};
+   std::uint32_t slot{};
+   std::uint32_t descriptor{};
++  std::size_t length{};
+   bool mirrored{};
++  // Slots of the other record length that still hold an initialized record:
++  // an interrupted length switch, before or after publication.
++  std::array<bool, 2> leftover{};
+ };
+ 
++// Per record length (two envelopes first), the digests of its two slots.
++using SlotDigests = std::array<std::array<Digest, 2>, 2>;
++
+ [[noreturn]] void fail(const CardError error, const char *const context) {
+   throw std::system_error(make_error_code(error), context);
+ }
+@@ -193,7 +201,7 @@ void fill_random(const std::span<std::byte> destination) {
+ }
+ 
+ void require_capacity(ICardRecordJournalStorage &storage) {
+-  if (storage.capacity() < kCardRecordJournalV1StorageSize) {
++  if (storage.capacity() < kCardRecordJournalV1ThreeSlotEnd) {
+     fail(CardError::invalid_configuration,
+          "card storage is too small for the record journal");
+   }
+@@ -210,7 +218,21 @@ read_exact(ICardRecordJournalStorage &storage, const std::size_t offset,
+   return result;
+ }
+ 
+-[[nodiscard]] std::size_t slot_offset(const std::uint32_t slot) noexcept {
++[[nodiscard]] std::size_t length_index(const std::size_t length) noexcept {
++  return length == kCardRecordV1Size ? 0U : 1U;
++}
++
++[[nodiscard]] std::size_t other_length(const std::size_t length) noexcept {
++  return length == kCardRecordV1Size ? kCardRecordV1ThreeSlotSize
++                                     : kCardRecordV1Size;
++}
++
++[[nodiscard]] std::size_t slot_offset(const std::size_t length,
++                                      const std::uint32_t slot) noexcept {
++  if (length == kCardRecordV1ThreeSlotSize) {
++    return slot == 0 ? kCardRecordJournalV1ThreeSlot0Offset
++                     : kCardRecordJournalV1ThreeSlot1Offset;
++  }
+   return slot == 0 ? kCardRecordJournalV1Slot0Offset
+                    : kCardRecordJournalV1Slot1Offset;
+ }
+@@ -251,19 +273,22 @@ make_descriptor(const CommitId &commit_id, const CommitId &previous_id,
+ 
+ [[nodiscard]] ParsedDescriptor
+ parse_descriptor(const std::span<const std::byte> descriptor,
+-                 const std::array<Digest, 2> &slot_digests) {
++                 const SlotDigests &slot_digests) {
+   if (descriptor.size() != kCardRecordJournalV1DescriptorSize ||
+       !equal_bytes(descriptor.first(kDescriptorMagic.size()),
+                    kDescriptorMagic) ||
+       load_u32(descriptor, 8) != kDescriptorVersion ||
+-      load_u32(descriptor, 12) != descriptor.size() ||
+-      load_u32(descriptor, kDescriptorRecordLengthOffset) !=
+-          kCardRecordV1Size) {
++      load_u32(descriptor, 12) != descriptor.size()) {
+     return {};
+   }
++  const std::size_t length =
++      load_u32(descriptor, kDescriptorRecordLengthOffset);
++  if (length != kCardRecordV1Size && length != kCardRecordV1ThreeSlotSize)
++    return {};
+   const std::uint32_t slot = load_u32(descriptor, kDescriptorSlotOffset);
+   if (slot > 1)
+     return {};
++  const auto &digests = slot_digests[length_index(length)];
+ 
+   const Digest expected_descriptor_digest =
+       sha256(descriptor.first(kDescriptorPrefixSize));
+@@ -286,13 +311,14 @@ parse_descriptor(const std::span<const std::byte> descriptor,
+       .valid = true,
+       .record_matches = equal_bytes(
+           descriptor.subspan(kDescriptorRecordDigestOffset, kDigestSize),
+-          slot_digests[slot]),
++          digests[slot]),
+       .inactive_matches = equal_bytes(
+           descriptor.subspan(kDescriptorInactiveDigestOffset, kDigestSize),
+-          slot_digests[slot ^ 1U]),
++          digests[slot ^ 1U]),
+       .commit_id = commit_id,
+       .previous_id = previous_id,
+       .slot = slot,
++      .length = length,
+   };
+ }
+ 
+@@ -303,11 +329,21 @@ parse_descriptor(const std::span<const std::byte> descriptor,
+                  kCardRecordJournalV1DescriptorSize),
+       read_exact(storage, kCardRecordJournalV1Descriptor1Offset,
+                  kCardRecordJournalV1DescriptorSize)};
+-  std::array<security::SecureBuffer, 2> slots{
+-      read_exact(storage, kCardRecordJournalV1Slot0Offset, kCardRecordV1Size),
+-      read_exact(storage, kCardRecordJournalV1Slot1Offset, kCardRecordV1Size)};
+-  const std::array<Digest, 2> slot_digests{sha256(slots[0].bytes()),
+-                                           sha256(slots[1].bytes())};
++  // Two-envelope slots are read first, in their original order.
++  std::array<std::array<security::SecureBuffer, 2>, 2> slots{{
++      {read_exact(storage, kCardRecordJournalV1Slot0Offset, kCardRecordV1Size),
++       read_exact(storage, kCardRecordJournalV1Slot1Offset,
++                  kCardRecordV1Size)},
++      {read_exact(storage, kCardRecordJournalV1ThreeSlot0Offset,
++                  kCardRecordV1ThreeSlotSize),
++       read_exact(storage, kCardRecordJournalV1ThreeSlot1Offset,
++                  kCardRecordV1ThreeSlotSize)}}};
++  SlotDigests slot_digests{};
++  for (std::size_t kind = 0; kind < 2; ++kind) {
++    for (std::size_t slot = 0; slot < 2; ++slot) {
++      slot_digests[kind][slot] = sha256(slots[kind][slot].bytes());
++    }
++  }
+   const std::array<ParsedDescriptor, 2> parsed{
+       parse_descriptor(descriptors[0].bytes(), slot_digests),
+       parse_descriptor(descriptors[1].bytes(), slot_digests)};
+@@ -324,7 +360,8 @@ parse_descriptor(const std::span<const std::byte> descriptor,
+     const bool same_commit =
+         equal_bytes(parsed[0].commit_id, parsed[1].commit_id) &&
+         equal_bytes(parsed[0].previous_id, parsed[1].previous_id) &&
+-        parsed[0].slot == parsed[1].slot;
++        parsed[0].slot == parsed[1].slot &&
++        parsed[0].length == parsed[1].length;
+     if (same_commit) {
+       if (parsed[0].inactive_matches == parsed[1].inactive_matches) {
+         fail(CardError::device_failure,
+@@ -340,7 +377,8 @@ parse_descriptor(const std::span<const std::byte> descriptor,
+         fail(CardError::device_failure,
+              "card record journal has an ambiguous commit chain");
+       }
+-      if (parsed[0].slot == parsed[1].slot) {
++      if (parsed[0].slot == parsed[1].slot &&
++          parsed[0].length == parsed[1].length) {
+         fail(CardError::device_failure,
+              "card record journal commit chain reused one slot");
+       }
+@@ -353,15 +391,68 @@ parse_descriptor(const std::span<const std::byte> descriptor,
+          "active card record journal commit is damaged");
+   }
+   const std::uint32_t selected_slot = parsed[selected].slot;
+-  return {.record = std::move(slots[selected_slot]),
++  const std::size_t selected_length = parsed[selected].length;
++  // A finished commit leaves the other length's slots zeroed, so anything else
++  // there is a torn or unpublished copy. Behind a two-envelope record the
++  // three-envelope area may instead hold an earlier format's extension
++  // journal, so it counts only when the first slot starts like one of our
++  // records (a switch always writes that slot first). Future-version records
++  // are not ours to normalize at all; reset removes what they leave.
++  auto &other = slots[length_index(other_length(selected_length))];
++  const CardRecordState selected_state = inspect_card_record(
++      slots[length_index(selected_length)][selected_slot].bytes());
++  const bool ours =
++      selected_length == kCardRecordV1ThreeSlotSize ||
++      starts_with(other[0].bytes(), kInitializedPrefix);
++  const bool normalizable =
++      (selected_state == CardRecordState::initialized_v1 ||
++       selected_state == CardRecordState::provisioned_uninitialized) &&
++      ours;
++  const auto nonzero = [](const security::SecureBuffer &bytes) {
++    return !std::ranges::all_of(bytes.bytes(), [](const std::byte value) {
++      return value == std::byte{};
++    });
++  };
++  const std::array<bool, 2> leftover{normalizable && nonzero(other[0]),
++                                     normalizable && nonzero(other[1])};
++  return {.record =
++              std::move(slots[length_index(selected_length)][selected_slot]),
+           .commit_id = parsed[selected].commit_id,
+           .previous_id = parsed[selected].previous_id,
+           .slot = selected_slot,
+           .descriptor = selected,
++          .length = selected_length,
+           .mirrored =
+               parsed[0].valid && parsed[1].valid &&
+               equal_bytes(descriptors[0].bytes(), descriptors[1].bytes()) &&
+-              parsed[selected].inactive_matches};
++              parsed[selected].inactive_matches && !leftover[0] &&
++              !leftover[1],
++          .leftover = leftover};
++}
++
++void write_verified(ICardRecordJournalStorage &storage, std::size_t offset,
++                    std::span<const std::byte> intended);
++
++void zero_verified(ICardRecordJournalStorage &storage, const std::size_t offset,
++                   const std::size_t length) {
++  const security::SecureBuffer zeros(length);
++  write_verified(storage, offset, zeros.bytes());
++}
++
++// Everything after the two-envelope layout, up to the reserved size the card
++// actually has. Used only where none of it can hold the active record. An
++// already blank tail is not rewritten.
++void zero_reserved_tail(ICardRecordJournalStorage &storage) {
++  const std::size_t end =
++      std::min(storage.capacity(), kCardRecordJournalV1ReservedSize);
++  const std::size_t length = end - kCardRecordJournalV1StorageSize;
++  const security::SecureBuffer tail =
++      read_exact(storage, kCardRecordJournalV1StorageSize, length);
++  if (std::ranges::all_of(tail.bytes(), [](const std::byte value) {
++        return value == std::byte{};
++      }))
++    return;
++  zero_verified(storage, kCardRecordJournalV1StorageSize, length);
+ }
+ 
+ void validate_logical_record(const std::span<const std::byte> record) {
+@@ -405,9 +496,15 @@ security::SecureBuffer
+ read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
+   LoadedJournal journal = load_journal(storage);
+   if (!journal.mirrored) {
+-    security::SecureBuffer filler(kCardRecordV1Size);
++    security::SecureBuffer filler(journal.length);
+     fill_random(filler.bytes());
+-    write_verified(storage, slot_offset(journal.slot ^ 1U), filler.bytes());
++    write_verified(storage, slot_offset(journal.length, journal.slot ^ 1U),
++                   filler.bytes());
++    const std::size_t other = other_length(journal.length);
++    for (std::uint32_t slot = 0; slot < 2; ++slot) {
++      if (journal.leftover[slot])
++        zero_verified(storage, slot_offset(other, slot), other);
++    }
+     const DescriptorBytes normalized_descriptor =
+         make_descriptor(journal.commit_id, journal.previous_id, journal.slot,
+                         journal.record.bytes(), filler.bytes());
+@@ -420,6 +517,7 @@ read_card_record_journal_v1(ICardRecordJournalStorage &storage) {
+     if (!normalized.mirrored ||
+         !equal_bytes(normalized.commit_id, journal.commit_id) ||
+         normalized.slot != journal.slot ||
++        normalized.length != journal.length ||
+         !equal_bytes(normalized.record.bytes(), journal.record.bytes())) {
+       fail(CardError::device_failure,
+            "card record journal recovery did not normalize storage");
+@@ -442,8 +540,9 @@ CardRecordJournalMediaState inspect_card_record_journal_media_v1(
+                  kCardRecordV1Size),
+       read_exact(storage, kCardRecordJournalV1Slot1Offset,
+                  kCardRecordV1Size)};
+-  const std::array<Digest, 2> slot_digests{
+-      sha256(slots[0].bytes()), sha256(slots[1].bytes())};
++  // Only descriptor validity matters here, which no slot digest affects.
++  const SlotDigests slot_digests{
++      {{sha256(slots[0].bytes()), sha256(slots[1].bytes())}, {}}};
+   const std::array<ParsedDescriptor, 2> parsed{
+       parse_descriptor(descriptors[0].bytes(), slot_digests),
+       parse_descriptor(descriptors[1].bytes(), slot_digests)};
+@@ -505,8 +604,10 @@ void provision_card_record_journal_v1(
+       std::to_integer<std::uint32_t>(slot_random.front()) & 1U;
+   security::SecureBuffer filler(kCardRecordV1Size);
+   fill_random(filler.bytes());
+-  write_verified(storage, slot_offset(initial_slot ^ 1U), filler.bytes());
+-  write_verified(storage, slot_offset(initial_slot), provisioning_record);
++  write_verified(storage, slot_offset(kCardRecordV1Size, initial_slot ^ 1U),
++                 filler.bytes());
++  write_verified(storage, slot_offset(kCardRecordV1Size, initial_slot),
++                 provisioning_record);
+   const DescriptorBytes descriptor =
+       make_descriptor(commit_id, previous_id, initial_slot, provisioning_record,
+                       filler.bytes());
+@@ -542,20 +643,34 @@ void bootstrap_uninitialized_card_record_journal_v1(
+   }
+ }
+ 
+-void commit_card_record_journal_v1(
+-    ICardRecordJournalStorage &storage,
+-    const std::span<const std::byte> replacement_record) {
++namespace {
++
++void commit_record(ICardRecordJournalStorage &storage,
++                   const std::span<const std::byte> replacement_record,
++                   const bool accept_future_source) {
+   validate_logical_record(replacement_record);
+   LoadedJournal current = load_journal(storage);
+-  validate_logical_record(current.record.bytes());
+-
+-  const std::uint32_t target_slot = current.slot ^ 1U;
++  const CardRecordState source = inspect_card_record(current.record.bytes());
++  if (!accept_future_source || source != CardRecordState::unsupported_version)
++    validate_logical_record(current.record.bytes());
++  // Nothing after the two-envelope layout belongs to a provisioned card.
++  if (source == CardRecordState::provisioned_uninitialized)
++    zero_reserved_tail(storage);
++
++  const std::size_t length = replacement_record.size();
++  const bool same_length = length == current.length;
++  // A different length has both of its slots inactive; start from the first.
++  const std::uint32_t target_slot = same_length ? current.slot ^ 1U : 0U;
+   const std::uint32_t target_descriptor = current.descriptor ^ 1U;
+-  write_verified(storage, slot_offset(target_slot), replacement_record);
++  write_verified(storage, slot_offset(length, target_slot), replacement_record);
+   const CommitId commit_id =
+       distinct_commit_id(current.commit_id, current.previous_id);
+-  security::SecureBuffer filler(kCardRecordV1Size);
++  security::SecureBuffer filler(length);
+   fill_random(filler.bytes());
++  if (!same_length) {
++    write_verified(storage, slot_offset(length, target_slot ^ 1U),
++                   filler.bytes());
++  }
+   const DescriptorBytes descriptor =
+       make_descriptor(commit_id, current.commit_id, target_slot,
+                       replacement_record, filler.bytes());
+@@ -565,18 +680,38 @@ void commit_card_record_journal_v1(
+   // before mirroring metadata so a stable card retains no readable update
+   // history. If either cleanup step tears, the random commit link still selects
+   // the already-verified new record and a retry can finish normalization.
+-  write_verified(storage, slot_offset(current.slot), filler.bytes());
++  if (same_length) {
++    write_verified(storage, slot_offset(length, current.slot), filler.bytes());
++    const std::size_t other = other_length(length);
++    for (std::uint32_t slot = 0; slot < 2; ++slot) {
++      if (current.leftover[slot])
++        zero_verified(storage, slot_offset(other, slot), other);
++    }
++  } else {
++    zero_verified(storage, slot_offset(current.length, current.slot),
++                  current.length);
++    zero_verified(storage, slot_offset(current.length, current.slot ^ 1U),
++                  current.length);
++  }
+   write_verified(storage, descriptor_offset(current.descriptor), descriptor);
+ 
+   LoadedJournal committed = load_journal(storage);
+   if (!equal_bytes(committed.commit_id, commit_id) ||
+-      committed.slot != target_slot ||
++      committed.slot != target_slot || committed.length != length ||
+       !equal_bytes(committed.record.bytes(), replacement_record)) {
+     fail(CardError::device_failure,
+          "card record journal commit did not become active");
+   }
+ }
+ 
++} // namespace
++
++void commit_card_record_journal_v1(
++    ICardRecordJournalStorage &storage,
++    const std::span<const std::byte> replacement_record) {
++  commit_record(storage, replacement_record, false);
++}
++
+ security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage& storage) {
+   return std::move(load_journal(storage).record);
+ }
+@@ -584,12 +719,14 @@ security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage
+ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
+     const std::span<const std::byte> expected) {
+   const auto current = snapshot_card_record_journal_v1(storage);
+-  if (inspect_card_record(expected) != CardRecordState::initialized_v1 ||
++  const CardRecordState state = inspect_card_record(expected);
++  if ((state != CardRecordState::initialized_v1 &&
++       state != CardRecordState::unsupported_version) ||
+       !equal_bytes(current.bytes(), expected))
+     fail(CardError::invalid_operation, "confirmed card record changed");
+   const auto marker = provision_uninitialized_card_record_v1();
+   std::exception_ptr write_failure;
+-  try { commit_card_record_journal_v1(storage, marker.bytes()); }
++  try { commit_record(storage, marker.bytes(), true); }
+   catch (...) { USB_VAULT_TRACE_FAILURE("card/card_record_journal_v1", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); write_failure = std::current_exception(); }
+   // A read completes cleanup if commit became authoritative before interruption.
+   const auto observed = read_card_record_journal_v1(storage);
+@@ -597,6 +734,8 @@ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
+     if (write_failure) std::rethrow_exception(write_failure);
+     fail(CardError::device_failure, "reset did not verify");
+   }
++  // The marker is authoritative; an earlier format's data may still follow it.
++  zero_reserved_tail(storage);
+ }
+ 
+ } // namespace usb_vault::card
+diff --git a/src/card/card_record_journal_v1.h b/src/card/card_record_journal_v1.h
+index b24defd..e81890a 100644
+--- a/src/card/card_record_journal_v1.h
++++ b/src/card/card_record_journal_v1.h
+@@ -26,6 +26,21 @@ static_assert(kCardRecordJournalV1Slot1Offset ==
+ static_assert(kCardRecordJournalV1StorageSize ==
+               kCardRecordJournalV1Slot1Offset + 216);
+ 
++// Three-envelope records use their own pair of slots after the two-envelope
++// layout, so switching lengths never overwrites the active record. The same
++// descriptors select either length. Initialization and reset clear the whole
++// reserved range so a reset card matches a freshly provisioned one.
++inline constexpr std::size_t kCardRecordJournalV1ThreeSlot0Offset = 736;
++inline constexpr std::size_t kCardRecordJournalV1ThreeSlot1Offset = 1028;
++inline constexpr std::size_t kCardRecordJournalV1ThreeSlotEnd = 1320;
++inline constexpr std::size_t kCardRecordJournalV1ReservedSize = 1808;
++static_assert(kCardRecordJournalV1ThreeSlot0Offset ==
++              kCardRecordJournalV1StorageSize);
++static_assert(kCardRecordJournalV1ThreeSlot1Offset ==
++              kCardRecordJournalV1ThreeSlot0Offset + kCardRecordV1ThreeSlotSize);
++static_assert(kCardRecordJournalV1ThreeSlotEnd ==
++              kCardRecordJournalV1ThreeSlot1Offset + kCardRecordV1ThreeSlotSize);
++
+ // Read-only evidence visible in the reserved journal range. None is not by
+ // itself authorization to erase or adopt a card: a hardware adapter must also
+ // prove that the target media is accessible, stable, and contains no legacy
+@@ -59,6 +74,9 @@ protected:
+ };
+ 
+ // Snapshot and conditional destructive reset used only after native confirmation.
++// Reset accepts an initialized record of either length, or a future-version
++// record left by an earlier format, publishes the provisioning marker and then
++// zeroes the rest of the reserved range.
+ [[nodiscard]] security::SecureBuffer snapshot_card_record_journal_v1(ICardRecordJournalStorage& storage);
+ void reset_card_record_journal_v1(ICardRecordJournalStorage& storage,
+     std::span<const std::byte> expected);
+@@ -108,7 +126,11 @@ void bootstrap_uninitialized_card_record_journal_v1(
+ // Atomically replaces the logical record by writing and verifying the inactive
+ // slot, publishing a new descriptor, randomizing the old slot, and mirroring
+ // metadata. A write error is accepted only when readback proves the intended
+-// bytes landed.
++// bytes landed. The replacement may change between the two- and
++// three-envelope lengths; slots of the length no longer in use are zeroed
++// after publication, and a read treats anything else left there as an
++// interrupted commit to clear. Committing over the provisioning marker first zeroes the
++// reserved range after the two-envelope layout.
+ void commit_card_record_journal_v1(
+     ICardRecordJournalStorage &storage,
+     std::span<const std::byte> replacement_record);
+diff --git a/src/card/card_record_v1.cpp b/src/card/card_record_v1.cpp
+index 02195d5..e4d7b76 100644
+--- a/src/card/card_record_v1.cpp
++++ b/src/card/card_record_v1.cpp
+@@ -1,5 +1,6 @@
+ #include "usb_vault/card/card_record_v1.h"
+ 
++
+ #include "security/argon2id_runtime.h"
+ 
+ #include <Windows.h>
+@@ -387,15 +388,19 @@ decrypt_envelope(const std::span<const std::byte> record,
+   return result;
+ }
+ 
++// Unused envelopes are random, so a fresh card looks the same however many
++// passwords are later set. Initialization builds the three-envelope record;
++// the legacy rewrap still builds the two-envelope one.
+ [[nodiscard]] security::SecureBuffer
+ build_record(const security::SecureBuffer &root_secret,
+              const security::SecureBuffer &primary_password_utf8,
+-             const security::SecureBuffer *const secondary_password_utf8) {
++             const security::SecureBuffer *const secondary_password_utf8,
++             const std::size_t record_size = kCardRecordV1Size) {
+   if (root_secret.size() != kCardRecordV1RootSecretSize) {
+     throw std::invalid_argument("card root secret has an invalid size");
+   }
+ 
+-  security::SecureBuffer result(kCardRecordV1Size);
++  security::SecureBuffer result(record_size);
+   fill_random(result.bytes());
+   write_header(result.bytes());
+   encrypt_envelope(result.bytes(), kCardRecordV1PrimaryEnvelopeOffset,
+@@ -410,6 +415,80 @@ build_record(const security::SecureBuffer &root_secret,
+   return result;
+ }
+ 
++[[nodiscard]] security::SecureBuffer
++duplicate(const security::SecureBuffer &source) {
++  security::SecureBuffer result(source.size());
++  std::ranges::copy(source.bytes(), result.bytes().begin());
++  return result;
++}
++
++// `positions` has bit N set when envelope N matched. It exists only so an
++// append can tell which envelope the caller's password opened; it is never
++// stored, logged or returned through the public interface.
++struct OpenedRecord final {
++  security::SecureBuffer root_secret{kCardRecordV1RootSecretSize};
++  unsigned int positions{0};
++};
++
++// One password-hardening operation, then every envelope under every slot
++// binding with no early exit. A kept envelope is moved without re-encryption,
++// so its binding no longer has to match its position.
++[[nodiscard]] OpenedRecord open_record(const std::span<const std::byte> record,
++                                       security::SecureBuffer password_utf8) {
++  if (inspect_card_record(record) != CardRecordState::initialized_v1) {
++    password_utf8.clear();
++    throw std::invalid_argument("card record is not an initialized v1 record");
++  }
++  try {
++    security::SecureBuffer master_key =
++        derive_master_key(password_utf8, record);
++    password_utf8.clear();
++    OpenedRecord opened;
++    unsigned int matches = 0;
++    unsigned int difference = 0;
++    const std::size_t envelopes =
++        (record.size() - kCardRecordV1HeaderSize) / kCardRecordV1EnvelopeSize;
++    for (std::size_t position = 0; position < envelopes; ++position) {
++      for (unsigned int binding = 0; binding < 3U; ++binding) {
++        EnvelopeResult result = decrypt_envelope(
++            record,
++            kCardRecordV1HeaderSize + (position * kCardRecordV1EnvelopeSize),
++            static_cast<std::byte>(binding), master_key);
++        const unsigned int hit = static_cast<unsigned int>(result.authenticated);
++        const unsigned int first = static_cast<unsigned int>(matches == 0U);
++        const unsigned int take = 0U - (hit & first);
++        const unsigned int check = 0U - (hit & (first ^ 1U));
++        for (std::size_t index = 0; index < kCardRecordV1RootSecretSize;
++             ++index) {
++          const unsigned int kept =
++              std::to_integer<unsigned int>(opened.root_secret.bytes()[index]);
++          const unsigned int found =
++              std::to_integer<unsigned int>(result.root_secret.bytes()[index]);
++          difference |= (kept ^ found) & check;
++          opened.root_secret.bytes()[index] =
++              static_cast<std::byte>((kept & ~take) | (found & take));
++        }
++        matches += hit;
++        opened.positions |= hit << position;
++        result.root_secret.clear();
++      }
++    }
++    master_key.clear();
++    if (matches == 0U) {
++      opened.root_secret.clear();
++      throw CardCredentialRejected();
++    }
++    if (difference != 0U) {
++      opened.root_secret.clear();
++      throw std::runtime_error("card record envelopes disagree on the root");
++    }
++    return opened;
++  } catch (...) {
++    password_utf8.clear();
++    throw;
++  }
++}
++
+ } // namespace
+ 
+ CardCredentialRejected::CardCredentialRejected()
+@@ -429,7 +508,8 @@ InitializedCardRecordV1 initialize_card_record_and_root_v1(
+   fill_random(root_secret.bytes());
+   try {
+     security::SecureBuffer record =
+-        build_record(root_secret, password_utf8, nullptr);
++        build_record(root_secret, password_utf8, nullptr,
++                     kCardRecordV1ThreeSlotSize);
+     password_utf8.clear();
+     return {.record = std::move(record),
+             .root_secret = std::move(root_secret)};
+@@ -443,51 +523,7 @@ InitializedCardRecordV1 initialize_card_record_and_root_v1(
+ security::SecureBuffer
+ unlock_card_record_v1(const std::span<const std::byte> record,
+                       security::SecureBuffer password_utf8) {
+-  if (inspect_card_record(record) != CardRecordState::initialized_v1) {
+-    password_utf8.clear();
+-    throw std::invalid_argument("card record is not an initialized v1 record");
+-  }
+-
+-  try {
+-    security::SecureBuffer master_key =
+-        derive_master_key(password_utf8, record);
+-    EnvelopeResult primary = decrypt_envelope(
+-        record, kCardRecordV1PrimaryEnvelopeOffset, std::byte{0}, master_key);
+-    EnvelopeResult secondary = decrypt_envelope(
+-        record, kCardRecordV1SecondaryEnvelopeOffset, std::byte{1}, master_key);
+-    master_key.clear();
+-    password_utf8.clear();
+-
+-    const unsigned int successful_envelopes =
+-        static_cast<unsigned int>(primary.authenticated) +
+-        static_cast<unsigned int>(secondary.authenticated);
+-    if (successful_envelopes != 1U) {
+-      primary.root_secret.clear();
+-      secondary.root_secret.clear();
+-      if (successful_envelopes == 0U) {
+-        throw CardCredentialRejected();
+-      }
+-      throw std::runtime_error("card record credential is ambiguous");
+-    }
+-
+-    const unsigned int primary_mask =
+-        0U - static_cast<unsigned int>(primary.authenticated);
+-    security::SecureBuffer result(kCardRecordV1RootSecretSize);
+-    for (std::size_t index = 0; index < result.size(); ++index) {
+-      const unsigned int primary_byte =
+-          std::to_integer<unsigned int>(primary.root_secret.bytes()[index]);
+-      const unsigned int secondary_byte =
+-          std::to_integer<unsigned int>(secondary.root_secret.bytes()[index]);
+-      result.bytes()[index] = static_cast<std::byte>(
+-          (primary_byte & primary_mask) | (secondary_byte & ~primary_mask));
+-    }
+-    primary.root_secret.clear();
+-    secondary.root_secret.clear();
+-    return result;
+-  } catch (...) {
+-    password_utf8.clear();
+-    throw;
+-  }
++  return std::move(open_record(record, std::move(password_utf8)).root_secret);
+ }
+ 
+ security::SecureBuffer
+@@ -521,4 +557,45 @@ rewrap_card_record_v1(const std::span<const std::byte> record,
+   }
+ }
+ 
++security::SecureBuffer
++append_card_password_v1(const std::span<const std::byte> record,
++                        security::SecureBuffer existing_password_utf8,
++                        security::SecureBuffer new_password_utf8) {
++  if (constant_time_equal(existing_password_utf8.bytes(),
++                          new_password_utf8.bytes())) {
++    existing_password_utf8.clear();
++    new_password_utf8.clear();
++    throw std::invalid_argument(
++        "new password must differ from the current password");
++  }
++
++  try {
++    OpenedRecord opened =
++        open_record(record, duplicate(existing_password_utf8));
++    // The lowest envelope the existing password opened is "current". Keep the
++    // first envelope unless that is the current one; then keep the second.
++    const std::size_t kept_offset =
++        (opened.positions & 1U) != 0U ? kCardRecordV1SecondaryEnvelopeOffset
++                                       : kCardRecordV1PrimaryEnvelopeOffset;
++    security::SecureBuffer result(kCardRecordV1ThreeSlotSize);
++    std::ranges::copy(record.first(kCardRecordV1HeaderSize),
++                      result.bytes().begin());
++    encrypt_envelope(result.bytes(), kCardRecordV1PrimaryEnvelopeOffset,
++                     std::byte{0}, opened.root_secret, new_password_utf8);
++    encrypt_envelope(result.bytes(), kCardRecordV1SecondaryEnvelopeOffset,
++                     std::byte{1}, opened.root_secret, existing_password_utf8);
++    std::ranges::copy(record.subspan(kept_offset, kCardRecordV1EnvelopeSize),
++                      result.bytes().begin() +
++                          kCardRecordV1TertiaryEnvelopeOffset);
++    opened.root_secret.clear();
++    existing_password_utf8.clear();
++    new_password_utf8.clear();
++    return result;
++  } catch (...) {
++    existing_password_utf8.clear();
++    new_password_utf8.clear();
++    throw;
++  }
++}
++
+ } // namespace usb_vault::card
+diff --git a/src/card/card_record_v1_inspection.cpp b/src/card/card_record_v1_inspection.cpp
+index c353061..0cf5e3e 100644
+--- a/src/card/card_record_v1_inspection.cpp
++++ b/src/card/card_record_v1_inspection.cpp
+@@ -40,9 +40,11 @@ constexpr std::uint32_t kArgon2Version13 = 0x13;
+              [](const std::byte value) { return value == std::byte{0}; });
+ }
+ 
++// A three-envelope record keeps the v1 header verbatim, length field included.
+ [[nodiscard]] bool valid_v1_header(
+     const std::span<const std::byte> record) noexcept {
+-  return record.size() == kCardRecordV1Size &&
++  return (record.size() == kCardRecordV1Size ||
++          record.size() == kCardRecordV1ThreeSlotSize) &&
+          std::ranges::equal(record.first(kInitializedMagic.size()),
+                             kInitializedMagic) &&
+          read_u32(record, 8) == kCardRecordV1Version &&
+diff --git a/tests/card_record_journal_v1_tests.cpp b/tests/card_record_journal_v1_tests.cpp
+index fefca7d..a1e1cdb 100644
+--- a/tests/card_record_journal_v1_tests.cpp
++++ b/tests/card_record_journal_v1_tests.cpp
+@@ -32,7 +32,12 @@ using usb_vault::card::kCardRecordJournalV1Descriptor1Offset;
+ using usb_vault::card::kCardRecordJournalV1DescriptorSize;
+ using usb_vault::card::kCardRecordJournalV1Slot0Offset;
+ using usb_vault::card::kCardRecordJournalV1Slot1Offset;
++using usb_vault::card::kCardRecordJournalV1ReservedSize;
+ using usb_vault::card::kCardRecordJournalV1StorageSize;
++using usb_vault::card::kCardRecordJournalV1ThreeSlot0Offset;
++using usb_vault::card::kCardRecordJournalV1ThreeSlot1Offset;
++using usb_vault::card::kCardRecordJournalV1ThreeSlotEnd;
++using usb_vault::card::kCardRecordV1ThreeSlotSize;
+ using usb_vault::card::kCardRecordV1Size;
+ using usb_vault::card::make_error_code;
+ using usb_vault::card::inspect_card_record;
+@@ -120,7 +125,7 @@ void store_u32(const std::span<std::byte> bytes, const std::size_t offset,
+ }
+ 
+ [[nodiscard]] bool
+-same_range(const std::array<std::byte, kCardRecordJournalV1StorageSize> &data,
++same_range(const std::array<std::byte, kCardRecordJournalV1ReservedSize> &data,
+            const std::size_t left, const std::size_t right,
+            const std::size_t length) noexcept {
+   return std::ranges::equal(std::span(data).subspan(left, length),
+@@ -128,7 +133,7 @@ same_range(const std::array<std::byte, kCardRecordJournalV1StorageSize> &data,
+ }
+ 
+ [[nodiscard]] bool same_record_at(
+-    const std::array<std::byte, kCardRecordJournalV1StorageSize> &data,
++    const std::array<std::byte, kCardRecordJournalV1ReservedSize> &data,
+     const std::size_t offset, const SecureBuffer &record) noexcept {
+   return std::ranges::equal(std::span(data).subspan(offset, record.size()),
+                             record.bytes());
+@@ -182,8 +187,8 @@ public:
+     corrupt_read_call_ = std::numeric_limits<std::size_t>::max();
+   }
+ 
+-  std::size_t capacity_{kCardRecordJournalV1StorageSize};
+-  std::array<std::byte, kCardRecordJournalV1StorageSize> data_{};
++  std::size_t capacity_{kCardRecordJournalV1ReservedSize};
++  std::array<std::byte, kCardRecordJournalV1ReservedSize> data_{};
+   WriteFault write_fault_{};
+   std::size_t corrupt_read_call_{std::numeric_limits<std::size_t>::max()};
+   std::size_t read_calls_{};
+@@ -392,7 +397,7 @@ void test_logical_state_inspection_is_strictly_read_only() {
+     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+                CardRecordState::provisioned_uninitialized,
+            "stable marker journal returned the wrong logical state");
+-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
++    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
+            "stable logical-state inspection was not one read-only snapshot");
+   }
+ 
+@@ -405,7 +410,7 @@ void test_logical_state_inspection_is_strictly_read_only() {
+     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+                CardRecordState::initialized_v1,
+            "initialized journal returned the wrong logical state");
+-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
++    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
+            "initialized logical-state inspection wrote storage");
+   }
+ 
+@@ -454,7 +459,7 @@ void test_logical_state_inspection_selects_without_normalizing() {
+     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+                CardRecordState::provisioned_uninitialized,
+            "read-only inspection selected partial staging bytes");
+-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
++    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
+            "read-only staging inspection normalized the inactive slot");
+   }
+ 
+@@ -471,7 +476,7 @@ void test_logical_state_inspection_selects_without_normalizing() {
+     expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+                CardRecordState::initialized_v1,
+            "read-only inspection did not select the published commit");
+-    expect(storage.read_calls_ == 4 && storage.write_calls_ == 0,
++    expect(storage.read_calls_ == 6 && storage.write_calls_ == 0,
+            "read-only published-commit inspection normalized storage");
+   }
+ }
+@@ -643,9 +648,10 @@ void test_staging_failures_preserve_active_commit() {
+   {
+     FakeStorage storage;
+     provision(storage, marker);
+-    // A commit first reads two descriptors and two slots. Corrupt only the
+-    // immediate staging readback, not the bytes retained by fake storage.
+-    storage.corrupt_read_call_ = 4;
++    // A commit first reads two descriptors and four slots, then over the
++    // provisioning marker checks the reserved tail. Corrupt only the staging
++    // readback, not the bytes retained by fake storage.
++    storage.corrupt_read_call_ = 7;
+     expect_card_error(
+         [&] { commit_card_record_journal_v1(storage, replacement.bytes()); },
+         CardError::device_failure, "corrupted staging readback was accepted");
+@@ -791,7 +797,7 @@ void test_invalid_inputs_do_not_touch_storage() {
+ 
+   {
+     FakeStorage storage;
+-    storage.capacity_ = kCardRecordJournalV1StorageSize - 1;
++    storage.capacity_ = kCardRecordJournalV1ThreeSlotEnd - 1;
+     expect_card_error(
+         [&] { provision_card_record_journal_v1(storage, marker.bytes()); },
+         CardError::invalid_configuration,
+@@ -826,7 +832,7 @@ void test_invalid_inputs_do_not_touch_storage() {
+ void test_reset_preserves_bytes_outside_application_region() {
+   class GuardedStorage final : public ICardRecordJournalStorage {
+    public:
+-    std::array<std::byte, kCardRecordJournalV1StorageSize + 64> data{};
++    std::array<std::byte, kCardRecordJournalV1ReservedSize + 64> data{};
+     std::size_t capacity() override { return data.size(); }
+     SecureBuffer read(std::size_t offset, std::size_t length) override {
+       expect(offset <= data.size() && length <= data.size() - offset, "out-of-range read");
+@@ -839,14 +845,14 @@ void test_reset_preserves_bytes_outside_application_region() {
+       std::ranges::copy(value, data.begin() + offset);
+     }
+   } storage;
+-  std::ranges::fill(std::span(storage.data).subspan(kCardRecordJournalV1StorageSize), std::byte{0xA5});
++  std::ranges::fill(std::span(storage.data).subspan(kCardRecordJournalV1ReservedSize), std::byte{0xA5});
+   const auto marker = provision_uninitialized_card_record_v1();
+   provision_card_record_journal_v1(storage, marker.bytes());
+   const auto record = framed_record(std::byte{0x37});
+   commit_card_record_journal_v1(storage, record.bytes());
+   const auto snapshot = usb_vault::card::snapshot_card_record_journal_v1(storage);
+   usb_vault::card::reset_card_record_journal_v1(storage, snapshot.bytes());
+-  expect(std::ranges::all_of(std::span(storage.data).subspan(kCardRecordJournalV1StorageSize),
++  expect(std::ranges::all_of(std::span(storage.data).subspan(kCardRecordJournalV1ReservedSize),
+       [](std::byte value) { return value == std::byte{0xA5}; }), "reset changed unrelated card data");
+ }
+ 
+@@ -906,10 +912,193 @@ void test_confirmed_reset_snapshot_and_fault_recovery() {
+   }
+ }
+ 
++// A three-envelope record keeps the two-envelope header, length field included.
++[[nodiscard]] SecureBuffer framed_three_slot_record(const std::byte fill) {
++  const SecureBuffer header = framed_record(fill);
++  SecureBuffer result(kCardRecordV1ThreeSlotSize);
++  std::ranges::fill(result.bytes(), fill);
++  std::ranges::copy(header.bytes(), result.bytes().begin());
++  return result;
++}
++
++[[nodiscard]] bool all_zero(
++    const std::array<std::byte, kCardRecordJournalV1ReservedSize> &data,
++    const std::size_t offset, const std::size_t length) noexcept {
++  return std::ranges::all_of(std::span(data).subspan(offset, length),
++                             [](const std::byte value) {
++                               return value == std::byte{};
++                             });
++}
++
++[[nodiscard]] bool holds_record_anywhere(const FakeStorage &storage,
++                                         const SecureBuffer &record) noexcept {
++  for (const std::size_t offset :
++       {kCardRecordJournalV1Slot0Offset, kCardRecordJournalV1Slot1Offset,
++        kCardRecordJournalV1ThreeSlot0Offset,
++        kCardRecordJournalV1ThreeSlot1Offset}) {
++    if (offset + record.size() <= storage.data_.size() &&
++        same_record_at(storage.data_, offset, record))
++      return true;
++  }
++  return false;
++}
++
++void test_length_switch_commits_use_their_own_slots() {
++  const auto marker = provision_uninitialized_card_record_v1();
++  const auto two = framed_record(std::byte{0x21});
++  const auto three = framed_three_slot_record(std::byte{0x31});
++  const auto next = framed_three_slot_record(std::byte{0x32});
++  FakeStorage storage;
++  provision(storage, marker);
++  commit_card_record_journal_v1(storage, two.bytes());
++
++  commit_card_record_journal_v1(storage, three.bytes());
++  // Checked before any read, so read-side normalization cannot hide it.
++  expect(same_record_at(storage.data_, kCardRecordJournalV1ThreeSlot0Offset,
++                        three),
++         "length switch did not start from the first three-envelope slot");
++  expect(all_zero(storage.data_, kCardRecordJournalV1Slot0Offset,
++                  kCardRecordJournalV1StorageSize -
++                      kCardRecordJournalV1Slot0Offset),
++         "length switch left two-envelope slots behind");
++  storage.reset_observation();
++  expect(same(read_card_record_journal_v1(storage), three) &&
++             storage.write_calls_ == 0,
++         "completed length switch was not active and stable");
++  expect(inspect_card_record_journal_logical_state_v1_read_only(storage) ==
++             CardRecordState::initialized_v1,
++         "three-envelope record was not classified as initialized");
++
++  commit_card_record_journal_v1(storage, next.bytes());
++  expect(same(read_card_record_journal_v1(storage), next),
++         "same-length three-envelope commit did not become active");
++  expect(same_record_at(storage.data_, kCardRecordJournalV1ThreeSlot1Offset,
++                        next) &&
++             !holds_record_anywhere(storage, three),
++         "same-length commit kept the previous three-envelope record");
++
++  // Returning to the two-envelope length clears the three-envelope slots.
++  commit_card_record_journal_v1(storage, two.bytes());
++  expect(all_zero(storage.data_, kCardRecordJournalV1ThreeSlot0Offset,
++                  kCardRecordJournalV1ThreeSlotEnd -
++                      kCardRecordJournalV1ThreeSlot0Offset),
++         "switching back left three-envelope slots behind");
++  storage.reset_observation();
++  expect(same(read_card_record_journal_v1(storage), two) &&
++             storage.write_calls_ == 0,
++         "switch back was not active and stable");
++}
++
++void test_initialization_clears_the_reserved_tail() {
++  const auto marker = provision_uninitialized_card_record_v1();
++  const auto three = framed_three_slot_record(std::byte{0x41});
++  FakeStorage storage;
++  provision(storage, marker);
++  std::ranges::fill(std::span(storage.data_).subspan(
++                        kCardRecordJournalV1StorageSize),
++                    std::byte{0x5A});
++  commit_card_record_journal_v1(storage, three.bytes());
++  expect(same(read_card_record_journal_v1(storage), three),
++         "initialization from the marker did not become active");
++  expect(all_zero(storage.data_, kCardRecordJournalV1ThreeSlotEnd,
++                  kCardRecordJournalV1ReservedSize -
++                      kCardRecordJournalV1ThreeSlotEnd),
++         "initialization kept data after the three-envelope slots");
++  expect(all_zero(storage.data_, kCardRecordJournalV1Slot0Offset,
++                  kCardRecordJournalV1StorageSize -
++                      kCardRecordJournalV1Slot0Offset),
++         "initialization kept the provisioning marker slots");
++}
++
++void test_interrupted_length_switch_recovers_one_record() {
++  const auto marker = provision_uninitialized_card_record_v1();
++  const auto two = framed_record(std::byte{0x51});
++  const auto three = framed_three_slot_record(std::byte{0x52});
++  for (std::size_t call = 0; call < 6; ++call) {
++    for (const std::size_t torn : {0U, 64U, 216U}) {
++      FakeStorage storage;
++      provision(storage, marker);
++      commit_card_record_journal_v1(storage, two.bytes());
++      storage.reset_observation();
++      storage.write_fault_ = {call, torn};
++      try {
++        commit_card_record_journal_v1(storage, three.bytes());
++      } catch (const std::system_error &) {
++      }
++      storage.reset_observation();
++      const auto observed = read_card_record_journal_v1(storage);
++      const bool old_active = same(observed, two);
++      expect(old_active || same(observed, three),
++             "interrupted length switch lost both records");
++      expect(!holds_record_anywhere(storage, old_active ? three : two),
++             "recovered journal kept the inactive record");
++      expect(old_active
++                 ? all_zero(storage.data_, kCardRecordJournalV1ThreeSlot0Offset,
++                            kCardRecordJournalV1ThreeSlotEnd -
++                                kCardRecordJournalV1ThreeSlot0Offset)
++                 : all_zero(storage.data_, kCardRecordJournalV1Slot0Offset,
++                            kCardRecordJournalV1StorageSize -
++                                kCardRecordJournalV1Slot0Offset),
++             "recovered journal kept bytes of the other record length");
++      storage.reset_observation();
++      static_cast<void>(read_card_record_journal_v1(storage));
++      expect(storage.write_calls_ == 0, "recovered journal was not stable");
++    }
++  }
++}
++
++void test_reset_clears_any_length_and_earlier_formats() {
++  using usb_vault::card::reset_card_record_journal_v1;
++  using usb_vault::card::snapshot_card_record_journal_v1;
++  const auto marker = provision_uninitialized_card_record_v1();
++
++  FakeStorage three_slot;
++  provision(three_slot, marker);
++  const auto three = framed_three_slot_record(std::byte{0x61});
++  commit_card_record_journal_v1(three_slot, three.bytes());
++  reset_card_record_journal_v1(three_slot, three.bytes());
++  expect(same(snapshot_card_record_journal_v1(three_slot), marker) &&
++             all_zero(three_slot.data_, kCardRecordJournalV1StorageSize,
++                      kCardRecordJournalV1ReservedSize -
++                          kCardRecordJournalV1StorageSize),
++         "three-envelope reset did not restore a provisioned card");
++
++  // An earlier format: a future-version record with its own data after the
++  // two-envelope layout. Reading leaves that data alone; reset removes it.
++  FakeStorage earlier;
++  provision(earlier, marker);
++  const auto future = future_record();
++  replace_active_record_and_rehash_descriptors(earlier, marker, future);
++  std::ranges::fill(std::span(earlier.data_).subspan(
++                        kCardRecordJournalV1StorageSize),
++                    std::byte{0x77});
++  earlier.reset_observation();
++  expect(same(read_card_record_journal_v1(earlier), future) &&
++             earlier.write_calls_ == 0,
++         "reading an earlier format changed its data");
++  expect_card_error(
++      [&] {
++        commit_card_record_journal_v1(earlier,
++                                      framed_record(std::byte{0x62}).bytes());
++      },
++      CardError::invalid_configuration,
++      "an ordinary commit replaced an earlier-format record");
++  reset_card_record_journal_v1(earlier, future.bytes());
++  expect(same(snapshot_card_record_journal_v1(earlier), marker) &&
++             all_zero(earlier.data_, kCardRecordJournalV1StorageSize,
++                      kCardRecordJournalV1ReservedSize -
++                          kCardRecordJournalV1StorageSize),
++         "earlier-format reset did not restore a provisioned card");
++}
++
+ } // namespace
+ 
+ int main() {
+   try {
++    test_length_switch_commits_use_their_own_slots();
++    test_initialization_clears_the_reserved_tail();
++    test_interrupted_length_switch_recovers_one_record();
++    test_reset_clears_any_length_and_earlier_formats();
+     test_media_inspection_is_read_only();
+     test_bootstrap_is_resumable_and_non_destructive();
+     test_complete_future_record_reaches_product_classification();
+diff --git a/tests/card_record_v1_tests.cpp b/tests/card_record_v1_tests.cpp
+index e04a14b..083567a 100644
+--- a/tests/card_record_v1_tests.cpp
++++ b/tests/card_record_v1_tests.cpp
+@@ -12,7 +12,10 @@
+ 
+ namespace {
+ 
++using usb_vault::card::append_card_password_v1;
+ using usb_vault::card::CardCredentialRejected;
++using usb_vault::card::kCardRecordV1TertiaryEnvelopeOffset;
++using usb_vault::card::kCardRecordV1ThreeSlotSize;
+ using usb_vault::card::CardRecordState;
+ using usb_vault::card::initialize_card_record_and_root_v1;
+ using usb_vault::card::initialize_card_record_v1;
+@@ -113,8 +116,8 @@ void test_initialization_and_primary_unlock() {
+       initialize_card_record_and_root_v1(
+           secure_text("daily-password-v1"));
+   SecureBuffer &initialized = material.record;
+-  expect(initialized.size() == kCardRecordV1Size,
+-         "initialized record has wrong size");
++  expect(initialized.size() == kCardRecordV1ThreeSlotSize,
++         "initialized record is not a three-envelope record");
+   expect(inspect_card_record(initialized.bytes()) ==
+              CardRecordState::initialized_v1,
+          "initialized record framing was rejected");
+@@ -123,8 +126,12 @@ void test_initialization_and_primary_unlock() {
+       kCardRecordV1PrimaryEnvelopeOffset, kCardRecordV1EnvelopeSize);
+   const auto secondary = initialized.bytes().subspan(
+       kCardRecordV1SecondaryEnvelopeOffset, kCardRecordV1EnvelopeSize);
+-  expect(!std::ranges::equal(primary, secondary),
+-         "primary and random secondary envelopes are identical");
++  const auto tertiary = initialized.bytes().subspan(
++      kCardRecordV1TertiaryEnvelopeOffset, kCardRecordV1EnvelopeSize);
++  expect(!std::ranges::equal(primary, secondary) &&
++             !std::ranges::equal(primary, tertiary) &&
++             !std::ranges::equal(secondary, tertiary),
++         "primary and random unused envelopes are not distinct");
+ 
+   SecureBuffer root = unlock_card_record_v1(initialized.bytes(),
+                                             secure_text("daily-password-v1"));
+@@ -163,7 +170,8 @@ void test_dual_rewrap_accepts_both_credentials_without_shape_change() {
+   SecureBuffer dual = rewrap_card_record_v1(
+       initialized.bytes(), secure_text("daily-password-v2"),
+       secure_text("lure-password-v2"), secure_text("daily-password-v2"));
+-  expect(dual.size() == initialized.size(), "rewrap changed fixed record size");
++  expect(dual.size() == kCardRecordV1Size,
++         "legacy rewrap did not build the two-envelope record");
+   expect(inspect_card_record(dual.bytes()) == CardRecordState::initialized_v1,
+          "rewrapped record framing was rejected");
+   expect(std::ranges::equal(
+@@ -223,6 +231,148 @@ void test_invalid_password_input_and_header_versions() {
+       "malformed record reached password processing");
+ }
+ 
++[[nodiscard]] std::span<const std::byte>
++envelope_at(const SecureBuffer &record, const std::size_t position) {
++  return record.bytes().subspan(
++      kCardRecordV1HeaderSize + (position * kCardRecordV1EnvelopeSize),
++      kCardRecordV1EnvelopeSize);
++}
++
++void expect_opens(const SecureBuffer &record, const std::string_view password,
++                  const SecureBuffer &root, const char *const message) {
++  SecureBuffer opened = unlock_card_record_v1(record.bytes(),
++                                              secure_text(password));
++  expect_same_secret(root, opened, message);
++}
++
++void expect_rejected(const SecureBuffer &record,
++                     const std::string_view password,
++                     const char *const message) {
++  expect_credential_rejected(
++      [&] {
++        static_cast<void>(
++            unlock_card_record_v1(record.bytes(), secure_text(password)));
++      },
++      message);
++}
++
++// One append, checked against the rule: [new, existing, kept] where kept is
++// the old first envelope unless the existing password opened it.
++[[nodiscard]] SecureBuffer append_and_check(const SecureBuffer &record,
++                                            const std::string_view existing,
++                                            const std::string_view added,
++                                            const std::size_t kept_position) {
++  SecureBuffer result = append_card_password_v1(
++      record.bytes(), secure_text(existing), secure_text(added));
++  expect(result.size() == kCardRecordV1ThreeSlotSize,
++         "append did not produce a three-envelope record");
++  expect(inspect_card_record(result.bytes()) ==
++             CardRecordState::initialized_v1,
++         "appended record framing was rejected");
++  expect(std::ranges::equal(result.bytes().first(kCardRecordV1HeaderSize),
++                            record.bytes().first(kCardRecordV1HeaderSize)),
++         "append changed the v1 header");
++  expect(std::ranges::equal(envelope_at(result, 2),
++                            envelope_at(record, kept_position)),
++         "append did not move the kept envelope byte for byte");
++  return result;
++}
++
++void test_three_slot_framing_keeps_the_v1_header() {
++  SecureBuffer initialized =
++      initialize_card_record_v1(secure_text("frame-password-1"));
++  SecureBuffer appended = append_card_password_v1(
++      initialized.bytes(), secure_text("frame-password-1"),
++      secure_text("frame-password-2"));
++  expect(appended.bytes()[12] == std::byte{216} &&
++             appended.bytes()[13] == std::byte{0},
++         "three-envelope record changed the v1 length field");
++
++  SecureBuffer relabelled = secure_copy(appended.bytes());
++  relabelled.bytes()[12] = std::byte{0x24};
++  relabelled.bytes()[13] = std::byte{0x01};
++  expect(inspect_card_record(relabelled.bytes()) == CardRecordState::malformed,
++         "three-envelope length in the header was accepted");
++
++  SecureBuffer truncated(kCardRecordV1ThreeSlotSize - 1);
++  std::ranges::copy(appended.bytes().first(truncated.size()),
++                    truncated.bytes().begin());
++  expect(inspect_card_record(truncated.bytes()) == CardRecordState::malformed,
++         "truncated three-envelope record was accepted");
++}
++
++void test_append_follows_v1_rule_with_a_third_slot() {
++  auto material = initialize_card_record_and_root_v1(secure_text("slot-pw-1"));
++  const SecureBuffer &root = material.root_secret;
++
++  // A single-password v1 card expands in place: [P2, P1, old random second].
++  SecureBuffer first = append_and_check(material.record, "slot-pw-1",
++                                        "slot-pw-2", 1);
++  expect_opens(first, "slot-pw-2", root, "new password did not open");
++  expect_opens(first, "slot-pw-1", root, "login password was not kept");
++
++  // Logged in with the newest: the old first envelope is the login, so the
++  // second one (P1) is kept. [P3, P2, P1]; all three open.
++  SecureBuffer second = append_and_check(first, "slot-pw-2", "slot-pw-3", 1);
++  expect_opens(second, "slot-pw-1", root, "moved envelope did not open");
++  expect_opens(second, "slot-pw-2", root, "login password was not kept");
++  expect_opens(second, "slot-pw-3", root, "new password did not open");
++
++  // Logged in with the oldest: it is kept as current, the most recent other
++  // (P3) is kept, and P2 is the one dropped. [P4, P1, P3].
++  SecureBuffer third = append_and_check(second, "slot-pw-1", "slot-pw-4", 0);
++  expect_opens(third, "slot-pw-1", root, "oldest login password was dropped");
++  expect_opens(third, "slot-pw-3", root, "most recent other was dropped");
++  expect_opens(third, "slot-pw-4", root, "new password did not open");
++  expect_rejected(third, "slot-pw-2", "least recent password survived");
++
++  // [P5, P4, P1]: P3 goes.
++  SecureBuffer fourth = append_and_check(third, "slot-pw-4", "slot-pw-5", 1);
++  expect_opens(fourth, "slot-pw-1", root, "kept password stopped opening");
++  expect_rejected(fourth, "slot-pw-3", "least recent password survived");
++
++  // An unknown duplicate is neither detected nor refused: [P5, P1, P5] has two
++  // matching envelopes with the same root and still opens.
++  SecureBuffer duplicate = append_and_check(fourth, "slot-pw-1", "slot-pw-5", 0);
++  expect_opens(duplicate, "slot-pw-5", root, "duplicate envelopes broke unlock");
++  expect_rejected(duplicate, "slot-pw-4", "least recent password survived");
++
++  expect_invalid_argument(
++      [&] {
++        static_cast<void>(append_card_password_v1(
++            fourth.bytes(), secure_text("slot-pw-5"), secure_text("slot-pw-5")));
++      },
++      "new password equal to the current one was accepted");
++  expect_credential_rejected(
++      [&] {
++        static_cast<void>(append_card_password_v1(
++            fourth.bytes(), secure_text("slot-pw-3"), secure_text("slot-pw-6")));
++      },
++      "a dropped password still authorized an append");
++}
++
++void test_two_password_v1_card_expands_keeping_the_other() {
++  SecureBuffer initialized =
++      initialize_card_record_v1(secure_text("dual-pw-old"));
++  SecureBuffer root = unlock_card_record_v1(initialized.bytes(),
++                                            secure_text("dual-pw-old"));
++  // v1 layout after setting a second password: [newer, older].
++  SecureBuffer dual = rewrap_card_record_v1(
++      initialized.bytes(), secure_text("dual-pw-old"),
++      secure_text("dual-pw-new"), secure_text("dual-pw-old"));
++
++  SecureBuffer from_older = append_and_check(dual, "dual-pw-old",
++                                             "dual-pw-third", 0);
++  expect_opens(from_older, "dual-pw-new", root, "other v1 password was lost");
++  expect_opens(from_older, "dual-pw-old", root, "v1 login password was lost");
++  expect_opens(from_older, "dual-pw-third", root, "third password did not open");
++
++  SecureBuffer from_newer = append_and_check(dual, "dual-pw-new",
++                                             "dual-pw-third", 1);
++  expect_opens(from_newer, "dual-pw-old", root, "other v1 password was lost");
++  expect_opens(from_newer, "dual-pw-new", root, "v1 login password was lost");
++}
++
+ } // namespace
+ 
+ int main() {
+@@ -230,6 +380,9 @@ int main() {
+   test_initialization_and_primary_unlock();
+   test_dual_rewrap_accepts_both_credentials_without_shape_change();
+   test_invalid_password_input_and_header_versions();
++  test_three_slot_framing_keeps_the_v1_header();
++  test_append_follows_v1_rule_with_a_third_slot();
++  test_two_password_v1_card_expands_keeping_the_other();
+   std::cout << "card_record_v1_tests: PASS\n";
+   return EXIT_SUCCESS;
+ }
+diff --git a/src/card/card_record_service.cpp b/src/card/card_record_service.cpp
+index ba5f944..c6d74f6 100644
+--- a/src/card/card_record_service.cpp
++++ b/src/card/card_record_service.cpp
+@@ -22,19 +22,6 @@ namespace {
+   return difference == 0;
+ }
+ 
+-// The record primitive needs the caller's password twice: once to open the
+-// existing record and once as one of the two replacement envelopes.
+-// SecureBuffer is deliberately not copyable, so the duplicate is explicit and
+-// is consumed by the same call that consumes the original.
+-[[nodiscard]] security::SecureBuffer duplicate(
+-    const security::SecureBuffer& source) {
+-  security::SecureBuffer result(source.size());
+-  for (std::size_t index = 0; index < source.size(); ++index) {
+-    result.bytes()[index] = source.bytes()[index];
+-  }
+-  return result;
+-}
+-
+ [[noreturn]] void fail_unverified_write() {
+   throw std::system_error(
+       make_error_code(CardError::device_failure),
+@@ -123,13 +110,11 @@ void CardRecordService::set_second_password(
+     throw UnexpectedCardRecordState(state);
+   }
+ 
+-  // The newly chosen password becomes the primary envelope and the existing
+-  // one the secondary. Unlocking tries both and returns the same root, so the
+-  // order carries no meaning beyond keeping the layout fixed.
+-  security::SecureBuffer retained = duplicate(existing_password_utf8);
+-  security::SecureBuffer updated = rewrap_card_record_v1(
++  // v1 kept [new, existing]; the third slot also keeps the most recent other
++  // password, so a mistyped new password never costs the one in use.
++  security::SecureBuffer updated = append_card_password_v1(
+       record.bytes(), std::move(existing_password_utf8),
+-      std::move(second_password_utf8), std::move(retained));
++      std::move(second_password_utf8));
+ 
+   std::exception_ptr write_failure;
+   try {
+diff --git a/src/card/vikey/vikey_card_record_store.cpp b/src/card/vikey/vikey_card_record_store.cpp
+index fcbf931..dc97f7d 100644
+--- a/src/card/vikey/vikey_card_record_store.cpp
++++ b/src/card/vikey/vikey_card_record_store.cpp
+@@ -6,6 +6,14 @@
+ #include <system_error>
+ 
+ namespace usb_vault::card::vikey {
++namespace {
++
++// The logical record has two envelopes, or three once a third password is set.
++[[nodiscard]] bool valid_record_size(const std::size_t size) noexcept {
++  return size == kCardRecordV1Size || size == kCardRecordV1ThreeSlotSize;
++}
++
++}  // namespace
+ 
+ VikeyCardRecordStore::VikeyCardRecordStore(
+     IVikeyCardRecordBackend& backend) noexcept
+@@ -13,7 +21,7 @@ VikeyCardRecordStore::VikeyCardRecordStore(
+ 
+ security::SecureBuffer VikeyCardRecordStore::get_blob() {
+   security::SecureBuffer record = backend_.read_record();
+-  if (record.size() != kCardRecordV1Size) {
++  if (!valid_record_size(record.size())) {
+     throw std::system_error(
+         make_error_code(CardError::device_failure),
+         "ViKey backend returned an invalid card record size");
+@@ -23,10 +31,10 @@ security::SecureBuffer VikeyCardRecordStore::get_blob() {
+ 
+ void VikeyCardRecordStore::put_blob(
+     const security::SecureBuffer& blob) {
+-  if (blob.size() != kCardRecordV1Size) {
++  if (!valid_record_size(blob.size())) {
+     throw std::system_error(
+         make_error_code(CardError::invalid_configuration),
+-        "ViKey card record must contain exactly 216 bytes");
++        "ViKey card record must contain 216 or 292 bytes");
+   }
+   backend_.write_record(blob);
+ }
+diff --git a/src/card/vikey/vikey_helper_client.cpp b/src/card/vikey/vikey_helper_client.cpp
+index e52c31c..18606c5 100644
+--- a/src/card/vikey/vikey_helper_client.cpp
++++ b/src/card/vikey/vikey_helper_client.cpp
+@@ -1170,7 +1170,9 @@ namespace {
+        (session_inputs->blob != nullptr &&
+         session_inputs->blob->size() !=
+             (helper::is_record_write(operation)
+-                 ? kCardRecordV1Size
++                 ? (session_inputs->blob->size() == kCardRecordV1ThreeSlotSize
++                        ? kCardRecordV1ThreeSlotSize
++                        : kCardRecordV1Size)
+                  : kVikeyBlobBytes)))) {
+     throw_card(CardError::invalid_configuration, "ViKey development session credential size is invalid", DiagnosticStage::input_shape);
+   }
+@@ -1387,7 +1389,8 @@ namespace {
+             session_inputs->user_sn, session_inputs->api_key,
+             session_inputs->user_pin);
+       } else if (helper::is_record_write(operation)) {
+-        request.payload_bytes = helper::kCardRecordWritePayloadBytes;
++        request.payload_bytes = static_cast<std::uint32_t>(
++            helper::kCardRecordReadPayloadBytes + session_inputs->blob->size());
+         helper::write_card_record_write_request(
+             request_pipe.parent_end.get(), request, *vendor_digest,
+             session_inputs->expected_hardware_id,
+@@ -1478,7 +1481,7 @@ namespace {
+     if (blob_response != nullptr) {
+       const DWORD expected_bytes =
+           helper::is_record_read(operation)
+-              ? static_cast<DWORD>(kCardRecordV1Size)
++              ? static_cast<DWORD>(response.payload_bytes)
+               : static_cast<DWORD>(kVikeyBlobBytes);
+       *blob_response = read_secret_payload_until(
+           response_pipe.parent_end.get(), process.get(), response, operation,
+diff --git a/src/card/vikey/vikey_helper_protocol.cpp b/src/card/vikey/vikey_helper_protocol.cpp
+index e001c2d..7e9a216 100644
+--- a/src/card/vikey/vikey_helper_protocol.cpp
++++ b/src/card/vikey/vikey_helper_protocol.cpp
+@@ -91,7 +91,10 @@ bool valid_request(const Request& request) noexcept {
+   } else if (is_record_read(request.operation)) {
+     required_payload = kCardRecordReadPayloadBytes;
+   } else if (is_record_write(request.operation)) {
+-    required_payload = kCardRecordWritePayloadBytes;
++    required_payload =
++        request.payload_bytes == kCardRecordThreeSlotWritePayloadBytes
++            ? kCardRecordThreeSlotWritePayloadBytes
++            : kCardRecordWritePayloadBytes;
+   } else if (request.operation == Operation::card_media_bootstrap) {
+     required_payload = kCardMediaBootstrapPayloadBytes;
+   } else if (request.operation == Operation::development_media_reset) {
+@@ -122,13 +125,15 @@ bool valid_response(const Response& response,
+   if (response.status == 0) {
+     if (response.diagnostic != 0 || response.native_kind != 0) return false;
+     if (response.security_properties == 0) return false;
+-    std::uint32_t required_payload = 0;
+-    if (expected_operation == Operation::development_blob_read) {
+-      required_payload = static_cast<std::uint32_t>(kVikeyBlobBytes);
+-    } else if (is_record_read(expected_operation)) {
+-      required_payload = static_cast<std::uint32_t>(kCardRecordV1Size);
++    if (is_record_read(expected_operation)) {
++      if (!valid_record_payload(expected_operation, response.payload_bytes))
++        return false;
++    } else if (response.payload_bytes !=
++               (expected_operation == Operation::development_blob_read
++                    ? static_cast<std::uint32_t>(kVikeyBlobBytes)
++                    : 0U)) {
++      return false;
+     }
+-    if (response.payload_bytes != required_payload) return false;
+     if (expected_operation == Operation::development_session_probe) {
+       return response.result == 0 && response.logical_state == 0 &&
+              valid_development_session_observation(
+@@ -206,8 +211,7 @@ CardMediaBootstrapRequest::CardMediaBootstrapRequest()
+ CardRecordWriteRequest::CardRecordWriteRequest()
+     : user_sn(kVikeyUserSnBytes),
+       api_key(kVikeyApiKeyBytes),
+-      user_pin(kVikeyUserPinBytes),
+-      record(kCardRecordV1Size) {}
++      user_pin(kVikeyUserPinBytes) {}
+ 
+ void write_development_session_request(
+     const HANDLE pipe, const Request& request,
+@@ -568,7 +572,9 @@ void write_card_record_write_request(
+       user_sn.size() != kVikeyUserSnBytes ||
+       api_key.size() != kVikeyApiKeyBytes ||
+       user_pin.size() != kVikeyUserPinBytes ||
+-      record.size() != kCardRecordV1Size) {
++      !valid_record_payload(request.operation, record.size()) ||
++      request.payload_bytes !=
++          kCardRecordReadPayloadBytes + record.size()) {
+     throw_protocol("refuse invalid ViKey card record write request");
+   }
+   write_exact(pipe, message_bytes(request));
+@@ -592,6 +598,9 @@ CardRecordWriteRequest read_card_record_write_request(
+   read_exact(pipe, result.user_sn.bytes());
+   read_exact(pipe, result.api_key.bytes());
+   read_exact(pipe, result.user_pin.bytes());
++  // valid_request admitted only the two record lengths.
++  result.record = security::SecureBuffer(request.payload_bytes -
++                                         kCardRecordReadPayloadBytes);
+   read_exact(pipe, result.record.bytes());
+   if (result.expected_hardware_id == 0) {
+     throw_protocol("reject zero ViKey card record identity");
+@@ -623,7 +632,7 @@ void write_card_record_response(
+     const HANDLE pipe, const Response& response,
+     const security::SecureBuffer& record) {
+   if (!valid_response(response, Operation::card_record_read) ||
+-      response.status != 0 || record.size() != kCardRecordV1Size) {
++      response.status != 0 || record.size() != response.payload_bytes) {
+     throw_protocol("refuse invalid ViKey card record response");
+   }
+   write_exact(pipe, message_bytes(response));
+@@ -660,7 +669,7 @@ security::SecureBuffer read_card_record_response_payload(
+       response.status != 0) {
+     throw_protocol("reject invalid ViKey card record response");
+   }
+-  security::SecureBuffer record(kCardRecordV1Size);
++  security::SecureBuffer record(response.payload_bytes);
+   read_exact(pipe, record.bytes());
+   return record;
+ }
+diff --git a/src/card/vikey/vikey_helper_protocol.h b/src/card/vikey/vikey_helper_protocol.h
+index b2b7533..6725210 100644
+--- a/src/card/vikey/vikey_helper_protocol.h
++++ b/src/card/vikey/vikey_helper_protocol.h
+@@ -14,7 +14,7 @@
+ namespace usb_vault::card::vikey::helper {
+ 
+ constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
+-constexpr std::uint16_t kVersion = 14;
++constexpr std::uint16_t kVersion = 17;
+ constexpr std::size_t kNonceSize = 16;
+ constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
+ constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
+@@ -31,9 +31,13 @@ constexpr std::uint32_t kDevelopmentBlobWritePayloadBytes =
+     static_cast<std::uint32_t>(kVikeyBlobBytes);
+ constexpr std::uint32_t kCardRecordReadPayloadBytes =
+     kDevelopmentSessionPayloadBytes + kHardwareIdentityBytes;
++// A record write carries either the two- or the three-envelope record.
+ constexpr std::uint32_t kCardRecordWritePayloadBytes =
+     kCardRecordReadPayloadBytes +
+     static_cast<std::uint32_t>(kCardRecordV1Size);
++constexpr std::uint32_t kCardRecordThreeSlotWritePayloadBytes =
++    kCardRecordReadPayloadBytes +
++    static_cast<std::uint32_t>(kCardRecordV1ThreeSlotSize);
+ constexpr std::uint32_t kCardIdentityProbePayloadBytes =
+     kDevelopmentSessionPayloadBytes;
+ constexpr std::uint32_t kCardMediaProbePayloadBytes =
+@@ -65,6 +69,11 @@ enum class Operation : std::uint32_t {
+ [[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
+   return op == Operation::card_record_read || op == Operation::card_record_snapshot;
+ }
++// Logical records are exchanged at their own length, two or three envelopes.
++[[nodiscard]] constexpr bool valid_record_payload(Operation,
++                                                  std::size_t bytes) noexcept {
++  return bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
++}
+ [[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
+   return op == Operation::card_record_write || op == Operation::card_record_reset;
+ }
+diff --git a/tests/card_record_service_tests.cpp b/tests/card_record_service_tests.cpp
+index 324e830..b1105d1 100644
+--- a/tests/card_record_service_tests.cpp
++++ b/tests/card_record_service_tests.cpp
+@@ -25,6 +25,7 @@ using usb_vault::card::ICardStore;
+ using usb_vault::card::UnexpectedCardRecordState;
+ using usb_vault::card::kCardRecordV1RootSecretSize;
+ using usb_vault::card::kCardRecordV1Size;
++using usb_vault::card::kCardRecordV1ThreeSlotSize;
+ using usb_vault::card::make_error_code;
+ using usb_vault::card::provision_uninitialized_card_record_v1;
+ using usb_vault::security::SecureBuffer;
+@@ -201,8 +202,8 @@ void test_second_password_opens_the_same_record() {
+ 
+   service.set_second_password(secure_text("service-daily-password-v1"),
+                               secure_text("service-second-password-v1"));
+-  require(store.blob.size() == kCardRecordV1Size,
+-          "the rewritten record changed size");
++  require(store.blob.size() == kCardRecordV1ThreeSlotSize,
++          "the rewritten record is not a three-envelope record");
+   require(store.blob != initialized,
+           "the rewritten record is byte-identical to the previous one");
+   require(service.inspect() == CardRecordState::initialized_v1,
+@@ -215,6 +216,30 @@ void test_second_password_opens_the_same_record() {
+   require(std::ranges::equal(root.bytes(), existing_root.bytes()) &&
+               std::ranges::equal(root.bytes(), second_root.bytes()),
+           "the two passwords no longer open the same root");
++
++  // A third password keeps both earlier ones; a fourth set from the newest
++  // keeps it and the login password, dropping the least recent one.
++  service.set_second_password(secure_text("service-second-password-v1"),
++                              secure_text("service-third-password-v1"));
++  for (const char* password : {"service-daily-password-v1",
++                               "service-second-password-v1",
++                               "service-third-password-v1"}) {
++    SecureBuffer opened = service.authenticate(secure_text(password));
++    require(std::ranges::equal(root.bytes(), opened.bytes()),
++            "a third password dropped an earlier one");
++  }
++  service.set_second_password(secure_text("service-third-password-v1"),
++                              secure_text("service-fourth-password-v1"));
++  bool dropped = false;
++  try {
++    static_cast<void>(service.authenticate(secure_text("service-daily-password-v1")));
++  } catch (const usb_vault::card::CardCredentialRejected&) {
++    dropped = true;
++  }
++  require(dropped, "a fourth password kept the least recent one");
++  SecureBuffer kept = service.authenticate(secure_text("service-second-password-v1"));
++  require(std::ranges::equal(root.bytes(), kept.bytes()),
++          "a fourth password dropped the most recent other password");
+ }
+ 
+ void test_reset_returns_the_card_to_the_provisioning_marker() {
+diff --git a/tests/vikey_helper_process_tests.cpp b/tests/vikey_helper_process_tests.cpp
+index 1e58667..2473a85 100644
+--- a/tests/vikey_helper_process_tests.cpp
++++ b/tests/vikey_helper_process_tests.cpp
+@@ -649,6 +649,13 @@ void test_formal_card_record_backend_staging(
+   store.put_blob(record);
+   expect(std::ranges::equal(record.bytes(), original),
+          "development card-record write changed caller data");
++  // A three-envelope record travels and commits through the same single
++  // helper operation; the in-process journal commit verifies it.
++  SecureBuffer three_slot(usb_vault::card::kCardRecordV1ThreeSlotSize);
++  std::ranges::fill(three_slot.bytes(), std::byte{0x7c});
++  std::ranges::copy(record.bytes().first(usb_vault::card::kCardRecordV1HeaderSize),
++                    three_slot.bytes().begin());
++  store.put_blob(three_slot);
+   const auto initialized_user_pin = fixed_secret(
+       usb_vault::card::vikey::kVikeyUserPinBytes, std::byte{'R'});
+   const auto initialized_media =
+@@ -692,7 +699,7 @@ void test_formal_card_record_backend_staging(
+                                CardError::invalid_configuration),
+            "short development card record returned the wrong error");
+   }
+-  expect(provider.loads == 2,
++  expect(provider.loads == 3,
+          "formal card-record backend cached or reused credentials");
+   expect(development_helper_directory_count() == directories_before,
+          "development card-record operations left staging residue");
+diff --git a/tests/vikey_helper_protocol_tests.cpp b/tests/vikey_helper_protocol_tests.cpp
+index 53ac7e1..5c2c91c 100644
+--- a/tests/vikey_helper_protocol_tests.cpp
++++ b/tests/vikey_helper_protocol_tests.cpp
+@@ -21,6 +21,7 @@ using usb_vault::card::vikey::kVikeyBlobBytes;
+ using usb_vault::card::vikey::kVikeyUserPinBytes;
+ using usb_vault::card::vikey::kVikeyUserSnBytes;
+ using usb_vault::card::kCardRecordV1Size;
++using usb_vault::card::kCardRecordV1ThreeSlotSize;
+ using namespace usb_vault::card::vikey::helper;
+ 
+ class Handle final {
+@@ -613,6 +614,70 @@ void test_card_record_response_round_trip() {
+                       "card record response changed caller data");
+ }
+ 
++// Records travel at their own length: two or three envelopes, nothing else.
++void test_three_slot_record_protocol() {
++  Request request{};
++  request.operation = Operation::card_record_write;
++  request.payload_bytes = kCardRecordThreeSlotWritePayloadBytes;
++  expect(valid_request(request), "three-envelope record write was rejected");
++  request.operation = Operation::card_record_reset;
++  expect(valid_request(request), "three-envelope record reset was rejected");
++  for (const auto record_bytes : {215u, 217u, 291u, 293u, 384u}) {
++    request.payload_bytes = kCardRecordReadPayloadBytes + record_bytes;
++    expect(!valid_request(request), "odd record write length was accepted");
++  }
++
++  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
++  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
++  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
++  const auto record = fixed_secret(kCardRecordV1ThreeSlotSize, std::byte{0x5c});
++  const Pipe write_pipe = make_pipe();
++  Request header{};
++  header.operation = Operation::card_record_write;
++  header.payload_bytes = kCardRecordThreeSlotWritePayloadBytes;
++  write_card_record_write_request(write_pipe.write.get(), header, {}, 7,
++                                  user_sn, api_key, user_pin, record);
++  const Request received_header = read_request(write_pipe.read.get());
++  CardRecordWriteRequest body =
++      read_card_record_write_request(write_pipe.read.get(), received_header);
++  expect(body.record.size() == kCardRecordV1ThreeSlotSize,
++         "three-envelope write changed the record length");
++  expect_fixed_secret(body.record, std::byte{0x5c},
++                      "three-envelope write data did not round-trip");
++  header.payload_bytes = kCardRecordWritePayloadBytes;
++  expect_protocol_error(
++      [&] {
++        write_card_record_write_request(write_pipe.write.get(), header, {}, 7,
++                                        user_sn, api_key, user_pin, record);
++      },
++      "record write header disagreed with its record length");
++
++  const Pipe response_pipe = make_pipe();
++  Response response{};
++  response.security_properties = kDevelopmentCompatibilitySecurityProperties;
++  response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1ThreeSlotSize);
++  response.nonce[9] = std::byte{0x43};
++  write_card_record_response(response_pipe.write.get(), response, record);
++  const Response received = read_response(response_pipe.read.get(),
++                                          response.nonce,
++                                          Operation::card_record_read);
++  const auto read_back =
++      read_card_record_response_payload(response_pipe.read.get(), received);
++  expect(read_back.size() == kCardRecordV1ThreeSlotSize,
++         "three-envelope record response changed length");
++  expect_fixed_secret(read_back, std::byte{0x5c},
++                      "three-envelope record response did not round-trip");
++  for (const auto size : {0u, 215u, 291u, 293u, 384u, 1808u}) {
++    response.payload_bytes = size;
++    expect(!valid_response(response, Operation::card_record_snapshot),
++           "odd record response length was accepted");
++  }
++  response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1Size);
++  expect_protocol_error(
++      [&] { write_card_record_response(response_pipe.write.get(), response, record); },
++      "record response header disagreed with its record length");
++}
++
+ void test_response_validation() {
+   Response response{};
+   response.security_properties = kRequiredSecurityProperties;
+@@ -883,6 +948,7 @@ int main() {
+     test_card_media_response_round_trip();
+     test_development_blob_response_round_trip();
+     test_card_record_response_round_trip();
++    test_three_slot_record_protocol();
+     test_response_validation();
+     test_nonce_mismatch_is_rejected();
+     test_diagnostic_round_trip();
+diff --git a/tools/vikey_helper/main.cpp b/tools/vikey_helper/main.cpp
+index 1a7c883..6a4b0d8 100644
+--- a/tools/vikey_helper/main.cpp
++++ b/tools/vikey_helper/main.cpp
+@@ -645,7 +645,7 @@ bootstrap_media_state(const CardMediaState state) {
+     if (close_error) {
+       return {.operation = {.status = close_error.value()}};
+     }
+-    if (record.size() != usb_vault::card::kCardRecordV1Size) {
++    if (!valid_record_payload(Operation::card_record_read, record.size())) {
+       return {.operation = {.status = static_cast<std::int32_t>(
+                                 CardError::device_failure)}};
+     }

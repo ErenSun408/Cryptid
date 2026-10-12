@@ -1,0 +1,23 @@
+{
+  "baseline1006": "38b600610e66c7a08a28f0d185357d2da2f357c2",
+  "actualCompatibilitySource": "6ab2ebda0178cc9731d796462368404a3dee5c9b",
+  "original1006InstallerSHA256": "F6CFC60B59D343259331AFB56B8F31BAE7FF001EE27885BC722BF6EC54D40E45",
+  "original1010InstallerSHA256": "C8ACAA18AC7BE46FA282A692BF8F0BA4A3FF49876C955E62F3568BA392C8E25C",
+  "uiSource": "out/evidence/ui-installer-payload-20261006-165504/payload",
+  "scope": "1006 product and delivery UI; 1010 v1 three-envelope record, journal, helper IPC, and password-update compatibility; no P5.4 v2 login migration or newer product UI",
+  "patches": [
+    "product.patch",
+    "independent-install.patch",
+    "credential-reuse.patch"
+  ],
+  "uiNote": "Original delivery UI equals baseline after CRLF/LF normalization; exact delivered bytes were restored for packaging.",
+  "sourceArchiveSHA256": "63493A96FAA451D08E8201B570A5989CC6FD04C81394AE8ED5C7DD6F4B630A85",
+  "productPatchSHA256": "A85CD52895E642D80DE6F03A774573034206DDB095A3BA64CFB30E7FF79107D0",
+  "independentInstallPatchSHA256": "DE5E3336FA479F76037804850D3A7E1454F53082F9ADAC0CC3455FFE478773E9",
+  "installIdentity": "USBVault1006Compat",
+  "displayName": "1006兼容测试版",
+  "dataDirectory": "usb-vault-1006-compat",
+  "defaultInstallDirectory": "%LOCALAPPDATA%\\Programs\\USB Vault 1006 Compat",
+  "credentialReusePatchSHA256": "476AC0B553D3AA24A019F6115539DB3163F166D420AB038D1AA288AE15388127",
+  "credentialReusePolicy": "Read main credentials only when all test entries are absent; never write or merge main credentials; local entries take precedence and fail closed."
+}
