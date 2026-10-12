@@ -4221,6 +4221,20 @@ void test_backup_transition_without_login_or_unmount_gate() {
     require(fixture.volume.mounted_state==authenticated,"backup entry unmounted volume");
     require(invoke()==E_PENDING,"backup bridge was not retired");
     DISPPARAMS args{}; require(host->Invoke(member_id(*host.Get(),L"getSessionState"),IID_NULL,LOCALE_INVARIANT,DISPATCH_METHOD,&args,nullptr,nullptr,nullptr)==E_PENDING,"retired backup bridge accessed context");
+    require(usb_vault::ui::resume_card_backup_webview_host_object(host.Get()),"native cancellation did not resume original bridge");
+    require(!usb_vault::ui::resume_card_backup_webview_host_object(host.Get()),"bridge resumed twice");
+    VARIANT state{};
+    require(SUCCEEDED(host->Invoke(member_id(*host.Get(),L"getSessionState"),IID_NULL,LOCALE_INVARIANT,DISPATCH_METHOD,&args,&state,nullptr,nullptr)),"resumed bridge unavailable");
+    VariantClear(&state);
+    require(fixture.volume.mounted_state==authenticated,"cancellation changed mounts");
+    require(SUCCEEDED(invoke()),"cancelled wizard could not reopen");
+    fixture.authentication.clear_authentication();
+    fixture.volume.mounted_state = false;
+    fixture.entry.route = CardEntryRoute::login_required;
+    work.card_epoch.fetch_add(1);
+    require(usb_vault::ui::resume_card_backup_webview_host_object(host.Get()),"live controller could not resume after revocation");
+    require(invoke_state(*host.Get())==2L && !fixture.authentication.authenticated() &&
+                !fixture.volume.mounted_state,"resumed bridge restored old authentication or mounts");
   }
 }
 void test_configuration_transition() {

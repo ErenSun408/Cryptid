@@ -47,6 +47,10 @@ bool VikeyCardBackup::pending(Clock::time_point now) noexcept {
   if (record_.size() == 0 || now >= deadline_) { cancel(); return false; }
   return true;
 }
+unsigned int VikeyCardBackup::remaining_seconds(Clock::time_point now) noexcept {
+  if (!pending(now)) return 0;
+  return static_cast<unsigned int>(std::chrono::ceil<std::chrono::seconds>(deadline_ - now).count());
+}
 void VikeyCardBackup::prepare(Clock::time_point now) {
   cancel();
   try {
@@ -61,18 +65,22 @@ void VikeyCardBackup::prepare(Clock::time_point now) {
         !std::ranges::equal(first.bytes(), second.bytes())) reject();
     record_ = std::move(first);
     source_ = source.hardware_id;
-    deadline_ = now + std::chrono::minutes(5);
+    deadline_ = now + std::chrono::minutes(3);
   } catch (...) { cancel(); throw; }
 }
-void VikeyCardBackup::complete(Clock::time_point now) {
+bool VikeyCardBackup::target_eligible(const VikeyCardMediaProbe& target, Clock::time_point now) noexcept {
+  return pending(now) && target.hardware_id != 0 && target.hardware_id != source_ &&
+      ((target.media_state == VikeyCardMediaState::blank && !target.logical_state) ||
+       (target.media_state == VikeyCardMediaState::product_evidence &&
+        target.logical_state == CardRecordState::provisioned_uninitialized));
+}
+void VikeyCardBackup::complete(Clock::time_point now, std::uint32_t expected_target) {
   try {
     if (!pending(now)) reject();
     CardOperationLease lease;
     const auto target = backend_.probe();
-    if (target.hardware_id == 0 || target.hardware_id == source_ ||
-        !((target.media_state == VikeyCardMediaState::blank && !target.logical_state) ||
-          (target.media_state == VikeyCardMediaState::product_evidence &&
-           target.logical_state == CardRecordState::provisioned_uninitialized))) reject();
+    if (!target_eligible(target, now) ||
+        (expected_target != 0 && target.hardware_id != expected_target)) reject();
     // The restricted helper repeats destination checks in its write session.
     backend_.write(target.hardware_id, record_);
     auto observed = backend_.snapshot(target.hardware_id);

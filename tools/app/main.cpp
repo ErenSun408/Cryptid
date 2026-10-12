@@ -7,7 +7,12 @@
 #include <dbt.h>
 #include <commctrl.h>
 #include <wtsapi32.h>
+#include <uxtheme.h>
+#include <vssym32.h>
+#pragma comment(lib, "uxtheme.lib")
+#include <future>
 #include "card/vikey/vikey_card_backup.h"
+#include "card/vikey/card_operation_lease.h"
 #include "usb_vault/ui/card_backup_exchange.h"
 
 #include "card/vikey/vikey_development_app_config.h"
@@ -375,9 +380,24 @@ struct BackupDialogState final {
   bool success{};
   bool failed{};
   bool attempted{};
+  bool closing{};
+  unsigned int displayed_seconds{181};
+  std::future<usb_vault::card::vikey::VikeyCardMediaProbe> target_probe;
+  std::uint32_t checked_target{};
+  bool probe_started{};
+  HWND status_window{};
+  HFONT status_font{};
+  COLORREF status_color{RGB(0, 128, 64)};
+  usb_vault::ui::CardBackupTargetReadiness readiness;
+  usb_vault::ui::CardBackupProbeRetry probe_retry;
+  std::uint64_t probe_generation{};
+  std::optional<usb_vault::card::vikey::VikeyCardMediaProbe> observed_card;
   explicit BackupDialogState(usb_vault::card::vikey::IVikeyCardBackupBackend& backend) : flow(backend) {}
 };
 BackupDialogState* g_backup_dialog{};
+bool g_backup_return_waiting{};
+bool g_backup_return_probe_attempted{};
+usb_vault::ui::CardBackupTargetReadiness g_backup_return_readiness;
 
 void show_failure(const wchar_t* const message) noexcept {
   static_cast<void>(::MessageBoxW(nullptr, message, kWindowTitle,
@@ -667,7 +687,7 @@ void clear_application_session() noexcept {
 
 bool MainWindowCloseSink::request_card_backup() noexcept {
   if (!g_main_window || !g_ui_session || !g_backup_backend || g_backup_requested ||
-      g_backup_dialog || g_view_switch_pending || g_creation_work.running.load() ||
+      g_backup_dialog || g_backup_return_waiting || g_view_switch_pending || g_creation_work.running.load() ||
       g_creation_work.hotkey_exit_pending.load() || g_deferred_removal || g_deferred_arrival ||
       (g_drop_target && g_drop_target->status().state == 1)) return false;
   if (!::PostMessageW(g_main_window, kShowCardBackupMessage, 0, 0)) return false;
@@ -1285,6 +1305,9 @@ void show_configuration(const HWND window) noexcept {
 void show_session(const HWND window) noexcept {
   USB_VAULT_TRACE("窗口", "重建安全会话并加载登录页", "");
   g_view_switch_pending = false;
+  g_backup_return_waiting = false;
+  g_backup_return_probe_attempted = false;
+  g_backup_return_readiness.invalidate();
   g_webview_startup.stop();
   ::KillTimer(window, 2);
   disarm_external_drops();
@@ -1322,11 +1345,43 @@ void show_session(const HWND window) noexcept {
 
 // TaskDialog owns the modal input boundary; the retiring WebView bridge has
 // already refused further calls. Card lifecycle messages continue normally.
+std::wstring backup_dialog_content(unsigned int seconds) {
+  return L"插入一张空白或未经初始化的备用卡，然后点击开始写入。\n"
+         L"请勿同时插入两张卡。该步骤三分钟内有效：剩余 " +
+         std::to_wstring(seconds / 60) + L":" + (seconds % 60 < 10 ? L"0" : L"") +
+         std::to_wstring(seconds % 60) +
+         L"\n\n备卡保留当前所有有效密码。后续的密码修改与卡重置无法在两卡间远程同步。\n\n\n\x00a0";
+}
+
+void position_backup_status(HWND window, HWND status_window) noexcept {
+  if (status_window) {
+    RECT bounds{};
+    ::GetClientRect(window, &bounds);
+    const int scale = static_cast<int>(::GetDpiForWindow(window));
+    const int margin = ::MulDiv(16, scale, 96);
+    const int height = ::MulDiv(24, scale, 96);
+    RECT button{};
+    const HWND write_button = ::GetDlgItem(window, 100);
+    if (write_button && ::GetWindowRect(write_button, &button))
+      ::MapWindowPoints(nullptr, window, reinterpret_cast<POINT*>(&button), 2);
+    else button.top = bounds.bottom - ::MulDiv(48, scale, 96);
+    ::MoveWindow(status_window, margin, button.top - height - margin,
+                 bounds.right - 2 * margin, height, TRUE);
+  }
+}
 LRESULT CALLBACK backup_dialog_subclass(HWND window, UINT message, WPARAM wparam,
                                        LPARAM lparam, UINT_PTR, DWORD_PTR data) {
   auto* state = reinterpret_cast<BackupDialogState*>(data);
+  if (message == WM_SIZE) position_backup_status(window, state->status_window);
+  if (message == WM_CTLCOLORSTATIC && reinterpret_cast<HWND>(lparam) == state->status_window) {
+    const auto dc = reinterpret_cast<HDC>(wparam);
+    ::SetTextColor(dc, state->status_color);
+    ::SetBkColor(dc, ::GetSysColor(COLOR_WINDOW));
+    return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+  }
   if ((message == WM_WTSSESSION_CHANGE && wparam == WTS_SESSION_LOCK) ||
       message == WM_QUERYENDSESSION) {
+    state->closing = true;
     state->flow.cancel();
     ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
   }
@@ -1343,27 +1398,144 @@ HRESULT CALLBACK backup_dialog_callback(HWND window, UINT message, WPARAM wparam
       state.failed = true; state.flow.cancel();
       ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
     }
+    state.status_window = ::CreateWindowExW(0, L"STATIC", L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0, 0, 0,
+        window, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+    if (!state.status_window) {
+      state.failed = true; state.flow.cancel();
+      ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+    } else {
+      LOGFONTW body_font{};
+      if (const auto theme = ::OpenThemeData(window, L"TEXTSTYLE")) {
+        if (SUCCEEDED(::GetThemeFont(theme, nullptr, TEXT_BODYTEXT, 0, TMT_FONT, &body_font)))
+          state.status_font = ::CreateFontIndirectW(&body_font);
+        ::CloseThemeData(theme);
+      }
+      if (!state.status_font) {
+        NONCLIENTMETRICSW metrics{sizeof(NONCLIENTMETRICSW)};
+        if (::SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0,
+                                         ::GetDpiForWindow(window)))
+          state.status_font = ::CreateFontIndirectW(&metrics.lfMessageFont);
+      }
+      auto font = state.status_font;
+      if (!font) font = reinterpret_cast<HFONT>(::SendMessageW(window, WM_GETFONT, 0, 0));
+      if (!font) font = static_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
+      ::SendMessageW(state.status_window, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+      position_backup_status(window, state.status_window);
+    }
   } else if (message == TDN_TIMER) {
     if (!state.attempted && !state.flow.pending()) {
+      state.closing = true;
       ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
     } else if (!state.attempted) {
+      const auto seconds = state.flow.remaining_seconds();
+      if (seconds != state.displayed_seconds) {
+        state.displayed_seconds = seconds;
+        try {
+          const auto content = backup_dialog_content(seconds);
+          ::SendMessageW(window, TDM_SET_ELEMENT_TEXT, TDE_CONTENT,
+                         reinterpret_cast<LPARAM>(content.c_str()));
+        } catch (...) {
+          state.failed = true;
+          state.flow.cancel();
+          ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+          return S_OK;
+        }
+      }
       const bool available = state.exchange.removed() && g_card_device_notifications &&
                              g_card_device_notifications->target_present();
-      ::SendMessageW(window, TDM_ENABLE_BUTTON, 100, available ? TRUE : FALSE);
+      const auto now = usb_vault::card::vikey::VikeyCardBackup::Clock::now();
+      if (state.readiness.observe(available, now)) {
+        state.observed_card.reset();
+        state.checked_target = 0;
+        state.probe_started = false;
+        state.probe_retry.reset();
+      }
+      const bool stable = state.readiness.stable(now);
+      if (stable && !state.probe_started && !state.target_probe.valid() && state.probe_retry.due(now)) {
+        state.probe_started = true;
+        state.probe_generation = state.readiness.generation();
+        try {
+          // The worker only reads card media; it never touches the snapshot or UI.
+          auto* backend = g_backup_backend.get();
+          state.target_probe = std::async(std::launch::async, [backend] {
+            usb_vault::card::vikey::CardOperationLease lease;
+            return backend->probe();
+          });
+        } catch (...) {
+          state.checked_target = 0;
+          state.probe_started = false;
+          state.probe_retry.failed();
+        }
+      }
+      if (state.target_probe.valid() &&
+          state.target_probe.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        try {
+          const auto target = state.target_probe.get();
+          if (!state.readiness.accepts(state.probe_generation)) {
+            state.probe_started = false;
+          } else {
+            state.observed_card = target;
+            if (state.flow.target_eligible(target)) state.checked_target = target.hardware_id;
+          }
+        } catch (const std::system_error& error) {
+          state.observed_card.reset();
+          state.checked_target = 0;
+          const bool retryable = usb_vault::ui::retryable_card_backup_probe(error.code()) ||
+              error.code() == std::error_code(ERROR_BUSY, std::system_category());
+          state.probe_started = state.readiness.accepts(state.probe_generation) && !retryable;
+          if (!state.probe_started) state.probe_retry.failed();
+        } catch (...) {
+          state.observed_card.reset();
+          state.checked_target = 0;
+          state.probe_started = state.readiness.accepts(state.probe_generation);
+        }
+      }
+      const bool ready = stable && state.checked_target != 0;
+      ::SendMessageW(window, TDM_ENABLE_BUTTON, 100,
+                     ready ? TRUE : FALSE);
+      const wchar_t* detection = L"";
+      state.status_color = RGB(0, 128, 64);
+      if (ready) detection = L"检测到空白安全卡";
+      else if (stable && state.observed_card && state.observed_card->hardware_id != 0) {
+        using Media = usb_vault::card::vikey::VikeyCardMediaState;
+        const auto& observed = *state.observed_card;
+        bool nonblank = false;
+        switch (observed.media_state) {
+          case Media::legacy_p1_or_foreign_prefix:
+          case Media::foreign_data:
+          case Media::provisioning_interrupted:
+          case Media::conflicting_evidence: nonblank = true; break;
+          case Media::product_evidence:
+            nonblank = observed.logical_state != usb_vault::card::CardRecordState::provisioned_uninitialized;
+            break;
+          case Media::blank: break;
+        }
+        if (nonblank) {
+          detection = L"检测到非空白安全卡";
+          state.status_color = RGB(192, 32, 32);
+        }
+      }
+      ::SetWindowTextW(state.status_window, detection);
+      position_backup_status(window, state.status_window);
+      ::InvalidateRect(state.status_window, nullptr, TRUE);
     }
   } else if (message == TDN_BUTTON_CLICKED) {
     if (wparam == 100) {
-      if (!state.exchange.removed() || !state.flow.pending()) return S_FALSE;
+      if (!state.exchange.removed() || !state.flow.pending() || !state.readiness.stable() || state.checked_target == 0 ||
+          !g_card_device_notifications || !g_card_device_notifications->target_present()) return S_FALSE;
       state.attempted = true;
       ::SendMessageW(window, TDM_ENABLE_BUTTON, 100, FALSE);
       ::SendMessageW(window, TDM_ENABLE_BUTTON, IDCANCEL, FALSE);
-      try { state.flow.complete(); state.success = true; }
+      try { state.flow.complete(usb_vault::card::vikey::VikeyCardBackup::Clock::now(), state.checked_target); state.success = true; }
       catch (...) { state.flow.cancel(); state.failed = true; }
-    } else { state.flow.cancel(); }
+    } else { state.closing = true; state.flow.cancel(); }
   } else if (message == TDN_DESTROYED) {
     ::WTSUnRegisterSessionNotification(window);
     ::RemoveWindowSubclass(window, backup_dialog_subclass, 1);
     state.window = nullptr;
+    state.status_window = nullptr;
+    if (state.status_font) { ::DeleteObject(state.status_font); state.status_font = nullptr; }
   }
   return S_OK;
 }
@@ -1375,46 +1547,77 @@ void show_card_backup(HWND window) noexcept {
     if (!::WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION))
       throw std::runtime_error("session lock notifications unavailable");
     state.flow.prepare();
-    constexpr TASKDIALOG_BUTTON buttons[]{{100, L"已插入备用卡，开始写入"}};
+    constexpr TASKDIALOG_BUTTON buttons[]{{100, L"开始写入"}};
     TASKDIALOGCONFIG dialog{sizeof(dialog)};
     dialog.hwndParent = window;
     dialog.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_CALLBACK_TIMER | TDF_SIZE_TO_CONTENT;
     dialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    dialog.pszWindowTitle = L"USB Vault · 制作备用卡";
+    dialog.pszWindowTitle = L"USB Vault · 备用安全卡";
     dialog.pszMainInstruction = L"原卡记录已读取，请换插备用卡";
-    dialog.pszContent = L"请先保存文件，再拔出原卡。拔卡时会自动卸载安全盘。\n\n"
-                        L"插入一张空白或未初始化的备用卡，然后点击开始写入。\n"
-                        L"请勿同时插入两张卡。该步骤五分钟内有效，取消或锁屏会清除暂存。\n\n"
-                        L"备卡保留当前所有有效密码。以后修改密码或重置原卡不会同步到备卡；它也不能让丢失的原卡失效。";
+    const auto content = backup_dialog_content(state.flow.remaining_seconds());
+    dialog.pszContent = content.c_str();
     dialog.cButtons = 1; dialog.pButtons = buttons; dialog.nDefaultButton = IDCANCEL;
     dialog.pfCallback = backup_dialog_callback;
     dialog.lpCallbackData = reinterpret_cast<LONG_PTR>(&state);
     if (FAILED(::TaskDialogIndirect(&dialog, nullptr, nullptr, nullptr))) state.failed = true;
   } catch (...) { state.failed = true; }
+  state.closing = true;
   state.flow.cancel();
+  // Finish the read-only worker before the suspended bridge is resumed.
+  if (state.target_probe.valid()) {
+    try {
+      const auto target = state.target_probe.get();
+      if (state.readiness.accepts(state.probe_generation)) state.observed_card = target;
+    } catch (...) { state.observed_card.reset(); }
+  }
   ::WTSUnRegisterSessionNotification(window);
+  if (state.exchange.removed()) {
+    g_backup_return_waiting = true;
+    g_backup_return_probe_attempted = true; // No probe in completion message boxes.
+    g_backup_return_readiness.invalidate();
+  }
   g_backup_dialog = nullptr;
   g_backup_requested = false;
   if (state.success) {
     ::MessageBoxW(window, L"备用卡写入和回读校验完成。\n请用原有有效密码重新登录，并验证已有安全盘可以打开。",
                   L"USB Vault · 备用卡", MB_OK | MB_ICONINFORMATION);
   } else if (state.failed) {
-    ::MessageBoxW(window, L"备卡未完成。请确认原卡记录完整、备用卡为空白且供应方凭据有效。\n"
-                         L"若已经开始写入，目标卡可能只完成部分步骤，请勿把它作为有效备卡。原卡未被本流程改写。",
+    ::MessageBoxW(window, L"备卡未完成。请确认原卡记录完整、备用卡为空白且供应方凭据有效。",
                   L"USB Vault · 备用卡", MB_OK | MB_ICONERROR);
   }
   if (!::IsWindow(window)) return;
   if (state.exchange.removed()) {
-    // Ordinary removal already revoked keys and released all mounts.
-    show_session(window);
+    // Keep the document and controller alive; only the insertion/login context
+    // is renewed. Removed-card secrets and mounts have already been revoked.
+    static_cast<void>(g_card_lifecycle_controller->handle_removal());
+    g_backup_return_waiting = true;
+    g_backup_return_probe_attempted = false;
+    g_backup_return_readiness.invalidate();
+    if (!state.attempted && state.observed_card &&
+        state.readiness.accepts(state.probe_generation) && g_card_device_notifications &&
+        g_card_device_notifications->target_present()) {
+      const auto& observed = *state.observed_card;
+      if (observed.media_state == usb_vault::card::vikey::VikeyCardMediaState::product_evidence &&
+          observed.logical_state == usb_vault::card::CardRecordState::initialized_v1) {
+        try {
+          g_card_enrollment->prime_login_inspection(observed);
+          static_cast<void>(g_card_lifecycle_controller->handle_arrival());
+          g_backup_return_probe_attempted = true;
+        } catch (...) { /* No cached result: fall back to a settled fresh probe. */ }
+      }
+    }
+    if (!usb_vault::ui::resume_card_backup_webview_host_object(g_host_object.Get())) {
+      report_webview_failure(1309, E_FAIL); return;
+    }
+    static_cast<void>(g_webview->ExecuteScript(
+        L"window.dispatchEvent(new CustomEvent('usb-vault-card-backup-closed',{detail:{sessionChanged:true}}));", nullptr));
   } else {
-    // Cancellation before physical removal must preserve the original mounts.
-    begin_webview_watch(window);
-    detach_host_object();
-    const HRESULT attached = attach_host_object();
-    if (FAILED(attached)) { report_webview_failure(1309, attached); return; }
-    const HRESULT navigated = g_webview->Navigate(g_page_uri.c_str());
-    if (FAILED(navigated)) report_webview_failure(1312, navigated);
+    // Keep the document, navigation state and mounts when the source stayed in place.
+    if (!usb_vault::ui::resume_card_backup_webview_host_object(g_host_object.Get())) {
+      report_webview_failure(1309, E_FAIL); return;
+    }
+    static_cast<void>(g_webview->ExecuteScript(
+        L"window.dispatchEvent(new Event('usb-vault-card-backup-closed'));", nullptr));
   }
 }
 
@@ -1429,8 +1632,18 @@ void show_card_backup(HWND window) noexcept {
       presence != Transition::active_session_force_unmounted &&
       presence != Transition::active_session_remains) return false;
   if (g_backup_dialog) {
-    if (g_backup_dialog->flow.pending() &&
-        g_backup_dialog->exchange.allow_removal(presence)) {
+    if (!g_backup_dialog->attempted &&
+        (g_backup_dialog->closing || g_backup_dialog->flow.pending()) &&
+        g_backup_dialog->exchange.allow_removal(presence, true)) {
+      g_backup_dialog->readiness.invalidate();
+      g_backup_dialog->checked_target = 0;
+      g_backup_dialog->observed_card.reset();
+      g_backup_dialog->probe_started = false;
+      g_backup_dialog->probe_retry.reset();
+      if (g_backup_dialog->window) {
+        ::SendMessageW(g_backup_dialog->window, TDM_ENABLE_BUTTON, 100, FALSE);
+        ::SetWindowTextW(g_backup_dialog->status_window, L"");
+      }
       // Normal removal used to terminate the process. When no volume was
       // mounted, presence cleanup alone did not release cached login inputs.
       // A controlled exchange must wipe those too before keeping us alive.
@@ -1515,6 +1728,40 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       if (g_view_switch_pending) return 0;
       if (g_mount_monitor && (wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE || wparam == DBT_DEVNODES_CHANGED))
         g_mount_monitor->request_refresh();
+      if ((g_backup_dialog || g_backup_return_waiting) && g_card_lifecycle_controller) {
+        const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
+            wparam, lparam, kDevelopmentCardIdentity);
+        if (arrival.has_value()) {
+          disarm_external_drops();
+          g_creation_work.card_epoch.fetch_add(1);
+          if (*arrival) {
+            // During exchange only track presence: normal entry inspection would
+            // compete with the read-only backup worker and block the modal loop.
+            if (g_backup_dialog)
+              static_cast<void>(g_card_lifecycle_controller->handle_uninspected_arrival());
+          } else {
+            const bool had_live_session =
+                (g_authentication && g_authentication->authenticated()) ||
+                (g_ui_session && g_ui_session->mounted());
+            const auto transition = g_card_lifecycle_controller->handle_removal();
+            if (g_backup_dialog) {
+              if (exit_after_card_removal(transition.presence)) return 0;
+            } else {
+              // This fresh return session has no authenticated keys or mounts.
+              // Never suppress cleanup failure or extend this guard to live work.
+              if (had_live_session ||
+                  transition.presence == usb_vault::application::CardPresenceTransition::active_session_remains) {
+                g_backup_return_waiting = false;
+                if (exit_after_card_removal(transition.presence)) return 0;
+              }
+              g_backup_return_readiness.invalidate();
+              g_backup_return_probe_attempted = false;
+              notify_webview_session_changed();
+            }
+          }
+        }
+        return 0;
+      }
       if (g_creation_work.running.load() || g_deferred_removal || g_deferred_arrival) {
         const auto arrival = usb_vault::platform::windows::inspect_target_card_event(
             wparam, lparam, kDevelopmentCardIdentity);
@@ -1562,6 +1809,28 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_TIMER:
       if (g_view_switch_pending) return 0;
+      if (g_backup_return_waiting && g_authentication && g_authentication->authenticated())
+        g_backup_return_waiting = false;
+      if (wparam == 1 && g_backup_return_waiting && g_card_device_notifications &&
+          g_card_lifecycle_controller && !g_creation_work.running.load()) {
+        if (g_backup_return_readiness.observe(g_card_device_notifications->target_present())) {
+          g_backup_return_probe_attempted = false;
+          static_cast<void>(g_card_lifecycle_controller->handle_removal());
+          notify_webview_session_changed();
+        }
+        if (!g_backup_return_probe_attempted && g_backup_return_readiness.stable()) {
+          g_backup_return_probe_attempted = true;
+          const auto transition = g_card_lifecycle_controller->handle_arrival();
+          if (transition.entry_route && *transition.entry_route !=
+              usb_vault::application::CardEntryRoute::unavailable)
+            g_backup_return_waiting = false;
+          notify_webview_session_changed();
+        }
+        if (g_backup_return_probe_attempted && g_backup_return_readiness.stable() &&
+            g_card_entry && g_card_entry->current_route() &&
+            *g_card_entry->current_route() != usb_vault::application::CardEntryRoute::unavailable)
+          g_backup_return_waiting = false;
+      }
       if (wparam == 1) service_mount_monitor();
       if (wparam == 1 && g_creation_work.hotkey_exit_pending.load()) {
         if (g_backup_dialog && g_backup_dialog->window) {

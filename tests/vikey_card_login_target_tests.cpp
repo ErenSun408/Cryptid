@@ -158,11 +158,29 @@ void test_all_other_contexts_are_rejected() {
       "unknown logical state was accepted for login");
 }
 
+void test_probe_handoff_is_one_shot_and_does_not_authenticate() {
+  RejectingCredentialProvider provider;
+  VikeyHelperCardEnrollment enrollment(VikeyHelperBackendConfig{}, provider);
+  enrollment.prime_login_inspection(probe(VikeyCardMediaState::product_evidence,CardRecordState::initialized_v1));
+  auto insertion = enrollment.inspect_entry();
+  require(insertion && insertion->inspect_product_record_read_only()==CardRecordState::initialized_v1 && provider.loads==0,
+          "probe handoff repeated hardware inspection");
+  auto login = enrollment.make_login_target(*insertion);
+  require(login && provider.loads==0,"probe handoff did not preserve normal login target");
+  bool consumed=false;
+  try { static_cast<void>(enrollment.inspect_entry()); } catch (...) { consumed=true; }
+  require(consumed && provider.loads==1,"one-shot probe was reused for another insertion");
+  bool rejected=false;
+  try { enrollment.prime_login_inspection(probe(VikeyCardMediaState::blank)); } catch (...) { rejected=true; }
+  require(rejected,"blank card accepted as login-ready handoff");
+}
+
 }  // namespace
 
 int main() {
   try {
     test_exact_initialized_context_is_side_effect_free();
+    test_probe_handoff_is_one_shot_and_does_not_authenticate();
     test_enrollment_factory_accepts_only_its_initialized_context();
     test_all_other_contexts_are_rejected();
     std::cout << "vikey_card_login_target_tests passed\n";

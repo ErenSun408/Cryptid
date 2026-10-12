@@ -244,11 +244,36 @@ void test_failed_unmount_cannot_restore_removed_context() {
           "failed unmount restored removed context or root authentication");
 }
 
+void test_exchange_arrivals_never_probe_and_return_session_starts_empty() {
+  Fixture exchange;
+  static_cast<void>(exchange.lifecycle.handle_arrival());
+  exchange.authentication.authenticated_state = true;
+  for (int i = 0; i < 4; ++i) {
+    static_cast<void>(exchange.lifecycle.handle_removal());
+    const auto arrival = exchange.lifecycle.handle_uninspected_arrival();
+    require(arrival.presence == CardPresenceTransition::card_available &&
+                !arrival.entry_route && !exchange.entry.has_context() &&
+                !exchange.authentication.authenticated() && exchange.source.calls_count == 1,
+            "exchange bounce triggered login inspection or restored authentication");
+    static_cast<void>(exchange.lifecycle.handle_uninspected_arrival());
+    require(exchange.source.calls_count == 1, "duplicate exchange arrival inspected SDK");
+  }
+  Fixture returned;
+  require(!returned.presence.card_present() && returned.source.calls_count == 0 &&
+              !returned.entry.has_context(), "fresh return session inspected unstable card");
+  static_cast<void>(returned.lifecycle.handle_removal());
+  require(returned.source.calls_count == 0, "queued removal inspected card");
+  const auto ready = returned.lifecycle.handle_arrival();
+  require(ready.entry_route == CardEntryRoute::login_required && returned.source.calls_count == 1 &&
+              !returned.authentication.authenticated(), "settled return did not require fresh login");
+}
+
 }  // namespace
 
 int main() {
   try {
     test_arrival_marks_present_and_inspects_once();
+    test_exchange_arrivals_never_probe_and_return_session_starts_empty();
     test_source_failure_is_unavailable_but_present();
     test_removal_destroys_context_before_forced_unmount();
     test_duplicate_removal_is_idempotent();

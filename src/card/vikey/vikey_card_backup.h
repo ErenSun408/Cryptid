@@ -32,9 +32,14 @@ class VikeyCardBackup final {
   using Clock = std::chrono::steady_clock;
   explicit VikeyCardBackup(IVikeyCardBackupBackend& backend) : backend_(backend) {}
   void prepare(Clock::time_point now = Clock::now());
-  void complete(Clock::time_point now = Clock::now());
+  void complete(Clock::time_point now = Clock::now(), std::uint32_t expected_target = 0);
+  bool target_eligible(const VikeyCardMediaProbe& target, Clock::time_point now = Clock::now()) noexcept;
+  bool is_source(const VikeyCardMediaProbe& target) const noexcept {
+    return source_ != 0 && target.hardware_id == source_;
+  }
   void cancel() noexcept;
   bool pending(Clock::time_point now = Clock::now()) noexcept;
+  unsigned int remaining_seconds(Clock::time_point now = Clock::now()) noexcept;
  private:
   IVikeyCardBackupBackend& backend_;
   security::SecureBuffer record_;

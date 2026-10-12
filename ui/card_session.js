@@ -7048,6 +7048,14 @@
     }
     closeCreationFlow();
   });
+  window.addEventListener("usb-vault-card-backup-closed", (event) => {
+    busy = false;
+    if (event.detail?.sessionChanged === true) {
+      window.dispatchEvent(new Event("usb-vault-session-changed"));
+      return;
+    }
+    render(messageForCurrentState());
+  });
   backupButtons.forEach(button => button.addEventListener("click", async () => {
     if (busy || !bridge || currentState === null) return;
     busy = true;

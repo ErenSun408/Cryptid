@@ -132,7 +132,16 @@ VikeyCardMediaProbe VikeyHelperCardEnrollment::probe() {
 
 std::unique_ptr<VikeyCardInsertionContext>
 VikeyHelperCardEnrollment::inspect_entry() {
+  if (primed_login_probe_) {
+    const auto value = *primed_login_probe_;
+    primed_login_probe_.reset();
+    return std::make_unique<VikeyCardInsertionContext>(value);
+  }
   return std::make_unique<VikeyCardInsertionContext>(probe());
+}
+void VikeyHelperCardEnrollment::prime_login_inspection(const VikeyCardMediaProbe& value) {
+  primed_login_probe_.reset();
+  primed_login_probe_ = validate_login_context(value);
 }
 
 std::unique_ptr<application::IReadOnlyCardEntryInspection>

@@ -8,6 +8,7 @@
 #include "usb_vault/card/card_initialization_service.h"
 
 #include <memory>
+#include <optional>
 
 namespace usb_vault::card::vikey {
 
@@ -23,6 +24,9 @@ class VikeyHelperCardEnrollment final
       IVikeyCredentialProvider& credential_provider);
 
   [[nodiscard]] std::unique_ptr<VikeyCardInsertionContext> inspect_entry();
+  // Native handoff from a completed read-only probe of an uninterrupted card
+  // connection. Consumed once; it supplies routing metadata, never authentication.
+  void prime_login_inspection(const VikeyCardMediaProbe& probe);
   [[nodiscard]] std::unique_ptr<application::IReadOnlyCardEntryInspection>
   inspect_inserted_card() override;
   [[nodiscard]] std::unique_ptr<ICardInitializationTarget>
@@ -42,6 +46,7 @@ class VikeyHelperCardEnrollment final
 
   VikeyHelperBackendConfig config_;
   IVikeyCredentialProvider& credential_provider_;
+  std::optional<VikeyCardMediaProbe> primed_login_probe_;
 };
 
 // Binds one adapter-approved initializable insertion context to the formal

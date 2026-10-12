@@ -636,6 +636,11 @@ class PasswordArgumentsWiper final {
 
 class CardProductWebViewHostObject final : public IDispatch {
  public:
+  bool resume_card_backup() noexcept {
+    if (!backup_pending_ || configuration_pending_) return false;
+    backup_pending_ = false;
+    return true;
+  }
   CardProductWebViewHostObject(
       CardProductUiSessionController& controller,
       IUiCloseRequestSink* const close_sink,
@@ -1014,7 +1019,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       exit_hotkey_sink_->set_capture(parameters->rgvarg[0].boolVal != VARIANT_FALSE);
       return S_OK;
     }
-    if (configuration_pending_ || creation_work_->hotkey_exit_pending.load()) {
+    if (configuration_pending_ || backup_pending_ || creation_work_->hotkey_exit_pending.load()) {
       DispatchTextWiper text_wiper(parameters);
       wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
       return E_PENDING;
@@ -1173,7 +1178,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (!close_sink_ || !close_sink_->request_card_backup()) return E_FAIL;
         controller_.cancel_login_reset();
-        configuration_pending_ = true;
+        backup_pending_ = true;
         return S_OK;
       case kOpenConfigurationId:
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
@@ -3495,6 +3500,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::uint64_t reset_epoch_{};
   LoginResetPreparation reset_result_;
   bool configuration_pending_{};
+  bool backup_pending_{};
   IUiWindowSizeSink* window_size_sink_{};
   IUiExitHotkeySink* exit_hotkey_sink_{};
   IUiExternalDropTargetSink* external_drop_sink_{};
@@ -3547,6 +3553,11 @@ class CardProductWebViewHostObject final : public IDispatch {
 };
 
 }  // namespace
+
+bool resume_card_backup_webview_host_object(IDispatch* object) noexcept {
+  auto* host = dynamic_cast<CardProductWebViewHostObject*>(object);
+  return host && host->resume_card_backup();
+}
 
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,

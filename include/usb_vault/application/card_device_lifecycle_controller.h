@@ -30,6 +30,8 @@ class CardDeviceLifecycleController final {
       IVolatileCardAuthenticationSession& authentication) noexcept;
 
   [[nodiscard]] CardDeviceLifecycleTransition handle_arrival() noexcept;
+  // Controlled exchange: revoke old context and track arrival without SDK work.
+  [[nodiscard]] CardDeviceLifecycleTransition handle_uninspected_arrival() noexcept;
   [[nodiscard]] CardDeviceLifecycleTransition handle_removal() noexcept;
   [[nodiscard]] std::optional<CardEntryRoute> current_route() const noexcept;
 

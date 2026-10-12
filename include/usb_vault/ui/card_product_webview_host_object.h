@@ -193,6 +193,11 @@ class IUiCloseRequestSink {
 // renameContainer(id, name): saves a display-only alias in the encrypted index.
 // Empty resets the alias. Requires authentication and enabled list persistence;
 // it shares the worker exclusion gate, never renames files or changes mounts.
+// Native-only: resume the same bridge while its controller remains alive.
+// After card removal, revoke keys/context and notify the page to discard its
+// previous session state before enabling interaction. Never resume a replaced controller.
+bool resume_card_backup_webview_host_object(IDispatch* object) noexcept;
+
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,

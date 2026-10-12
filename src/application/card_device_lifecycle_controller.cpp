@@ -31,6 +31,17 @@ CardDeviceLifecycleController::handle_arrival() noexcept {
 }
 
 CardDeviceLifecycleTransition
+CardDeviceLifecycleController::handle_uninspected_arrival() noexcept {
+  const auto presence = presence_.handle_arrival();
+  if (presence == CardPresenceTransition::card_available) {
+    authentication_.clear_authentication();
+    entry_.handle_removal();
+  }
+  return {.presence = presence, .entry_route = entry_.current_route(),
+          .entry_changed = presence == CardPresenceTransition::card_available};
+}
+
+CardDeviceLifecycleTransition
 CardDeviceLifecycleController::handle_removal() noexcept {
   const bool entry_changed = entry_.current_route().has_value();
   entry_.handle_removal();
