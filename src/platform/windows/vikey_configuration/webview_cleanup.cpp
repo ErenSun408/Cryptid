@@ -234,6 +234,66 @@ Result uninstall_runtime() noexcept {
     }, [] { return !version(false) && !version(true); });
   } catch (...) { return Result::unavailable; }
 }
+bool application_log_name(std::wstring_view name) noexcept {
+  if (!name.ends_with(L".txt")) return false;
+  name.remove_suffix(4);
+  if (name.starts_with(L"runtime-log-")) name.remove_prefix(12);
+  else if (name.starts_with(L"creator-log-")) {
+    name.remove_prefix(12);
+    const auto separator = name.find(L'-');
+    if (separator == 0 || separator > 10 || separator == std::wstring_view::npos) return false;
+    for (const auto c : name.substr(0, separator)) if (c < L'0' || c > L'9') return false;
+    name.remove_prefix(separator + 1);
+  } else return false;
+  if (name.size() < 15 || name[8] != L'-') return false;
+  for (std::size_t i = 0; i < 15; ++i)
+    if (i != 8 && (name[i] < L'0' || name[i] > L'9')) return false;
+  name.remove_prefix(15);
+  if (name.size() >= 3 && name[0] == L'-' && name[1] >= L'0' && name[1] <= L'9' && name[2] >= L'0' && name[2] <= L'9')
+    name.remove_prefix(3);
+  if (name.empty()) return true;
+  if (!name.starts_with(L"-p") || name.size() < 4 || name.size() > 12) return false;
+  for (const auto c : name.substr(2)) if (c < L'0' || c > L'9') return false;
+  return true;
+}
+Result clean_logs(const std::filesystem::path& application) noexcept {
+  try {
+    auto parents = pin_ancestry(application);
+    const auto logs = application / L"logs";
+    if (GetFileAttributesW(logs.c_str()) == INVALID_FILE_ATTRIBUTES)
+      return missing(GetLastError()) ? Result::ready : Result::unavailable;
+    auto directory = open_plain(logs, true, true);
+    std::vector<Entry> entries;
+    WIN32_FIND_DATAW found{};
+    const auto scan = FindFirstFileW((logs / L"*").c_str(), &found);
+    if (scan == INVALID_HANDLE_VALUE) require(GetLastError() == ERROR_FILE_NOT_FOUND);
+    else {
+      struct Scan { HANDLE value; ~Scan() { FindClose(value); } } guard{scan};
+      unsigned count = 0;
+      do {
+        require(++count <= 20000);
+        if (!application_log_name(found.cFileName)) continue;
+        // Never traverse a directory or link masquerading as an application log.
+        require(!(found.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)));
+        const auto path = logs / found.cFileName;
+        entries.push_back({path, open_plain(path, false, true)});
+      } while (FindNextFileW(scan, &found));
+      require(GetLastError() == ERROR_NO_MORE_FILES);
+    }
+    FILE_DISPOSITION_INFO remove{TRUE};
+    for (auto& entry : entries) {
+      require(SetFileInformationByHandle(entry.handle.value, FileDispositionInfo, &remove, sizeof(remove)) != FALSE);
+      CloseHandle(std::exchange(entry.handle.value, INVALID_HANDLE_VALUE));
+    }
+    if (!SetFileInformationByHandle(directory.value, FileDispositionInfo, &remove, sizeof(remove)))
+      return GetLastError() == ERROR_DIR_NOT_EMPTY ? Result::ready : Result::failed;
+    return Result::ready;
+  } catch (...) { return Result::unavailable; }
+}
+Result clean_application_data(const std::filesystem::path& application) noexcept {
+  const auto result = clean_logs(application);
+  return result == Result::ready ? clean_profile(application) : result;
+}
 Result clean_profile(const std::filesystem::path& application) noexcept {
   try {
     auto parents = pin_ancestry(application);

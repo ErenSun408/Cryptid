@@ -27,7 +27,7 @@ Var CleanupTestStatus
   FileClose $2
   StrCpy $0 $CleanupTestStatus
 !macroend
-!include "${__FILEDIR__}\..\packaging\windows\installer-engine.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\..\packaging\windows\installer-engine.nsh"
 Name "USB Vault isolated installer test"
 OutFile "${TestOutput}"
 RequestExecutionLevel user
@@ -62,11 +62,6 @@ Section "Uninstall"
     StrCpy $CleanupTestStatus $1
   ${EndIf}
   ClearErrors
-  ${GetOptions} $0 "/DELETEWEBVIEW=" $1
-  ${IfNot} ${Errors}
-    StrCpy $UninstallDeleteWebView $1
-  ${EndIf}
-  ClearErrors
   ${GetOptions} $0 "/DELETECONFIG=" $1
   ${IfNot} ${Errors}
     StrCpy $UninstallDeleteConfiguration $1
@@ -78,6 +73,9 @@ Section "Uninstall"
   Call un.ReleaseSetup
   SetErrorLevel 0
   ${If} $UpdateFailed == 1
-    SetErrorLevel 10
+    !insertmacro AbortFailedUninstall
   ${EndIf}
+  FileOpen $0 "${TestRoot}\uninstall-completed.txt" w
+  FileWrite $0 "completed"
+  FileClose $0
 SectionEnd

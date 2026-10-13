@@ -1,6 +1,6 @@
 !ifndef USB_VAULT_UPDATE_JOURNAL
 !define USB_VAULT_UPDATE_JOURNAL
-!include "${__FILEDIR__}\update-files.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\update-files.nsh"
 
 ; Recovery is restricted to the SAME compiled package file list. A future
 ; integration must bind the private journal directory to that package identity,

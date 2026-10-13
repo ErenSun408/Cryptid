@@ -3,6 +3,16 @@ param([Parameter(Mandatory = $true)][string] $MakeNsis)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '..\tools\installer-file-plan.ps1')
+# Windows PowerShell 5.1 decodes BOM-less scripts as ANSI, corrupting Chinese
+# literals before NSIS even reads the generated include. Exercise that host.
+$encodingRoot = Join-Path (Split-Path -Parent $PSScriptRoot) ('out\installer-encoding-tests-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $encodingRoot | Out-Null
+$planScript = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\tools\installer-file-plan.ps1')).Replace("'", "''")
+$quotedEncodingRoot = $encodingRoot.Replace("'", "''")
+$encodingCommand = ". '$planScript'; Write-InstallerFilePlan -Package '$quotedEncodingRoot' -Files @() -Output '$quotedEncodingRoot' -Identity 'ENCODINGPROBE'"
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $encodingCommand
+if ($LASTEXITCODE -ne 0 -or ![IO.File]::ReadAllText((Join-Path $encodingRoot 'package-plan.nsh')).Contains('卸载 USB Vault.exe')) { throw 'Windows PowerShell 5.1 corrupted the uninstaller filename' }
+Write-Output 'PASS Windows PowerShell 5.1 preserves the Chinese file plan'
 $suite = Join-Path (Split-Path -Parent $PSScriptRoot) ('out\installer-engine-tests-' + [Guid]::NewGuid().ToString('N'))
 $keys = [Collections.Generic.List[string]]::new()
 # Set only the test directory DACL. Set-Acl may also request audit privileges
@@ -88,11 +98,14 @@ function Compile-Fixture($Fixture, [string] $StopAt = 'never', [string] $Identit
     return $executable
 }
 function Run-Fixture([string] $Executable, [int] $Expected = 0, [string] $Arguments = '/S') {
+    $uninstallCompletion = $null
     if ((Split-Path -Leaf $Executable) -eq '卸载 USB Vault.exe') {
         # NSIS normally re-executes a temporary copy; that parent reports 0
         # even when its child refuses uninstall. Run our own isolated copy with
         # _?= last so we wait for and inspect the actual uninstaller exit code.
         $installedDirectory = Split-Path -Parent $Executable
+        $uninstallCompletion = Join-Path (Split-Path -Parent $installedDirectory) 'uninstall-completed.txt'
+        if ($Expected -eq 10) { $Expected = 1603 }
         $runner = Join-Path (Split-Path -Parent $installedDirectory) ('uninstall-runner-' + [Guid]::NewGuid().ToString('N') + '.exe')
         Copy-Item -LiteralPath $Executable -Destination $runner
         $Executable = $runner
@@ -100,12 +113,16 @@ function Run-Fixture([string] $Executable, [int] $Expected = 0, [string] $Argume
     }
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru -Wait
     if ($process.ExitCode -ne $Expected) { throw "Expected $Expected, got $($process.ExitCode): $Executable" }
+    if ($uninstallCompletion -and ((Test-Path -LiteralPath $uninstallCompletion) -ne ($Expected -eq 0))) {
+        throw 'Failed uninstall reached its success continuation, or successful uninstall did not complete'
+    }
 }
 function Assert-Text([string] $Path, [string] $Expected) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf) -or [IO.File]::ReadAllText($Path) -cne $Expected) { throw "Unexpected contents: $Path" }
 }
 function Assert-Installed($Fixture) {
     Assert-Text "$($Fixture.Root)\app\USB Vault.exe" 'new main'
+    if (!(Test-Path -LiteralPath "$($Fixture.Root)\app\卸载 USB Vault.exe")) { throw 'Unicode uninstaller filename was corrupted' }
     Assert-Text "$($Fixture.Root)\app\nested\asset" 'new asset'
     if (Test-Path -LiteralPath "$($Fixture.Root)\app\.usb-vault-update") { throw 'Transaction not cleaned' }
     if ((Get-ItemProperty -LiteralPath $Fixture.Key).InstallLocation -ne "$($Fixture.Root)\app") { throw 'Registration mismatch' }
@@ -123,61 +140,46 @@ function Configuration-Targets($Fixture) {
 }
 try {
     foreach ($configuration in @(0, 1)) {
-        foreach ($runtime in @(0, 1)) {
             foreach ($driver in @(0, 1)) {
-                $fixture = New-Fixture "cleanup-choice-$configuration-$runtime-$driver"
+                $fixture = New-Fixture "cleanup-choice-$configuration-$driver"
                 $exe = Compile-Fixture $fixture
                 Run-Fixture $exe
                 [IO.File]::WriteAllText("$($fixture.Root)\app\container.hc", 'container stay')
                 [IO.File]::WriteAllText("$($fixture.Root)\app\self-stored.txt", 'personal stay')
-                Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments "/S /DELETECONFIG=$configuration /DELETEWEBVIEW=$runtime /DELETEDRIVER=$driver"
+                Assert-Installed $fixture
+                Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments "/S /DELETECONFIG=$configuration /DELETEDRIVER=$driver"
                 $calls = if (Test-Path -LiteralPath "$($fixture.Root)\cleanup-calls.txt") { [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt") } else { '' }
-                if ($calls.Contains('--cleanup-webview-profile') -ne ($configuration -eq 1) -or
-                    $calls.Contains('--uninstall-webview') -ne ($runtime -eq 1) -or
+                if (!$calls.Contains('--cleanup-application-data') -or
+                    $calls.Contains('--uninstall-webview') -or
                     $calls.Contains('--uninstall-veracrypt') -ne ($driver -eq 1)) { throw 'Cleanup choices are coupled' }
                 if (Test-Path -LiteralPath $fixture.Key) { throw 'Successful cleanup left registration' }
                 Assert-Text "$($fixture.Root)\app\container.hc" 'container stay'
                 Assert-Text "$($fixture.Root)\app\self-stored.txt" 'personal stay'
             }
-        }
     }
-    Write-Output 'PASS eight cleanup option combinations invoke only selected actions and retain user files'
+    Write-Output 'PASS four cleanup choices preserve shared WebView2 and user files, with correct Unicode uninstaller filename'
 
     foreach ($status in @(11, 12, 20, 21, 22)) {
         $fixture = New-Fixture "driver-failure-$status"
         $exe = Compile-Fixture $fixture
         Run-Fixture $exe
-        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments "/S /DELETECONFIG=1 /DELETEWEBVIEW=1 /DELETEDRIVER=1 /CLEANUPSTATUS=$status"
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments "/S /DELETECONFIG=1 /DELETEDRIVER=1 /CLEANUPSTATUS=$status"
         Assert-Installed $fixture
         $calls = [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt")
-        if (!$calls.Contains('--uninstall-veracrypt') -or $calls.Contains('--cleanup-webview-profile') -or $calls.Contains('--uninstall-webview')) { throw 'Driver failure did not stop later cleanup' }
-        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=0 /DELETEWEBVIEW=0 /DELETEDRIVER=0'
+        if (!$calls.Contains('--uninstall-veracrypt') -or $calls.Contains('--cleanup-application-data') -or $calls.Contains('--uninstall-webview')) { throw 'Driver failure did not stop later cleanup' }
+        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=0 /DELETEDRIVER=0'
         if (Test-Path -LiteralPath $fixture.Key) { throw 'Opting out did not recover driver cleanup failure' }
     }
     Write-Output 'PASS blocked, unavailable, restart, cancelled and failed driver cleanup retains application and supports opting out'
 
-    foreach ($status in @(12, 21, 22)) {
-        $fixture = New-Fixture "webview-failure-$status"
-        $exe = Compile-Fixture $fixture
-        Run-Fixture $exe
-        New-Item -ItemType Directory -Path "$($fixture.Root)\config" | Out-Null
-        [IO.File]::WriteAllText("$($fixture.Root)\config\settings.txt", 'settings stay')
-        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments "/S /DELETECONFIG=0 /DELETEWEBVIEW=1 /CLEANUPSTATUS=$status"
-        Assert-Installed $fixture
-        Assert-Text "$($fixture.Root)\config\settings.txt" 'settings stay'
-        Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" -Arguments '/S /DELETECONFIG=0 /DELETEWEBVIEW=0'
-        if (Test-Path -LiteralPath $fixture.Key) { throw 'Opting out did not recover failed WebView uninstall' }
-    }
-    Write-Output 'PASS unavailable, cancelled and failed WebView cleanup retains application and supports opting out'
-
-    $fixture = New-Fixture 'profile-failure-stops-runtime'
+    $fixture = New-Fixture 'profile-failure-retains-product'
     $exe = Compile-Fixture $fixture
     Run-Fixture $exe
-    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments '/S /DELETECONFIG=1 /DELETEWEBVIEW=1 /CLEANUPSTATUS=12'
+    Run-Fixture "$($fixture.Root)\app\卸载 USB Vault.exe" 10 -Arguments '/S /DELETECONFIG=1 /CLEANUPSTATUS=12'
     Assert-Installed $fixture
     $calls = [IO.File]::ReadAllText("$($fixture.Root)\cleanup-calls.txt")
-    if (!$calls.Contains('--cleanup-webview-profile') -or $calls.Contains('--uninstall-webview')) { throw 'Failed profile cleanup still removed runtime' }
-    Write-Output 'PASS profile cleanup failure stops runtime removal before deleting the product'
+    if (!$calls.Contains('--cleanup-application-data') -or $calls.Contains('--uninstall-webview')) { throw 'Failed profile cleanup still removed runtime' }
+    Write-Output 'PASS profile cleanup failure retains the product and reports failure without success continuation'
 
     foreach ($delete in @(0, 1)) {
         $fixture = New-Fixture "configuration-choice-$delete"

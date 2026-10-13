@@ -1,9 +1,9 @@
 !ifndef USB_VAULT_INSTALLER_ENGINE
 !define USB_VAULT_INSTALLER_ENGINE
 !define UpdateIncludeUninstaller
-!include "${__FILEDIR__}\update-paths.nsh"
-!include "${__FILEDIR__}\update-journal.nsh"
-!include "${PackagePlan}"
+!include /CHARSET=UTF8 "${__FILEDIR__}\update-paths.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\update-journal.nsh"
+!include /CHARSET=UTF8 "${PackagePlan}"
 !ifndef ProductMenu
   !define ProductMenu "$SMPROGRAMS\USB Vault"
 !endif
@@ -94,9 +94,16 @@ FunctionEnd
 !macroend
 !insertmacro SetupCommonFunctions ""
 !insertmacro SetupCommonFunctions "un."
-!include "${__FILEDIR__}\uninstall-configuration.nsh"
-!include "${__FILEDIR__}\uninstall-webview.nsh"
-!include "${__FILEDIR__}\uninstall-driver.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\uninstall-configuration.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\uninstall-webview.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\uninstall-driver.nsh"
+
+; SetErrorLevel alone does not fail NSIS's progress page. Abort must execute
+; in the uninstall section after its explanation has been shown.
+!macro AbortFailedUninstall
+  SetErrorLevel 1603
+  Abort "卸载未完成。应用安装记录已保留，请处理提示的问题后重试。"
+!macroend
 
 ; Build a protected descriptor owned by the actual token user. Restrict the
 ; transaction tree to that user and SYSTEM, with inherited child permissions.

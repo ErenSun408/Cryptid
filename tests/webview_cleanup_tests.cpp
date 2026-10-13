@@ -77,6 +77,31 @@ int wmain(int argc, wchar_t** argv) {
     check(CreateHardLinkW((data / L"link").c_str(), outside.c_str(), nullptr) != FALSE, "hardlink fixture failed");
     check(clean_profile(application) == Result::ready && std::filesystem::file_size(outside) == 13, "hardlink cleanup modified outside data");
     check(clean_profile(application / L"..") != Result::ready && clean_profile(L"relative") != Result::ready, "aliased root accepted");
+    for (const auto name : {L"runtime-log-20261012-123456.txt", L"runtime-log-20261012-123456-01-p02.txt",
+                            L"creator-log-1234-20261012-123456-p100.txt"})
+      check(application_log_name(name), "application log rejected");
+    for (const auto name : {L"container.hc", L"notes.txt", L"runtime-log.txt", L"runtime-log-20261012-123456.txt.hc",
+                            L"runtime-log-20261012-123456-p../x.txt", L"creator-log--20261012-123456.txt"})
+      check(!application_log_name(name), "unknown file classified as log");
+    const auto logs = application / L"logs";
+    const auto log_a = logs / L"runtime-log-20261012-123456.txt";
+    const auto log_b = logs / L"creator-log-1234-20261012-123456-p02.txt";
+    write(log_a); write(log_b); write(logs / L"notes.txt");
+    check(clean_logs(application) == Result::ready && !std::filesystem::exists(log_a) &&
+          !std::filesystem::exists(log_b) && std::filesystem::exists(logs / L"notes.txt"), "log cleanup scope incorrect");
+    std::filesystem::remove(logs / L"notes.txt");
+    check(clean_logs(application) == Result::ready && !std::filesystem::exists(logs), "empty logs retained");
+    write(log_a); write(log_b);
+    HANDLE log_lock = CreateFileW(log_b.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    check(log_lock != INVALID_HANDLE_VALUE, "log lock failed");
+    const auto log_result = clean_logs(application);
+    CloseHandle(log_lock);
+    check(log_result != Result::ready && std::filesystem::exists(log_a), "locked logs partially deleted during preflight");
+    check(clean_logs(application) == Result::ready, "log retry failed");
+    write(log_a); write(data / L"cache");
+    check(clean_application_data(application) == Result::ready && !std::filesystem::exists(logs) &&
+          !std::filesystem::exists(profile), "combined application cleanup failed");
+    check(clean_application_data(application) == Result::ready, "absent app data not idempotent");
     write(fixture / L"unsigned.exe");
     check(!microsoft_signed_file(fixture / L"unsigned.exe") && !microsoft_signed_file(fixture / L"absent.exe"), "untrusted executable accepted");
     const auto path = setup_path(application, L"142.0.3595.94");

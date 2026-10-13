@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $suite | Out-Null
 $probe = Start-Process -FilePath $helper -ArgumentList '--probe-uninstall-cleanup' -WindowStyle Hidden -PassThru -Wait
 if ($probe.ExitCode -ne 0) { throw 'Cleanup capability probe failed' }
 function Run-Cleanup([string] $Application, [int] $Expected = 0) {
-    $process = Start-Process -FilePath $helper -ArgumentList ('--cleanup-webview-profile "' + $Application + '"') -WindowStyle Hidden -PassThru -Wait
+    $process = Start-Process -FilePath $helper -ArgumentList ('--cleanup-application-data "' + $Application + '"') -WindowStyle Hidden -PassThru -Wait
     if ($process.ExitCode -ne $Expected) { throw "Expected $Expected, got $($process.ExitCode)" }
 }
 function New-Application([string] $Name) {
@@ -27,7 +27,12 @@ New-Item -ItemType Directory -Path $outside | Out-Null
 [IO.File]::WriteAllText("$outside\sentinel", 'outside stays')
 
 $app = New-Application 'app with spaces'
+New-Item -ItemType Directory -Path "$app\logs" | Out-Null
+[IO.File]::WriteAllText("$app\logs\runtime-log-20261012-123456.txt", 'runtime log')
+[IO.File]::WriteAllText("$app\logs\self-stored.txt", 'personal stays')
 Run-Cleanup $app
+if (Test-Path -LiteralPath "$app\logs\runtime-log-20261012-123456.txt") { throw 'Application log remained' }
+Assert-Text "$app\logs\self-stored.txt" 'personal stays'
 if (Test-Path -LiteralPath "$app\USB Vault.exe.WebView2\EBWebView") { throw 'Browser data remained' }
 Assert-Text "$app\container.custom" 'container stays'
 Assert-Text "$app\USB Vault.exe.WebView2\self-stored" 'user stays'
@@ -53,6 +58,13 @@ New-Item -ItemType Junction -Path $app -Target $outside | Out-Null
 Run-Cleanup $app 12
 Assert-Text "$outside\sentinel" 'outside stays'
 Write-Output 'PASS application ancestry junction rejected'
+
+$app = New-Application 'logs-junction'
+New-Item -ItemType Junction -Path "$app\logs" -Target $outside | Out-Null
+Run-Cleanup $app 12
+Assert-Text "$outside\sentinel" 'outside stays'
+Assert-Text "$app\USB Vault.exe.WebView2\EBWebView\Default\Cache\entry" 'cache'
+Write-Output 'PASS redirected logs rejected before browser cache deletion'
 
 $app = New-Application 'occupied-profile'
 $lockedPath = "$app\USB Vault.exe.WebView2\EBWebView\Default\Cache\entry"

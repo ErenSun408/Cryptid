@@ -1,7 +1,6 @@
 !ifndef USB_VAULT_UNINSTALL_WEBVIEW
 !define USB_VAULT_UNINSTALL_WEBVIEW
-Var UninstallDeleteWebView
-Var UninstallWebViewFailed
+Var UninstallProfileFailed
 
 !macro RunWebViewCleanup Mode
   !ifdef UninstallCleanupTest
@@ -12,36 +11,26 @@ Var UninstallWebViewFailed
     Pop $1
   !endif
   ${If} $0 != 0
-    StrCpy $UninstallWebViewFailed 1
+    StrCpy $UninstallProfileFailed 1
     StrCpy $UpdateFailed 1
     Return
   ${EndIf}
 !macroend
 
 Function un.CleanWebViewData
-  StrCpy $UninstallWebViewFailed 0
-  ${If} $UninstallDeleteConfiguration != 1
-  ${AndIf} $UninstallDeleteWebView != 1
-    Return
-  ${EndIf}
+  StrCpy $UninstallProfileFailed 0
   !ifndef UninstallCleanupTest
     InitPluginsDir
     ClearErrors
     SetOutPath "$PLUGINSDIR"
     File "${SetupHelper}"
     ${If} ${Errors}
-      StrCpy $UninstallWebViewFailed 1
+      StrCpy $UninstallProfileFailed 1
       StrCpy $UpdateFailed 1
       Return
     ${EndIf}
   !endif
-  ${If} $UninstallDeleteConfiguration == 1
-    DetailPrint "正在清理 USB Vault 的浏览器数据…"
-    !insertmacro RunWebViewCleanup '--cleanup-webview-profile "$INSTDIR"'
-  ${EndIf}
-  ${If} $UninstallDeleteWebView == 1
-    DetailPrint "正在请求卸载共享 WebView2 Runtime…"
-    !insertmacro RunWebViewCleanup '--uninstall-webview'
-  ${EndIf}
+  DetailPrint "正在清理 USB Vault 的运行日志和浏览器缓存…"
+  !insertmacro RunWebViewCleanup '--cleanup-application-data "$INSTDIR"'
 FunctionEnd
 !endif

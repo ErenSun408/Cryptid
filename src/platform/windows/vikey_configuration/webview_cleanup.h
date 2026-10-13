@@ -12,6 +12,9 @@ setup::Result uninstall_runtime() noexcept;
 // Only EBWebView inside the reserved USB Vault.exe.WebView2 application profile.
 // Does not touch arbitrary profile overrides or another application's data.
 setup::Result clean_profile(const std::filesystem::path& application) noexcept;
+bool application_log_name(std::wstring_view name) noexcept;
+setup::Result clean_logs(const std::filesystem::path& application) noexcept;
+setup::Result clean_application_data(const std::filesystem::path& application) noexcept;
 bool microsoft_signed_file(const std::filesystem::path& path) noexcept;
 
 // Injectable orchestration shared by the real adapter and deterministic tests.

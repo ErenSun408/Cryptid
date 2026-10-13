@@ -63,12 +63,16 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
     const std::wstring mode = argc >= 2 ? argv[1] : L"";
     const std::filesystem::path application = argc == 3 ? argv[2] : L"";
     const bool cleanup_profile = mode == L"--cleanup-webview-profile" && argc == 3;
+    const bool cleanup_application = mode == L"--cleanup-application-data" && argc == 3;
     const bool single_mode = argc == 2;
     LocalFree(argv);
-    if (cleanup_profile)
+    if (cleanup_application)
+      result = configuration::webview_cleanup::clean_application_data(application);
+    else if (cleanup_profile)
       result = configuration::webview_cleanup::clean_profile(application);
     else if (!single_mode) result = Result::bad_arguments;
     else if (mode == L"--probe-uninstall-cleanup") result = Result::ready;
+    else if (mode == L"--probe-application-cleanup") result = Result::ready;
     else if (mode == L"--probe-driver-cleanup") result = Result::ready;
     else if (mode == L"--uninstall-veracrypt")
       result = configuration::driver_cleanup::request_uninstall(directory() / L"usb_vault_setup_helper.exe");

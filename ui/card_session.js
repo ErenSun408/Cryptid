@@ -206,7 +206,7 @@
   ]);
   const surface = document.getElementById("card-session-surface");
   const configurationButton = document.getElementById("open-configuration");
-  const backupButtons = [document.getElementById("card-backup-login"), document.getElementById("card-backup-settings")];
+  const backupButtons = [document.getElementById("card-backup-settings")];
   const sessionTools = document.getElementById("session-tools");
   const sessionToolsToggle = document.getElementById("session-tools-toggle");
   const sessionToolsMenu = document.getElementById("session-tools-menu");
@@ -4797,7 +4797,7 @@
     sessionTools.hidden = bridge === null || currentState === nativeState.authenticated;
     sessionToolsToggle.disabled = busy || currentState === null || bridge === null;
     if (busy || sessionTools.hidden) closeSessionTools();
-    forgotOpen.hidden = !forgotAvailable;
+    forgotOpen.hidden = false;
     forgotOpen.disabled = busy || !forgotAvailable;
     backupButtons.forEach(button => { button.disabled = busy || bridge === null || currentState === null; });
     configurationButton.hidden = bridge === null || currentState === nativeState.authenticated;

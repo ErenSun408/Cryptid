@@ -1,4 +1,4 @@
-# Compile-time NSIS file plan. The caller verifies all source hashes first.
+﻿# Compile-time NSIS file plan. The caller verifies all source hashes first.
 function Write-InstallerFilePlan {
     param([string] $Package, [IO.FileInfo[]] $Files, [string] $Output, [string] $Identity)
     $plan = [Collections.Generic.List[string]]::new()
@@ -78,5 +78,7 @@ function Write-InstallerFilePlan {
     $plan.Add('!macro PackageRemoveDirectories')
     foreach ($dir in ($directories | Sort-Object Length -Descending)) { $plan.Add('  RMDir "$INSTDIR\' + $dir + '"') }
     $plan.Add('!macroend')
-    [IO.File]::WriteAllLines((Join-Path $Output 'package-plan.nsh'), $plan, [Text.UTF8Encoding]::new($false))
+    # Includes do not inherit makensis /INPUTCHARSET; keep an explicit BOM as
+    # well as the engine's /CHARSET=UTF8 so other include callers stay correct.
+    [IO.File]::WriteAllLines((Join-Path $Output 'package-plan.nsh'), $plan, [Text.UTF8Encoding]::new($true))
 }
