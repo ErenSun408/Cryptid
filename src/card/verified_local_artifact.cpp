@@ -124,7 +124,8 @@ class Hash final {
       handle, value.data(), static_cast<DWORD>(value.size()),
       FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (length == 0 || length >= value.size()) {
-    fail(CardError::backend_unavailable, "resolve local artifact path", DiagnosticStage::path_check);
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::path_check,
+        "resolve local artifact path", length ? ERROR_INSUFFICIENT_BUFFER : ::GetLastError(), NativeCodeKind::win32);
   }
   value.resize(length);
 
@@ -179,7 +180,8 @@ void require_final_path(const HANDLE handle,
           FILE_FLAG_OPEN_REPARSE_POINT,
       nullptr));
   if (handle.get() == INVALID_HANDLE_VALUE) {
-    fail(CardError::backend_unavailable, "lock local artifact for verification", DiagnosticStage::file_open);
+    throw DiagnosticError(make_error_code(CardError::backend_unavailable), DiagnosticStage::file_open,
+        "lock local artifact for verification", ::GetLastError(), NativeCodeKind::win32);
   }
 
   const FILE_ATTRIBUTE_TAG_INFO info = attributes(handle.get());

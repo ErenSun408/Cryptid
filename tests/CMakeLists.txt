@@ -628,11 +628,12 @@ add_test(NAME vikey_development_app_config_tests
 add_executable(configuration_installer_tests
   configuration_installer_tests.cpp
   ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/driver_deployment.cpp
+  ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/driver_diagnostics.cpp
   ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/driver_cleanup.cpp
   ${PROJECT_SOURCE_DIR}/src/platform/windows/vikey_configuration/installers.cpp)
 target_include_directories(configuration_installer_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(configuration_installer_tests PRIVATE
-  usb_vault_core usb_vault_vikey_development_credentials usb_vault_verified_local_artifact Shell32 Wintrust Advapi32)
+  usb_vault_core usb_vault_vikey_development_credentials usb_vault_verified_local_artifact Shell32 Wintrust Advapi32 Ole32)
 usb_vault_configure_target(configuration_installer_tests)
 add_test(NAME configuration_installer_tests COMMAND configuration_installer_tests)
 

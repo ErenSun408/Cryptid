@@ -11,8 +11,119 @@
 #include <stdexcept>
 #include <vector>
 #include <algorithm>
+#include <array>
 
 namespace {
+int diagnostic_child(std::wstring_view token, std::wstring_view mode) {
+  using namespace configuration::driver;
+  using configuration::setup::Result;
+  Diagnostic diagnostic{Step::service_start, CodeKind::win32, 577};
+  if (mode == L"hresult") diagnostic = {Step::source_verification, CodeKind::hresult, 0x800B0109, 34};
+  if (mode == L"win32" || mode == L"hresult")
+    return send_diagnostic(token, Result::failed, diagnostic) ? 22 : 1;
+  const std::wstring name = L"\\\\.\\pipe\\USBVaultDriverDiagnostic-" + std::wstring(token);
+  const auto pipe = CreateFileW(name.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (pipe == INVALID_HANDLE_VALUE) return 1;
+  std::array<std::uint32_t, 7> packet{0x31445655, 22, 22, 1, 577, 0, 0};
+  DWORD size = 24;
+  if (mode == L"short") size = 8;
+  else if (mode == L"long") size = 28;
+  else if (mode == L"magic") packet[0] = 0;
+  else if (mode == L"step") packet[2] = 1000;
+  else if (mode == L"kind") packet[3] = 1000;
+  else if (mode == L"result") packet[1] = 0;
+  DWORD written{};
+  const bool sent = WriteFile(pipe, packet.data(), size, &written, nullptr) && written == size;
+  CloseHandle(pipe);
+  return sent ? 22 : 1;
+}
+void diagnostic_tests() {
+  using namespace configuration::driver;
+  using namespace usb_vault::card;
+  using configuration::setup::Result;
+  if (valid_diagnostic_token(L"") || valid_diagnostic_token(std::wstring(32, L'G')) ||
+      valid_diagnostic_token(L"../../unexpected") ||
+      send_diagnostic(L"bad", Result::failed, {})) throw std::runtime_error("unsafe diagnostic token accepted");
+  Diagnostic diagnostic{Step::target_verification};
+  const DiagnosticError certificate(make_error_code(CardError::backend_unavailable), DiagnosticStage::installer_signature,
+      "private-path-must-never-escape", 0x80092013, NativeCodeKind::hresult);
+  capture_exception(diagnostic, certificate);
+  if (format_diagnostic(diagnostic) != "UVD1|20|2|0x80092013|34")
+    throw std::runtime_error("HRESULT or diagnostic privacy lost");
+  diagnostic = {Step::target_create};
+  capture_exception(diagnostic, std::system_error(ERROR_ACCESS_DENIED, std::system_category(), "private-path"));
+  if (format_diagnostic(diagnostic) != "UVD1|15|1|0x00000005|0")
+    throw std::runtime_error("Win32 diagnostic lost");
+  std::array<wchar_t, 32768> executable{};
+  if (!GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size())))
+    throw std::runtime_error("diagnostic child path unavailable");
+  for (const auto mode : {L"win32", L"hresult", L"short", L"long", L"magic", L"step", L"kind", L"result", L"peer"}) {
+    DiagnosticReceiver receiver;
+    if (!valid_diagnostic_token(receiver.token())) throw std::runtime_error("bad generated diagnostic token");
+    const std::wstring child_mode = std::wstring_view(mode) == L"peer" ? L"win32" : mode;
+    std::wstring command = L"\"" + std::wstring(executable.data()) + L"\" --diagnostic-child " + receiver.token() + L" " + child_mode;
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.data(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+          nullptr, nullptr, &startup, &process)) throw std::runtime_error("diagnostic child failed to start");
+    CloseHandle(process.hThread);
+    if (WaitForSingleObject(process.hProcess, 5000) != WAIT_OBJECT_0) {
+      TerminateProcess(process.hProcess, 1); WaitForSingleObject(process.hProcess, 5000); CloseHandle(process.hProcess);
+      throw std::runtime_error("diagnostic child timed out");
+    }
+    DWORD code{};
+    GetExitCodeProcess(process.hProcess, &code);
+    Diagnostic received{Step::wait_elevated, CodeKind::process_exit, 22};
+    const auto pid = std::wstring_view(mode) == L"peer" ? GetCurrentProcessId() : process.dwProcessId;
+    const bool accepted = receiver.receive(pid, code, received);
+    CloseHandle(process.hProcess);
+    if (code != 22) throw std::runtime_error("diagnostic child send failed");
+    const bool wanted = std::wstring_view(mode) == L"win32" || std::wstring_view(mode) == L"hresult";
+    if (accepted != wanted) throw std::runtime_error("invalid diagnostic report disposition");
+    if (!accepted && (received.step != Step::wait_elevated || received.code != 22))
+      throw std::runtime_error("rejected report modified fallback diagnostic");
+    if (accepted && std::wstring_view(mode) == L"hresult" &&
+        format_diagnostic(received) != "UVD1|12|2|0x800B0109|34") throw std::runtime_error("child HRESULT truncated");
+    if (accepted && std::wstring_view(mode) == L"win32" &&
+        format_diagnostic(received) != "UVD1|22|1|0x00000241|0") throw std::runtime_error("child Win32 code lost");
+  }
+  DiagnosticReceiver empty;
+  diagnostic = {Step::wait_elevated};
+  if (empty.receive(GetCurrentProcessId(), 22, diagnostic)) throw std::runtime_error("absent report accepted");
+}
+void helper_diagnostic_tests(const wchar_t* executable) {
+  using namespace configuration::driver;
+  HANDLE token{};
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) throw std::runtime_error("cannot inspect test token");
+  TOKEN_ELEVATION elevation{};
+  DWORD count{};
+  const bool inspected = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &count) != FALSE;
+  CloseHandle(token);
+  if (!inspected) throw std::runtime_error("cannot inspect test elevation");
+  if (elevation.TokenIsElevated) {
+    std::cout << "SKIP real helper pipe report: elevated test token must not install a system driver\n";
+    return;
+  }
+  DiagnosticReceiver receiver;
+  std::wstring command = L"\"" + std::wstring(executable) + L"\" --install-driver-elevated --diagnostic-pipe " + receiver.token();
+  STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+      nullptr, nullptr, &startup, &process)) throw std::runtime_error("real diagnostic helper did not start");
+  CloseHandle(process.hThread);
+  if (WaitForSingleObject(process.hProcess, 5000) != WAIT_OBJECT_0) {
+    TerminateProcess(process.hProcess, 1); WaitForSingleObject(process.hProcess, 5000); CloseHandle(process.hProcess);
+    throw std::runtime_error("real diagnostic helper timed out");
+  }
+  DWORD code{};
+  GetExitCodeProcess(process.hProcess, &code);
+  Diagnostic received{};
+  const bool accepted = receiver.receive(process.dwProcessId, code, received);
+  CloseHandle(process.hProcess);
+  if (code != 12 || !accepted || format_diagnostic(received) != "UVD1|11|1|0x000002E4|0")
+    throw std::runtime_error("real helper lost token rejection or original error across pipe");
+  std::cout << "PASS real helper pipe preserved elevation rejection and Win32 740; no driver access\n";
+}
 struct RemovalFixture {
   configuration::driver_cleanup::State state;
   int fail{};
@@ -57,10 +168,17 @@ void removal_policy_tests() {
 }
 
 int wmain(int argc, wchar_t** argv) {
+  if (argc == 4 && std::wstring_view(argv[1]) == L"--diagnostic-child")
+    return diagnostic_child(argv[2], argv[3]);
+  if (argc == 3 && std::wstring_view(argv[1]) == L"--helper-diagnostics") {
+    try { helper_diagnostic_tests(argv[2]); return 0; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+  }
   const auto directory = std::filesystem::temp_directory_path() /
       (L"usb-vault-installer-test-" + std::to_wstring(::GetCurrentProcessId()));
   bool owned = false;
   try {
+    diagnostic_tests();
     removal_policy_tests();
     using configuration::setup::Result;
     using configuration::setup::ensure_dependency;
@@ -120,7 +238,12 @@ int wmain(int argc, wchar_t** argv) {
       if (exists) { std::ofstream file(fixture, std::ios::binary); file << "untrusted installer"; }
       bool rejected = false;
       try { static_cast<void>(configuration::verify_veracrypt_driver(fixture)); }
-      catch (...) { rejected = true; }
+      catch (const usb_vault::card::DiagnosticError& error) {
+        rejected = true;
+        if (!exists && (error.stage() != usb_vault::card::DiagnosticStage::file_open ||
+            error.kind() != usb_vault::card::NativeCodeKind::win32 || error.native() != ERROR_FILE_NOT_FOUND))
+          throw std::runtime_error("missing driver native error lost");
+      }
       if (!rejected) throw std::runtime_error("untrusted or missing driver accepted");
       rejected = false;
       try { static_cast<void>(configuration::verify_webview_installer(fixture)); }

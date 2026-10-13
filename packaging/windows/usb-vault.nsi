@@ -15,6 +15,7 @@ Unicode true
 !include FileFunc.nsh
 !include x64.nsh
 !include /CHARSET=UTF8 "${__FILEDIR__}\installation-record.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\driver-diagnostics.nsh"
 
 !ifndef PayloadDirectory
   !error "Use tools/build-windows-installer.ps1 with a verified package"
@@ -81,6 +82,7 @@ FunctionEnd
 
 Var WebViewState
 Var VeraCryptState
+Var VeraCryptDiagnostic
 Var WebViewCheck
 Var WebViewSelection
 Var WelcomeTitleFont
@@ -149,7 +151,10 @@ Function .onInit
   Pop $0
   nsExec::ExecToStack '"$PLUGINSDIR\usb_vault_setup_helper.exe" --probe-veracrypt'
   Pop $VeraCryptState
-  Pop $0
+  Pop $VeraCryptDiagnostic
+  Push $VeraCryptDiagnostic
+  Call FormatDriverDiagnostic
+  Pop $VeraCryptDiagnostic
   StrCpy $INSTDIR "$LOCALAPPDATA\Programs\USB Vault"
   ; Configuration is a page inside the product window now, so the product
   ; window is the only one to look for.
@@ -332,12 +337,12 @@ Function DependencyPageLeave
   ${EndIf}
 
   ${If} $VeraCryptState == 11
-    MessageBox MB_ICONSTOP "现有系统驱动配置与 USB Vault 不兼容。安装包虽已包含驱动，但不能直接覆盖，请先处理现有驱动。"
+    MessageBox MB_ICONSTOP "现有系统驱动配置与 USB Vault 不兼容。安装包虽已包含驱动，但不能直接覆盖，请先处理现有驱动。$\r$\n$\r$\n$VeraCryptDiagnostic"
     Abort
   ${ElseIf} $VeraCryptState != 0
   ${AndIf} $VeraCryptState != 10
   ${AndIf} $VeraCryptState != 13
-    MessageBox MB_ICONSTOP "无法确认系统中的 VeraCrypt 驱动状态。请先处理检测错误后重新运行安装。"
+    MessageBox MB_ICONSTOP "无法确认系统中的 VeraCrypt 驱动状态（代码 $VeraCryptState）。$\r$\n$\r$\n$VeraCryptDiagnostic$\r$\n$\r$\n请保留此提示以便排查，然后重新运行安装。"
     Abort
   ${EndIf}
 FunctionEnd
@@ -354,6 +359,15 @@ FunctionEnd
   nsExec::ExecToStack '"$PLUGINSDIR\usb_vault_setup_helper.exe" ${Switch}'
   Pop $0
   Pop $1
+  ${If} "${Switch}" == "--veracrypt"
+  ${AndIf} $0 != 0
+    Push $1
+    Call FormatDriverDiagnostic
+    Pop $1
+    DetailPrint "$1"
+  ${Else}
+    StrCpy $1 ""
+  ${EndIf}
   ${If} $0 == 20
     SetRebootFlag true
     DetailPrint "${Name} 安装成功，完成 USB Vault 安装后需要重启 Windows。"
@@ -362,11 +376,15 @@ FunctionEnd
     SetErrorLevel 1602
     Quit
   ${ElseIf} $0 == 11
-    MessageBox MB_ICONSTOP "现有 ${Name} 版本不兼容，未覆盖。请处理现有版本后重新运行安装。"
+    MessageBox MB_ICONSTOP "现有 ${Name} 版本不兼容，未覆盖。请处理现有版本后重新运行安装。$\r$\n$\r$\n$1"
     SetErrorLevel 1603
     Quit
   ${ElseIf} $0 != 0
-    MessageBox MB_ICONSTOP "${Name} 未就绪（代码 $0）。请确认安装已完成、授权未取消；如刚安装驱动，请重启后重试。此次尚未安装 USB Vault。"
+    ${If} "${Switch}" == "--veracrypt"
+      MessageBox MB_ICONSTOP "${Name} 未就绪（代码 $0）。$\r$\n$\r$\n$1$\r$\n$\r$\n此次尚未安装 USB Vault。请保留此提示以便排查，然后重试。"
+    ${Else}
+      MessageBox MB_ICONSTOP "${Name} 未就绪（代码 $0）。请确认安装已完成、授权未取消；如刚安装驱动，请重启后重试。此次尚未安装 USB Vault。"
+    ${EndIf}
     SetErrorLevel 1603
     Quit
   ${EndIf}

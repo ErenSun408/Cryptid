@@ -1,5 +1,6 @@
 #pragma once
 #include "setup_policy.h"
+#include "driver_diagnostics.h"
 #include <filesystem>
 
 namespace configuration::driver {
@@ -15,7 +16,7 @@ constexpr setup::Result classify(Presence presence, bool orphan_file) noexcept {
   return setup::Result::unavailable;
 }
 std::filesystem::path system_driver_path();
-setup::Result probe() noexcept;
-setup::Result install_elevated(const std::filesystem::path& directory) noexcept;
-setup::Result request_install(const std::filesystem::path& executable) noexcept;
+setup::Result probe(Diagnostic* diagnostic = nullptr) noexcept;
+setup::Result install_elevated(const std::filesystem::path& directory, Diagnostic* diagnostic = nullptr) noexcept;
+setup::Result request_install(const std::filesystem::path& executable, Diagnostic* diagnostic = nullptr) noexcept;
 }
