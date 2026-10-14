@@ -16,6 +16,7 @@ Unicode true
 !include x64.nsh
 !include /CHARSET=UTF8 "${__FILEDIR__}\installation-record.nsh"
 !include /CHARSET=UTF8 "${__FILEDIR__}\driver-diagnostics.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}\install-path-policy.nsh"
 
 !ifndef PayloadDirectory
   !error "Use tools/build-windows-installer.ps1 with a verified package"
@@ -51,7 +52,7 @@ Page custom DependencyPageCreate DependencyPageLeave
 
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE ValidateInstallDirectory
 !define MUI_PAGE_CUSTOMFUNCTION_PRE InstallDirectoryPre
-!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 USB Vault 的最终安装文件夹。已有安装将在原位置更新，保留凭据、设置和容器。路径请不要包含中文。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 USB Vault 的最终安装文件夹。已有安装将在原位置更新，保留凭据、设置和容器。路径只能包含英文字母、数字和常用符号，不能包含中文或其他非英文字符。"
 !insertmacro MUI_PAGE_DIRECTORY
 
 !insertmacro MUI_PAGE_INSTFILES
@@ -156,6 +157,13 @@ Function .onInit
   Call FormatDriverDiagnostic
   Pop $VeraCryptDiagnostic
   StrCpy $INSTDIR "$LOCALAPPDATA\Programs\USB Vault"
+  ; A non-ASCII account name puts the per-user default outside the path
+  ; policy, so the default moves to a folder at the system drive root.
+  !insertmacro InstallPathAsciiOnly "$INSTDIR" $1
+  ${If} $1 != 1
+    ${GetRoot} "$WINDIR" $1
+    StrCpy $INSTDIR "$1\USB Vault"
+  ${EndIf}
   ; Configuration is a page inside the product window now, so the product
   ; window is the only one to look for.
   FindWindow $0 "UsbVaultMainWindow"
@@ -170,6 +178,13 @@ Function .onInit
       !insertmacro ProbeRecordedInstallation
       ${If} $1 == 10
         StrCpy $RegisteredLocation $0
+        ; Updates keep the recorded location, so a non-ASCII one cannot be
+        ; updated in place.
+        !insertmacro InstallPathAsciiOnly "$0" $1
+        ${If} $1 != 1
+          MessageBox MB_ICONSTOP "原安装位置包含中文或其他非英文字符，无法在原位置更新：$\r$\n$0$\r$\n$\r$\n请先卸载 USB Vault，再重新安装到只包含英文字母、数字和常用符号的路径。"
+          Abort
+        ${EndIf}
         StrCpy $INSTDIR $0
         StrCpy $0 $INSTDIR
         Call UpdateGuardDirectory
@@ -231,6 +246,11 @@ Function ValidateInstallDirectory
     Abort
   ${EndIf}
   StrCpy $INSTDIR $2
+  !insertmacro InstallPathAsciiOnly "$INSTDIR" $3
+  ${If} $3 != 1
+    MessageBox MB_ICONEXCLAMATION "安装路径只能包含英文字母、数字和常用符号，不能包含中文或其他非英文字符。$\r$\n$\r$\n请重新选择安装位置。"
+    Abort
+  ${EndIf}
   ${If} $ExistingInstall == 1
     System::Call 'kernel32::CompareStringOrdinal(w "$INSTDIR", i -1, w "$RegisteredLocation", i -1, i 1) i .r0'
     ${If} $0 != 2
