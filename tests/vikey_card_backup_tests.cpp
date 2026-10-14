@@ -5,6 +5,7 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 using namespace usb_vault::card;
 using namespace usb_vault::card::vikey;
 using usb_vault::security::SecureBuffer;
@@ -86,6 +87,12 @@ void tests() {
     for (const auto error : {CardError::authentication_failed, CardError::authentication_locked,
                             CardError::api_key_invalid, CardError::multiple_devices, CardError::permission_denied})
       check(!usb_vault::ui::retryable_card_backup_probe(make_error_code(error)));
+    // A timeout must not be reported as a source, blank or credential problem.
+    const std::wstring_view timed_out=usb_vault::ui::card_backup_failure_text(make_error_code(CardError::operation_timed_out));
+    const std::wstring_view generic=usb_vault::ui::card_backup_failure_text(make_error_code(CardError::invalid_operation));
+    check(timed_out.find(L"超时")!=std::wstring_view::npos && timed_out.find(L"供应方凭据")==std::wstring_view::npos);
+    check(generic.find(L"超时")==std::wstring_view::npos);
+    check(std::wstring_view{usb_vault::ui::card_backup_failure_text({})}==generic);
   }
   // Real encrypted envelopes must unlock to the original root after copying.
   {

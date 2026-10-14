@@ -98,7 +98,7 @@ class VikeyHelperCardResetTarget final : public ICardResetTarget {
       write_vikey_development_card_record_with_network_access(
           config_.helper_path, config_.helper_digest, config_.vendor_directory,
           config_.vendor_digest, hardware_id_, credentials.user_sn,
-          credentials.api_key, credentials.user_pin, expected, config_.timeout, true);
+          credentials.api_key, credentials.user_pin, expected, config_.write_timeout, true);
     } catch (...) { USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); rethrow_enrollment_failure(); }
   }
  private:
@@ -220,7 +220,7 @@ void VikeyHelperCardEnrollment::bootstrap(
         config_.helper_path, config_.helper_digest,
         config_.vendor_directory, config_.vendor_digest,
         context.hardware_id, context.media_state, credentials.user_sn,
-        credentials.api_key, credentials.user_pin, config_.timeout);
+        credentials.api_key, credentials.user_pin, config_.write_timeout);
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_enrollment_failure();

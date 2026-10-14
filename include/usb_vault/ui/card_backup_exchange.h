@@ -3,12 +3,21 @@
 #include "usb_vault/card/card_error.h"
 #include <chrono>
 #include <cstdint>
+#include <system_error>
 
 namespace usb_vault::ui {
 inline bool retryable_card_backup_probe(const std::error_code& error) noexcept {
   using card::CardError;
   return error == CardError::device_not_found || error == CardError::communication_failed ||
          error == CardError::operation_timed_out;
+}
+// A timeout in the probe, write or read-back ends the helper mid-session, so
+// the spare card may be left unfinished. It must not be reported as a source,
+// blank or credential problem.
+inline const wchar_t* card_backup_failure_text(const std::error_code& error) noexcept {
+  if (error == card::CardError::operation_timed_out)
+    return L"备卡操作超时，备卡未完成。\n请拔出备用卡后重新开始备卡；若该卡显示为非空白，请改用另一张空白卡。";
+  return L"备卡未完成。请确认原卡记录完整、备用卡为空白且供应方凭据有效。";
 }
 // Retry transient read failures without overlapping workers or busy polling.
 class CardBackupProbeRetry final {

@@ -55,7 +55,7 @@ void VikeyHelperBlobBackend::put_blob(
         config_.helper_path, config_.helper_digest,
         config_.vendor_directory, config_.vendor_digest,
         credentials.user_sn, credentials.api_key, credentials.user_pin,
-        blob, config_.timeout);
+        blob, config_.write_timeout);
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_blob_backend", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_backend_failure();

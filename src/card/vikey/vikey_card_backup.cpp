@@ -38,7 +38,7 @@ void VikeyHelperCardBackupBackend::write(std::uint32_t identity,
   write_vikey_development_card_record_with_network_access(
       config_.helper_path, config_.helper_digest, config_.vendor_directory,
       config_.vendor_digest, identity, c.user_sn, c.api_key, c.user_pin,
-      record, config_.timeout, false, true);
+      record, config_.write_timeout, false, true);
 }
 void VikeyCardBackup::cancel() noexcept {
   record_.clear(); source_ = 0; deadline_ = {};

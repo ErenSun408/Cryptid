@@ -2,6 +2,7 @@
 #include "../src/platform/windows/vikey_configuration/checks.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <iostream>
 #include <stdexcept>
@@ -65,6 +66,10 @@ void test_packaged_config() {
          "packaged vendor must stay beside executable");
   expect(config.helper_digest[31] == std::byte{31} &&
          config.vendor_digest[0] == std::byte{0xff}, "packaged digests changed");
+  // Real blank-card backup writes ran past 5 seconds and were terminated.
+  expect(config.timeout == std::chrono::seconds(5) &&
+         config.write_timeout == std::chrono::seconds(30),
+         "packaged helper read/write deadlines changed");
   expect_invalid([&] { static_cast<void>(packaged_app_config(L"relative", kHelperDigest, kVendorDigest)); },
                  "packaged directory must be absolute");
   expect_invalid([&] { static_cast<void>(packaged_app_config(L"C:\\app", L"bad", kVendorDigest)); },

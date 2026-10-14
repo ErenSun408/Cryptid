@@ -65,7 +65,7 @@ void VikeyHelperCardRecordBackend::write_record(
         config_.vendor_directory, config_.vendor_digest,
         expected_hardware_id_,
         credentials.user_sn, credentials.api_key, credentials.user_pin,
-        record, config_.timeout);
+        record, config_.write_timeout);
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_record_backend", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_backend_failure();

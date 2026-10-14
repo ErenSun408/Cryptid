@@ -37,7 +37,11 @@ struct VikeyHelperBackendConfig final {
   Sha256Digest helper_digest{};
   std::filesystem::path vendor_directory;
   Sha256Digest vendor_digest{};
+  // Probes and reads keep the short bound. A write session may scan, bootstrap,
+  // commit and read back blank media in one helper run, which exceeds 5 seconds
+  // on real cards; ending it early terminates the helper mid-write.
   std::chrono::milliseconds timeout{std::chrono::seconds(5)};
+  std::chrono::milliseconds write_timeout{std::chrono::seconds(30)};
 };
 
 }  // namespace usb_vault::card::vikey

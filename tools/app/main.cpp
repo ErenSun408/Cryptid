@@ -392,9 +392,19 @@ struct BackupDialogState final {
   usb_vault::ui::CardBackupProbeRetry probe_retry;
   std::uint64_t probe_generation{};
   std::optional<usb_vault::card::vikey::VikeyCardMediaProbe> observed_card;
+  // The write runs off the UI thread; while it runs only the worker touches flow.
+  std::future<void> write_task;
+  bool writing{};
+  std::error_code failure;
+  UINT deferred_exit{};
+  std::optional<usb_vault::application::CardPresenceTransition> deferred_removal;
   explicit BackupDialogState(usb_vault::card::vikey::IVikeyCardBackupBackend& backend) : flow(backend) {}
 };
 BackupDialogState* g_backup_dialog{};
+// The write worker clears the staged record itself when it finishes.
+void cancel_backup_flow(BackupDialogState& state) noexcept {
+  if (!state.writing) state.flow.cancel();
+}
 bool g_backup_return_waiting{};
 bool g_backup_return_probe_attempted{};
 usb_vault::ui::CardBackupTargetReadiness g_backup_return_readiness;
@@ -1379,10 +1389,11 @@ LRESULT CALLBACK backup_dialog_subclass(HWND window, UINT message, WPARAM wparam
     ::SetBkColor(dc, ::GetSysColor(COLOR_WINDOW));
     return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
   }
+  if (message == WM_QUERYENDSESSION && state->writing) return FALSE;
   if ((message == WM_WTSSESSION_CHANGE && wparam == WTS_SESSION_LOCK) ||
       message == WM_QUERYENDSESSION) {
     state->closing = true;
-    state->flow.cancel();
+    cancel_backup_flow(*state);
     ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
   }
   return ::DefSubclassProc(window, message, wparam, lparam);
@@ -1424,6 +1435,18 @@ HRESULT CALLBACK backup_dialog_callback(HWND window, UINT message, WPARAM wparam
       position_backup_status(window, state.status_window);
     }
   } else if (message == TDN_TIMER) {
+    if (state.writing) {
+      if (state.write_task.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return S_OK;
+      try { state.write_task.get(); state.success = true; }
+      catch (const std::system_error& error) { state.failure = error.code(); state.failed = true; }
+      catch (...) { state.failed = true; }
+      state.writing = false;
+      static_cast<void>(::ShutdownBlockReasonDestroy(g_main_window));
+      state.closing = true;
+      ::SendMessageW(window, TDM_ENABLE_BUTTON, IDCANCEL, TRUE);
+      ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
+      return S_OK;
+    }
     if (!state.attempted && !state.flow.pending()) {
       state.closing = true;
       ::PostMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
@@ -1521,14 +1544,32 @@ HRESULT CALLBACK backup_dialog_callback(HWND window, UINT message, WPARAM wparam
       ::InvalidateRect(state.status_window, nullptr, TRUE);
     }
   } else if (message == TDN_BUTTON_CLICKED) {
+    // Closing cannot abort a helper write safely; keep the dialog until it ends.
+    if (state.writing) return S_FALSE;
     if (wparam == 100) {
-      if (!state.exchange.removed() || !state.flow.pending() || !state.readiness.stable() || state.checked_target == 0 ||
+      if (state.attempted || !state.exchange.removed() || !state.flow.pending() || !state.readiness.stable() ||
+          state.checked_target == 0 || state.target_probe.valid() ||
           !g_card_device_notifications || !g_card_device_notifications->target_present()) return S_FALSE;
       state.attempted = true;
       ::SendMessageW(window, TDM_ENABLE_BUTTON, 100, FALSE);
       ::SendMessageW(window, TDM_ENABLE_BUTTON, IDCANCEL, FALSE);
-      try { state.flow.complete(usb_vault::card::vikey::VikeyCardBackup::Clock::now(), state.checked_target); state.success = true; }
-      catch (...) { state.flow.cancel(); state.failed = true; }
+      try {
+        auto* flow = &state.flow;
+        const auto now = usb_vault::card::vikey::VikeyCardBackup::Clock::now();
+        const auto target = state.checked_target;
+        state.write_task = std::async(std::launch::async, [flow, now, target] { flow->complete(now, target); });
+        state.writing = true;
+        static_cast<void>(::ShutdownBlockReasonCreate(g_main_window, L"正在写入备用安全卡，请等待写入完成。"));
+      } catch (...) {
+        state.flow.cancel(); state.failed = true;
+        return S_OK;
+      }
+      ::SendMessageW(window, TDM_SET_ELEMENT_TEXT, TDE_MAIN_INSTRUCTION,
+                     reinterpret_cast<LPARAM>(L"正在写入备用卡"));
+      ::SendMessageW(window, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, reinterpret_cast<LPARAM>(
+          L"正在写入并回读校验，可能需要十余秒。\n请勿拔出备用卡，也不要锁屏或关闭窗口。"));
+      if (state.status_window) ::SetWindowTextW(state.status_window, L"");
+      return S_FALSE;
     } else { state.closing = true; state.flow.cancel(); }
   } else if (message == TDN_DESTROYED) {
     ::WTSUnRegisterSessionNotification(window);
@@ -1539,6 +1580,7 @@ HRESULT CALLBACK backup_dialog_callback(HWND window, UINT message, WPARAM wparam
   }
   return S_OK;
 }
+[[nodiscard]] bool exit_after_card_removal(usb_vault::application::CardPresenceTransition presence) noexcept;
 void show_card_backup(HWND window) noexcept {
   if (!g_backup_requested || !g_backup_backend) return;
   BackupDialogState state(*g_backup_backend);
@@ -1562,6 +1604,14 @@ void show_card_backup(HWND window) noexcept {
     if (FAILED(::TaskDialogIndirect(&dialog, nullptr, nullptr, nullptr))) state.failed = true;
   } catch (...) { state.failed = true; }
   state.closing = true;
+  if (state.write_task.valid()) {
+    // Only reachable if the dialog ended abnormally; never release flow mid-write.
+    try { state.write_task.get(); state.success = true; state.failed = false; }
+    catch (const std::system_error& error) { state.failure = error.code(); state.success = false; state.failed = true; }
+    catch (...) { state.success = false; state.failed = true; }
+    state.writing = false;
+    static_cast<void>(::ShutdownBlockReasonDestroy(g_main_window));
+  }
   state.flow.cancel();
   // Finish the read-only worker before the suspended bridge is resumed.
   if (state.target_probe.valid()) {
@@ -1582,9 +1632,14 @@ void show_card_backup(HWND window) noexcept {
     ::MessageBoxW(window, L"备用卡写入和回读校验完成。\n请用原有有效密码重新登录，并验证已有安全盘可以打开。",
                   L"USB Vault · 备用卡", MB_OK | MB_ICONINFORMATION);
   } else if (state.failed) {
-    ::MessageBoxW(window, L"备卡未完成。请确认原卡记录完整、备用卡为空白且供应方凭据有效。",
+    ::MessageBoxW(window, usb_vault::ui::card_backup_failure_text(state.failure),
                   L"USB Vault · 备用卡", MB_OK | MB_ICONERROR);
   }
+  if (state.attempted)
+    USB_VAULT_TRACE("备卡", state.success ? "写入完成" : "写入未完成",
+                    state.success ? std::string{} : "卡错误 " + std::to_string(state.failure.value()));
+  if (state.deferred_removal && exit_after_card_removal(*state.deferred_removal)) return;
+  if (state.deferred_exit && ::IsWindow(window)) ::PostMessageW(window, state.deferred_exit, 0, 0);
   if (!::IsWindow(window)) return;
   if (state.exchange.removed()) {
     // Keep the document and controller alive; only the insertion/login context
@@ -1631,6 +1686,13 @@ void show_card_backup(HWND window) noexcept {
       presence != Transition::active_session_unmounted &&
       presence != Transition::active_session_force_unmounted &&
       presence != Transition::active_session_remains) return false;
+  if (g_backup_dialog && g_backup_dialog->writing &&
+      presence != Transition::active_session_remains) {
+    // Terminating now would kill the helper mid-write and hide the result.
+    // The exchange already revoked mounts; exit once the bounded write ends.
+    g_backup_dialog->deferred_removal = presence;
+    return false;
+  }
   if (g_backup_dialog) {
     if (!g_backup_dialog->attempted &&
         (g_backup_dialog->closing || g_backup_dialog->flow.pending()) &&
@@ -1653,7 +1715,7 @@ void show_card_backup(HWND window) noexcept {
       }
       return false;
     }
-    g_backup_dialog->flow.cancel();
+    cancel_backup_flow(*g_backup_dialog);
   }
   g_tray.remove();
   // Only terminate our own process. Child helpers retain their existing job
@@ -1708,12 +1770,13 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return 0;
     case WM_WTSSESSION_CHANGE:
       if (wparam == WTS_SESSION_LOCK && g_backup_dialog) {
-        g_backup_dialog->flow.cancel();
+        cancel_backup_flow(*g_backup_dialog);
         if (g_backup_dialog->window) ::PostMessageW(g_backup_dialog->window, TDM_CLICK_BUTTON, IDCANCEL, 0);
       }
       return 0;
     case WM_QUERYENDSESSION:
-      if (g_backup_dialog) g_backup_dialog->flow.cancel();
+      if (g_backup_dialog && g_backup_dialog->writing) return FALSE;
+      if (g_backup_dialog) cancel_backup_flow(*g_backup_dialog);
       return TRUE;
     case kShowCardBackupMessage:
       show_card_backup(window);
@@ -1833,8 +1896,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       }
       if (wparam == 1) service_mount_monitor();
       if (wparam == 1 && g_creation_work.hotkey_exit_pending.load()) {
+        // No volume is mounted during the exchange; let the bounded write finish.
+        if (g_backup_dialog && g_backup_dialog->writing) return 0;
         if (g_backup_dialog && g_backup_dialog->window) {
-          g_backup_dialog->flow.cancel();
+          cancel_backup_flow(*g_backup_dialog);
           ::SendMessageW(g_backup_dialog->window, TDM_CLICK_BUTTON, IDCANCEL, 0);
           g_creation_work.hotkey_exit_pending.store(false);
           ::PostMessageW(window, kExplicitExitMessage, 0, 0);
@@ -1944,8 +2009,12 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
     }
     case WM_CLOSE:
     case kExplicitExitMessage:
+      if (g_backup_dialog && g_backup_dialog->writing) {
+        if (g_backup_dialog->deferred_exit != kExplicitExitMessage) g_backup_dialog->deferred_exit = message;
+        return 0;
+      }
       if (g_backup_dialog && g_backup_dialog->window) {
-        g_backup_dialog->flow.cancel();
+        cancel_backup_flow(*g_backup_dialog);
         ::SendMessageW(g_backup_dialog->window, TDM_CLICK_BUTTON, IDCANCEL, 0);
         ::PostMessageW(window, message, wparam, lparam);
         return 0;
