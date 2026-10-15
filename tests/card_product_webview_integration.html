@@ -188,6 +188,7 @@
     <button id="volume-operation-confirm" type="button" hidden>确定</button>
     <button id="volume-operation-force" type="button" hidden>强制卸载</button>
     <button id="volume-operation-retry" type="button" hidden>重试挂载</button>
+    <button id="volume-operation-open" type="button" hidden>打开</button>
   </div>
   <div id="batch-result-dialog" role="dialog" tabindex="-1" hidden>
     <h3 id="batch-result-title"></h3>
@@ -196,6 +197,7 @@
     <div id="batch-result-list"></div>
     <output id="batch-result-setting-status" role="status" hidden></output>
     <button id="batch-result-retry" type="button" disabled>重试选中项</button>
+    <button id="batch-result-open" type="button" hidden>打开</button>
     <button id="batch-result-confirm" type="button">确定</button>
   </div>
   <div id="reset-card-dialog" role="dialog" hidden>
@@ -282,7 +284,7 @@
   <div id="forget-container-dialog" role="dialog" hidden>
     <h3 id="forget-container-title">从列表移除</h3>
     <button id="forget-container-close" type="button">关闭</button>
-    <p>将 <strong id="forget-container-name"></strong> 从列表中移除。</p>
+    <p><span id="forget-container-lead">将 </span><strong id="forget-container-name"></strong><span id="forget-container-tail"> 从列表中移除。</span></p>
     <span id="forget-container-description"></span>
     <label id="forget-container-acknowledge-field" hidden><input id="forget-container-acknowledge" type="checkbox"></label>
     <output id="forget-container-status"></output>
@@ -378,6 +380,7 @@
       <button id="creation-cancel-work" type="button"></button>
     </div>
     <output id="create-volume-status"></output>
+    <button id="create-volume-open" type="button" hidden>打开</button>
     <button id="create-volume-cancel" type="button">
       <svg id="create-volume-back-icon" viewBox="0 0 24 24" hidden></svg>
       <span id="create-volume-cancel-label">取消</span>

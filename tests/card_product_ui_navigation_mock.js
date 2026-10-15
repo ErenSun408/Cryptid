@@ -182,6 +182,15 @@ window.navigationFixture = {
     getBatchItemId: (index) => fixture.batchItems[index].id,
     getBatchItemOutcome: (index) => fixture.batchItems[index].outcome,
     beginMountAdoptedContainer: (id) => beginVolume(() => bridge.mountAdoptedContainer(id)),
+    // Like the native bridge, only a mounted container of this list opens.
+    openContainerDrive: (id) => {
+      (fixture.explorerOpened = fixture.explorerOpened || []).push(id);
+      return !fixture.failExplorer && fixture.containers.some((item) => item.id === id && item.mounted);
+    },
+    openThisPc: () => {
+      (fixture.explorerOpened = fixture.explorerOpened || []).push(0);
+      return !fixture.failExplorer;
+    },
     beginUnmountContainer: (id) => {
       fixture.forceTarget = id;
       return beginVolume(() => bridge.unmountContainer(id));

@@ -4308,7 +4308,38 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   }
   std::wstring display_name(const usb_vault::volume::PartitionCandidate&) override { return L"T: · Test volume"; }
   bool open_disk_management() noexcept override { ++tool_calls; return tool_success; }
+  std::vector<wchar_t> opened_drives;
+  int this_pc_calls{};
+  bool open_drive_in_explorer(const wchar_t letter) noexcept override { opened_drives.push_back(letter); return tool_success; }
+  bool open_this_pc() noexcept override { ++this_pc_calls; return tool_success; }
 };
+
+void test_explorer_opens_only_a_mounted_session_container() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  FakePartitionServices services;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, &g_close_sink, &host, nullptr, &work, nullptr, &services)), "explorer host failed");
+  VARIANT result{};
+  const auto open = [&](unsigned int id) { ::VariantClear(&result); return invoke_with_number(*host.Get(), L"openContainerDrive", id, &result, nullptr); };
+  const auto this_pc = [&] { ::VariantClear(&result); return invoke_no_arguments(*host.Get(), L"openThisPc", &result); };
+  const auto opened = [&] { return result.vt == VT_BOOL && result.boolVal == VARIANT_TRUE; };
+  require(open(1) == E_ACCESSDENIED && this_pc() == E_ACCESSDENIED && services.opened_drives.empty() && services.this_pc_calls == 0,
+          "explorer opened without authentication");
+  fixture.authentication.establish(root_secret());
+  require(create_container_succeeds(*host.Get(), L"work", fixture.directory.wide(), 64), "explorer setup failed");
+  const ULONG id = invoke_container_number(*host.Get(), L"getContainerId", 0);
+  require(SUCCEEDED(open(id)) && opened() && services.opened_drives == std::vector<wchar_t>{L'D'}, "mounted container drive not opened");
+  require(open(0) == DISP_E_TYPEMISMATCH && SUCCEEDED(open(id + 1000)) && !opened() && services.opened_drives.size() == 1,
+          "unknown container reached explorer");
+  services.tool_success = false;
+  require(SUCCEEDED(open(id)) && !opened() && SUCCEEDED(this_pc()) && !opened(), "failed launch reported as opened");
+  services.tool_success = true;
+  require(SUCCEEDED(this_pc()) && opened() && services.this_pc_calls == 2, "this PC not opened");
+  fixture.volume.containers[0].mounted = false;
+  require(SUCCEEDED(open(id)) && !opened() && services.opened_drives.size() == 2, "unmounted container reached explorer");
+  ::VariantClear(&result);
+}
 
 void test_partition_selection_lifecycle() {
   Fixture fixture;
@@ -4749,6 +4780,7 @@ int main() {
     test_partition_pair_bridge();
     test_bitlocker_creation_gate();
     test_partition_selection_lifecycle();
+    test_explorer_opens_only_a_mounted_session_container();
     test_partition_resume_pause_and_revocation();
     test_partition_creation_snapshot_and_epoch();
     test_partition_creation_snapshot_and_epoch(L"beginPartitionConversion");

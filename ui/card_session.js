@@ -491,6 +491,7 @@
   const creationBackIcon = document.getElementById("create-volume-back-icon");
   const creationContinueButton =
     document.getElementById("create-volume-continue");
+  const creationOpenButton = document.getElementById("create-volume-open");
   const containerForm = document.getElementById("create-container-form");
   const containerName = document.getElementById("create-container-name");
   const containerNameError =
@@ -596,6 +597,10 @@
   let creationFinalizing = false;
   let creationResult = "";
   let creationProgressTimer = null;
+  // The mounted container a successful creation left behind, found by the
+  // letter creation reported; zero when there is none to open.
+  const creationOpenId = () => creationResult === "success" && creationDrive !== ""
+    ? containers.find((container) => container.mounted && container.drive === creationDrive)?.id || 0 : 0;
   const stopCreationProgress = () => {
     if (creationProgressTimer !== null) clearInterval(creationProgressTimer);
     creationProgressTimer = null;
@@ -1349,7 +1354,10 @@
       creationCompleted || !ready;
     creationContinueButton.textContent = creationStorage === "disk" ? (reviewing ? (partitionPreserve.checked ? "开始加密" : "清空并创建") : "下一步") : "下一步";
     creationContinueButton.hidden = creationResult !== "";
-    creationCancelLabel.textContent = creationResult !== "" ? "关闭" : creationCompleted ? "完成" : "取消";
+    creationOpenButton.hidden = creationOpenId() === 0;
+    creationOpenButton.disabled = busy;
+    creationCancelButton.classList.toggle("primary", creationResult === "success");
+    creationCancelLabel.textContent = creationResult === "success" ? "确定" : creationResult !== "" ? "关闭" : creationCompleted ? "完成" : "取消";
     creationBackIcon.hidden = true;
   };
 
@@ -1416,14 +1424,15 @@
     pendingForgetId = id;
     pendingForgetDeletesFile = deleteFile;
     forgetName.textContent = name;
+    forgetDialog.dataset.delete = deleteFile ? "true" : "false";
+    document.getElementById("forget-container-lead").textContent = deleteFile ? "将从磁盘永久删除 " : "将 ";
+    document.getElementById("forget-container-tail").textContent = deleteFile ? " ，数据无法恢复。" : " 从列表中移除。";
     forgetTitle.textContent = deleteFile ? "从磁盘删除" : "从列表移除";
     forgetAcknowledge.checked = false;
     forgetAcknowledgeField.hidden = !deleteFile;
     forgetConfirmButton.textContent = deleteFile ? "永久删除" : "移除";
     forgetConfirmButton.disabled = deleteFile;
-    document.getElementById("forget-container-description").textContent = deleteFile
-      ? "将从磁盘永久删除该安全盘文件，数据无法恢复。"
-      : containers.find(container => container.id === id)?.partition
+    if (!deleteFile) document.getElementById("forget-container-description").textContent = containers.find(container => container.id === id)?.partition
         ? "只移除加密身份记录，不会删除分区或解密数据。当前版本无法通过文件导入找回分区；移除后将失去应用中的挂载入口，请确认不再需要此记录。"
         : "只移除记录，不会删除安全盘文件。文件仍在原路径，可通过「导入」重新添加至列表。";
     forgetStatus.textContent = "";
@@ -1463,6 +1472,8 @@
     creationStatus.textContent = "";
     creationStatus.dataset.tone = "";
     creationCancelLabel.textContent = "取消";
+    creationCancelButton.classList.remove("primary");
+    creationOpenButton.hidden = true;
     creationBackIcon.hidden = true;
     renderContainers();
     if (activeSection === "decoy") void refreshDecoyCandidates();
@@ -6055,6 +6066,21 @@
   const volumeOperationConfirm = document.getElementById("volume-operation-confirm");
   const volumeOperationForce = document.getElementById("volume-operation-force");
   const volumeOperationRetry = document.getElementById("volume-operation-retry");
+  const volumeOperationOpen = document.getElementById("volume-operation-open");
+  // Explorer is offered after a mount and never opened unasked. The page
+  // names a container, or none for This PC; native code finds the letter.
+  // Null while a launch is pending: a second click must not open a second window.
+  let explorerPending = false;
+  const openInExplorer = async (id) => {
+    if (explorerPending) return null;
+    if (bridge === null || currentState !== nativeState.authenticated || externalRefreshPending) return false;
+    explorerPending = true;
+    try { return (await (id ? bridge.openContainerDrive(id) : bridge.openThisPc())) === true; }
+    catch (pageError) { logCaughtPageError("openInExplorer", pageError); return false; }
+    finally { explorerPending = false; }
+  };
+  const isMountedContainer = (id) => containers.some((container) => container.id === id && container.mounted);
+  let volumeOpenId = 0;
   let volumeForceContext = null;
   let volumeRetryContext = null;
   let volumeOperationContext = null;
@@ -6073,6 +6099,8 @@
     volumeRetryContext = null;
     volumeOperationForce.hidden = true;
     volumeOperationRetry.hidden = true;
+    volumeOpenId = 0;
+    volumeOperationOpen.hidden = true;
     volumeOperationForce.textContent = "强制卸载";
     volumeOperationConfirm.textContent = "确定";
     clearVolumeOperationTimer();
@@ -6097,6 +6125,8 @@
     volumeOperationContext = null;
     volumeOperationForce.hidden = true;
     volumeOperationRetry.hidden = true;
+    volumeOpenId = 0;
+    volumeOperationOpen.hidden = true;
     clearVolumeOperationTimer();
     volumeOperationDialog.hidden = true;
     volumeOperationTitle.textContent = "";
@@ -6142,9 +6172,23 @@
       containers.some((container) => container.id === volumeOperationContext.id && !container.mounted)
       ? { ...volumeOperationContext } : null;
     volumeOperationRetry.hidden = volumeRetryContext === null;
+    // A finished single mount stays up until it is answered: confirm closes
+    // it, and Open also shows the volume in Explorer.
+    const mounted = succeeded && volumeOperationContext?.verb === "挂载" && !volumeOperationContext.batch;
+    volumeOpenId = mounted && isMountedContainer(volumeOperationContext.id) ? volumeOperationContext.id : 0;
+    volumeOperationOpen.hidden = volumeOpenId === 0;
     volumeOperationConfirm.focus();
-    if (succeeded) volumeOperationTimer = setTimeout(hideVolumeOperation, 3000);
+    if (succeeded && !mounted) volumeOperationTimer = setTimeout(hideVolumeOperation, 3000);
   };
+  volumeOperationOpen.addEventListener("click", async () => {
+    const id = volumeOpenId;
+    if (!id || volumeOperationDialog.dataset.result !== "success") return;
+    const opened = await openInExplorer(id);
+    if (opened === null) return;
+    if (opened) {
+      if (volumeOpenId === id) hideVolumeOperation();
+    } else if (volumeOpenId === id) volumeOperationNote.textContent = "无法打开资源管理器，请稍后重试。";
+  });
   volumeOperationConfirm.addEventListener("click", () => {
     if (volumeOperationDialog.dataset.result !== "running") hideVolumeOperation();
   });
@@ -6186,6 +6230,7 @@
       else if (event.key === "Escape") hideVolumeOperation();
       else if (document.activeElement === volumeOperationConfirm && !volumeOperationForce.hidden) volumeOperationForce.focus();
       else if (document.activeElement === volumeOperationConfirm && !volumeOperationRetry.hidden) volumeOperationRetry.focus();
+      else if (document.activeElement === volumeOperationConfirm && !volumeOperationOpen.hidden) volumeOperationOpen.focus();
       else volumeOperationConfirm.focus();
     }
   });
@@ -6208,6 +6253,9 @@
   const batchResultAll = document.getElementById("batch-result-all");
   const batchResultRetry = document.getElementById("batch-result-retry");
   const batchResultConfirm = document.getElementById("batch-result-confirm");
+  const batchResultOpen = document.getElementById("batch-result-open");
+  // One volume mounted opens that volume; several open This PC (0).
+  let batchOpenTarget = null;
   const batchResultForce = document.getElementById("batch-result-force");
   const batchResultSettingStatus = document.getElementById("batch-result-setting-status");
   let batchResultContext = null;
@@ -6233,6 +6281,8 @@
     batchResultForce.checked = false;
     batchResultForce.disabled = true;
     batchResultForce.closest("label").hidden = true;
+    batchOpenTarget = null;
+    batchResultOpen.hidden = true;
   };
   const dismissBatchResults = () => {
     if (busy || batchResultDialog.hidden) return;
@@ -6256,6 +6306,7 @@
     batchResultRetry.disabled = busy || !context.selected.size;
     batchResultForce.closest("label").hidden = context.mounting || !eligible.length;
     batchResultForce.disabled = busy || context.mounting || !eligible.length;
+    batchResultOpen.disabled = busy;
     for (const input of batchResultList.querySelectorAll("input:not(:disabled)")) {
       input.checked = context.selected.has(Number(input.dataset.id));
     }
@@ -6351,6 +6402,10 @@
       if (eligible.has(item.id)) row.append(input);
       batchResultList.append(row);
     }
+    const mountedIds = context.mounting
+      ? context.items.filter((item) => item.outcome === 2 && isMountedContainer(item.id)).map((item) => item.id) : [];
+    batchOpenTarget = mountedIds.length === 1 ? mountedIds[0] : mountedIds.length ? 0 : null;
+    batchResultOpen.hidden = batchOpenTarget === null;
     updateBatchResultSelection();
     batchResultDialog.hidden = false;
     batchResultConfirm.focus();
@@ -6418,6 +6473,19 @@
     void runSelectedBatch(batchControls[batchResultContext.mounting ? 0 : 1], batchResultContext);
   });
   batchResultConfirm.addEventListener("click", dismissBatchResults);
+  batchResultOpen.addEventListener("click", async () => {
+    const context = batchResultContext;
+    const target = batchOpenTarget;
+    if (busy || !context || target === null || batchResultDialog.hidden) return;
+    const opened = await openInExplorer(target);
+    if (opened === null) return;
+    if (opened) {
+      if (batchResultContext === context) dismissBatchResults();
+    } else if (batchResultContext === context) {
+      batchResultSettingStatus.textContent = "无法打开资源管理器，请稍后重试。";
+      batchResultSettingStatus.hidden = false;
+    }
+  });
   batchResultDialog.addEventListener("click", (event) => {
     const mark = event.target.closest?.(".batch-result-sign");
     if (mark) {
@@ -7024,7 +7092,7 @@
       creationStorage = "disk"; // Existing conversions retain their resume path.
     }
     creationInplace = true; partitionErase.checked = false; busy = true;
-    creationStatus.textContent = resume ? "正在认证并继续加密，正在使用本次管理员授权。" : "正在准备原地加密，正在使用本次管理员授权。";
+    creationStatus.textContent = resume ? "正在认证并继续加密。" : "正在准备原地加密。";
     creationStatus.dataset.tone = "";
     let creationAccepted = false;
     try {
@@ -7058,7 +7126,7 @@
     const revision = batchSessionRevision;
     partitionErase.checked = false;
     busy = true;
-    creationStatus.textContent = "正在创建安全盘，正在使用本次管理员授权。";
+    creationStatus.textContent = "正在创建安全盘。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     let creationAccepted = false;
@@ -7111,7 +7179,7 @@
     }
 
     busy = true;
-    creationStatus.textContent = "正在创建，正在使用本次管理员授权。";
+    creationStatus.textContent = "正在创建。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     let creationAccepted = false;
@@ -7525,6 +7593,15 @@
   creationCancelButton.addEventListener("click", () => {
     if (busy) return;
     closeCreationFlow();
+  });
+  creationOpenButton.addEventListener("click", async () => {
+    const id = creationOpenId();
+    if (busy || !id) return;
+    const opened = await openInExplorer(id);
+    if (opened === null) return;
+    if (opened) {
+      if (!creationDialog.hidden && creationOpenId() === id) closeCreationFlow();
+    } else if (!creationDialog.hidden) setCreationDescription("无法打开资源管理器，请稍后重试。");
   });
   const browseForDirectory = async (input) => {
     if (busy || currentState !== nativeState.authenticated) return;

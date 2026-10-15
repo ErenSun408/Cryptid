@@ -53,7 +53,32 @@ class NativePartitionServices final : public IUiPartitionServices {
       return ::ShellExecuteExW(&info) != FALSE;
     } catch (...) { USB_VAULT_TRACE_FAILURE("ui/partition_picker_services", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
   }
+  bool open_drive_in_explorer(const wchar_t letter) noexcept override {
+    if (letter < L'A' || letter > L'Z') return false;
+    const wchar_t root[] = {letter, L':', L'\\', L'\0'};
+    return open_explorer(root);
+  }
+  bool open_this_pc() noexcept override {
+    return open_explorer(L"shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
+  }
  private:
+  // Explorer is started by its full path rather than by opening the drive
+  // root, whose default verb an autorun entry on the volume could replace.
+  static bool open_explorer(const wchar_t* const target) noexcept {
+    try {
+      std::array<wchar_t, MAX_PATH + 1> directory{};
+      const UINT count = ::GetSystemWindowsDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
+      if (!count || count >= directory.size()) return false;
+      const std::wstring executable = std::wstring(directory.data(), count) + LR"(\explorer.exe)";
+      SHELLEXECUTEINFOW info{sizeof(info)};
+      info.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+      info.lpVerb = L"open";
+      info.lpFile = executable.c_str();
+      info.lpParameters = target;
+      info.nShow = SW_SHOWNORMAL;
+      return ::ShellExecuteExW(&info) != FALSE;
+    } catch (...) { USB_VAULT_TRACE_FAILURE("ui/partition_picker_services", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__)); return false; }
+  }
   std::unique_ptr<volume_creation::VolumeCreator> creator_;
 };
 }

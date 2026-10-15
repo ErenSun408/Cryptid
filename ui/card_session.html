@@ -933,9 +933,18 @@
     #volume-operation-title { font-size: 1.05rem; line-height: 1.6; overflow-wrap: anywhere; margin: .85rem 0 .5rem; }
     #volume-operation-note { font-size: .8rem; line-height: 1.7; color: var(--text-2); margin: 0; overflow-wrap: anywhere; }
     :is(#volume-operation-dialog, #decoy-protection-warning) .modal-footer { justify-content: center; min-height: 3.25rem; }
+    /* A finished mount or unmount reads like the other result dialogs: confirm last, on the right. */
+    #volume-operation-dialog[data-result="success"] .modal-footer { justify-content: flex-end; }
     /* One shared floor so the two footer buttons match whatever their labels
        say: the longest is "确认强制卸载" at roughly 6.2rem, so 7rem wins. */
-    #volume-operation-confirm, #volume-operation-force, #volume-operation-retry, #decoy-protection-unmount { min-width: 7rem; }
+    #volume-operation-confirm, #volume-operation-force, #volume-operation-retry, #volume-operation-open, #decoy-protection-unmount { min-width: 7rem; }
+    /* A finished mount or unmount sizes its buttons like the one-click mount result. */
+    #volume-operation-dialog[data-result="success"] .modal-footer { gap: .5rem; padding-inline: 1rem; }
+    #volume-operation-dialog[data-result="success"] .modal-footer .shell-button { min-width: 0; padding-inline: .6rem; }
+    /* Open and confirm share one fixed width wherever a mount result offers both. */
+    #volume-operation-dialog[data-result="success"] :is(#volume-operation-open, #volume-operation-confirm),
+    #batch-result-dialog :is(#batch-result-open, #batch-result-confirm),
+    #create-volume-dialog :is(#create-volume-open, #create-volume-open:not([hidden]) ~ #create-volume-cancel) { width: 50px; min-width: 0; padding-inline: 0; }
     /* All three states keep the same disc, so the mark never collapses when a
        result replaces the spinner; only its colour and inner shape change. The
        shapes are drawn in CSS like .creation-progress-steps .step-mark above,
@@ -961,6 +970,8 @@
     #batch-result-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: .1rem .5rem; font-size: 1.05rem; }
     .batch-result-counts { font-size: .72rem; font-weight: 400; color: var(--text-3); }
     :is(#batch-result-confirm, #export-result-confirm) { color: #14160f; border-color: transparent; background: linear-gradient(145deg, var(--gold-2), var(--gold)); }
+    #volume-operation-dialog[data-result="success"] #volume-operation-confirm { color: #14160f; border-color: transparent; background: linear-gradient(145deg, var(--gold-2), var(--gold)); }
+    #volume-operation-dialog[data-result="success"] #volume-operation-confirm:hover:not(:disabled) { border-color: transparent; background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     :is(#batch-result-confirm, #export-result-confirm):hover:not(:disabled) { border-color: transparent; background: linear-gradient(145deg, #eed3a0, var(--gold-2)); }
     :is(#batch-result-dialog, #export-result-dialog) .modal-body { padding: .75rem 1.25rem; }
     #export-result-summary { display: block; margin-bottom: .65rem; }
@@ -1021,6 +1032,17 @@
     .storage-switch [aria-pressed="true"] { background: var(--gold); color: var(--ink-900); }
     #create-volume-dialog .modal { width: min(40rem, 100%); height: min(48rem, calc(100vh - 4rem)); display: flex; flex-direction: column; }
     #create-volume-dialog .modal-body { flex: 1; min-height: 0; }
+    /* Deleting from disk says everything in one plain sentence. */
+    #forget-container-dialog[data-delete="true"] .creation-note { display: none; }
+    #forget-container-dialog[data-delete="true"] .modal { width: min(24rem, 100%); }
+    #forget-container-dialog[data-delete="true"] :is(.modal-header, .modal-footer) { padding: .75rem 1rem; }
+    #forget-container-dialog[data-delete="true"] .modal-body { padding: 1rem; }
+    #forget-container-dialog[data-delete="true"] .modal-body > p { margin: 0; }
+    #forget-container-dialog[data-delete="true"] .creation-check { margin-top: .75rem; }
+    #forget-container-dialog[data-delete="true"] .creation-status:empty { display: none; }
+    /* Progress and its result are short, so the dialog fits them instead of
+       keeping the form's fixed height. */
+    #create-volume-dialog:has(#creation-progress:not([hidden])) .modal { height: auto; max-height: calc(100vh - 4rem); }
     #create-volume-dialog .modal-header, #create-volume-dialog .modal-footer { flex-shrink: 0; }
     #create-storage-switch { align-items: center; flex-wrap: wrap; }
     #create-volume-description { flex: 1; min-width: 12rem; margin: 0; color: var(--text-2); font-size: .72rem; line-height: 1.6; }
@@ -1789,6 +1811,7 @@
       <div class="modal-footer">
         <button id="volume-operation-force" class="shell-button danger" type="button" hidden>强制卸载</button>
         <button id="volume-operation-retry" class="shell-button" type="button" hidden>重试挂载</button>
+        <button id="volume-operation-open" class="shell-button" type="button" hidden>打开</button>
         <button id="volume-operation-confirm" class="shell-button primary" type="button" hidden>确定</button>
       </div>
     </div>
@@ -1805,6 +1828,7 @@
         <label class="batch-result-force" hidden title="强制卸载可能导致未保存数据丢失或文件系统损坏"><span>强制卸载</span><input id="batch-result-force" type="checkbox"></label>
         <label class="batch-result-all"><span>全选</span><input id="batch-result-all" type="checkbox"></label>
         <button id="batch-result-retry" class="shell-button" type="button" disabled>重试选中项</button>
+        <button id="batch-result-open" class="shell-button" type="button" hidden>打开</button>
         <button id="batch-result-confirm" class="shell-button" type="button">确定</button>
       </div>
     </div>
@@ -2052,7 +2076,7 @@
         </button>
       </div>
       <div class="modal-body">
-        <p>将 <strong id="forget-container-name"></strong> 从列表中移除。</p>
+        <p><span id="forget-container-lead">将 </span><strong id="forget-container-name"></strong><span id="forget-container-tail"> 从列表中移除。</span></p>
         <div class="creation-note">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
           <span id="forget-container-description">只移除记录，不会删除安全盘文件。文件仍在原路径，可通过「导入」重新添加至列表。</span>
@@ -2262,7 +2286,7 @@
           </ol>
           <div class="creation-progress-bar" role="progressbar" aria-label="安全盘创建处理中"></div>
           <div id="creation-progress-time" class="creation-progress-time">已用时 00:00</div>
-          <p class="creation-hint">本次运行复用已授予的管理员权限。大容量安全盘需要较长时间，请保持安全卡连接并等待完成。</p>
+          <p class="creation-hint">大容量安全盘需要较长时间，请保持安全卡连接并等待完成。</p>
           <button id="creation-cancel-work" class="modal-button creation-cancel-work" type="button">取消创建</button>
         </div>
         <output id="create-volume-status" class="creation-status" aria-live="polite"></output>
@@ -2270,6 +2294,7 @@
       <div class="modal-footer">
         <button id="bitlocker-cancel" class="modal-button" type="button" hidden>取消</button>
         <button id="bitlocker-continue" class="modal-button primary" type="button" hidden disabled>继续</button>
+        <button id="create-volume-open" class="modal-button" type="button" hidden>打开</button>
         <button id="create-volume-cancel" class="modal-button" type="button">
           <svg id="create-volume-back-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M15 6l-6 6 6 6"></path></svg>
           <span id="create-volume-cancel-label">取消</span>

@@ -79,6 +79,10 @@ class IUiPartitionServices {
   virtual void decrypt_bitlocker(const volume::PartitionCandidate&, const std::function<bool()>& confirm,
                                  const std::function<bool()>& cancelled) = 0;
   virtual bool open_bitlocker_help() noexcept = 0;
+  // Explorer windows offered after a mount. The letter is one the session's
+  // own container list reported mounted, never a page value.
+  virtual bool open_drive_in_explorer(wchar_t) noexcept { return false; }
+  virtual bool open_this_pc() noexcept { return false; }
 };
 [[nodiscard]] IUiPartitionServices& native_partition_services() noexcept;
 [[nodiscard]] std::unique_ptr<IUiPartitionServices> make_partition_services(const std::filesystem::path& helper);

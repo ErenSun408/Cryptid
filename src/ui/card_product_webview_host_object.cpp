@@ -83,6 +83,9 @@ constexpr DISPID kTreatUndecidedAsPackageId = 151;
 constexpr DISPID kRenameImportPackageId = 152;
 constexpr DISPID kBeginExportSelectionId = 153;
 constexpr DISPID kDeleteContainerFromDiskId = 154;
+// Opening Explorer reads the session list and mutates nothing.
+constexpr DISPID kOpenContainerDriveId = 155;
+constexpr DISPID kOpenThisPcId = 156;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -516,6 +519,8 @@ class PasswordArgumentsWiper final {
     case kExportContainerFileId: return "exportContainerFile";
     case kForgetContainerId: return "forgetContainer";
     case kDeleteContainerFromDiskId: return "deleteContainerFromDisk";
+    case kOpenContainerDriveId: return "openContainerDrive";
+    case kOpenThisPcId: return "openThisPc";
     case kGetAutoMountId: return "getAutoMountEnabled";
     case kBatchItemIdId: return "getBatchItemId";
     case kBatchItemNameId: return "getBatchItemName";
@@ -856,6 +861,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       ids[0] = kDeleteContainerFromDiskId;
       return S_OK;
     }
+    if (matches(names[0], L"openContainerDrive")) { ids[0] = kOpenContainerDriveId; return S_OK; }
+    if (matches(names[0], L"openThisPc")) { ids[0] = kOpenThisPcId; return S_OK; }
     if (matches(names[0], kForgetContainerName)) {
       ids[0] = kForgetContainerId;
       return S_OK;
@@ -1153,6 +1160,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kGetStartupViewId:
       case kGetAutoMountId:
       case kSetForcePreferenceId: // Changing a preference must not discard retry results.
+      // Opening a mounted volume from a result dialog keeps that result.
+      case kOpenContainerDriveId: case kOpenThisPcId:
       case kListContainerDirectoryId:
       // Reading why the last listing failed must not discard retry results
       // either; it is the page asking about a failure it has already seen.
@@ -1584,6 +1593,12 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kDeleteContainerFromDiskId:
         return invoke_forget_container(parameters, argument_error,
                                        member == kDeleteContainerFromDiskId);
+      case kOpenContainerDriveId:
+        return invoke_open_container_drive(parameters, result, argument_error);
+      case kOpenThisPcId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+        return complete_selection(partition_services_.open_this_pc(), result);
       case kGetRememberContainerPathsId:
         return invoke_get_remember_container_paths(parameters, result);
       case kSetRememberContainerPathsId:
@@ -3625,6 +3640,33 @@ class CardProductWebViewHostObject final : public IDispatch {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+      return E_FAIL;
+    }
+  }
+
+  // The page names a container, never a drive: the letter comes from this
+  // session's own list and only while that container is mounted.
+  HRESULT invoke_open_container_drive(DISPPARAMS* const parameters,
+                                      VARIANT* const result,
+                                      UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    std::uint32_t identifier = 0;
+    if (!exact_uint32(parameters->rgvarg[0], identifier) || identifier == 0) {
+      if (argument_error != nullptr) *argument_error = 0;
+      return DISP_E_TYPEMISMATCH;
+    }
+    if (controller_.state() != CardProductUiState::authenticated) return E_ACCESSDENIED;
+    try {
+      wchar_t letter{};
+      for (const ContainerUiStatus& status : controller_.container_statuses()) {
+        if (status.id == identifier && status.mounted) letter = status.drive_letter;
+      }
+      return complete_selection(letter != wchar_t{} && partition_services_.open_drive_in_explorer(letter), result);
     } catch (...) {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
