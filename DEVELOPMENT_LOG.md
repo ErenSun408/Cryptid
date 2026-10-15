@@ -6112,3 +6112,10 @@
 - 实现：控制器 rename_selected_import_package 改为 set_selected_import_name，仅校验并保存导入后顶层名称，不打开、不重命名导出包；页面桥沿用 renameImportPackage 成员；页面标签改为“导入名称”，每次导入前都以输入框的值设置名称，错误提示改为“导入名称不符合要求。”；重名在写入阶段按既有规则拒绝。
 - 验证：card_product_ui_session_controller（无效名称拒绝、命名后导出包文件名与内容不变、旁边同名文件不受影响、跨登录拒绝）、card_product_webview_host_object（命名不移动导出包）、card_product_ui_page_contract、card_product_ui_encrypted_transfer_dom_tests 通过；其余 DOM 测试中 7 项与 HEAD 同样失败。p46 已重新构建（02:41:39），部署页面与源码一致。
 - 提交：按明确决定与导入名称修正合并为一个 [fix] 提交；禁止推送。
+
+### 2026-10-15 — ui / 导入文件选择器只保留所有文件筛选
+- 范围与审计：通用导入的文件选择器原有两项筛选：“安全盘文件和密文导出包（*.*）”与旧版“安全盘文件（*.hc;*.sys;*.dat;*.bin）”。新版安全盘与密文导出包都没有固定后缀，旧后缀筛选会把它们藏起来，因此按决定删去。
+- 实现：shell_container_file_chooser 只保留一项筛选“所有文件（*.*）”；选择器的标题、选项及不留痕迹的设置不变，保存位置的文件夹选择器不受影响。
+- 验证：p46 中 usb_vault_windows_shell_container_chooser 目标编译通过；p46 应用已重新构建（13:01:10），实机打开导入对话框确认只有“所有文件”一项。
+- 安全与风险：筛选只影响对话框列出的文件，导入路径的校验未改动。
+- 提交：按明确决定以 [ui] 单独提交；禁止推送。

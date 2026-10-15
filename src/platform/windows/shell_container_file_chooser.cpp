@@ -13,10 +13,9 @@ namespace {
 constexpr wchar_t kContainerDirectoryTitle[] = L"选择安全盘的保存位置";
 constexpr wchar_t kExistingContainerTitle[] = L"选择要导入的安全盘文件或密文导出包";
 // The generic import takes containers and cipher export packages alike, and
-// a package has no fixed extension, so every file is offered first.
+// neither has a fixed extension, so every file is offered.
 constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
-    {L"安全盘文件和密文导出包", L"*.*"},
-    {L"安全盘文件", L"*.hc;*.sys;*.dat;*.bin"},
+    {L"所有文件", L"*.*"},
 };
 
 // Neither dialog may leave a trace of the chosen location. `FOS_DONTADDTORECENT`
