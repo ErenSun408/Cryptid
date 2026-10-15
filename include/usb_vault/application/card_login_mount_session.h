@@ -499,6 +499,16 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) = 0;
 
+  // The migration export as the product offers it: an ordinary folder named
+  // `folder_name` (the container's display name when empty) at the location,
+  // holding the container file under its own name. Neither carries the
+  // Hidden or System attribute the container may have had where it lived.
+  // The folder must not exist yet; a failure removes what this created.
+  virtual void export_container_folder(std::uint32_t, std::wstring_view,
+                                       std::wstring_view) {
+    throw std::logic_error("container migration is unavailable");
+  }
+
   // P5.9 encrypted export. Packs one entry of a mounted container into a
   // package that only this product opens, and only with `password_utf8`, at
   // `absolute_destination_directory` under `package_name`, which must not be
@@ -716,6 +726,9 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void export_container_file(
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
+  void export_container_folder(std::uint32_t id,
+                               std::wstring_view absolute_destination_directory,
+                               std::wstring_view folder_name) override;
   void export_container_selection(
       std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
       std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,

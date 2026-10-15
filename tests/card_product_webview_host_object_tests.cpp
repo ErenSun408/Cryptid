@@ -558,6 +558,16 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
          .destination = std::wstring(absolute_destination_directory)});
   }
 
+  void export_container_folder(
+      const std::uint32_t id,
+      const std::wstring_view absolute_destination_directory,
+      const std::wstring_view folder_name) override {
+    exported_files.push_back(
+        {.id = id,
+         .name = std::wstring(folder_name),
+         .destination = std::wstring(absolute_destination_directory)});
+  }
+
   void export_container_selection(std::span<const usb_vault::application::ExportSelectionEntry> entries,
       std::wstring_view destination, std::wstring_view folder, bool encrypted,
       const usb_vault::security::SecureBuffer& password, const std::function<bool()>& cancelled,
@@ -3878,19 +3888,21 @@ void test_the_bridge_carries_both_exports() {
           "the export location outlived the call");
   clear_arguments(entry.data(), 4);
 
-  std::array<VARIANTARG, 2> file{};
-  file[1] = number_argument(4);
-  file[0] = text_argument(L"D:\\Migration");
+  std::array<VARIANTARG, 3> file{};
+  file[2] = number_argument(4);
+  file[1] = text_argument(L"D:\\Migration");
+  file[0] = text_argument(L"工作资料");
   ::VariantInit(&result);
-  require(invoke_named(*host.Get(), L"exportContainerFile", file.data(), 2,
+  require(invoke_named(*host.Get(), L"exportContainerFile", file.data(), 3,
                        &result, nullptr) == S_OK,
           "the migration export did not cross the bridge");
   static_cast<void>(::VariantClear(&result));
   require(fixture.volume.exported_files.size() == 1 &&
               fixture.volume.exported_files[0].id == 4 &&
+              fixture.volume.exported_files[0].name == L"工作资料" &&
               fixture.volume.exported_files[0].destination == L"D:\\Migration",
           "the migration export crossed the bridge out of order");
-  clear_arguments(file.data(), 2);
+  clear_arguments(file.data(), 3);
 }
 
 void test_the_export_bridge_checks_its_shapes() {
@@ -3911,15 +3923,19 @@ void test_the_export_bridge_checks_its_shapes() {
           "a migration export with four arguments was accepted");
   clear_arguments(values.data(), 4);
 
-  std::array<VARIANTARG, 2> wrong_types{};
-  wrong_types[1] = text_argument(L"4");
-  wrong_types[0] = text_argument(L"D:\\Migration");
+  std::array<VARIANTARG, 3> wrong_types{};
+  wrong_types[2] = text_argument(L"4");
+  wrong_types[1] = text_argument(L"D:\\Migration");
+  wrong_types[0] = text_argument(L"");
   UINT argument_error = 99;
   require(invoke_named(*host.Get(), L"exportContainerFile", wrong_types.data(),
-                       2, nullptr, &argument_error) == DISP_E_TYPEMISMATCH &&
+                       3, nullptr, &argument_error) == DISP_E_TYPEMISMATCH &&
               argument_error == 0,
           "a container identifier arrived as text and was accepted");
-  clear_arguments(wrong_types.data(), 2);
+  require(invoke_named(*host.Get(), L"exportContainerFile", wrong_types.data(),
+                       2, nullptr, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a migration export without its folder name was accepted");
+  clear_arguments(wrong_types.data(), 3);
 
   require(fixture.volume.exported_entries.empty() &&
               fixture.volume.exported_files.empty(),

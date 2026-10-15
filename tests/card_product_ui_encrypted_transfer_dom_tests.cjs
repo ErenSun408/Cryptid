@@ -491,6 +491,33 @@ const openBackup = async (d, $, mode) => {
     } finally { w.close(); }
   }
 
+  // A migration is named in the dialog: the vault's name by default, any
+  // name the user types otherwise, and that name reaches the bridge.
+  {
+    const {w, d, $} = load();
+    try {
+      const migrations = [];
+      w.chrome.webview.hostObjects.nativeBridge.exportContainerFile = (...args) => { migrations.push(args); return true; };
+      await tick();
+      await openBackup(d, $, 'export-mode-migrate');
+      d.querySelector('[data-migrate-select="2"]').click();
+      await wait(() => !$('backup-export-confirm').disabled);
+      $('backup-export-confirm').click(); await tick();
+      assert.equal($('export-dialog-title').textContent, '安全盘迁移');
+      assert.equal($('export-dialog-name-field').hidden, false);
+      assert.equal($('export-dialog-name-label').textContent, '导出名称');
+      assert.equal($('export-dialog-name').value, '影像存档', 'the vault name is the default');
+      assert.equal($('export-dialog-name-hint').hidden, true, 'a migration shows no name hint');
+      assert.equal($('export-dialog-secret-fields').hidden, true);
+      $('export-dialog-name').value = '影像存档 迁移';
+      $('export-dialog-location').click(); await tick();
+      $('export-dialog-start').click();
+      await wait(() => migrations.length === 1 && /^导出成功$/.test($('backup-export-status').textContent));
+      assert.deepEqual(migrations[0], [2, 'D:\\Vaults', '影像存档 迁移']);
+      for (let i = 0; i < 10; i++) await tick();
+    } finally { w.close(); }
+  }
+
   // A session change closes the dialogs and forgets their fields.
   {
     const {w, d, $} = load();

@@ -976,6 +976,15 @@ void CardLoginMountSession::discard_new_container(const std::uint32_t id) {
               [&] { impl_->core.discard_new_container(id); });
 }
 
+void CardLoginMountSession::export_container_folder(
+    const std::uint32_t id, const std::wstring_view absolute_destination_directory,
+    const std::wstring_view folder_name) {
+  traced_call("迁移安全盘到文件夹", [&] { return "安全盘 #" + std::to_string(id); },
+      [&] {
+        impl_->core.export_container_folder(id, absolute_destination_directory, folder_name);
+      });
+}
+
 void CardLoginMountSession::export_container_file(
     const std::uint32_t id,
     const std::wstring_view absolute_destination_directory) {
@@ -3639,6 +3648,50 @@ void CardLoginMountSessionCore::export_container_file(
       absolute_destination_directory, file_name_of(entry->path));
   SESSION_TRACE("导出安全盘文件", container_text(*entry) + "；目标 " + wide_text(destination));
   runtime_.copy_entry(entry->path, destination, {});
+}
+
+void CardLoginMountSessionCore::export_container_folder(
+    const std::uint32_t id, const std::wstring_view absolute_destination_directory,
+    const std::wstring_view folder_name) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error(
+        "migrating a container requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument(
+        "no container is adopted under that identifier");
+  }
+  if (entry->partition) throw std::logic_error("partition ciphertext export is unsupported");
+  // The same refusal as the plain file copy above: a mounted volume is in
+  // flight, and an incomplete copy is not a migration result.
+  if (entry->mounted) {
+    throw std::logic_error(
+        "unmount the container before migrating it, so what is copied is a "
+        "volume nothing is writing to");
+  }
+  const std::wstring name =
+      folder_name.empty() ? display_name(*entry) : std::wstring(folder_name);
+  const std::wstring folder =
+      volume::resolve_exported_entry_path(absolute_destination_directory, name);
+  const std::wstring destination = folder + L"\\" + file_name_of(entry->path);
+  // 🔴 Only the container number is traced: the location and the folder
+  // name are what an export must not leave behind.
+  SESSION_TRACE("迁移安全盘到文件夹", "安全盘 #" + std::to_string(id));
+  // The folder is new and ordinary. The container file keeps its own name and
+  // bytes but not the Hidden and System attributes it may have had in place,
+  // so what arrives is a folder anyone can see and carry to another machine.
+  runtime_.create_directory(folder);
+  try {
+    runtime_.copy_entry(entry->path, destination, {});
+    runtime_.set_container_file_hidden(destination, false);
+  } catch (...) {
+    try {
+      runtime_.delete_entry(folder);
+    } catch (...) {
+    }
+    throw;
+  }
 }
 
 std::vector<volume::WatchedMount> CardLoginMountSessionCore::mount_watch_targets() const {

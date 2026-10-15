@@ -690,6 +690,16 @@ void CardProductUiSessionController::export_container_entry(
                                          absolute_destination_directory);
 }
 
+void CardProductUiSessionController::export_container_folder(
+    const std::uint32_t id, const std::wstring_view absolute_destination_directory,
+    const std::wstring_view folder_name) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "migrating a container is not available in the current UI state");
+  }
+  volume_session_.export_container_folder(id, absolute_destination_directory, folder_name);
+}
+
 void CardProductUiSessionController::export_container_file(
     const std::uint32_t id,
     const std::wstring_view absolute_destination_directory) {

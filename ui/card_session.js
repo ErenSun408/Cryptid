@@ -3140,13 +3140,25 @@
     if (busy || backupExportConfirm.disabled || currentState !== nativeState.authenticated) return;
     const encrypted = exportMode === "encrypted";
     exportDialogTitle.textContent = { plain: "明文导出", encrypted: "密文导出", migrate: "安全盘迁移" }[exportMode];
-    exportDialogNameField.hidden = exportMode === "migrate";
-    exportDialogNameLabel.textContent = encrypted ? "导出包名称" : "导出文件夹名称";
-    exportDialogName.value = "";
-    exportDialogName.disabled = !mergeExport;
-    exportDialogNameHint.textContent = mergeExport
-      ? "留空则命名为“导出项目”；内容按安全盘名称分目录。"
-      : "已关闭合并导出，每个项目分别导出到以项目名称命名的文件夹或密文包。";
+    if (exportMode === "migrate") {
+      // A migration comes out as an ordinary folder named like the vault, with
+      // the vault file inside under its own name.
+      exportDialogNameField.hidden = false;
+      exportDialogNameLabel.textContent = "导出名称";
+      exportDialogName.value = containers.find((container) => container.id === migrateContainerId)?.name || "";
+      exportDialogName.disabled = false;
+      exportDialogNameHint.textContent = "";
+      exportDialogNameHint.hidden = true;
+    } else {
+      exportDialogNameField.hidden = false;
+      exportDialogNameHint.hidden = false;
+      exportDialogNameLabel.textContent = encrypted ? "导出包名称" : "导出文件夹名称";
+      exportDialogName.value = "";
+      exportDialogName.disabled = !mergeExport;
+      exportDialogNameHint.textContent = mergeExport
+        ? "留空则命名为“导出项目”；内容按安全盘名称分目录。"
+        : "已关闭合并导出，每个项目分别导出到以项目名称命名的文件夹或密文包。";
+    }
     exportDialogSecretFields.hidden = !encrypted;
     clearExportDialogSecrets();
     exportDialogLocation = exportMode === "migrate" ? migrateLocation : exportLocation;
@@ -3164,9 +3176,10 @@
     const mode = exportMode;
     const location = exportDialogLocation;
     if (mode === "migrate") {
+      const folderName = exportDialogName.value.trim();
       migrateLocation = location;
       closeExportDialog();
-      await runMigration(location);
+      await runMigration(location, folderName);
       return;
     }
     let password = null;
@@ -3206,7 +3219,7 @@
     openModal(importKindDialog, importKindPackage);
   };
 
-  const runMigration = async (location) => {
+  const runMigration = async (location, folderName = "") => {
     if (busy || migrateContainerId === 0 || location === "") return;
     const id = migrateContainerId;
     busy = true;
@@ -3217,7 +3230,7 @@
     await new Promise((resolve) => { setTimeout(resolve, 0); });
     let failed = false;
     try {
-      await bridge.exportContainerFile(id, location);
+      await bridge.exportContainerFile(id, location, folderName);
     } catch (pageError) { logCaughtPageError("runMigration/1", pageError);
       failed = true;
     }
@@ -3231,7 +3244,7 @@
     render(messageForCurrentState());
     if (failed) {
       setMigrateStatus(
-        "迁移没有完成。安全盘可能仍挂载着，位置不可写、空间不足，或那里已经有同名文件了。",
+        "迁移没有完成。安全盘可能仍挂载着，位置不可写、空间不足、名称不可用，或那里已经有同名文件夹了。",
         "error");
       renderBackupCentre();
       return;
@@ -3239,7 +3252,7 @@
     // The location goes the way the plaintext export's does, and for the same
     // reason: an export leaves nothing behind, on either side.
     migrateLocation = "";
-    setMigrateStatus("已导出。换机后仍须原安全卡与原口令。", "success");
+    setMigrateStatus("导出成功", "success");
     renderBackupCentre();
   };
 

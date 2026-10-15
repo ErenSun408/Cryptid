@@ -3553,26 +3553,29 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
-  // Two arguments: the container, and where its file goes. The container is
-  // named by identifier here as everywhere else, so the page never learns
-  // where the container itself lives.
+  // Three arguments: the container, where the folder goes, and the folder's
+  // name (empty for the container's display name). The container is named by
+  // identifier here as everywhere else, so the page never learns where the
+  // container itself lives.
   HRESULT invoke_export_container_file(
       DISPPARAMS* const parameters, VARIANT* const result,
       UINT* const argument_error) noexcept {
-    if (parameters == nullptr || parameters->cArgs != 2 ||
+    if (parameters == nullptr || parameters->cArgs != 3 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       return DISP_E_BADPARAMCOUNT;
     }
     const DispatchTextWiper text_wiper(parameters);
     std::uint32_t id = 0;
     std::wstring_view destination_directory;
-    if (!exact_uint32(parameters->rgvarg[1], id) ||
-        !exact_wstring(parameters->rgvarg[0], destination_directory)) {
+    std::wstring_view folder_name;
+    if (!exact_uint32(parameters->rgvarg[2], id) ||
+        !exact_wstring(parameters->rgvarg[1], destination_directory) ||
+        !exact_wstring(parameters->rgvarg[0], folder_name)) {
       if (argument_error != nullptr) *argument_error = 0;
       return DISP_E_TYPEMISMATCH;
     }
     try {
-      controller_.export_container_file(id, destination_directory);
+      controller_.export_container_folder(id, destination_directory, folder_name);
       return complete_selection(true, result);
     } catch (const std::invalid_argument&) {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));

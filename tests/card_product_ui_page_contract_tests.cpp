@@ -1410,7 +1410,7 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
               script.find("exportDialogStart.addEventListener(\"click\", async () => { await startExportFromDialog(); });") != std::string::npos,
           "plaintext export retained its retired confirmation page");
   require(count_occurrences(script, "bridge.exportContainerFile") == 1 &&
-              script.find("await bridge.exportContainerFile(id, location);") !=
+              script.find("await bridge.exportContainerFile(id, location, folderName);") !=
                   std::string::npos,
           "the migration export is not reached in exactly one place");
 

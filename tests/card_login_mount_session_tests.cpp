@@ -3282,6 +3282,61 @@ void test_a_container_file_is_migrated_verbatim_and_nothing_else_moves() {
   static_cast<void>(other);
 }
 
+// The migration as the product offers it: an ordinary folder named like the
+// vault, the vault file inside under its own name, without Hidden or System.
+void test_a_migration_comes_out_as_a_visible_folder() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  require_throws_plain_logic_error(
+      [&] { session.export_container_folder(id, L"D:\\Migration", L""); },
+      "a mounted container was migrated");
+  session.unmount_container(id);
+  const std::size_t events_before = session.operation_history().size();
+  const int index_writes_before = runtime.index_writes;
+  runtime.actual_hidden = true;
+
+  session.export_container_folder(id, L"D:\\Migration", L"工作资料");
+  require(runtime.created_directories.size() == 1 &&
+              runtime.created_directories[0] == L"D:\\Migration\\工作资料",
+          "the migration folder was not named as asked");
+  require(runtime.copied.size() == 1 && runtime.copied[0].first == L"C:\\vault\\one.hc" &&
+              runtime.copied[0].second == L"D:\\Migration\\工作资料\\one.hc",
+          "the vault file did not keep its own name inside the folder");
+  require(runtime.visibility_path == L"D:\\Migration\\工作资料\\one.hc" && !runtime.actual_hidden,
+          "the migrated vault file kept Hidden and System");
+  require(session.operation_history().size() == events_before &&
+              runtime.index_writes == index_writes_before,
+          "the migration left a trace");
+
+  // An empty name takes the vault's display name.
+  session.export_container_folder(id, L"E:\\", L"");
+  require(runtime.created_directories.size() == 2 &&
+              runtime.created_directories[1] == L"E:\\one.hc",
+          "an empty folder name did not fall back to the vault's name");
+
+  // A failed copy takes the new folder away again.
+  runtime.fail_copy = true;
+  require_throws<std::runtime_error>(
+      [&] { session.export_container_folder(id, L"D:\\Out", L"again"); },
+      "a failed migration did not report the failure");
+  runtime.fail_copy = false;
+  require(!runtime.deleted.empty() && runtime.deleted.back() == L"D:\\Out\\again",
+          "a failed migration left its folder behind");
+
+  const std::size_t folders = runtime.created_directories.size();
+  for (const std::wstring_view name : {L"a\\b", L"..", L"con"}) {
+    require_throws<std::invalid_argument>(
+        [&] { session.export_container_folder(id, L"D:\\Out", name); },
+        "a folder name that is not one was accepted");
+  }
+  require(runtime.created_directories.size() == folders,
+          "a refused folder name still reached the storage layer");
+}
+
 // 🔴 The driver is writing to a mounted volume, so a copy taken then is a copy
 // of something in flight. Q-04 forbids handing an incomplete copy back as a
 // usable migration result.
@@ -5331,6 +5386,7 @@ int main() {
     test_an_export_location_that_is_not_one_never_reaches_the_disk();
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();
     test_a_mounted_container_is_not_migrated();
+    test_a_migration_comes_out_as_a_visible_folder();
     test_a_migration_refuses_what_it_cannot_name();
     test_maintenance_opens_the_outer_volume_under_protection();
     test_maintenance_refuses_every_failure_the_same_way();

@@ -418,6 +418,16 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
          .destination = std::wstring(absolute_destination_directory)});
   }
 
+  void export_container_folder(
+      const std::uint32_t id,
+      const std::wstring_view absolute_destination_directory,
+      const std::wstring_view folder_name) override {
+    exported_files.push_back(
+        {.id = id,
+         .name = std::wstring(folder_name),
+         .destination = std::wstring(absolute_destination_directory)});
+  }
+
   std::vector<ExportCall> exported_entries;
   std::vector<ExportCall> exported_files;
 
@@ -2486,11 +2496,12 @@ void test_exports_reach_the_session_unchanged() {
               fixture.volume.exported_entries[0].destination == L"D:\\Out",
           "the plaintext export did not carry all four of its parts");
 
-  fixture.controller.export_container_file(4, L"D:\\Migration");
+  fixture.controller.export_container_folder(4, L"D:\\Migration", L"工作资料");
   require(fixture.volume.exported_files.size() == 1 &&
               fixture.volume.exported_files[0].id == 4 &&
+              fixture.volume.exported_files[0].name == L"工作资料" &&
               fixture.volume.exported_files[0].destination == L"D:\\Migration",
-          "the migration export did not carry the container and location");
+          "the migration export did not carry the container, folder name and location");
 
   // The controller decides nothing about either: the location is checked by
   // the session, which is also the only layer that knows whether it lands

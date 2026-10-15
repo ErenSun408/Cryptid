@@ -389,6 +389,9 @@ class CardLoginMountSessionCore final {
       std::wstring_view absolute_destination_directory);
   void export_container_file(
       std::uint32_t id, std::wstring_view absolute_destination_directory);
+  void export_container_folder(std::uint32_t id,
+                               std::wstring_view absolute_destination_directory,
+                               std::wstring_view folder_name);
   void export_container_selection(
       std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
       std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,

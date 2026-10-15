@@ -284,6 +284,11 @@ class CardProductUiSessionController final {
   // usable one.
   void export_container_file(
       std::uint32_t id, std::wstring_view absolute_destination_directory);
+  // The migration as a visible folder named by the page (the container's
+  // display name when empty) holding the container file.
+  void export_container_folder(std::uint32_t id,
+                               std::wstring_view absolute_destination_directory,
+                               std::wstring_view folder_name);
 
   // P5.9 encrypted export. The export password arrives twice in independent
   // buffers, both wiped on every path, and must match and pass the offline
