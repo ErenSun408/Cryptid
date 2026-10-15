@@ -506,6 +506,7 @@ void ExportPackageReaderV1::open_next_chunk() {
   if (!key_->open_chunk(next_index_, final, sealed,
                         chunk_.bytes().first(chunk_size_))) {
     chunk_.wipe();
+    if (next_index_ == 0) throw ExportPackageAuthenticationRejected();
     throw ExportPackageRejected();
   }
   ++next_index_;

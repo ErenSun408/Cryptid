@@ -151,6 +151,14 @@ void test_import_restores_the_tree_after_verifying() {
   expect(std::filesystem::last_write_time(docs / L"a.txt") <
              std::filesystem::file_time_type::clock::now() - std::chrono::hours(24),
          "the restored file must keep its modification time");
+  package.set_restored_name(L"Renamed archive");
+  expect(package.write_into(secure("import test password"), destination.drive,
+                            destination.relative, {}, {}) == L"Renamed archive",
+         "a restored folder did not use the override name");
+  expect(package.verify(secure("import test password"), {}, {}).top_level_name() == L"Docs",
+         "renaming must not mutate the authenticated manifest");
+  expect(usb_vault_test::read_text_file(fixture.into / L"Renamed archive" / L"sub" / L"b.bin") == fixture.large,
+         "renaming the top folder changed a child path or its contents");
 }
 
 void test_import_failures_leave_the_destination_as_it_was() {
@@ -231,6 +239,15 @@ void test_a_single_file_package_restores_one_file() {
          "the single file was not restored under its name");
   expect(entries_in(into) == 1 && usb_vault_test::read_text_file(into / L"note.txt") == "only one",
          "the single file was not restored");
+  expect_throws<std::invalid_argument>([&] { package.set_restored_name(L"..\\escape"); },
+                                      "the restored name must be a single component");
+  package.set_restored_name(L"renamed.txt");
+  expect(package.write_into(secure("single file password"), destination.drive, destination.relative,
+                            {}, {}) == L"renamed.txt", "a file name override was ignored");
+  expect(usb_vault_test::read_text_file(into / L"renamed.txt") == "only one", "a renamed file changed content");
+  expect_win32([&] { static_cast<void>(package.write_into(secure("single file password"), destination.drive,
+                              destination.relative, {}, {})); }, ERROR_FILE_EXISTS,
+               "a renamed import must not overwrite another entry");
 }
 
 }  // namespace

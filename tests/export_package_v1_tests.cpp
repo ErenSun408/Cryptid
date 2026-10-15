@@ -189,15 +189,25 @@ void test_tampering_is_rejected() {
   expect(package.size() == kExportPackageV1SaltSize + 2 * kSealed + 100 + kExportPackageV1TagSize,
          "three-chunk layout");
 
-  expect_rejected(package, "tamper test passwore", "a wrong password must be rejected");
+  expect_throws<usb_vault::backup::ExportPackageAuthenticationRejected>(
+      [&] { static_cast<void>(open_all(package, "tamper test passwore")); },
+      "a wrong password must fail first-chunk authentication");
 
   Bytes salt_flip = package;
   salt_flip[3] ^= std::byte{1};
-  expect_rejected(salt_flip, "tamper test password", "a changed salt must be rejected");
+  expect_throws<usb_vault::backup::ExportPackageAuthenticationRejected>(
+      [&] { static_cast<void>(open_all(salt_flip, "tamper test password")); },
+      "salt damage cannot be distinguished from a wrong password");
 
   Bytes middle_flip = package;
   middle_flip[kExportPackageV1SaltSize + kSealed + 4242] ^= std::byte{0x80};
-  expect_rejected(middle_flip, "tamper test password", "a changed middle chunk must be rejected");
+  try {
+    static_cast<void>(open_all(middle_flip, "tamper test password"));
+    expect(false, "a changed middle chunk must be rejected");
+  } catch (const usb_vault::backup::ExportPackageAuthenticationRejected&) {
+    expect(false, "damage after an authenticated first chunk is not a password error");
+  } catch (const ExportPackageRejected&) {
+  }
 
   Bytes tag_flip = package;
   tag_flip.back() ^= std::byte{1};

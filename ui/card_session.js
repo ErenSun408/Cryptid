@@ -1876,6 +1876,7 @@
   let importMinimumMib = 0;
   let importLocation = "";
   let importRunning = false;
+  let importSucceeded = false;
   let exportStopRequested = false;
   let exportDialogLocation = "";
 
@@ -2153,20 +2154,22 @@
     }
   };
 
-  const exportRow = (container, tail, onActivate) => {
+  const exportRow = (container, tail, onActivate, reorderable = true) => {
     const row = document.createElement("div");
     row.className = "xrow";
     row.dataset.rowContainer = String(container.id);
 
-    const grab = document.createElement("span");
-    grab.className = "grab";
-    grab.dataset.reorderGrip = String(container.id);
-    grab.setAttribute("aria-hidden", "true");
-    grab.appendChild(gripGlyph());
-    grab.addEventListener("pointerdown", (event) => {
-      beginContainerReorder(event, row, container.id);
-    });
-    row.appendChild(grab);
+    if (reorderable) {
+      const grab = document.createElement("span");
+      grab.className = "grab";
+      grab.dataset.reorderGrip = String(container.id);
+      grab.setAttribute("aria-hidden", "true");
+      grab.appendChild(gripGlyph());
+      grab.addEventListener("pointerdown", (event) => {
+        beginContainerReorder(event, row, container.id);
+      });
+      row.appendChild(grab);
+    }
 
     const open = document.createElement("button");
     open.className = "xrow-open";
@@ -2846,7 +2849,7 @@
   // container and every login.
   const encryptedFailureText = (code) => ({
     [-1]: "已取消。",
-    1: "加密口令错误，或导出包已损坏。",
+    1: "加密口令错误。",
     2: "两次输入的加密口令不一致。",
     3: "加密口令太短，至少需要 12 个字符。",
     4: "目标位置已有同名的文件或文件夹。",
@@ -2854,6 +2857,7 @@
     6: "源文件在导出时发生了变化，或包含不支持的链接。",
     8: "位置、名称或容量不符合要求。",
     9: "导入没有完成，新建的安全盘也未能完全撤销，请在安全盘列表中检查并手动删除。",
+    10: "导出包已损坏或格式不受支持。",
   })[code] || "没有完成，请稍后重试。";
 
   // Polls one transfer to its end. Null when the session changed meanwhile.
@@ -2885,8 +2889,7 @@
     importStatus.dataset.tone = tone;
   };
 
-  const resetImport = () => {
-    importPicked = "";
+  const resetImportAttempt = () => {
     importMinimumMib = 0;
     importPassword.value = "";
     importNewSecond.value = "";
@@ -2894,10 +2897,17 @@
     importNewAcknowledge.checked = false;
   };
 
+  const resetImport = () => {
+    importPicked = "";
+    resetImportAttempt();
+  };
+
   // Everything the form says about a new container, so nothing of one login's
   // attempt is shown to the next.
   const resetImportForm = () => {
+    importSucceeded = false;
     resetImport();
+    importPackageName.value = "";
     importTarget = "existing";
     importContainerId = 0;
     importLocation = "";
@@ -2911,23 +2921,30 @@
 
   const renderImportContainers = () => {
     importContainerList.replaceChildren();
-    const mounted = orderedContainers().filter((container) => container.mounted);
-    if (!mounted.some((container) => container.id === importContainerId)) importContainerId = 0;
-    if (mounted.length === 0) {
-      exportNote(importContainerList, "没有已挂载的安全盘。");
+    const available = (container) => container.mounted && !container.unavailable &&
+      !container.conversion && !isMaintenanceContainer(container.id);
+    const listed = orderedContainers();
+    if (!listed.some((container) => container.id === importContainerId && available(container))) importContainerId = 0;
+    if (listed.length === 0) {
+      exportNote(importContainerList, "还没有安全盘，可选择新建安全盘并导入。");
       return;
     }
-    for (const container of mounted) {
+    for (const container of listed) {
       const pick = () => {
-        if (busy) return;
+        if (busy || importSucceeded || !available(container)) return;
         importContainerId = importContainerId === container.id ? 0 : container.id;
         setImportStatus("");
         renderBackupCentre();
       };
       const tail = checkBox(container.id === importContainerId);
       tail.classList.add("selectable");
+      tail.setAttribute("aria-disabled", String(busy || importSucceeded || !available(container)));
       tail.addEventListener("click", (event) => { event.stopPropagation(); pick(); });
-      importContainerList.appendChild(exportRow(container, tail, pick));
+      const row = exportRow(container, tail, pick, false);
+      row.classList.toggle("import-unmounted", !container.mounted);
+      row.querySelector(".xrow-open").disabled = busy || importSucceeded || !available(container);
+      if (importSucceeded) row.querySelector("[data-row-mount]").disabled = true;
+      importContainerList.appendChild(row);
     }
   };
 
@@ -2938,25 +2955,26 @@
     importExistingFields.hidden = toNew;
     importNewFields.hidden = !toNew || importMinimumMib === 0;
     importNewHiddenFields.hidden = !importNewHidden.checked;
-    importPackageName.textContent = importPicked === "" ? "（已使用，请重新导入）" : importPicked;
+    importPackageName.disabled = busy || importSucceeded;
     for (const control of [importPassword, importTargetExisting,
                            importTargetNew, importNewName, importNewLocation, importNewBrowse, importNewSize,
                            importNewHidden, importNewHiddenSize, importNewSecond, importNewSecondConfirmation,
                            importNewAcknowledge]) {
-      control.disabled = busy;
+      control.disabled = busy || importSucceeded;
     }
     // Once verified, the password has been used; nothing reads the field.
-    importPassword.disabled = busy || importMinimumMib !== 0;
+    importPassword.disabled = busy || importSucceeded || importMinimumMib !== 0;
     importNewLocation.textContent = importLocation === "" ? "选择一个位置…" : importLocation;
     importNewLocation.classList.toggle("ph", importLocation === "");
-    importCancel.textContent = importRunning ? "停止" : "取消";
+    importCancel.textContent = importRunning ? "停止" : importSucceeded ? "关闭" : "取消";
+    importConfirm.hidden = importSucceeded;
     renderImportContainers();
     let ready = false;
     if (!toNew) {
-      importConfirm.textContent = "开始导入";
+      importConfirm.textContent = "下一步";
       ready = importPicked !== "" && importContainerId !== 0;
     } else if (importMinimumMib === 0) {
-      importConfirm.textContent = "校验导出包";
+      importConfirm.textContent = "下一步";
       ready = importPicked !== "";
     } else {
       importConfirm.textContent = "新建安全盘并导入";
@@ -2973,7 +2991,7 @@
             second === importNewSecondConfirmation.value && importNewAcknowledge.checked
           : size >= importMinimumMib);
     }
-    importConfirm.disabled = busy || !ready;
+    importConfirm.disabled = busy || importSucceeded || !ready || importPackageName.value.trim() === "";
   };
 
   const runImport = async () => {
@@ -2990,12 +3008,24 @@
     let second = null;
     let finished = false;
     let shownPercent = -1;
+    const requestedPackageName = importPackageName.value;
     try {
       busy = true;
       importRunning = true;
       setImportStatus(verifying ? "正在校验导出包…" : "正在准备…");
       renderBackupCentre();
       render(messageForCurrentState());
+      if (requestedPackageName !== importPicked) {
+        const renameError = Number(await bridge.renameImportPackage(requestedPackageName));
+        if (!current()) return;
+        if (renameError !== 0) {
+          resetImportAttempt();
+          setImportStatus(renameError === 4 ? "导入包所在位置已有同名文件，请修改名称。" :
+            renameError === 8 ? "导入包名称不符合要求。" : "无法修改导入包文件名，请检查文件是否被占用或位置是否可写。", "error");
+          return;
+        }
+        importPicked = requestedPackageName;
+      }
       if (!toNew) {
         first = passwordArray(importPassword);
         await bridge.beginEncryptedImport(importContainerId, "", first);
@@ -3031,19 +3061,21 @@
         setImportStatus(`校验通过。新安全盘至少需要 ${importMinimumMib} MiB。`, "success");
         return;
       }
-      // Every other outcome consumes the pick natively; the page follows.
-      resetImport();
       if (outcome.state === 2) {
-        closeModal(importDialog);
-        setDashboardStatus("导入完成。");
+        importSucceeded = true;
+        importPassword.value = "";
+        importNewSecond.value = "";
+        importNewSecondConfirmation.value = "";
+        setImportStatus("导入成功", "success");
       } else {
-        setImportStatus(`${encryptedFailureText(outcome.state === 4 ? -1 : outcome.error)} 如需重试，请关闭后重新导入。`,
+        resetImportAttempt();
+        setImportStatus(`${encryptedFailureText(outcome.state === 4 ? -1 : outcome.error)} 可重新输入加密口令后重试。`,
                         outcome.state === 4 ? "" : "error");
       }
     } catch (pageError) { logCaughtPageError("runImport/1", pageError);
       if (current()) {
-        resetImport();
-        setImportStatus(finished ? "没有完成，请关闭后重新导入。" : "没有开始，请关闭后重新导入。", "error");
+        resetImportAttempt();
+        setImportStatus(finished ? "没有完成，可重新输入加密口令后重试。" : "没有开始，可重新输入加密口令后重试。", "error");
       }
     } finally {
       wipe(first); wipe(second);
@@ -3057,6 +3089,7 @@
       }
       render(messageForCurrentState());
       renderBackupCentre();
+      if (current() && importSucceeded) importCancel.focus();
     }
   };
 
@@ -3159,6 +3192,7 @@
   const openImportDialog = (name) => {
     resetImportForm();
     importPicked = name;
+    importPackageName.value = name;
     importTarget = "existing";
     setImportStatus("");
     renderImportPane();
@@ -7183,8 +7217,8 @@
   importTargetExisting.addEventListener("click", () => {
     if (busy || importTarget === "existing") return;
     importTarget = "existing";
-    // A verification consumed the pick natively; it cannot feed this target.
-    if (importMinimumMib !== 0) resetImport();
+    // A different target requires fresh password input and verification.
+    if (importMinimumMib !== 0) resetImportAttempt();
     setImportStatus("");
     renderBackupCentre();
   });
@@ -7206,9 +7240,15 @@
     importLocation = chosen;
     renderBackupCentre();
   });
-  for (const field of [importNewName, importNewSize, importNewHiddenSize, importNewSecond,
+  for (const field of [importPackageName, importNewName, importNewSize, importNewHiddenSize, importNewSecond,
                        importNewSecondConfirmation]) {
-    field.addEventListener("input", () => { renderImportPane(); });
+    field.addEventListener("input", () => {
+      if (field === importPackageName && importMinimumMib !== 0) {
+        resetImportAttempt();
+        setImportStatus("名称已修改，请重新输入加密口令并校验。");
+      }
+      renderImportPane();
+    });
   }
   importNewHidden.addEventListener("change", () => { renderImportPane(); });
   importNewAcknowledge.addEventListener("change", () => { renderImportPane(); });

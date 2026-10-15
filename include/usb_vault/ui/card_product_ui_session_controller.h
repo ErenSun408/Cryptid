@@ -328,10 +328,12 @@ class CardProductUiSessionController final {
   // cancelled.
   [[nodiscard]] std::wstring choose_import_package();
 
-  // Hands over the pick and forgets it. Empty when nothing was picked, or when
-  // the pick was made under another login than the current one, so a package
-  // chosen before a logout can never be imported after the next login.
-  [[nodiscard]] std::wstring take_import_package();
+  // Copies the selected path for retries within the same login. Another pick
+  // or a login change releases it; no password or decrypted data is cached.
+  [[nodiscard]] std::wstring selected_import_package();
+  // Renames the selected package in its existing directory without replacing
+  // a file; the same single-component name becomes its restored top name.
+  void rename_selected_import_package(std::wstring_view name);
 
   // Thrown when an import into a new container failed and the container it
   // created could not be fully undone: it may still be listed or on disk.
@@ -460,6 +462,7 @@ class CardProductUiSessionController final {
   const security::IPasswordStrengthPolicy& password_policy_;
   IContainerFileChooser& file_chooser_;
   std::wstring pending_import_package_;
+  std::wstring pending_import_restored_name_;
   std::uint64_t pending_import_generation_{};
   std::wstring undecided_import_file_;
   std::uint64_t undecided_import_generation_{};

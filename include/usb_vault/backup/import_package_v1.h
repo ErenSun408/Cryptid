@@ -50,6 +50,10 @@ class ImportPackageV1 final {
   // file system metadata. Valid after verify().
   [[nodiscard]] std::uint64_t required_bytes(std::uint64_t cluster_bytes = 65536) const;
 
+  // Overrides only the restored top component; the authenticated manifest is
+  // kept intact for the second-pass comparison. An empty name keeps it.
+  void set_restored_name(std::wstring_view name);
+
   // The write pass, into `relative_directory` of the mounted volume on
   // `drive_letter`. Returns the restored top-level name. Throws
   // std::system_error with ERROR_FILE_EXISTS when that name is taken,
@@ -66,6 +70,7 @@ class ImportPackageV1 final {
   std::uint64_t size_{};
   bool verified_{false};
   ExportManifest manifest_;
+  std::wstring restored_name_;
 };
 
 }  // namespace usb_vault::backup

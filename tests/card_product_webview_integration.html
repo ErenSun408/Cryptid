@@ -109,7 +109,7 @@
       <div id="export-migrate-pane" hidden><div id="migrate-container-list"></div></div>
       <div id="export-dialog" hidden>
       <h3 id="export-dialog-title">导出</h3>
-      <div id="export-dialog-name-field"><input id="export-dialog-name" type="text"><p id="export-dialog-name-hint"></p></div>
+      <div id="export-dialog-name-field"><label for="export-dialog-name">导出包名称</label><input id="export-dialog-name" type="text"><p id="export-dialog-name-hint"></p></div>
       <button id="export-dialog-location" type="button"></button>
       <button id="export-dialog-browse" type="button">浏览</button>
       <div id="export-dialog-secret-fields">
@@ -127,7 +127,7 @@
       <button id="import-kind-package" type="button">作为密文导出包导入</button>
       </div>
       <div id="import-dialog" hidden>
-      <span id="import-package-name"></span>
+      <input id="import-package-name" type="text">
       <input id="import-password" type="password">
       <button id="import-target-existing" type="button" aria-pressed="true">导入到已有安全盘</button>
       <button id="import-target-new" type="button" aria-pressed="false">新建安全盘并导入</button>

@@ -7,6 +7,7 @@
 #include "usb_vault/ui/container_target_path.h"
 #include "usb_vault/ui/password_ingress.h"
 #include "usb_vault/volume/volume_space.h"
+#include "usb_vault/volume/volume_entry_path.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 
 #include <algorithm>
@@ -528,6 +529,8 @@ CardProductUiSessionController::choose_import_file() {
     const std::scoped_lock lock(import_mutex_);
     undecided_import_file_.clear();
     pending_import_package_.clear();
+    pending_import_restored_name_.clear();
+    verified_import_.reset();
   }
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("importing is not available in the current UI state");
@@ -729,6 +732,8 @@ std::wstring CardProductUiSessionController::choose_import_package() {
   {
     const std::scoped_lock lock(import_mutex_);
     pending_import_package_.clear();
+    pending_import_restored_name_.clear();
+    verified_import_.reset();
   }
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("importing a package is not available in the current UI state");
@@ -749,6 +754,7 @@ void CardProductUiSessionController::release_stale_import_state() noexcept {
   const bool current = state() == CardProductUiState::authenticated;
   if (!current || pending_import_generation_ != authentication_.generation()) {
     pending_import_package_.clear();
+    pending_import_restored_name_.clear();
   }
   if (!current || undecided_import_generation_ != authentication_.generation()) {
     undecided_import_file_.clear();
@@ -758,15 +764,61 @@ void CardProductUiSessionController::release_stale_import_state() noexcept {
   }
 }
 
-std::wstring CardProductUiSessionController::take_import_package() {
+std::wstring CardProductUiSessionController::selected_import_package() {
   const std::scoped_lock lock(import_mutex_);
-  std::wstring package = std::move(pending_import_package_);
-  pending_import_package_.clear();
+  // A new attempt keeps only the path, never an earlier verified password.
+  verified_import_.reset();
   if (state() != CardProductUiState::authenticated ||
       pending_import_generation_ != authentication_.generation()) {
+    pending_import_package_.clear();
+    pending_import_restored_name_.clear();
     return {};
   }
-  return package;
+  return pending_import_package_;
+}
+
+void CardProductUiSessionController::rename_selected_import_package(const std::wstring_view name) {
+  static_cast<void>(volume::resolve_volume_child_path(L'C', L"", name));
+  const std::scoped_lock lock(import_mutex_);
+  if (state() != CardProductUiState::authenticated || pending_import_package_.empty() ||
+      pending_import_generation_ != authentication_.generation()) {
+    throw std::logic_error("no selected package belongs to this login");
+  }
+  const std::filesystem::path current(pending_import_package_);
+  if (current.filename().wstring() == name) return;
+  std::wstring renamed = (current.parent_path() / name).wstring();
+  std::wstring restored(name);
+  const std::size_t name_bytes = renamed.size() * sizeof(wchar_t);
+  std::vector<std::byte> rename_buffer(sizeof(FILE_RENAME_INFO) + name_bytes);
+  auto* const rename = reinterpret_cast<FILE_RENAME_INFO*>(rename_buffer.data());
+  rename->ReplaceIfExists = FALSE;
+  rename->RootDirectory = nullptr;
+  rename->FileNameLength = static_cast<DWORD>(name_bytes);
+  std::copy(renamed.begin(), renamed.end(), rename->FileName);
+  verified_import_.reset();
+  // Pin the selected entry while renaming. A file link is renamed itself,
+  // never its target, and directories cannot enter this operation.
+  const HANDLE raw = ::CreateFileW(pending_import_package_.c_str(), DELETE | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (raw == INVALID_HANDLE_VALUE) {
+    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "open the selected import package");
+  }
+  const auto close_source = [](void* handle) { static_cast<void>(::CloseHandle(handle)); };
+  const std::unique_ptr<void, decltype(close_source)> source(raw, close_source);
+  BY_HANDLE_FILE_INFORMATION information{};
+  if (!::GetFileInformationByHandle(raw, &information)) {
+    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "inspect the selected import package");
+  }
+  if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || ::GetFileType(raw) != FILE_TYPE_DISK)
+    throw std::invalid_argument("the selected import package is not a file");
+  if (!::SetFileInformationByHandle(raw, FileRenameInfo, rename,
+                                    static_cast<DWORD>(rename_buffer.size()))) {
+    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(),
+                            "rename the selected import package");
+  }
+  pending_import_package_.swap(renamed);
+  pending_import_restored_name_.swap(restored);
 }
 
 void CardProductUiSessionController::verify_import(
@@ -782,6 +834,11 @@ void CardProductUiSessionController::verify_import(
   }
   if (package.empty()) throw std::logic_error("no import package has been picked");
   auto verified = std::make_unique<VerifiedImport>(package);
+  {
+    const std::scoped_lock lock(import_mutex_);
+    if (package == pending_import_package_ && pending_import_generation_ == authentication_.generation())
+      verified->package_file.set_restored_name(pending_import_restored_name_);
+  }
   verified->password = consume_password_utf8(mutable_password_utf8);
   verified->generation = authentication_.generation();
   static_cast<void>(verified->package_file.verify(verified->password, cancelled, progress));
@@ -900,6 +957,18 @@ std::wstring CardProductUiSessionController::import_package_into_container(
   if (package.empty()) throw std::logic_error("no import package has been picked");
   security::SecureBuffer password = consume_password_utf8(mutable_password_utf8);
   SecureBufferGuard password_guard(password);
+  std::wstring restored_name;
+  {
+    const std::scoped_lock lock(import_mutex_);
+    if (package == pending_import_package_ && pending_import_generation_ == authentication_.generation())
+      restored_name = pending_import_restored_name_;
+  }
+  if (!restored_name.empty()) {
+    backup::ImportPackageV1 selected(package);
+    selected.set_restored_name(restored_name);
+    static_cast<void>(selected.verify(password, cancelled, progress));
+    return volume_session_.write_verified_import(id, relative_directory, selected, password, cancelled, progress);
+  }
   return volume_session_.import_package_into_container(id, relative_directory, package,
                                                        password, cancelled, progress);
 }

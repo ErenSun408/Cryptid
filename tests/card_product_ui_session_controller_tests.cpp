@@ -2,6 +2,7 @@
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
 #include "usb_vault/backup/export_package_file.h"
+#include "usb_vault/backup/export_package_v1.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/confirmed_password.h"
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <cstdint>
 #include <string>
@@ -2220,7 +2222,7 @@ void test_encrypted_export_confirms_the_password_first() {
 }
 
 // P5.9: the picked package path stays in the controller and reaches only the
-// session; the page sees its file name. A pick is consumed by one import.
+// session; the page sees its file name. The path supports same-login retries.
 void test_an_import_uses_the_picked_package_once() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2229,9 +2231,9 @@ void test_an_import_uses_the_picked_package_once() {
           "the page was not shown the picked file name");
 
   std::vector<std::byte> password = bytes("long enough export pass");
-  const std::wstring taken = fixture.controller.take_import_package();
-  require(taken == L"E:\\Backups\\family photos" && fixture.controller.take_import_package().empty(),
-          "a pick was not handed over exactly once");
+  const std::wstring taken = fixture.controller.selected_import_package();
+  require(taken == L"E:\\Backups\\family photos" && fixture.controller.selected_import_package() == taken,
+          "a pick was not retained for same-login retries");
   require(fixture.controller.import_package_into_container(5, L"in", taken, password, {}, {}) == L"Docs",
           "the import did not return the restored name");
   require(std::ranges::all_of(password, [](std::byte b) { return b == std::byte{0}; }),
@@ -2252,12 +2254,79 @@ void test_an_import_uses_the_picked_package_once() {
   require(fixture.controller.choose_import_package() == L"family photos", "the second pick failed");
   fixture.authentication.clear_authentication();
   fixture.authentication.establish(root_secret());
-  require(fixture.controller.take_import_package().empty(),
+  require(fixture.controller.selected_import_package().empty(),
           "a pick made before a new login was handed over after it");
 
   fixture.chooser.import_path.clear();
   require(fixture.controller.choose_import_package().empty(), "a cancelled pick named a file");
   require(fixture.volume.imports.size() == 1, "a refused import reached the session");
+}
+
+void test_a_selected_import_package_can_be_renamed_without_overwriting() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  const std::filesystem::path root(fixture.directory.wide());
+  const auto source = root / L"original package";
+  const auto existing = root / L"already here";
+  { std::ofstream(source, std::ios::binary) << "ciphertext stays identical";
+    std::ofstream(existing, std::ios::binary) << "keep this file"; }
+  fixture.chooser.import_path = source.wstring();
+  static_cast<void>(fixture.controller.choose_import_package());
+  for (const auto name : {L"", L"..\\escape", L"CON", L"stream:name", L"trailing."}) {
+    require_throws<std::invalid_argument>([&] { fixture.controller.rename_selected_import_package(name); },
+                                         "a name that can escape the selected directory was accepted");
+  }
+  require_throws<std::system_error>([&] { fixture.controller.rename_selected_import_package(L"already here"); },
+                                    "renaming overwrote an existing package");
+  require(fixture.controller.selected_import_package() == source.wstring() && std::filesystem::exists(source),
+          "a failed rename lost the original selection");
+  fixture.controller.rename_selected_import_package(L"new package");
+  const auto renamed = root / L"new package";
+  require(fixture.controller.selected_import_package() == renamed.wstring() &&
+              !std::filesystem::exists(source) && std::filesystem::exists(renamed),
+          "renaming did not update the file and the session selection together");
+  std::ifstream content(renamed, std::ios::binary);
+  require(std::string(std::istreambuf_iterator<char>(content), {}) == "ciphertext stays identical",
+          "renaming changed the package content");
+  content.close();
+  const auto directory = root / L"a directory";
+  std::filesystem::create_directory(directory);
+  fixture.chooser.import_path = directory.wstring();
+  static_cast<void>(fixture.controller.choose_import_package());
+  require_throws<std::invalid_argument>([&] { fixture.controller.rename_selected_import_package(L"renamed directory"); },
+                                        "a directory was renamed as an import package");
+  require(std::filesystem::is_directory(directory), "a refused directory rename changed the source");
+  fixture.authentication.clear_authentication();
+  fixture.authentication.establish(root_secret());
+  require_throws<std::logic_error>([&] { fixture.controller.rename_selected_import_package(L"later login"); },
+                                  "another login renamed a stale selected file");
+}
+
+void test_a_renamed_package_is_verified_again_before_any_import_write() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  const std::filesystem::path root(fixture.directory.wide());
+  const auto source = root / L"note.txt";
+  const auto package = root / L"original package";
+  { std::ofstream(source, std::ios::binary) << "restore this"; }
+  auto raw_password = bytes("long enough export pass");
+  SecureBuffer password(raw_password.size());
+  std::ranges::copy(raw_password, password.bytes().begin());
+  usb_vault::backup::export_package_to_file_v1(source.wstring(), package.wstring(), password);
+  fixture.chooser.import_path = package.wstring();
+  static_cast<void>(fixture.controller.choose_import_package());
+  fixture.controller.rename_selected_import_package(L"restored note.txt");
+  const auto selected = fixture.controller.selected_import_package();
+  auto wrong = bytes("incorrect password");
+  require_throws<usb_vault::backup::ExportPackageAuthenticationRejected>([&] {
+    static_cast<void>(fixture.controller.import_package_into_container(5, L"", selected, wrong, {}, {}));
+  }, "renaming bypassed package authentication");
+  require(fixture.volume.import_events.empty(), "a rejected renamed package reached the write pass");
+  require_wiped(wrong, "a rejected renamed-package password was retained");
+  static_cast<void>(fixture.controller.import_package_into_container(5, L"", selected, raw_password, {}, {}));
+  require(fixture.volume.import_events == std::vector<std::wstring>{L"write:5:"},
+          "a renamed package did not use the verified import path");
+  require_wiped(raw_password, "a renamed-package password survived the import");
 }
 
 // P5.9: an import into a new container verifies first, creates through the
@@ -2370,7 +2439,7 @@ void test_the_generic_import_sorts_containers_from_packages() {
   auto choice = fixture.controller.choose_import_file();
   require(choice.kind == Kind::package && choice.name == L"photos backup",
           "a file that is not whole sectors was not taken as a package");
-  require(fixture.controller.take_import_package() == fixture.chooser.existing_path,
+  require(fixture.controller.selected_import_package() == fixture.chooser.existing_path,
           "the package pick was not held for an import");
   require(fixture.volume.adopt_calls == 0 && fixture.volume.mount_calls == 0,
           "a package was treated as a container");
@@ -2385,7 +2454,7 @@ void test_the_generic_import_sorts_containers_from_packages() {
   require(choice.kind == Kind::undecided && choice.name == L"unnamed",
           "a sector-sized file without a container extension was decided for the user");
   require(fixture.controller.treat_undecided_import_as_package() == L"unnamed" &&
-              fixture.controller.take_import_package() == fixture.chooser.existing_path,
+              fixture.controller.selected_import_package() == fixture.chooser.existing_path,
           "an undecided file could not be imported as a package");
   require(!fixture.controller.adopt_undecided_import_file(), "a settled pick was settled twice");
 
@@ -2510,6 +2579,8 @@ int main() {
     test_exports_reach_the_session_unchanged();
     test_encrypted_export_confirms_the_password_first();
     test_an_import_uses_the_picked_package_once();
+    test_a_selected_import_package_can_be_renamed_without_overwriting();
+    test_a_renamed_package_is_verified_again_before_any_import_write();
     test_an_import_into_a_new_container_is_all_or_nothing();
     test_the_generic_import_sorts_containers_from_packages();
     std::cout << "card_product_ui_session_controller_tests passed\n";

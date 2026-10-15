@@ -37,13 +37,17 @@ struct ExportPackageV1Header final {
                          const ExportPackageV1Header&) = default;
 };
 
-// The single answer to a package that does not open. A wrong password and a
-// damaged, truncated, reordered or spliced package are deliberately the same
-// failure: telling them apart would need something in the clear to compare.
-class ExportPackageRejected final : public std::runtime_error {
+// Rejects a damaged, truncated, reordered or spliced package. First-chunk
+// authentication has a subtype, but still cannot distinguish a wrong password
+// from salt or first-chunk damage without changing the package format.
+class ExportPackageRejected : public std::runtime_error {
  public:
   ExportPackageRejected();
 };
+
+// A first-chunk tag failure cannot distinguish a wrong password from damage
+// to the salt or first chunk. Later rejection confirms an invalid package.
+class ExportPackageAuthenticationRejected final : public ExportPackageRejected {};
 
 // Exact size of the package a header produces, for space checks before any
 // byte is written. Throws std::length_error when the size does not fit.

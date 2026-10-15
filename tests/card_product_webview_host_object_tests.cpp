@@ -589,6 +589,8 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override {
     progress(1, 10, 10);
     if (cancelled()) throw std::system_error(ERROR_CANCELLED, std::system_category());
+    if (import_failure == 1) throw usb_vault::backup::ExportPackageAuthenticationRejected();
+    if (import_failure == 10) throw usb_vault::backup::ExportPackageRejected();
     progress(2, 10, 10);
     imports.push_back({.id = id,
                        .directory = std::wstring(relative_directory),
@@ -596,6 +598,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return L"Docs";
   }
   std::vector<ExportCall> imports;
+  unsigned int import_failure{};
 
   std::vector<ExportCall> exported_entries;
   std::vector<ExportCall> exported_files;
@@ -3656,6 +3659,32 @@ void test_an_encrypted_import_runs_on_the_worker() {
           "the page was not given only the picked file name");
   static_cast<void>(::VariantClear(&picked));
 
+  // One selection survives authentication and damaged-package failures.
+  for (const unsigned int error : {1U, 10U}) {
+    fixture.volume.import_failure = error;
+    std::array<VARIANTARG, 3> attempt{};
+    attempt[2] = number_argument(5);
+    attempt[1] = text_argument(L"in");
+    initialize_byte_array(attempt[0], bytes("long enough export pass"));
+    require(invoke_named(*host.Get(), L"beginEncryptedImport", attempt.data(), 3, nullptr, nullptr) == S_OK,
+            "an import retry needed another file selection");
+    require_array_wiped(attempt[0], 23, "a retry password survived the bridge");
+    clear_arguments(attempt.data(), 3);
+    std::wstring status;
+    for (int i = 0; i < 4000; ++i) {
+      VARIANT value{};
+      require(invoke_named(*host.Get(), L"encryptedTransferStatus", nullptr, 0, &value, nullptr) == S_OK,
+              "the retry status was unavailable");
+      status.assign(value.bstrVal, ::SysStringLen(value.bstrVal));
+      static_cast<void>(::VariantClear(&value));
+      if (!status.starts_with(L"1,")) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(status == L"3,10,10," + std::to_wstring(error) + L",1",
+            "authentication and package damage shared an error code");
+  }
+  fixture.volume.import_failure = 0;
+
   std::array<VARIANTARG, 3> values{};
   values[2] = number_argument(5);
   values[1] = text_argument(L"in");
@@ -3682,6 +3711,35 @@ void test_an_encrypted_import_runs_on_the_worker() {
               fixture.volume.imports[0].directory == L"in" &&
               fixture.volume.imports[0].destination == L"E:\\Backups\\family photos",
           "the import crossed the bridge out of order");
+}
+
+void test_the_import_package_rename_bridge_validates_and_reports_collisions() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  const auto root = std::filesystem::path(fixture.directory.wide());
+  const auto original = root / L"original package";
+  { std::ofstream(original, std::ios::binary) << "ciphertext";
+    std::ofstream(root / L"existing package", std::ios::binary) << "keep"; }
+  fixture.chooser.import_path = original.wstring();
+  static_cast<void>(fixture.controller.choose_import_package());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  const auto rename = [&](const std::wstring_view name) {
+    VARIANTARG argument = text_argument(std::wstring(name));
+    VARIANT result{};
+    const HRESULT hr = invoke_named(*host.Get(), L"renameImportPackage", &argument, 1, &result, nullptr);
+    require(hr == S_OK && result.vt == VT_UI4, "renaming did not return a bounded status");
+    const unsigned long code = result.ulVal;
+    static_cast<void>(::VariantClear(&argument));
+    static_cast<void>(::VariantClear(&result));
+    return code;
+  };
+  require(rename(L"..\\escape") == 8 && rename(L"existing package") == 4,
+          "the rename bridge did not distinguish invalid names and collisions");
+  require(rename(L"renamed package") == 0 &&
+              fixture.controller.selected_import_package() == (root / L"renamed package").wstring(),
+          "the rename bridge did not update the selected package");
+  fixture.authentication.clear_authentication();
+  require(rename(L"later login") == 7, "a stale login renamed a package");
 }
 
 // P5.9: an import into a new container needs a fresh pick to verify and a
@@ -4657,6 +4715,7 @@ int main() {
     test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
     test_an_encrypted_export_runs_on_the_worker();
     test_an_encrypted_import_runs_on_the_worker();
+    test_the_import_package_rename_bridge_validates_and_reports_collisions();
     test_an_import_into_a_new_container_needs_a_verified_package();
     test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password();
     test_opening_maintenance_runs_on_the_volume_worker();

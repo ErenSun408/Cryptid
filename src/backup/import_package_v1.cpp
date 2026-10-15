@@ -185,13 +185,19 @@ std::uint64_t ImportPackageV1::required_bytes(const std::uint64_t cluster_bytes)
   return total;
 }
 
+void ImportPackageV1::set_restored_name(const std::wstring_view name) {
+  if (!name.empty()) static_cast<void>(volume::resolve_volume_child_path(L'C', L"", name));
+  restored_name_ = name;
+}
+
 std::wstring ImportPackageV1::write_into(const security::SecureBuffer& password_utf8,
                                          const wchar_t drive_letter,
                                          const std::wstring_view relative_directory,
                                          const std::function<bool()>& cancelled,
                                          const ImportProgress& progress) {
   if (!verified_) throw std::logic_error("the import package has not been verified");
-  const std::wstring top = manifest_.top_level_name();
+  const std::wstring original_top = manifest_.top_level_name();
+  const std::wstring top = restored_name_.empty() ? original_top : restored_name_;
   const std::wstring final_path =
       volume::resolve_volume_child_path(drive_letter, relative_directory, top);
   const std::wstring staging_name = random_name();
@@ -203,7 +209,7 @@ std::wstring ImportPackageV1::write_into(const security::SecureBuffer& password_
   std::vector<std::wstring> targets;
   targets.reserve(manifest_.entries.size());
   for (const ExportManifestEntry& entry : manifest_.entries) {
-    const std::wstring rest = entry.relative_path.substr(top.size());
+    const std::wstring rest = entry.relative_path.substr(original_top.size());
     static_cast<void>(volume::resolve_volume_entry_path(
         drive_letter, join(relative_directory, top + rest)));
     targets.push_back(volume::resolve_volume_entry_path(

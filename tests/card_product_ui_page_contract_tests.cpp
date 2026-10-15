@@ -244,8 +244,8 @@ void test_page_has_route_specific_password_surfaces() {
   // least as good a reason. P5.9 adds seven: its five password fields, the
   // name of a container created by an import and the export package name.
   // The editable import package name adds one more protected text control.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 18 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 18,
+  require(count_occurrences(page, "autocomplete=\"off\"") == 19 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 19,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");

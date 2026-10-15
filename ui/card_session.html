@@ -1199,6 +1199,15 @@
     /* Cancelled is neither of the two: nothing went wrong and nothing was
        made, so it reads as a caution rather than a failure. */
     .creation-status[data-tone="cancelled"] { color: var(--warn); }
+    #import-dialog .modal { height: min(50rem, calc(100dvh - 3rem)); display: flex; flex-direction: column; }
+    #import-dialog .modal-header, #import-dialog .modal-footer { flex: 0 0 auto; }
+    #import-dialog .modal-body { display: flex; flex-direction: column; flex: 1; min-height: 0; max-height: none; overflow: hidden; }
+    #import-dialog .modal-body > .xfield, #import-dialog .picks { flex: 0 0 auto; }
+    #import-existing-fields { display: flex; flex: 1; min-height: 0; }
+    #import-container-list { flex: 1; min-height: 0; margin: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+    #import-new-fields { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    #import-status { flex: 0 0 auto; margin: 0; padding: .5rem 1.25rem; overflow-wrap: anywhere; }
+    #import-container-list .import-unmounted .xrow-open, #import-container-list .import-unmounted .cbx { opacity: .4; }
     .modal-footer { justify-content: flex-end; gap: .5rem; border-top: 1px solid var(--line); background: rgba(255, 255, 255, .015); }
     .modal-button:disabled { cursor: default; opacity: .45; }
     /* Mounting has begun: the button only reports progress, so it keeps the
@@ -1899,8 +1908,8 @@
       <div class="modal-header"><h3 id="import-dialog-title">导入密文导出包</h3></div>
       <div class="modal-body">
         <div class="xfield">
-          <label>导出包</label>
-          <div class="line"><span id="import-package-name" class="xinp"></span></div>
+          <label for="import-package-name">导入包命名</label>
+          <div class="line"><input id="import-package-name" class="xinp" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="255"></div>
         </div>
         <div class="xfield">
           <label for="import-password">加密口令</label>
@@ -1917,7 +1926,7 @@
           </button>
         </div>
         <div id="import-existing-fields">
-          <div id="import-container-list" class="xlist"></div>
+          <div id="import-container-list" class="xlist" tabindex="0" aria-label="安全盘列表"></div>
         </div>
         <div id="import-new-fields" hidden>
           <div class="xfield">
@@ -1963,11 +1972,11 @@
             </label>
           </div>
         </div>
-        <output id="import-status" class="creation-status" aria-live="polite"></output>
       </div>
+      <output id="import-status" class="creation-status" aria-live="polite"></output>
       <div class="modal-footer">
         <button id="import-cancel" class="modal-button" type="button">取消</button>
-        <button id="import-confirm" class="modal-button primary" type="button" disabled>开始导入</button>
+        <button id="import-confirm" class="modal-button primary" type="button" disabled>下一步</button>
       </div>
     </div>
   </div>

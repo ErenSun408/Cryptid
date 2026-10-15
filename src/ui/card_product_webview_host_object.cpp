@@ -81,6 +81,7 @@ constexpr DISPID kBeginImportNewContainerBId = 148;
 constexpr DISPID kChooseImportFileId = 149;
 constexpr DISPID kAdoptUndecidedImportId = 150;
 constexpr DISPID kTreatUndecidedAsPackageId = 151;
+constexpr DISPID kRenameImportPackageId = 152;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -580,6 +581,7 @@ class PasswordArgumentsWiper final {
     case kChooseImportFileId: return "chooseImportFile";
     case kAdoptUndecidedImportId: return "adoptUndecidedImportFile";
     case kTreatUndecidedAsPackageId: return "treatUndecidedImportAsPackage";
+    case kRenameImportPackageId: return "renameImportPackage";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -781,6 +783,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginImportIntoNewContainerMib")) { ids[0] = kBeginImportNewContainerId; return S_OK; }
     if (matches(names[0], L"beginImportIntoNewContainerBMib")) { ids[0] = kBeginImportNewContainerBId; return S_OK; }
     if (matches(names[0], L"chooseImportFile")) { ids[0] = kChooseImportFileId; return S_OK; }
+    if (matches(names[0], L"renameImportPackage")) { ids[0] = kRenameImportPackageId; return S_OK; }
     if (matches(names[0], L"adoptUndecidedImportFile")) { ids[0] = kAdoptUndecidedImportId; return S_OK; }
     if (matches(names[0], L"treatUndecidedImportAsPackage")) { ids[0] = kTreatUndecidedAsPackageId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
@@ -1015,6 +1018,9 @@ class CardProductWebViewHostObject final : public IDispatch {
                                    UINT* argument_error) noexcept override {
     if (member == kReportPageEventId)
       return report_page_event(iid, flags, parameters, result, argument_error);
+    // The selected package name must never enter diagnostic argument traces.
+    if (member == kRenameImportPackageId)
+      return invoke_unlogged(member, iid, locale, flags, parameters, result, exception, argument_error);
     if constexpr (!USB_VAULT_DEBUG_LOG) {
       return invoke_unlogged(member, iid, locale, flags, parameters, result, exception,
                              argument_error);
@@ -1670,6 +1676,27 @@ class CardProductWebViewHostObject final : public IDispatch {
           return E_FAIL;
         }
       }
+      case kRenameImportPackageId: {
+        if (parameters == nullptr || parameters->cArgs != 1 || parameters->cNamedArgs != 0 ||
+            parameters->rgvarg == nullptr) return DISP_E_BADPARAMCOUNT;
+        const DispatchTextWiper text_wiper(parameters);
+        std::wstring_view name;
+        if (!exact_wstring(parameters->rgvarg[0], name)) return DISP_E_TYPEMISMATCH;
+        if (result == nullptr) return E_POINTER;
+        unsigned int code = 0;
+        try {
+          controller_.rename_selected_import_package(name);
+        } catch (const std::invalid_argument&) {
+          code = 8;
+        } catch (const std::system_error& error) {
+          code = error.code().category() == std::system_category() &&
+              (error.code().value() == ERROR_FILE_EXISTS || error.code().value() == ERROR_ALREADY_EXISTS) ? 4U : 7U;
+        } catch (...) {
+          code = 7;
+        }
+        ::VariantInit(result); result->vt = VT_UI4; result->ulVal = code;
+        return S_OK;
+      }
       case kBeginImportNewContainerId:
       case kBeginImportNewContainerBId:
         return begin_import_new_container(member == kBeginImportNewContainerBId, parameters,
@@ -1900,11 +1927,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     encrypted_failure_other = 7,
     encrypted_failure_target = 8,
     encrypted_failure_rollback = 9,
+    encrypted_failure_damaged = 10,
   };
 
-  // Seven arguments: container, directory, entry, location, package name, and
-  // the export password twice as byte arrays. Both arrays are consumed (and so
-  // wiped) before anything else is looked at.
+  // Seven arguments: container, directory, entry, location, package name,
+  // and the export passphrase twice as independently consumed byte arrays.
   HRESULT begin_encrypted_export(DISPPARAMS* const parameters, VARIANT* const result,
                                  UINT* const argument_error) noexcept {
     if (parameters == nullptr || parameters->cArgs != 7 ||
@@ -1955,7 +1982,7 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   // Three arguments: the container, the directory shown, and the export
   // password as a byte array. The package is the one picked through
-  // chooseImportPackage, which the controller holds and consumes.
+  // chooseImportPackage, whose path remains available for same-login retries.
   HRESULT begin_encrypted_import(DISPPARAMS* const parameters, VARIANT* const result,
                                  UINT* const argument_error) noexcept {
     if (parameters == nullptr || parameters->cArgs != 3 ||
@@ -1977,8 +2004,8 @@ class CardProductWebViewHostObject final : public IDispatch {
           controller_.state() != CardProductUiState::authenticated) {
         return E_ACCESSDENIED;
       }
-      // Taken here, on the page's thread, so the worker never shares the pick.
-      std::wstring package = controller_.take_import_package();
+      // Copied on the page thread; the worker owns an independent path copy.
+      std::wstring package = controller_.selected_import_package();
       if (package.empty()) return E_ACCESSDENIED;
       return begin_encrypted_transfer(
           [this, id, relative_directory = std::wstring(relative_directory),
@@ -2016,7 +2043,7 @@ class CardProductWebViewHostObject final : public IDispatch {
           controller_.state() != CardProductUiState::authenticated) {
         return E_ACCESSDENIED;
       }
-      std::wstring package = controller_.take_import_package();
+      std::wstring package = controller_.selected_import_package();
       if (package.empty()) return E_ACCESSDENIED;
       return begin_encrypted_transfer(
           [this, package = std::move(package), password = std::move(password)](
@@ -2101,8 +2128,10 @@ class CardProductWebViewHostObject final : public IDispatch {
   [[nodiscard]] static unsigned int encrypted_failure(const std::exception_ptr& failure) noexcept {
     try {
       std::rethrow_exception(failure);
-    } catch (const backup::ExportPackageRejected&) {
+    } catch (const backup::ExportPackageAuthenticationRejected&) {
       return encrypted_failure_rejected;
+    } catch (const backup::ExportPackageRejected&) {
+      return encrypted_failure_damaged;
     } catch (const CardProductUiSessionController::ImportRollbackIncomplete&) {
       return encrypted_failure_rollback;
     } catch (const security::PasswordConfirmationRejected& rejected) {
