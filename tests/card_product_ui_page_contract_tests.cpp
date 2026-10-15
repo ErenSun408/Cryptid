@@ -224,8 +224,10 @@ void test_page_has_route_specific_password_surfaces() {
       read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE), "configuration-surface");
   // Two session inputs, two creation inputs, one read-only review preview and
   // the one the maintenance column asks for. The password the session was
-  // opened under is not among them.
-  require(count_occurrences(page, "type=\"password\"") == 6,
+  // opened under is not among them. P5.9 adds five: the export password twice,
+  // the import password, and the second password twice for a hidden-volume
+  // container created by an import.
+  require(count_occurrences(page, "type=\"password\"") == 11,
           "product page must have the session, creation and review inputs");
   require(page.find("id=\"card-password\"") != std::string::npos &&
               page.find("id=\"card-password-confirmation\"") !=
@@ -239,9 +241,10 @@ void test_page_has_route_specific_password_surfaces() {
   // maintenance column's password. A remembered container path is exactly what
   // section 8.4 forbids, so browser assistance is off on those too; a file
   // name inside a container is the content of an encrypted volume, which is at
-  // least as good a reason.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 11 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 11,
+  // least as good a reason. P5.9 adds six: its five password fields and the
+  // name of a container created by an import.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 17 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 17,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");

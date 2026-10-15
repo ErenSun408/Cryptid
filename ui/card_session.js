@@ -388,6 +388,34 @@
   const exportModeMigrate = document.getElementById("export-mode-migrate");
   const exportPlainPane = document.getElementById("export-plain-pane");
   const exportMigratePane = document.getElementById("export-migrate-pane");
+  const exportModeEncrypted = document.getElementById("export-mode-encrypted");
+  const exportModeImport = document.getElementById("export-mode-import");
+  const exportEncryptedFields = document.getElementById("export-encrypted-fields");
+  const encryptedExportPassword = document.getElementById("encrypted-export-password");
+  const encryptedExportConfirmation = document.getElementById("encrypted-export-confirmation");
+  const importPane = document.getElementById("import-pane");
+  const importPackageName = document.getElementById("import-package-name");
+  const importPackageBrowse = document.getElementById("import-package-browse");
+  const importPassword = document.getElementById("import-password");
+  const importTargetExisting = document.getElementById("import-target-existing");
+  const importTargetNew = document.getElementById("import-target-new");
+  const importExistingFields = document.getElementById("import-existing-fields");
+  const importContainerList = document.getElementById("import-container-list");
+  const importNewFields = document.getElementById("import-new-fields");
+  const importNewName = document.getElementById("import-new-name");
+  const importNewLocation = document.getElementById("import-new-location");
+  const importNewBrowse = document.getElementById("import-new-browse");
+  const importNewSize = document.getElementById("import-new-size");
+  const importNewHidden = document.getElementById("import-new-hidden");
+  const importNewHiddenFields = document.getElementById("import-new-hidden-fields");
+  const importNewHiddenSize = document.getElementById("import-new-hidden-size");
+  const importNewSecond = document.getElementById("import-new-second");
+  const importNewSecondConfirmation = document.getElementById("import-new-second-confirmation");
+  const importNewAcknowledge = document.getElementById("import-new-acknowledge");
+  const exportResultCancel = document.getElementById("export-result-cancel");
+  const importCancel = document.getElementById("import-cancel");
+  const importConfirm = document.getElementById("import-confirm");
+  const importStatus = document.getElementById("import-status");
   const backupMigrateLocation =
     document.getElementById("backup-migrate-location");
   const backupMigrateBrowse = document.getElementById("backup-migrate-browse");
@@ -1836,6 +1864,16 @@
   // another machine is rarely the one being browsed.
   let migrateContainerId = 0;
   let migrateLocation = "";
+  // P5.9 import. The package path stays native; the page holds its name only.
+  // A verified package for a new container is held natively too; the page
+  // only knows the smallest size it fits into.
+  let importPicked = "";
+  let importTarget = "existing";
+  let importContainerId = 0;
+  let importMinimumMib = 0;
+  let importLocation = "";
+  let importRunning = false;
+  let exportStopRequested = false;
 
   const exportGlyph = (paths, cls) => {
     const svg = document.createElementNS(kSvgNamespace, "svg");
@@ -2450,13 +2488,20 @@
   };
 
   const renderBackupCentre = () => {
-    const plain = exportMode === "plain";
-    exportModePlain.setAttribute("aria-pressed", plain ? "true" : "false");
-    exportModeMigrate.setAttribute("aria-pressed", plain ? "false" : "true");
+    const encrypted = exportMode === "encrypted";
+    const plain = exportMode === "plain" || encrypted;
+    exportModePlain.setAttribute("aria-pressed", exportMode === "plain" ? "true" : "false");
+    exportModeEncrypted.setAttribute("aria-pressed", encrypted ? "true" : "false");
+    exportModeMigrate.setAttribute("aria-pressed", exportMode === "migrate" ? "true" : "false");
+    exportModeImport.setAttribute("aria-pressed", exportMode === "import" ? "true" : "false");
     exportPlainPane.hidden = !plain;
-    exportMigratePane.hidden = plain;
-    exportModePlain.disabled = busy;
-    exportModeMigrate.disabled = busy;
+    exportEncryptedFields.hidden = !encrypted;
+    exportMigratePane.hidden = exportMode !== "migrate";
+    importPane.hidden = exportMode !== "import";
+    for (const pick of [exportModePlain, exportModeEncrypted, exportModeMigrate, exportModeImport]) pick.disabled = busy;
+    encryptedExportPassword.disabled = busy;
+    encryptedExportConfirmation.disabled = busy;
+    renderImportPane();
 
     renderExportContainers();
     backupExportLocation.textContent =
@@ -2466,9 +2511,10 @@
     backupExportLocation.disabled = busy;
     backupExportConfirm.disabled =
       busy || exportSelection.size === 0 || exportLocation === "";
+    const exportLabel = encrypted ? "开始加密导出" : "开始导出";
     backupExportConfirm.textContent = exportSelection.size === 0
-      ? "开始导出"
-      : `开始导出（${exportSelection.size}）`;
+      ? exportLabel
+      : `${exportLabel}（${exportSelection.size}）`;
 
     renderMigrateContainers();
     let migrateReady = false;
@@ -2702,11 +2748,33 @@
   // makes that gap easier to reach, and nothing here hides it.
   const runExport = async () => {
     if (busy || currentState !== nativeState.authenticated || exportSelection.size === 0 || exportLocation === "" || !exportResultDialog.hidden) return;
+    const encrypted = exportMode === "encrypted";
+    if (encrypted && (encryptedExportPassword.value === "" || encryptedExportConfirmation.value === "")) {
+      setBackupStatus("请输入两次导出密码。", "error");
+      return;
+    }
     const requests = [...exportSelection.values()];
     const location = exportLocation;
     const revision = batchSessionRevision;
     const current = () => revision === batchSessionRevision && currentState === nativeState.authenticated;
+    // The two passwords leave their fields at once; each package gets its own
+    // copies, which the bridge wipes, and these are wiped when the run ends.
+    let exportPassword = null;
+    let exportConfirmation = null;
+    let encryptedFailure = 0;
+    if (encrypted) {
+      try {
+        exportPassword = new TextEncoder().encode(encryptedExportPassword.value);
+        exportConfirmation = new TextEncoder().encode(encryptedExportConfirmation.value);
+      } finally {
+        encryptedExportPassword.value = "";
+        encryptedExportConfirmation.value = "";
+      }
+    }
     busy = true;
+    exportStopRequested = false;
+    exportResultCancel.hidden = !encrypted;
+    exportResultCancel.disabled = false;
     setBackupStatus("");
     exportResultItems = requests.map(item => ({ name: item.name, container: containers.find(c => c.id === item.id)?.name || "", state: "waiting" }));
     exportResultRunning = true;
@@ -2720,12 +2788,37 @@
     try {
       for (const [index, request] of requests.entries()) {
         if (!current()) return;
+        // A stop, or a password the policy refused, ends the run: every
+        // later entry would be refused the same way.
+        if (exportStopRequested || encryptedFailure === -1 || encryptedFailure === 2 || encryptedFailure === 3) {
+          for (const item of exportResultItems.slice(index)) item.state = "failed";
+          failed.push(...requests.slice(index));
+          renderExportResults();
+          break;
+        }
         exportResultItems[index].state = "running";
         renderExportResults();
         await new Promise((resolve) => { setTimeout(resolve, 0); });
         if (!current()) return;
         try {
-          await bridge.exportContainerEntry(request.id, request.directory, request.name, location);
+          if (encrypted) {
+            let first = Array.from(exportPassword);
+            let second = Array.from(exportConfirmation);
+            try {
+              await bridge.beginEncryptedExport(request.id, request.directory, request.name,
+                                                location, request.name, first, second);
+            } finally {
+              wipe(first); wipe(second); first = null; second = null;
+            }
+            const outcome = await awaitEncryptedTransfer(revision, null);
+            if (outcome === null || !current()) return;
+            if (outcome.state !== 2) {
+              encryptedFailure = outcome.state === 4 ? -1 : outcome.error;
+              throw new Error("encrypted export did not complete");
+            }
+          } else {
+            await bridge.exportContainerEntry(request.id, request.directory, request.name, location);
+          }
           if (!current()) return;
           exportSelection.delete(
           exportKey(request.id, request.directory, request.name));
@@ -2742,12 +2835,17 @@
       catch (pageError) { logCaughtPageError("runExport/2", pageError); currentState = nativeState.unavailable; activeVolumes = true; }
       if (!current()) return;
       if (failed.length !== 0) {
-        setBackupStatus("部分文件导出失败，请检查目标位置和可用空间后重试。", "error");
+        setBackupStatus(encrypted && encryptedFailure !== 0
+          ? encryptedFailureText(encryptedFailure)
+          : "部分文件导出失败，请检查目标位置和可用空间后重试。", "error");
       } else {
         exportLocation = "";
         setBackupStatus("");
       }
     } finally {
+      wipe(exportPassword);
+      wipe(exportConfirmation);
+      exportResultCancel.hidden = true;
       busy = false;
       exportResultRunning = false;
       if (current()) { renderExportResults(); exportResultConfirm.focus(); }
@@ -2757,6 +2855,224 @@
       if (externalRefreshPending) await refreshAfterExternalChange();
     }
   };
+  // P5.9 encrypted transfers. Codes are role-neutral and the same for every
+  // container and every login.
+  const encryptedFailureText = (code) => ({
+    [-1]: "已取消。",
+    1: "导出密码错误，或导出包已损坏。",
+    2: "两次输入的导出密码不一致。",
+    3: "导出密码太短，至少需要 12 个字符。",
+    4: "目标位置已有同名的文件或文件夹。",
+    5: "目标位置空间不足。",
+    6: "源文件在导出时发生了变化，或包含不支持的链接。",
+    8: "位置、名称或容量不符合要求。",
+    9: "导入没有完成，新建的安全盘也未能完全撤销，请在安全盘列表中检查并手动删除。",
+  })[code] || "没有完成，请稍后重试。";
+
+  // Polls one transfer to its end. Null when the session changed meanwhile.
+  const awaitEncryptedTransfer = async (revision, onProgress) => {
+    for (;;) {
+      const raw = String(await bridge.encryptedTransferStatus());
+      if (revision !== batchSessionRevision) return null;
+      if (!/^\d+,\d+,\d+,\d+,\d+$/.test(raw)) throw new Error("invalid transfer status");
+      const [state, done, total, error, phase] = raw.split(",").map(Number);
+      if (state !== 1) return { state, error };
+      if (onProgress !== null) onProgress(phase, done, total);
+      await new Promise((resolve) => { setTimeout(resolve, 150); });
+    }
+  };
+
+  const passwordArray = (input) => {
+    let encoded = null;
+    try {
+      encoded = new TextEncoder().encode(input.value);
+      return Array.from(encoded);
+    } finally {
+      input.value = "";
+      wipe(encoded);
+    }
+  };
+
+  const setImportStatus = (message, tone = "") => {
+    importStatus.textContent = message;
+    importStatus.dataset.tone = tone;
+  };
+
+  const resetImport = () => {
+    importPicked = "";
+    importMinimumMib = 0;
+    importPassword.value = "";
+    importNewSecond.value = "";
+    importNewSecondConfirmation.value = "";
+    importNewAcknowledge.checked = false;
+  };
+
+  // Everything the form says about a new container, so nothing of one login's
+  // attempt is shown to the next.
+  const resetImportForm = () => {
+    resetImport();
+    importTarget = "existing";
+    importContainerId = 0;
+    importLocation = "";
+    importNewName.value = "";
+    importNewSize.value = "";
+    importNewHiddenSize.value = "";
+    importNewHidden.checked = false;
+  };
+
+  const codePoints = (text) => [...text].length;
+
+  const renderImportContainers = () => {
+    importContainerList.replaceChildren();
+    const mounted = orderedContainers().filter((container) => container.mounted);
+    if (!mounted.some((container) => container.id === importContainerId)) importContainerId = 0;
+    if (mounted.length === 0) {
+      exportNote(importContainerList, "没有已挂载的安全盘。");
+      return;
+    }
+    for (const container of mounted) {
+      const pick = () => {
+        if (busy) return;
+        importContainerId = importContainerId === container.id ? 0 : container.id;
+        setImportStatus("");
+        renderBackupCentre();
+      };
+      const tail = checkBox(container.id === importContainerId);
+      tail.classList.add("selectable");
+      tail.addEventListener("click", (event) => { event.stopPropagation(); pick(); });
+      importContainerList.appendChild(exportRow(container, tail, pick));
+    }
+  };
+
+  const renderImportPane = () => {
+    const toNew = importTarget === "new";
+    importTargetExisting.setAttribute("aria-pressed", toNew ? "false" : "true");
+    importTargetNew.setAttribute("aria-pressed", toNew ? "true" : "false");
+    importExistingFields.hidden = toNew;
+    importNewFields.hidden = !toNew || importMinimumMib === 0;
+    importNewHiddenFields.hidden = !importNewHidden.checked;
+    importPackageName.textContent = importPicked === "" ? "选择一个导出包…" : importPicked;
+    importPackageName.classList.toggle("ph", importPicked === "");
+    for (const control of [importPackageName, importPackageBrowse, importPassword, importTargetExisting,
+                           importTargetNew, importNewName, importNewLocation, importNewBrowse, importNewSize,
+                           importNewHidden, importNewHiddenSize, importNewSecond, importNewSecondConfirmation,
+                           importNewAcknowledge]) {
+      control.disabled = busy;
+    }
+    // Once verified, the password has been used; nothing reads the field.
+    importPassword.disabled = busy || importMinimumMib !== 0;
+    importNewLocation.textContent = importLocation === "" ? "选择一个位置…" : importLocation;
+    importNewLocation.classList.toggle("ph", importLocation === "");
+    importCancel.hidden = !importRunning;
+    renderImportContainers();
+    let ready = false;
+    if (!toNew) {
+      importConfirm.textContent = "开始导入";
+      ready = importPicked !== "" && importContainerId !== 0;
+    } else if (importMinimumMib === 0) {
+      importConfirm.textContent = "校验导出包";
+      ready = importPicked !== "";
+    } else {
+      importConfirm.textContent = "新建安全盘并导入";
+      const size = Number(importNewSize.value);
+      const hiddenSize = Number(importNewHiddenSize.value);
+      const second = importNewSecond.value;
+      // The same limits the creation form holds a hidden-volume container to:
+      // the inner volume at most 3/4 of the whole, a 12-128 character second
+      // password typed twice, and the consequence acknowledged.
+      ready = importNewName.value.trim() !== "" && importLocation !== "" && Number.isInteger(size) &&
+        (importNewHidden.checked
+          ? Number.isInteger(hiddenSize) && hiddenSize >= importMinimumMib && hiddenSize * 4 <= size * 3 &&
+            codePoints(second) >= 12 && codePoints(second) <= 128 &&
+            second === importNewSecondConfirmation.value && importNewAcknowledge.checked
+          : size >= importMinimumMib);
+    }
+    importConfirm.disabled = busy || !ready;
+  };
+
+  const runImport = async () => {
+    if (busy || currentState !== nativeState.authenticated || importConfirm.disabled) return;
+    const revision = batchSessionRevision;
+    const current = () => revision === batchSessionRevision && currentState === nativeState.authenticated;
+    const toNew = importTarget === "new";
+    const verifying = toNew && importMinimumMib === 0;
+    if ((!toNew || verifying) && importPassword.value === "") {
+      setImportStatus("请输入导出密码。", "error");
+      return;
+    }
+    let first = null;
+    let second = null;
+    let finished = false;
+    let shownPercent = -1;
+    try {
+      busy = true;
+      importRunning = true;
+      setImportStatus(verifying ? "正在校验导出包…" : "正在准备…");
+      renderBackupCentre();
+      render(messageForCurrentState());
+      if (!toNew) {
+        first = passwordArray(importPassword);
+        await bridge.beginEncryptedImport(importContainerId, "", first);
+      } else if (verifying) {
+        first = passwordArray(importPassword);
+        await bridge.beginVerifyImport(first);
+      } else if (importNewHidden.checked) {
+        first = passwordArray(importNewSecond);
+        second = passwordArray(importNewSecondConfirmation);
+        await bridge.beginImportIntoNewContainerBMib(importNewName.value.trim(), importLocation,
+          Number(importNewSize.value), Number(importNewHiddenSize.value), first, second);
+      } else {
+        await bridge.beginImportIntoNewContainerMib(importNewName.value.trim(), importLocation,
+          Number(importNewSize.value));
+      }
+      wipe(first); wipe(second); first = null; second = null;
+      const outcome = await awaitEncryptedTransfer(revision, (phase, done, total) => {
+        const percent = total === 0 ? 0 : Math.floor((done / total) * 100);
+        // The status is announced; say it only when what it says changes.
+        const key = phase * 1000 + percent;
+        if (key === shownPercent) return;
+        shownPercent = key;
+        setImportStatus(`${phase === 1 ? "正在校验" : "正在写入"}… ${percent}%`);
+      });
+      if (outcome === null || !current()) return;
+      finished = true;
+      if (outcome.state === 2 && verifying) {
+        importMinimumMib = Number(await bridge.getVerifiedImportMinimumMib());
+        if (!current()) return;
+        if (importMinimumMib === 0) throw new Error("verified package missing");
+        if (!(Number(importNewSize.value) >= importMinimumMib)) importNewSize.value = String(importMinimumMib);
+        importPassword.value = "";
+        setImportStatus(`校验通过。新安全盘至少需要 ${importMinimumMib} MiB。`, "success");
+        return;
+      }
+      // Every other outcome consumes the pick natively; the page follows.
+      resetImport();
+      if (outcome.state === 2) {
+        setImportStatus("导入完成。", "success");
+      } else {
+        setImportStatus(encryptedFailureText(outcome.state === 4 ? -1 : outcome.error),
+                        outcome.state === 4 ? "" : "error");
+      }
+    } catch (pageError) { logCaughtPageError("runImport/1", pageError);
+      if (current()) {
+        resetImport();
+        setImportStatus(finished ? "没有完成，请稍后重试。" : "没有开始，请重新选择导出包后重试。", "error");
+      }
+    } finally {
+      wipe(first); wipe(second);
+      busy = false;
+      importRunning = false;
+      if (current()) {
+        try { await refreshNativeState(); }
+        catch (pageError) { logCaughtPageError("runImport/2", pageError); currentState = nativeState.unavailable; activeVolumes = true; }
+      } else {
+        resetImport();
+      }
+      render(messageForCurrentState());
+      renderBackupCentre();
+    }
+  };
+
   const runMigration = async () => {
     if (busy || migrateContainerId === 0 || migrateLocation === "") return;
     const id = migrateContainerId;
@@ -5359,6 +5675,10 @@
     clearExportResults();
     exportSelection.clear();
     exportLocation = "";
+    encryptedExportPassword.value = "";
+    encryptedExportConfirmation.value = "";
+    resetImportForm();
+    setImportStatus("");
     cancelContainerRename();
     // A walk's findings belong to the session that made them.
     resetDecoySection();
@@ -6697,12 +7017,79 @@
   backupExportConfirm.addEventListener("click", async () => { await runExport(); });
   const chooseExportMode = (mode) => {
     if (busy || exportMode === mode) return;
+    // A password typed for one mode does not wait in a hidden field.
+    encryptedExportPassword.value = "";
+    encryptedExportConfirmation.value = "";
+    importPassword.value = "";
+    importNewSecond.value = "";
+    importNewSecondConfirmation.value = "";
     exportMode = mode;
     setBackupStatus("");
     setMigrateStatus("");
     renderBackupCentre();
   };
   exportModePlain.addEventListener("click", () => { chooseExportMode("plain"); });
+  exportModeEncrypted.addEventListener("click", () => { chooseExportMode("encrypted"); });
+  exportModeImport.addEventListener("click", () => { chooseExportMode("import"); });
+  importPackageName.addEventListener("click", () => { importPackageBrowse.click(); });
+  importPackageBrowse.addEventListener("click", async () => {
+    if (busy || bridge === null) return;
+    const revision = batchSessionRevision;
+    let chosen = "";
+    try { chosen = await bridge.chooseImportPackage(); }
+    catch (pageError) { logCaughtPageError("importPackageBrowse", pageError); chosen = ""; }
+    if (revision !== batchSessionRevision) return;
+    // A new pick replaces any earlier one, natively too.
+    importMinimumMib = 0;
+    importPicked = typeof chosen === "string" ? chosen : "";
+    setImportStatus("");
+    renderBackupCentre();
+  });
+  importTargetExisting.addEventListener("click", () => {
+    if (busy || importTarget === "existing") return;
+    importTarget = "existing";
+    // A verification consumed the pick natively; it cannot feed this target.
+    if (importMinimumMib !== 0) resetImport();
+    setImportStatus("");
+    renderBackupCentre();
+  });
+  importTargetNew.addEventListener("click", () => {
+    if (busy) return;
+    importTarget = "new";
+    setImportStatus("");
+    renderBackupCentre();
+  });
+  importNewLocation.addEventListener("click", () => { importNewBrowse.click(); });
+  importNewBrowse.addEventListener("click", async () => {
+    if (busy || bridge === null) return;
+    const revision = batchSessionRevision;
+    let chosen = "";
+    try { chosen = await bridge.chooseContainerDirectory(); }
+    catch (pageError) { logCaughtPageError("importNewBrowse", pageError); return; }
+    if (revision !== batchSessionRevision) return;
+    if (typeof chosen !== "string" || chosen.length === 0) return;
+    importLocation = chosen;
+    renderBackupCentre();
+  });
+  for (const field of [importNewName, importNewSize, importNewHiddenSize, importNewSecond,
+                       importNewSecondConfirmation]) {
+    field.addEventListener("input", () => { renderImportPane(); });
+  }
+  importNewHidden.addEventListener("change", () => { renderImportPane(); });
+  importNewAcknowledge.addEventListener("change", () => { renderImportPane(); });
+  exportResultCancel.addEventListener("click", async () => {
+    if (!exportResultRunning || exportStopRequested || bridge === null) return;
+    exportStopRequested = true;
+    exportResultCancel.disabled = true;
+    try { await bridge.cancelEncryptedTransfer(); }
+    catch (pageError) { logCaughtPageError("exportResultCancel", pageError); }
+  });
+  importConfirm.addEventListener("click", async () => { await runImport(); });
+  importCancel.addEventListener("click", async () => {
+    if (!importRunning || bridge === null) return;
+    try { await bridge.cancelEncryptedTransfer(); }
+    catch (pageError) { logCaughtPageError("importCancel", pageError); }
+  });
   exportModeMigrate.addEventListener("click", () => {
     chooseExportMode("migrate");
   });
