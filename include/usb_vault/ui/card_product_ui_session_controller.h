@@ -326,6 +326,9 @@ class CardProductUiSessionController final {
   // import button always did; a package is held like choose_import_package();
   // an undecided file is held until one of the two calls below settles it.
   [[nodiscard]] ImportFileChoice choose_import_file();
+
+  // Deletes an unmounted file container from disk, then from the list.
+  void delete_container_from_disk(std::uint32_t id);
   // Settles an undecided pick as a container. False when nothing is held.
   bool adopt_undecided_import_file();
   // Settles an undecided pick as a package and returns its name; empty when

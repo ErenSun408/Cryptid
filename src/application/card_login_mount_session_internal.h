@@ -199,6 +199,9 @@ class CardLoginMountSessionRuntime {
   virtual void delete_container_file(std::wstring_view) {
     throw std::logic_error("container deletion is unavailable");
   }
+  // Removes a folder only if it is one the product made for a container --
+  // Hidden and System -- and only if it is now empty. Anything else stays.
+  virtual void remove_protected_directory_if_empty(std::wstring_view) {}
   virtual void copy_entry(std::wstring_view absolute_source,
                           std::wstring_view absolute_destination,
                           const volume::TransferCancellation& cancelled) = 0;
@@ -416,6 +419,7 @@ class CardLoginMountSessionCore final {
   void defer_operation_records();
   void settle_operation_records(bool keep);
   void discard_new_container(std::uint32_t id);
+  void delete_container_from_disk(std::uint32_t id);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;

@@ -25,6 +25,7 @@
       --ok: #68be95;
       --warn: #d8a544;
       --danger: #d96b62;
+      --info: #4f86c6;
       --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
     }
     * { box-sizing: border-box; }
@@ -582,8 +583,13 @@
     .container-swipe[data-dragging] > .container-row { transition: none; user-select: none; }
     .container-swipe-remove { position: absolute; right: 0; top: 0; bottom: 0; width: 108px; padding: 0; white-space: nowrap; clip-path: inset(0 0 0 108px); transition: clip-path .18s ease; border: 0; border-radius: 0; background: var(--danger); color: #fff; font: inherit; font-size: .78rem; font-weight: 600; cursor: pointer; }
     .container-swipe-remove:disabled { cursor: default; opacity: .5; }
+    /* 左滑露出的两个动作：从列表移除（只删记录）与从磁盘删除（删除文件本身）。 */
+    .container-swipe-actions { position: absolute; right: 0; top: 0; bottom: 0; width: 176px; display: flex; clip-path: inset(0 0 0 176px); transition: clip-path .18s ease; }
+    .container-swipe[data-dragging] > .container-swipe-actions { transition: none; }
+    .container-swipe-actions > .container-swipe-remove { position: static; flex: 1 1 0; width: auto; clip-path: none; transition: none; }
+    .container-swipe-actions > .container-swipe-forget { background: var(--info); color: #fff; }
     .container-action-reserve { visibility: hidden; pointer-events: none; }
-    @media (prefers-reduced-motion: reduce) { .container-swipe > .container-row, .container-swipe-remove { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { .container-swipe > .container-row, .container-swipe-remove, .container-swipe-actions { transition: none; } }
     .container-row { border-top: 0; position: relative; padding-right: 3rem; cursor: pointer; }
     .container-row:hover { background: rgba(255,255,255,.025); }
     .container-row.container-new { animation: container-arrival 2.2s ease-out; }
@@ -2043,6 +2049,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
           <span id="forget-container-description">只移除记录，不会删除安全盘文件。文件仍在原路径，可通过「导入」重新添加至列表。</span>
         </div>
+        <label id="forget-container-acknowledge-field" class="creation-check" for="forget-container-acknowledge" hidden>
+          <input id="forget-container-acknowledge" type="checkbox">
+          <span>我已知悉从磁盘删除可能带来的永久性后果</span>
+        </label>
         <output id="forget-container-status" class="creation-status" aria-live="polite"></output>
       </div>
       <div class="modal-footer">

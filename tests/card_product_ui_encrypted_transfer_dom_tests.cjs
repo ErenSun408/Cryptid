@@ -518,6 +518,50 @@ const openBackup = async (d, $, mode) => {
     } finally { w.close(); }
   }
 
+  // A swipe offers both removing the entry and deleting the file; deleting
+  // asks for an acknowledgement and calls its own bridge member.
+  {
+    const {w, d, $} = load();
+    try {
+      const deleted = [];
+      const forgotten = [];
+      const bridge = w.chrome.webview.hostObjects.nativeBridge;
+      bridge.deleteContainerFromDisk = (id) => { deleted.push(id); return true; };
+      const originalForget = bridge.forgetContainer;
+      bridge.forgetContainer = (id) => { forgotten.push(id); return originalForget ? originalForget(id) : true; };
+      await tick();
+      const rail = d.querySelector('[data-container-list] .container-swipe:has([data-row-container="2"])') ||
+        [...d.querySelectorAll('[data-container-list] .container-swipe')].find(item => item.querySelector('[data-row-container="2"]'));
+      const actions = rail.querySelector('.container-swipe-actions');
+      const buttons = [...actions.querySelectorAll('button')].map(button => button.textContent);
+      assert.deepEqual(buttons, ['从列表移除', '从磁盘删除']);
+      const mountedRail = [...d.querySelectorAll('[data-container-list] .container-swipe')]
+        .find(item => item.querySelector('[data-row-container="1"]'));
+      assert.ok([...mountedRail.querySelectorAll('.container-swipe-actions button')].every(button => button.disabled),
+                'a mounted vault offers neither action');
+      actions.querySelector('[data-container-action="delete-file"]').click(); await tick();
+      assert.equal($('forget-container-dialog').hidden, false);
+      assert.equal($('forget-container-title').textContent, '从磁盘删除');
+      assert.equal($('forget-container-confirm').disabled, true, 'deleting waits for the acknowledgement');
+      $('forget-container-acknowledge').checked = true;
+      $('forget-container-acknowledge').dispatchEvent(new w.Event('change'));
+      assert.equal($('forget-container-confirm').disabled, false);
+      $('forget-container-confirm').click();
+      await wait(() => deleted.length === 1);
+      assert.deepEqual(deleted, [2]);
+      assert.equal(forgotten.length, 0, 'deleting did not go through the plain removal');
+      for (let i = 0; i < 10; i++) await tick();
+      // The plain removal keeps its own wording and needs no acknowledgement.
+      const again = [...d.querySelectorAll('[data-container-list] .container-swipe')]
+        .find(item => item.querySelector('[data-row-container="2"]'));
+      again.querySelector('[data-container-action="forget"]').click(); await tick();
+      assert.equal($('forget-container-title').textContent, '从列表移除');
+      assert.equal($('forget-container-acknowledge-field').hidden, true);
+      assert.equal($('forget-container-confirm').disabled, false);
+      $('forget-container-cancel').click(); await tick();
+    } finally { w.close(); }
+  }
+
   // A session change closes the dialogs and forgets their fields.
   {
     const {w, d, $} = load();

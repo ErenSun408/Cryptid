@@ -796,6 +796,10 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   }
   std::vector<std::wstring> import_writes;
   std::vector<std::wstring> deleted_containers;
+  std::vector<std::wstring> protected_cleanups;
+  void remove_protected_directory_if_empty(const std::wstring_view path) override {
+    protected_cleanups.emplace_back(path);
+  }
 
   struct EncryptedExport final {
     std::wstring source;
@@ -3282,6 +3286,43 @@ void test_a_container_file_is_migrated_verbatim_and_nothing_else_moves() {
   static_cast<void>(other);
 }
 
+// Deleting from disk removes the file first and only then the entry; it is
+// refused while mounted and when the file is not where the list says.
+void test_a_container_is_deleted_from_disk_only_when_safe() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  require_throws_plain_logic_error(
+      [&] { session.delete_container_from_disk(id); },
+      "a mounted container was deleted from disk");
+  session.unmount_container(id);
+  const std::size_t events_before = session.operation_history().size();
+
+  // A file that is not there may be on a drive that is not attached.
+  std::erase(runtime.other_existing, std::wstring(L"C:\\vault\\one.hc"));
+  require_throws<std::runtime_error>(
+      [&] { session.delete_container_from_disk(id); },
+      "a container whose file is missing was dropped");
+  require(runtime.deleted_containers.empty() && session.container_statuses().size() == 1,
+          "a refused deletion still changed something");
+
+  runtime.other_existing.emplace_back(L"C:\\vault\\one.hc");
+  session.delete_container_from_disk(id);
+  require(runtime.deleted_containers.size() == 1 &&
+              runtime.deleted_containers[0] == L"C:\\vault\\one.hc",
+          "the container file was not deleted");
+  require(runtime.protected_cleanups.size() == 1 && runtime.protected_cleanups[0] == L"C:\\vault",
+          "the container's folder was not offered for cleanup");
+  require(session.container_statuses().empty(), "the deleted container stayed in the list");
+  require(session.operation_history().size() == events_before, "the deletion was recorded");
+  require_throws<std::invalid_argument>(
+      [&] { session.delete_container_from_disk(id); },
+      "a deleted container was deleted again");
+}
+
 // The migration as the product offers it: an ordinary folder named like the
 // vault, the vault file inside under its own name, without Hidden or System.
 void test_a_migration_comes_out_as_a_visible_folder() {
@@ -5387,6 +5428,7 @@ int main() {
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();
     test_a_mounted_container_is_not_migrated();
     test_a_migration_comes_out_as_a_visible_folder();
+    test_a_container_is_deleted_from_disk_only_when_safe();
     test_a_migration_refuses_what_it_cannot_name();
     test_maintenance_opens_the_outer_volume_under_protection();
     test_maintenance_refuses_every_failure_the_same_way();

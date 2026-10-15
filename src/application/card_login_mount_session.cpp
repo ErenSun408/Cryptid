@@ -388,6 +388,18 @@ class ProductionCardLoginMountSessionRuntime final
     return package.write_into(password_utf8, drive_letter, relative_directory, cancelled, progress);
   }
 
+  void remove_protected_directory_if_empty(const std::wstring_view path) override {
+    const std::wstring directory(path);
+    const DWORD attributes = ::GetFileAttributesW(directory.c_str());
+    constexpr DWORD kProtected = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & (kProtected | FILE_ATTRIBUTE_REPARSE_POINT)) != kProtected) {
+      return;
+    }
+    // Fails, and is left alone, when anything else is inside.
+    static_cast<void>(::RemoveDirectoryW(directory.c_str()));
+  }
+
   void delete_container_file(const std::wstring_view path) override {
     const std::wstring file(path);
     static_cast<void>(::SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL));
@@ -969,6 +981,11 @@ void CardLoginMountSession::defer_operation_records() {
 
 void CardLoginMountSession::settle_operation_records(const bool keep) {
   impl_->core.settle_operation_records(keep);
+}
+
+void CardLoginMountSession::delete_container_from_disk(const std::uint32_t id) {
+  traced_call("从磁盘删除安全盘", [&] { return "安全盘 #" + std::to_string(id); },
+              [&] { impl_->core.delete_container_from_disk(id); });
 }
 
 void CardLoginMountSession::discard_new_container(const std::uint32_t id) {
@@ -3595,6 +3612,31 @@ void CardLoginMountSessionCore::settle_operation_records(const bool keep) {
   }
   if (!keep) return;
   for (const auto& [path, alias] : paths) remember_container_path(path, alias);
+}
+
+void CardLoginMountSessionCore::delete_container_from_disk(const std::uint32_t id) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error("deleting a container requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument("no container is adopted under that identifier");
+  }
+  if (entry->partition) throw std::logic_error("a partition is never deleted from disk here");
+  if (entry->mounted || entry->maintenance) {
+    throw std::logic_error("unmount the container before deleting it");
+  }
+  const std::wstring path = entry->path;
+  // 🔴 A missing file may be on a drive that is not attached right now.
+  // Dropping the record would then lose the container's place in the list
+  // while the file lives on, so this refuses and leaves removal to the user.
+  if (!runtime_.container_exists(path)) {
+    throw std::runtime_error("the container file is not where the list says it is");
+  }
+  runtime_.delete_container_file(path);
+  runtime_.remove_protected_directory_if_empty(protected_directory_of(path));
+  forget_container(id);
+  SESSION_TRACE("安全盘已从磁盘删除", "安全盘 #" + std::to_string(id));
 }
 
 void CardLoginMountSessionCore::discard_new_container(const std::uint32_t id) {

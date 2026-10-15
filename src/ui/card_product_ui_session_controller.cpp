@@ -523,6 +523,13 @@ namespace {
 
 }  // namespace
 
+void CardProductUiSessionController::delete_container_from_disk(const std::uint32_t id) {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("deleting a container is not available in the current UI state");
+  }
+  volume_session_.delete_container_from_disk(id);
+}
+
 CardProductUiSessionController::ImportFileChoice
 CardProductUiSessionController::choose_import_file() {
   {

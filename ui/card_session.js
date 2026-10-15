@@ -443,6 +443,12 @@
   // The container the open dialog is asking about. Zero means no question is
   // pending, so a stale confirmation can never act on the wrong row.
   let pendingForgetId = 0;
+  // True when the dialog is deleting the container file rather than only
+  // dropping the list entry.
+  let pendingForgetDeletesFile = false;
+  const forgetTitle = document.getElementById("forget-container-title");
+  const forgetAcknowledgeField = document.getElementById("forget-container-acknowledge-field");
+  const forgetAcknowledge = document.getElementById("forget-container-acknowledge");
 
   const forgotOpen = document.getElementById("forgot-password-open");
   const forgotDialog = document.getElementById("forgot-password-dialog");
@@ -1402,12 +1408,19 @@
       busy || !ready || !resetAcknowledge.checked;
   };
 
-  const openForgetFlow = (id, name) => {
+  const openForgetFlow = (id, name, deleteFile = false) => {
     if (busy || currentState !== nativeState.authenticated) return;
     pendingForgetId = id;
+    pendingForgetDeletesFile = deleteFile;
     forgetName.textContent = name;
-    document.getElementById("forget-container-description").textContent =
-      containers.find(container => container.id === id)?.partition
+    forgetTitle.textContent = deleteFile ? "从磁盘删除" : "从列表移除";
+    forgetAcknowledge.checked = false;
+    forgetAcknowledgeField.hidden = !deleteFile;
+    forgetConfirmButton.textContent = deleteFile ? "永久删除" : "移除";
+    forgetConfirmButton.disabled = deleteFile;
+    document.getElementById("forget-container-description").textContent = deleteFile
+      ? "将从磁盘永久删除该安全盘文件，数据无法恢复。"
+      : containers.find(container => container.id === id)?.partition
         ? "只移除加密身份记录，不会删除分区或解密数据。当前版本无法通过文件导入找回分区；移除后将失去应用中的挂载入口，请确认不再需要此记录。"
         : "只移除记录，不会删除安全盘文件。文件仍在原路径，可通过「导入」重新添加至列表。";
     forgetStatus.textContent = "";
@@ -1418,6 +1431,8 @@
   const closeForgetFlow = (force = false) => {
     if (busy && !force) return;
     pendingForgetId = 0;
+    pendingForgetDeletesFile = false;
+    forgetAcknowledge.checked = false;
     forgetDialog.hidden = true;
     forgetName.textContent = "";
     forgetStatus.textContent = "";
@@ -4879,7 +4894,7 @@
   });
   window.addEventListener("blur", closeContainerSwipe);
   const wireContainerSwipe = (rail, row, remove) => {
-    const swipeWidth = 108;
+    const swipeWidth = 176;
     const setDistance = distance => {
       remove.hidden = distance === 0;
       remove.style.clipPath = `inset(0 0 0 ${swipeWidth - distance}px)`;
@@ -4904,7 +4919,7 @@
     }, true);
     row.addEventListener("keydown", event => {
       if (event.target.closest("input, button") || busy || row.dataset.busy === "true") return;
-      if (event.key === "ArrowLeft") { event.preventDefault(); reveal(); if (!remove.disabled) remove.focus(); }
+      if (event.key === "ArrowLeft") { event.preventDefault(); reveal(); remove.querySelector("button:not(:disabled)")?.focus(); }
       if (["ArrowRight", "Escape"].includes(event.key)) { event.preventDefault(); closeContainerSwipe(); }
     });
     remove.addEventListener("keydown", event => {
@@ -4946,7 +4961,11 @@
       const end = e => {
         if (e.pointerId !== pointer) return;
         cleanup();
-        if (distance >= swipeWidth / 3 && dragging) reveal();
+        // Opening needs a third of the rail. Closing an open rail needs only
+        // a drag past the middle of the first action, "从列表移除", which is
+        // half the rail wide: a quarter of the rail back to the right.
+        const keepOpen = wasOpen ? distance > swipeWidth * 3 / 4 : distance >= swipeWidth / 3;
+        if (keepOpen && dragging) reveal();
         else { row.style.transform = ""; remove.hidden = true; }
       };
       cancelContainerSwipe = cancel;
@@ -5073,12 +5092,24 @@
     if (!management) row.appendChild(details);
     const rail = document.createElement("div");
     rail.className = "container-swipe";
+    // Two actions behind the swipe: drop the list entry, or delete the file.
+    const swipeActions = document.createElement("div");
+    swipeActions.className = "container-swipe-actions";
+    swipeActions.hidden = true;
     const remove = containerActionButton(container, "forget", "从列表移除", container.mounted);
-    remove.className = "container-swipe-remove";
-    remove.hidden = true;
-    if (container.mounted) remove.title = "请先卸载安全盘";
-    rail.append(remove, row);
-    wireContainerSwipe(rail, row, remove);
+    remove.className = "container-swipe-remove container-swipe-forget";
+    const erase = containerActionButton(container, "delete-file", "从磁盘删除",
+                                        container.mounted || Boolean(container.partition));
+    erase.className = "container-swipe-remove";
+    if (container.mounted) {
+      remove.title = "请先卸载安全盘";
+      erase.title = "请先卸载安全盘";
+    } else if (container.partition) {
+      erase.title = "分区安全盘不支持从磁盘删除";
+    }
+    swipeActions.append(remove, erase);
+    rail.append(swipeActions, row);
+    wireContainerSwipe(rail, row, swipeActions);
     group.appendChild(rail);
 
     if (expanded) {
@@ -6546,6 +6577,10 @@
     () => bridge.forgetContainer(id),
     "无法从列表移除该安全盘，请稍后重试。");
 
+  const deleteContainerFromDisk = (id) => runContainerAction(
+    () => bridge.deleteContainerFromDisk(id),
+    "无法从磁盘删除该安全盘。文件可能正在被使用，或不在原位置（可改用“从列表移除”）。");
+
   const runSelectedBatch = async (control, retryContext = null, automaticIds = null) => {
     if (busy || bridge === null || currentState !== nativeState.authenticated ||
         externalRefreshPending || !volumeOperationDialog.hidden) return;
@@ -7399,11 +7434,16 @@
   forgetDialog.addEventListener("pointerdown", (event) => {
     if (event.button === 0 && event.target === forgetDialog) closeForgetFlow();
   });
+  forgetAcknowledge.addEventListener("change", () => {
+    if (pendingForgetDeletesFile) forgetConfirmButton.disabled = !forgetAcknowledge.checked;
+  });
   forgetConfirmButton.addEventListener("click", async () => {
     const id = pendingForgetId;
-    if (busy || id === 0) return;
+    const deleteFile = pendingForgetDeletesFile;
+    if (busy || id === 0 || (deleteFile && !forgetAcknowledge.checked)) return;
     closeForgetFlow();
-    await forgetAdoptedContainer(id);
+    if (deleteFile) await deleteContainerFromDisk(id);
+    else await forgetAdoptedContainer(id);
   });
   creationCancelWork.addEventListener("click", async () => {
     if (creationCancelWork.disabled) return;
@@ -7551,6 +7591,8 @@
       if (!Number.isInteger(id) || id <= 0 || isMaintenanceContainer(id)) return;
       if (target.dataset.containerAction === "forget") {
         openForgetFlow(id, target.dataset.containerName ?? "");
+      } else if (target.dataset.containerAction === "delete-file") {
+        openForgetFlow(id, target.dataset.containerName ?? "", true);
       } else if (target.dataset.containerAction === "unmount") {
         await unmountAdoptedContainer(id);
       } else if (target.dataset.containerAction === "resume") {

@@ -83,6 +83,7 @@ constexpr DISPID kAdoptUndecidedImportId = 150;
 constexpr DISPID kTreatUndecidedAsPackageId = 151;
 constexpr DISPID kRenameImportPackageId = 152;
 constexpr DISPID kBeginExportSelectionId = 153;
+constexpr DISPID kDeleteContainerFromDiskId = 154;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -515,6 +516,7 @@ class PasswordArgumentsWiper final {
     case kExportContainerEntryId: return "exportContainerEntry";
     case kExportContainerFileId: return "exportContainerFile";
     case kForgetContainerId: return "forgetContainer";
+    case kDeleteContainerFromDiskId: return "deleteContainerFromDisk";
     case kGetAutoMountId: return "getAutoMountEnabled";
     case kBatchItemIdId: return "getBatchItemId";
     case kBatchItemNameId: return "getBatchItemName";
@@ -851,6 +853,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
     if (matches(names[0], kUnmountContainerName)) {
       ids[0] = kUnmountContainerId;
+      return S_OK;
+    }
+    if (matches(names[0], L"deleteContainerFromDisk")) {
+      ids[0] = kDeleteContainerFromDiskId;
       return S_OK;
     }
     if (matches(names[0], kForgetContainerName)) {
@@ -1578,7 +1584,9 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kUnmountContainerId:
         return invoke_unmount_container(parameters, argument_error);
       case kForgetContainerId:
-        return invoke_forget_container(parameters, argument_error);
+      case kDeleteContainerFromDiskId:
+        return invoke_forget_container(parameters, argument_error,
+                                       member == kDeleteContainerFromDiskId);
       case kGetRememberContainerPathsId:
         return invoke_get_remember_container_paths(parameters, result);
       case kSetRememberContainerPathsId:
@@ -3614,8 +3622,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  // One argument, the container. Forgetting drops the list entry only;
+  // deleting from disk removes the container file first.
   HRESULT invoke_forget_container(DISPPARAMS* const parameters,
-                                  UINT* const argument_error) noexcept {
+                                  UINT* const argument_error,
+                                  const bool delete_file = false) noexcept {
     if (parameters == nullptr || parameters->cArgs != 1 ||
         parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
       return DISP_E_BADPARAMCOUNT;
@@ -3626,7 +3637,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       return DISP_E_TYPEMISMATCH;
     }
     try {
-      controller_.forget_container(identifier);
+      if (delete_file) controller_.delete_container_from_disk(identifier);
+      else controller_.forget_container(identifier);
       return S_OK;
     } catch (const std::invalid_argument&) {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));

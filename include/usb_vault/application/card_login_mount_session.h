@@ -571,6 +571,15 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void discard_new_container(std::uint32_t) {
     throw std::logic_error("container discard is unavailable");
   }
+  // Deletes an unmounted file container from disk for good: its file goes
+  // first, then the empty folder the product made for it, and only then the
+  // list entry and its index record. Not for partitions, not while mounted,
+  // and not when the file is not where the list says, since that may be a
+  // drive that is simply not attached. Nothing goes to the recycle bin and
+  // nothing is recorded.
+  virtual void delete_container_from_disk(std::uint32_t) {
+    throw std::logic_error("container deletion is unavailable");
+  }
 
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
@@ -753,6 +762,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void defer_operation_records() override;
   void settle_operation_records(bool keep) override;
   void discard_new_container(std::uint32_t id) override;
+  void delete_container_from_disk(std::uint32_t id) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   // Native owner only, never concurrent with session workers. No driver IO.
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;
