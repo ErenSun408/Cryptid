@@ -152,6 +152,8 @@ add_library(usb_vault_core STATIC
   src/application/container_index_view_v1.cpp
   src/application/mount_orchestrator.cpp
   src/application/product_settings_v1.cpp
+  src/backup/export_manifest_v1.cpp
+  src/backup/export_package_source.cpp
   src/backup/export_package_v1.cpp
   src/card/card_error.cpp
   src/card/card_initialization_service.cpp
