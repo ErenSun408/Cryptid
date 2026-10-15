@@ -306,6 +306,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::vector<std::wstring> other_staging;
   std::vector<std::string> events;
 
+  int batch_unmounts{};
+  int batch_forced_unmounts{};
+  [[nodiscard]] usb_vault::volume::UnmountResult unmount_batch_item(
+      const wchar_t drive_letter) override {
+    ++batch_unmounts;
+    return unmount(drive_letter);
+  }
+  [[nodiscard]] usb_vault::volume::UnmountEscalationResult unmount_forced_batch_item(
+      const wchar_t drive_letter) override {
+    ++batch_forced_unmounts;
+    return unmount_forced(drive_letter);
+  }
+
   [[nodiscard]] usb_vault::volume::UnmountResult unmount(
       const wchar_t drive_letter) override {
     attached_volume_sizes.erase(drive_letter);
@@ -2088,6 +2101,23 @@ void test_unmounted_container_can_be_mounted_again() {
   require_throws<std::invalid_argument>(
       [&] { session.unmount_container(id + 100); },
       "an unknown container identifier was accepted");
+  require(runtime.batch_unmounts == 0 && runtime.batch_forced_unmounts == 0,
+          "a single unmount took the batch path");
+
+}
+
+void test_batch_items_take_the_batch_unmount_path() {
+  for (const bool force : {false, true}) {
+    CardAuthenticationSession authentication;
+    FakeRuntime runtime;
+    CardLoginMountSessionCore session(authentication, runtime, layout());
+    session.consume_authenticated_login(root_secret(), bytes("login-password"));
+    const std::uint32_t id = session.create_container(L"C:\\vault\\second.hc", 64ULL * 1024ULL * 1024ULL);
+    session.unmount_container_impl(id, force, true, true);
+    require(!session.mounted() && runtime.batch_unmounts == int(!force) &&
+                runtime.batch_forced_unmounts == int(force),
+            "a batch item did not take the batch unmount path");
+  }
 }
 
 void test_mount_requires_authentication_and_an_existing_file() {
@@ -5387,6 +5417,7 @@ int main() {
     test_multiple_standard_containers_get_distinct_drive_letters();
     test_container_paths_are_adopted_once();
     test_unmounted_container_can_be_mounted_again();
+    test_batch_items_take_the_batch_unmount_path();
     test_mount_requires_authentication_and_an_existing_file();
     test_unmount_active_releases_every_adopted_container();
     test_operation_history_records_only_committed_session_facts();

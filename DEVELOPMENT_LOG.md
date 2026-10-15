@@ -6126,4 +6126,11 @@
 - 验证：card_product_webview_host_object_tests（新增：未认证拒绝、仅打开已挂载 ID 的盘符、未知或未挂载拒绝、启动失败如实返回）与 card_product_ui_page_contract_tests 通过。新增 card_product_ui_mount_open_dom_tests 的 8 个场景通过；mount_sync、export_results、encrypted_transfer、file_entry DOM 测试通过；navigation、partition_creation、bitlocker、partition_conversion、file_creation_failure 与 HEAD 同样失败。p46 应用已重新构建（14:17:49），部署页面与源码一致；webview 集成测试未执行；待实机验证。
 - 安全与风险：资源管理器会在 ShellBags、快速访问中留下盘符与浏览痕迹。仅在明确点击“打开”时产生，与手动打开相同。独立代码审查无阻断项；据其意见已改为：Windows 目录取自 GetSystemWindowsDirectoryW；启动未返回时忽略重复点击，DOM 测试已覆盖双击；批量结果、导出结果的金底样式与单个挂载的金底样式分开定义，避免提高优先级。尚未覆盖 Esc、Tab 循环及新建文件安全盘路径的 DOM 场景。
 - 后续调整：单个挂载成功对话框的“打开”“确定”改用一键挂载结果页的按钮宽度与间距；创建进度页改为按内容高度显示，不再保留表单的固定高度；移除创建进度与状态中“复用/使用本次管理员授权”的提示。页面契约测试与 mount_open DOM 测试通过；单个挂载、一键挂载、新建完成三处的“打开”“确定”统一固定为 50px。“从磁盘删除”对话框的提示改为一句普通正文“将从磁盘永久删除 <名称> ，数据无法恢复。”，名称保持加粗，不再显示警示框；“从列表移除”文案不变。页面契约测试、mount_open、encrypted_transfer、swipe DOM 测试通过，删除提示文本经 jsdom 脚本核对；卸载、强制卸载成功对话框的“确定”改为与挂载成功相同的金底、50px、右对齐样式，仍保留 3 秒自动关闭；“从磁盘删除”确认对话框宽度缩为 24rem，收紧页眉、正文、页脚内边距，空状态行不占位。mount_sync DOM 测试亦通过；p46 应用已重新构建（15:40:45），部署页面与源码一致；待实机验证。
-- 提交：按明确决定合并为一个 [ui] 提交；禁止推送。
+- 提交：按明确决定合并为一个 [ui] 提交，哈希 0b68083；禁止推送。
+
+### 2026-10-15 — volume / 批量卸载放宽占用重试并合并此电脑刷新
+- 范围与审计：一键卸载后随机个别安全盘未卸载、重试成功。运行日志 runtime-log-20261013-102002 显示失败项在 2 秒内连续 20 次得到 VeraCrypt 返回码 6（卷上仍有打开文件），本进程同期未访问该卷；判断为外部程序（资源管理器、索引、安全软件等）短时占用。按明确决定只改两点：批量单盘重试期限 2 秒延长到 3 秒；批量期间不再每卸一盘刷新“此电脑”，结束后刷新一次。单个卸载不变。
+- 检查与实现：UnmountRetryOptions 新增 batch；重试策略按 batch 选择 3 秒期限，并让 run_unmount_batch 跳过 CSIDL_DRIVES 的 SHCNE_UPDATEDIR；逐盘 SHCNE_DRIVEREMOVED 与卸载广播保留。会话运行时、会话接口和界面控制器新增批量单项卸载入口（普通与强制），默认回落到原调用；页面桥批量卸载改走该入口，并在批量结束后经 IUiPartitionServices::refresh_drive_list 刷新一次。
+- 验证：volume_provider_tests（批量与单个的刷新标志、2 秒／3 秒忙重试期限）、card_login_mount_session_tests（批量单项走批量路径，单个卸载不走）、card_product_webview_host_object_tests（批量卸载只刷新一次，批量挂载不刷新）、card_product_ui_session_controller_tests、ui_close_guard_tests 通过；其余目标编译通过。p46 应用与 usb_vault_volume_creator.exe 已重新构建（16:45:53），部署页面与源码一致；未实机验证。
+- 安全与风险：不改变强制卸载语义，不引入自动强制。延长期限只能降低而不能消除外部占用导致的失败；持续占用仍报失败并可重试。批量期间资源管理器的此电脑视图要到结束才整体刷新。
+- 提交：按明确决定以 [fix] 单独提交；禁止推送。

@@ -33,6 +33,14 @@ class CardLoginMountSessionRuntime {
       wchar_t drive_letter) = 0;
   [[nodiscard]] virtual volume::UnmountEscalationResult unmount_forced(
       wchar_t drive_letter) = 0;
+  // Batch items: see UnmountRetryOptions::batch.
+  [[nodiscard]] virtual volume::UnmountResult unmount_batch_item(wchar_t drive_letter) {
+    return unmount(drive_letter);
+  }
+  [[nodiscard]] virtual volume::UnmountEscalationResult unmount_forced_batch_item(
+      wchar_t drive_letter) {
+    return unmount_forced(drive_letter);
+  }
   [[nodiscard]] virtual bool container_exists(std::wstring_view path) = 0;
   [[nodiscard]] virtual std::optional<std::uint64_t>
   container_size_if_present(std::wstring_view path) = 0;
@@ -358,7 +366,7 @@ class CardLoginMountSessionCore final {
   void force_unmount_container(std::uint32_t id);
   void force_unmount_user_active();
   void unmount_container_impl(std::uint32_t id, bool allow_force,
-                              bool end_measurements = true);
+                              bool end_measurements = true, bool batch_item = false);
   void forget_container(std::uint32_t id);
   [[nodiscard]] bool remembering_container_paths();
   void set_remembering_container_paths(bool remember);

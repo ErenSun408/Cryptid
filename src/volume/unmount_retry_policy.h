@@ -12,15 +12,17 @@ namespace usb_vault::volume::detail {
 namespace {
 
 constexpr auto kRetryWindow = std::chrono::seconds(2);
+constexpr auto kBatchRetryWindow = std::chrono::seconds(3);
 constexpr auto kRetryInterval = std::chrono::milliseconds(100);
 
 }  // namespace
 
 template <typename Provider>
 UnmountResult retry_unmount_silently(const Provider& provider,
-                                 const wchar_t drive_letter) {
+                                 const wchar_t drive_letter,
+                                 const std::chrono::milliseconds window = kRetryWindow) {
   const auto start = std::chrono::steady_clock::now();
-  const auto deadline = start + kRetryWindow;
+  const auto deadline = start + window;
   std::uint32_t attempts = 0;
 
   for (;;) {
@@ -88,8 +90,9 @@ UnmountResult retry_unmount(const Provider& provider, wchar_t drive_letter,
                             const UnmountRetryOptions& options) {
   const auto start = std::chrono::steady_clock::now();
   UnmountResult result;
-  provider.run_unmount_batch(drive_letter, options.notify_shell, [&] {
-    result = retry_unmount_silently(provider, drive_letter);
+  provider.run_unmount_batch(drive_letter, options.notify_shell, !options.batch, [&] {
+    result = retry_unmount_silently(provider, drive_letter,
+                                    options.batch ? kBatchRetryWindow : kRetryWindow);
   });
   result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - start);
@@ -101,7 +104,7 @@ UnmountEscalationResult escalate_unmount(const Provider& provider,
     wchar_t drive_letter, const UnmountRetryOptions& options) {
   const auto start = std::chrono::steady_clock::now();
   UnmountEscalationResult result;
-  provider.run_unmount_batch(drive_letter, options.notify_shell, [&] {
+  provider.run_unmount_batch(drive_letter, options.notify_shell, !options.batch, [&] {
     result = escalate_unmount_silently(provider, drive_letter);
   });
   result.result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

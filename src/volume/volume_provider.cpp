@@ -207,19 +207,17 @@ detail::DrivePresence drive_presence(const std::int32_t drive_number) noexcept {
 }
 
 void notify_unmount(const detail::UnmountNotification notification,
-                    const std::int32_t drive_number) noexcept {
+                    const std::int32_t drive_number, const bool refresh_drives = true) noexcept {
   if (notification == detail::UnmountNotification::complete) {
     detail::refresh_unmounted_drive(
         [=]() noexcept { return drive_presence(drive_number); },
         [=]() noexcept { broadcast_unmount(notification, drive_number); },
-        []() noexcept {
-          // Refresh the live drive inventory rather than replaying a removal
-          // for a letter another volume might acquire between probe and delivery.
-          ITEMIDLIST* computer{};
-          if (SUCCEEDED(::SHGetSpecialFolderLocation(nullptr, CSIDL_DRIVES, &computer)) && computer)
-            ::SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, computer, nullptr);
-          ::CoTaskMemFree(computer);
-        }, []() noexcept { ::Sleep(50); });
+        // Refresh the live drive inventory rather than replaying a removal
+        // for a letter another volume might acquire between probe and delivery.
+        // A batch skips it: Explorer re-reading every remaining drive here
+        // holds the next volume open just as its unmount starts.
+        [=]() noexcept { if (refresh_drives) refresh_drive_list(); },
+        []() noexcept { ::Sleep(50); });
     return;
   }
   const bool restored = notification == detail::UnmountNotification::restored;
@@ -450,7 +448,7 @@ void VolumeProvider::notify_mounted(const wchar_t drive_letter) const {
 }
 
 void VolumeProvider::run_unmount_batch(
-    const wchar_t drive_letter, const bool notifications,
+    const wchar_t drive_letter, const bool notifications, const bool refresh_drives,
     const std::function<void()>& operation) const {
   require_active(impl_);
   const auto target_drive = detail::drive_number(drive_letter);
@@ -458,10 +456,17 @@ void VolumeProvider::run_unmount_batch(
   require_supported_version(driver.get());
   detail::unmount_with_notifications(notifications, operation,
       [&](detail::UnmountNotification notification) noexcept {
-        notify_unmount(notification, target_drive);
+        notify_unmount(notification, target_drive, refresh_drives);
       }, [&]() noexcept {
         return (::GetLogicalDrives() & (DWORD{1} << target_drive)) != 0;
       });
+}
+
+void refresh_drive_list() noexcept {
+  ITEMIDLIST* computer{};
+  if (SUCCEEDED(::SHGetSpecialFolderLocation(nullptr, CSIDL_DRIVES, &computer)) && computer)
+    ::SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, computer, nullptr);
+  ::CoTaskMemFree(computer);
 }
 
 std::vector<MountedVolume> VolumeProvider::mounted_volumes() const {

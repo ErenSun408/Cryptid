@@ -343,6 +343,12 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   virtual void force_unmount_container(std::uint32_t) {
     throw std::logic_error("manual forced cleanup is unavailable");
   }
+  // One item of a batch: a busy volume is retried a little longer, and the
+  // caller refreshes This PC once after the last item.
+  virtual void unmount_batch_item(std::uint32_t id, bool force) {
+    if (force) force_unmount_container(id);
+    else unmount_container(id);
+  }
   virtual void force_unmount_user_active() {
     throw std::logic_error("manual forced cleanup is unavailable");
   }
@@ -701,6 +707,7 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       const std::function<bool()>& cancelled, const std::function<void(unsigned int)>& progress = {}) override;
   void unmount_container(std::uint32_t id) override;
   void force_unmount_container(std::uint32_t id) override;
+  void unmount_batch_item(std::uint32_t id, bool force) override;
   void force_unmount_user_active() override;
   void forget_container(std::uint32_t id) override;
   std::uint32_t adopt_container(std::wstring_view path) override;

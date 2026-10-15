@@ -1877,8 +1877,7 @@ class CardProductWebViewHostObject final : public IDispatch {
               if (plan[i].target.mounted == mount) outcome = 11;
               else {
                 if (mount) controller_.mount_container(plan[i].target.id);
-                else if (force) controller_.force_unmount_container(plan[i].target.id);
-                else controller_.unmount_container(plan[i].target.id);
+                else controller_.unmount_batch_item(plan[i].target.id, force);
                 outcome = 2;
               }
             } catch (const std::system_error& error) {
@@ -1900,6 +1899,7 @@ class CardProductWebViewHostObject final : public IDispatch {
             batch_completed_ = i + 1;
           }
         }
+        if (!mount) partition_services_.refresh_drive_list();
         if (SUCCEEDED(com)) ::CoUninitialize();
         {
           std::lock_guard lock(batch_mutex_);

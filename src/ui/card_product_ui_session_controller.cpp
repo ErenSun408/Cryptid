@@ -1078,6 +1078,12 @@ void CardProductUiSessionController::force_unmount_container(const std::uint32_t
   volume_session_.force_unmount_container(id);
 }
 
+void CardProductUiSessionController::unmount_batch_item(const std::uint32_t id, const bool force) {
+  if (state() != CardProductUiState::authenticated)
+    throw_wrong_route("unmounting a container is not available in the current UI state");
+  volume_session_.unmount_batch_item(id, force);
+}
+
 void CardProductUiSessionController::force_unmount_user_active() {
   volume_session_.force_unmount_user_active();
 }

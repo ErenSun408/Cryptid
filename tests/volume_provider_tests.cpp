@@ -556,6 +556,7 @@ void test_notification_count_across_actual_retry_policy() {
   using detail::UnmountNotification;
   struct Provider {
     mutable int pending{}, complete{}, restored{}, attempts{}, forced{}, probes{};
+    mutable int refreshing{-1};
     int failures{3};
     bool present{true};
     bool transport_error{false};
@@ -568,9 +569,10 @@ void test_notification_count_across_actual_retry_policy() {
       if (attempts <= failures) throw std::system_error(make_error_code(DriverError::volume_busy));
       return {};
     }
-    void run_unmount_batch(wchar_t drive, bool enabled,
+    void run_unmount_batch(wchar_t drive, bool enabled, bool refresh,
                            const std::function<void()>& operation) const {
       require(drive == L'W', "batch changed drive");
+      refreshing = refresh ? 1 : 0;
       detail::unmount_with_notifications(enabled, operation,
           [&](UnmountNotification event) noexcept {
             if (event == UnmountNotification::pending) ++pending;
@@ -615,6 +617,25 @@ void test_notification_count_across_actual_retry_policy() {
     require(rejected && provider.attempts == 1 && provider.forced == 0 &&
             provider.pending == 1 && provider.complete == 0 && provider.restored == 1,
             "transport failure was retried, forced, or notified twice");
+  }
+  // A batch item leaves the This PC refresh to its caller and waits a little
+  // longer for a busy volume; a single unmount keeps both as they were.
+  for (bool batch : {false, true}) {
+    Provider provider;
+    static_cast<void>(detail::retry_unmount(provider, L'W', {.batch = batch}));
+    require(provider.refreshing == int(!batch), "retry refresh did not follow the batch flag");
+    Provider escalated;
+    escalated.failures = 0;
+    static_cast<void>(detail::escalate_unmount(escalated, L'W', {.batch = batch}));
+    require(escalated.refreshing == int(!batch), "escalation refresh did not follow the batch flag");
+    Provider busy;
+    busy.failures = 1000;
+    const auto start = std::chrono::steady_clock::now();
+    try { static_cast<void>(detail::retry_unmount(busy, L'W', {.batch = batch})); } catch (const std::system_error&) {}
+    const auto waited = std::chrono::steady_clock::now() - start;
+    require(batch ? waited >= std::chrono::milliseconds(2900) && waited < std::chrono::milliseconds(3900)
+                  : waited >= std::chrono::milliseconds(1900) && waited < std::chrono::milliseconds(2900),
+            "busy retry window does not match the batch flag");
   }
   for (int failures : {0, 1, 2}) {
     Provider provider;

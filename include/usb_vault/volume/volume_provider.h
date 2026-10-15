@@ -145,8 +145,9 @@ class VolumeProvider final {
       const UnmountOptions& options = {}) const;
 
   // One Shell notification transaction for a complete retry/escalation batch.
-  // Operations inside the callback must use notify_shell=false.
-  void run_unmount_batch(wchar_t drive_letter, bool notify_shell,
+  // Operations inside the callback must use notify_shell=false. Without
+  // refresh_drives the caller refreshes This PC itself, see refresh_drive_list.
+  void run_unmount_batch(wchar_t drive_letter, bool notify_shell, bool refresh_drives,
                          const std::function<void()>& operation) const;
 
   // Publishes a drive that was mounted with notify_shell=false. Higher-level
@@ -162,6 +163,10 @@ class VolumeProvider final {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+// Asks Explorer to re-read the drive list once, as a batch of unmounts does
+// after its last item instead of after every one.
+void refresh_drive_list() noexcept;
 
 }  // namespace usb_vault::volume
 

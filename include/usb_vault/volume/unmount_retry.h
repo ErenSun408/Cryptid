@@ -6,6 +6,9 @@ namespace usb_vault::volume {
 
 struct UnmountRetryOptions final {
   bool notify_shell{true};
+  // One item of a batch: busy volumes get a slightly longer window, and the
+  // This PC refresh is left to the caller, which sends it once at the end.
+  bool batch{false};
 };
 
 // Retries only a normal unmount rejected as busy. The policy never escalates to

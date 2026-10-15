@@ -59,6 +59,16 @@ class ProductionCardLoginMountSessionRuntime final
     return volume::unmount_with_forced_escalation(provider_, drive_letter);
   }
 
+  [[nodiscard]] volume::UnmountResult unmount_batch_item(
+      const wchar_t drive_letter) override {
+    return volume::unmount_with_retry(provider_, drive_letter, {.batch = true});
+  }
+
+  [[nodiscard]] volume::UnmountEscalationResult unmount_forced_batch_item(
+      const wchar_t drive_letter) override {
+    return volume::unmount_with_forced_escalation(provider_, drive_letter, {.batch = true});
+  }
+
   [[nodiscard]] bool container_exists(
       const std::wstring_view path) override {
     return container_size_if_present(path).has_value();
@@ -1090,6 +1100,11 @@ bool CardLoginMountSession::mounted() const noexcept {
 void CardLoginMountSession::force_unmount_container(const std::uint32_t id) {
   traced_call("强制卸载安全盘", [&] { return "安全盘 #" + std::to_string(id); },
               [&] { impl_->core.force_unmount_container(id); });
+}
+
+void CardLoginMountSession::unmount_batch_item(const std::uint32_t id, const bool force) {
+  traced_call(force ? "批量强制卸载安全盘" : "批量卸载安全盘", [&] { return "安全盘 #" + std::to_string(id); },
+              [&] { impl_->core.unmount_container_impl(id, force, true, true); });
 }
 
 void CardLoginMountSession::force_unmount_user_active() {
@@ -3188,7 +3203,7 @@ void CardLoginMountSessionCore::force_unmount_user_active() {
 
 void CardLoginMountSessionCore::unmount_container_impl(
     const std::uint32_t id, const bool allow_force,
-    const bool end_measurements) {
+    const bool end_measurements, const bool batch_item) {
   for (SessionContainer& container : state_.containers) {
     if (container.id != id) continue;
     if (!container.mounted) return;
@@ -3197,11 +3212,13 @@ void CardLoginMountSessionCore::unmount_container_impl(
     SESSION_TRACE(allow_force ? "强制卸载安全盘" : "卸载安全盘", container_text(container));
     try {
       if (allow_force) {
-        const volume::UnmountEscalationResult result = runtime_.unmount_forced(drive_letter);
+        const volume::UnmountEscalationResult result = batch_item
+            ? runtime_.unmount_forced_batch_item(drive_letter) : runtime_.unmount_forced(drive_letter);
         SESSION_TRACE("卸载返回", "已升级为强制 " + yes_no(result.forced) + "；" +
                                       unmount_result_text(result.result));
       } else {
-        const volume::UnmountResult result = runtime_.unmount(drive_letter);
+        const volume::UnmountResult result = batch_item
+            ? runtime_.unmount_batch_item(drive_letter) : runtime_.unmount(drive_letter);
         SESSION_TRACE("卸载返回", unmount_result_text(result));
       }
       mark_released(container);

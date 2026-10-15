@@ -1,5 +1,6 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "usb_vault/volume/volume_provider.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 #include <Windows.h>
 #include <stdexcept>
@@ -61,6 +62,7 @@ class NativePartitionServices final : public IUiPartitionServices {
   bool open_this_pc() noexcept override {
     return open_explorer(L"shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
   }
+  void refresh_drive_list() noexcept override { volume::refresh_drive_list(); }
  private:
   // Explorer is started by its full path rather than by opening the drive
   // root, whose default verb an autorun entry on the volume could replace.

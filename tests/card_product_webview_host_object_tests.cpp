@@ -4312,7 +4312,37 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   int this_pc_calls{};
   bool open_drive_in_explorer(const wchar_t letter) noexcept override { opened_drives.push_back(letter); return tool_success; }
   bool open_this_pc() noexcept override { ++this_pc_calls; return tool_success; }
+  std::atomic<int> drive_refreshes{0};
+  void refresh_drive_list() noexcept override { ++drive_refreshes; }
 };
+
+void test_unmount_batch_refreshes_this_pc_once() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  for (const auto* name : {L"one.hc", L"two.hc", L"three.hc"})
+    static_cast<void>(fixture.volume.adopt(name, 64ULL * 1024 * 1024));
+  for (auto& entry : fixture.volume.containers) entry.mounted = true;
+  usb_vault::ui::CreationWorkState work;
+  FakePartitionServices services;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, &g_close_sink, &host, nullptr, &work, nullptr, &services)),
+          "refresh host failed");
+  const auto run = [&](const wchar_t* name, const wchar_t* selection) {
+    VARIANT value{}; value.vt = VT_BSTR; value.bstrVal = ::SysAllocString(selection);
+    DISPPARAMS arguments{&value, nullptr, 1, 0};
+    const HRESULT hr = host->Invoke(member_id(*host.Get(), name), IID_NULL, LOCALE_INVARIANT,
+        DISPATCH_METHOD, &arguments, nullptr, nullptr, nullptr);
+    ::VariantClear(&value);
+    require(hr == S_OK, "refresh batch did not start");
+    for (int i = 0; work.running.load() && i < 2000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(), "refresh batch did not finish");
+  };
+  run(L"beginUnmountBatch", L"1,2,3");
+  require(services.drive_refreshes.load() == 1 && !fixture.volume.containers[0].mounted &&
+          !fixture.volume.containers[2].mounted, "unmount batch refreshed This PC other than once at the end");
+  run(L"beginMountBatch", L"1,2");
+  require(services.drive_refreshes.load() == 1, "mount batch refreshed This PC");
+}
 
 void test_explorer_opens_only_a_mounted_session_container() {
   Fixture fixture;
@@ -4781,6 +4811,7 @@ int main() {
     test_bitlocker_creation_gate();
     test_partition_selection_lifecycle();
     test_explorer_opens_only_a_mounted_session_container();
+    test_unmount_batch_refreshes_this_pc_once();
     test_partition_resume_pause_and_revocation();
     test_partition_creation_snapshot_and_epoch();
     test_partition_creation_snapshot_and_epoch(L"beginPartitionConversion");
