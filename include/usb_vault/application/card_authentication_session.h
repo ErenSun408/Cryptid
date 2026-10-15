@@ -51,6 +51,9 @@ class CardAuthenticationSession final
   void establish(security::SecureBuffer root_secret);
   void clear_authentication() noexcept override;
   [[nodiscard]] bool authenticated() const noexcept override;
+  // Changes with every establishment, so state held for one login can tell
+  // that it no longer belongs to the current one. Carries no secret.
+  [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
 
  private:
   friend class detail::CardLoginMountSessionCore;

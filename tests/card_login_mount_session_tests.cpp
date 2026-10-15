@@ -757,12 +757,26 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
            encrypted_exports.size();
   }
 
+  std::wstring import_package(const std::wstring_view package,
+                              const usb_vault::security::SecureBuffer& password,
+                              const wchar_t drive_letter,
+                              const std::wstring_view relative_directory,
+                              const std::function<bool()>&,
+                              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) override {
+    imports.push_back({std::wstring(package),
+                       std::wstring(1, drive_letter) + L"|" + std::wstring(relative_directory),
+                       password.size()});
+    if (fail_copy) throw std::runtime_error("the import failed");
+    return L"Docs";
+  }
+
   struct EncryptedExport final {
     std::wstring source;
     std::wstring destination;
     std::size_t password_bytes{};
   };
   std::vector<EncryptedExport> encrypted_exports;
+  std::vector<EncryptedExport> imports;
 
   VolumeDirectoryListing listing;
   bool fail_copy{};
@@ -4114,6 +4128,59 @@ void test_an_encrypted_export_leaves_no_trace_and_refuses_containers() {
   nothing_was_written("a refused encrypted export left a local trace");
 }
 
+// P5.9: an encrypted import names its destination by container and
+// directory, refuses an unmounted container, and leaves nothing behind.
+void test_an_encrypted_import_reaches_a_mounted_container_without_a_trace() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t idle = session.create_container(
+      L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+  session.unmount_container(idle);
+  const std::size_t events_before = session.operation_history().size();
+  const std::size_t runtime_events_before = runtime.events.size();
+  const int index_writes_before = runtime.index_writes;
+  const auto nothing_was_written = [&](const char* const message) {
+    require(session.operation_history().size() == events_before &&
+                runtime.events.size() == runtime_events_before &&
+                runtime.index_writes == index_writes_before,
+            message);
+  };
+  const SecureBuffer password = bytes("export password 123");
+
+  require(session.import_package_into_container(id, L"reports", L"D:\\In\\pkg", password, {}, {}) ==
+              L"Docs",
+          "the import did not return the restored name");
+  require(runtime.imports.size() == 1 && runtime.imports[0].source == L"D:\\In\\pkg" &&
+              runtime.imports[0].destination == L"X|reports" &&
+              runtime.imports[0].password_bytes == password.size(),
+          "the import did not reach the storage layer as resolved");
+  nothing_was_written("an encrypted import left a local trace");
+
+  runtime.fail_copy = true;
+  require_throws<std::runtime_error>(
+      [&] { static_cast<void>(session.import_package_into_container(id, L"", L"D:\\pkg", password, {}, {})); },
+      "a failing import did not report the failure");
+  runtime.fail_copy = false;
+  nothing_was_written("a failed encrypted import left a local trace");
+
+  const std::size_t calls = runtime.imports.size();
+  require_throws_plain_logic_error(
+      [&] { static_cast<void>(session.import_package_into_container(idle, L"", L"D:\\pkg", password, {}, {})); },
+      "an import into an unmounted container was accepted");
+  require_throws<std::invalid_argument>(
+      [&] { static_cast<void>(session.import_package_into_container(id, L"..", L"D:\\pkg", password, {}, {})); },
+      "an import directory leaving the volume was accepted");
+  require_throws<std::invalid_argument>(
+      [&] { static_cast<void>(session.import_package_into_container(id, L"", L"D:\\pkg", SecureBuffer{}, {}, {})); },
+      "an import without a password was accepted");
+  require(runtime.imports.size() == calls, "a refused import still reached the storage layer");
+  nothing_was_written("a refused encrypted import left a local trace");
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -5126,6 +5193,7 @@ int main() {
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
+    test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();
     test_an_export_into_a_container_is_refused_as_a_copy();
     test_an_export_location_that_is_not_one_never_reaches_the_disk();
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();

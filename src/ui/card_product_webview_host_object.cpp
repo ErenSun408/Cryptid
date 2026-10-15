@@ -72,6 +72,8 @@ constexpr DISPID kOpenCardBackupId = 230;
 constexpr DISPID kBeginEncryptedExportId = 140;
 constexpr DISPID kEncryptedTransferStatusId = 141;
 constexpr DISPID kCancelEncryptedTransferId = 142;
+constexpr DISPID kChooseImportPackageId = 143;
+constexpr DISPID kBeginEncryptedImportId = 144;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -562,6 +564,8 @@ class PasswordArgumentsWiper final {
     case kBeginEncryptedExportId: return "beginEncryptedExport";
     case kEncryptedTransferStatusId: return "encryptedTransferStatus";
     case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
+    case kChooseImportPackageId: return "chooseImportPackage";
+    case kBeginEncryptedImportId: return "beginEncryptedImport";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -756,6 +760,8 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginEncryptedExport")) { ids[0] = kBeginEncryptedExportId; return S_OK; }
     if (matches(names[0], L"encryptedTransferStatus")) { ids[0] = kEncryptedTransferStatusId; return S_OK; }
     if (matches(names[0], L"cancelEncryptedTransfer")) { ids[0] = kCancelEncryptedTransferId; return S_OK; }
+    if (matches(names[0], L"chooseImportPackage")) { ids[0] = kChooseImportPackageId; return S_OK; }
+    if (matches(names[0], L"beginEncryptedImport")) { ids[0] = kBeginEncryptedImportId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1580,6 +1586,24 @@ class CardProductWebViewHostObject final : public IDispatch {
                                             argument_error);
       case kBeginEncryptedExportId:
         return begin_encrypted_export(parameters, result, argument_error);
+      case kChooseImportPackageId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result == nullptr) return E_POINTER;
+        if (creation_work_->interrupted.load() ||
+            controller_.state() != CardProductUiState::authenticated) {
+          return E_ACCESSDENIED;
+        }
+        try {
+          const std::wstring name = controller_.choose_import_package();
+          ::VariantInit(result);
+          return complete_string(name.c_str(), static_cast<UINT>(name.size()), result);
+        } catch (...) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "选择导入包失败", "");
+          return E_FAIL;
+        }
+      }
+      case kBeginEncryptedImportId:
+        return begin_encrypted_import(parameters, result, argument_error);
       case kEncryptedTransferStatusId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (result == nullptr) return E_POINTER;
@@ -1594,13 +1618,15 @@ class CardProductWebViewHostObject final : public IDispatch {
           encrypted_done_.store(0);
           encrypted_total_.store(0);
           encrypted_error_.store(0);
+          encrypted_phase_.store(0);
         }
         try {
           const std::wstring packed =
               std::to_wstring(encrypted_state_.load()) + L"," +
               std::to_wstring(encrypted_done_.load()) + L"," +
               std::to_wstring(encrypted_total_.load()) + L"," +
-              std::to_wstring(encrypted_error_.load());
+              std::to_wstring(encrypted_error_.load()) + L"," +
+              std::to_wstring(encrypted_phase_.load());
           ::VariantInit(result);
           return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
         } catch (...) { return E_FAIL; }
@@ -1840,15 +1866,61 @@ class CardProductWebViewHostObject final : public IDispatch {
            package_name = std::wstring(package_name), password = std::move(password),
            confirmation = std::move(confirmation)](
               const std::function<bool()>& cancelled,
-              const std::function<void(std::uint64_t, std::uint64_t)>& progress) mutable {
+              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
             controller_.export_container_entry_encrypted(
                 id, relative_directory, name, destination_directory, package_name,
-                password.bytes(), confirmation.bytes(), cancelled, progress);
+                password.bytes(), confirmation.bytes(), cancelled,
+                [&progress](const std::uint64_t done, const std::uint64_t total) {
+                  progress(2, done, total);
+                });
           },
           result);
     } catch (...) {
       USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
       wipe_available_arguments(parameters, 2);
+      return E_FAIL;
+    }
+  }
+
+  // Three arguments: the container, the directory shown, and the export
+  // password as a byte array. The package is the one picked through
+  // chooseImportPackage, which the controller holds and consumes.
+  HRESULT begin_encrypted_import(DISPPARAMS* const parameters, VARIANT* const result,
+                                 UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 3 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      security::SecureBuffer password = consume_webview_password_array(parameters->rgvarg[0]);
+      std::uint32_t id = 0;
+      std::wstring_view relative_directory;
+      if (!exact_uint32(parameters->rgvarg[2], id) ||
+          !exact_wstring(parameters->rgvarg[1], relative_directory) || password.empty()) {
+        if (argument_error != nullptr) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      if (creation_work_->interrupted.load() ||
+          controller_.state() != CardProductUiState::authenticated) {
+        return E_ACCESSDENIED;
+      }
+      // Taken here, on the page's thread, so the worker never shares the pick.
+      std::wstring package = controller_.take_import_package();
+      if (package.empty()) return E_ACCESSDENIED;
+      return begin_encrypted_transfer(
+          [this, id, relative_directory = std::wstring(relative_directory),
+           package = std::move(package), password = std::move(password)](
+              const std::function<bool()>& cancelled,
+              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+            static_cast<void>(controller_.import_package_into_container(
+                id, relative_directory, package, password.bytes(), cancelled, progress));
+          },
+          result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      wipe_available_arguments(parameters, 1);
       return E_FAIL;
     }
   }
@@ -1903,6 +1975,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     encrypted_done_.store(0);
     encrypted_total_.store(0);
     encrypted_error_.store(encrypted_failure_none);
+    encrypted_phase_.store(0);
     encrypted_state_.store(1);
     creation_work_->finish();
     creation_work_->volume_operation.store(true);
@@ -1915,10 +1988,12 @@ class CardProductWebViewHostObject final : public IDispatch {
           return encrypted_cancel_.load() || creation_work_->interrupted.load() ||
                  creation_work_->card_epoch.load() != epoch;
         };
-        const auto progress = [this](const std::uint64_t done, const std::uint64_t total) {
-          encrypted_total_.store(total);
-          encrypted_done_.store(done);
-        };
+        const std::function<void(unsigned int, std::uint64_t, std::uint64_t)> progress =
+            [this](const unsigned int phase, const std::uint64_t done, const std::uint64_t total) {
+              encrypted_phase_.store(phase);
+              encrypted_total_.store(total);
+              encrypted_done_.store(done);
+            };
         unsigned int state = 2;
         try {
           operation(cancelled, progress);
@@ -3741,6 +3816,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::atomic<std::uint64_t> encrypted_total_{0};
   std::atomic<unsigned int> encrypted_error_{0};
   std::atomic<std::uint64_t> encrypted_epoch_{0};
+  std::atomic<unsigned int> encrypted_phase_{0};  // 1 verifying, 2 writing
   std::mutex survey_mutex_;
   std::vector<std::uint32_t> survey_found_;
   std::uint64_t survey_epoch_{};

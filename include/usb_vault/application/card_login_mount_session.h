@@ -506,6 +506,19 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("encrypted export is unavailable");
   }
 
+  // P5.9 encrypted import into a directory of a container mounted normally
+  // (not open for decoy maintenance). The whole package is authenticated
+  // before anything is written; the entry is then restored under a hidden
+  // staging name and renamed into place without replacing anything, and a
+  // failure removes only what this import wrote. Returns the restored name.
+  // Nothing about the call is written down.
+  virtual std::wstring import_package_into_container(
+      std::uint32_t, std::wstring_view, std::wstring_view,
+      const security::SecureBuffer&, const std::function<bool()>&,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("encrypted import is unavailable");
+  }
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -666,6 +679,11 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       std::wstring_view package_name, const security::SecureBuffer& password_utf8,
       const std::function<bool()>& cancelled,
       const std::function<void(std::uint64_t, std::uint64_t)>& progress) override;
+  std::wstring import_package_into_container(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view absolute_package, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   // Native owner only, never concurrent with session workers. No driver IO.
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;

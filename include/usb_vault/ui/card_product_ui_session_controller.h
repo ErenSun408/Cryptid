@@ -293,6 +293,25 @@ class CardProductUiSessionController final {
       const std::function<bool()>& cancelled,
       const std::function<void(std::uint64_t, std::uint64_t)>& progress);
 
+  // P5.9: lets the user pick a package to import. The path is held here, in
+  // memory only and for this login only, and never crosses to the page; the
+  // file name is returned so the page can show what was picked. Empty when
+  // cancelled.
+  [[nodiscard]] std::wstring choose_import_package();
+
+  // Hands over the pick and forgets it. Empty when nothing was picked, or when
+  // the pick was made under another login than the current one, so a package
+  // chosen before a logout can never be imported after the next login.
+  [[nodiscard]] std::wstring take_import_package();
+
+  // Imports a taken package into a directory of a mounted container. The
+  // password buffer is wiped on every path.
+  std::wstring import_package_into_container(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view package, std::span<std::byte> mutable_password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+
   // The settings switches, both of them the same shape. Reading one needs no
   // session, so the page can show them in their real positions before anyone
   // logs in; changing one does, because the change is a session action like
@@ -359,6 +378,8 @@ class CardProductUiSessionController final {
   application::IAuthenticatedCardVolumeSession& volume_session_;
   const security::IPasswordStrengthPolicy& password_policy_;
   IContainerFileChooser& file_chooser_;
+  std::wstring pending_import_package_;
+  std::uint64_t pending_import_generation_{};
 };
 
 }  // namespace usb_vault::ui

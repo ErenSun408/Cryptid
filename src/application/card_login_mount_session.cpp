@@ -1,5 +1,6 @@
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/backup/export_package_file.h"
+#include "usb_vault/backup/import_package_v1.h"
 
 #include "application/card_login_mount_session_internal.h"
 #include "usb_vault/application/card_authentication_session.h"
@@ -357,6 +358,17 @@ class ProductionCardLoginMountSessionRuntime final
                               const std::function<bool()>& cancelled,
                               const std::function<void(std::uint64_t, std::uint64_t)>& progress) override {
     backup::export_package_to_file_v1(source, destination, password_utf8, cancelled, progress);
+  }
+
+  std::wstring import_package(const std::wstring_view absolute_package,
+                              const security::SecureBuffer& password_utf8,
+                              const wchar_t drive_letter,
+                              const std::wstring_view relative_directory,
+                              const std::function<bool()>& cancelled,
+                              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override {
+    backup::ImportPackageV1 package(absolute_package);
+    static_cast<void>(package.verify(password_utf8, cancelled, progress));
+    return package.write_into(password_utf8, drive_letter, relative_directory, cancelled, progress);
   }
 
   void copy_entry(const std::wstring_view absolute_source,
@@ -885,6 +897,20 @@ void CardLoginMountSession::export_container_entry_encrypted(
         impl_->core.export_container_entry_encrypted(
             id, relative_directory, name, absolute_destination_directory,
             package_name, password_utf8, cancelled, progress);
+      });
+}
+
+std::wstring CardLoginMountSession::import_package_into_container(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view absolute_package,
+    const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  // Only the container number is traced, as for the encrypted export.
+  return traced_call("加密导入条目", [&] { return "安全盘 #" + std::to_string(id); },
+      [&] {
+        return impl_->core.import_package_into_container(
+            id, relative_directory, absolute_package, password_utf8, cancelled, progress);
       });
 }
 
@@ -3354,6 +3380,36 @@ void CardLoginMountSessionCore::export_container_entry_encrypted(
   // No `record_operation`, and no trace of the source or the destination.
   runtime_.export_encrypted_entry(source, destination, password_utf8, cancelled,
                                   progress);
+}
+
+std::wstring CardLoginMountSessionCore::import_package_into_container(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view absolute_package,
+    const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error("an encrypted import requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument("no container is adopted under that identifier");
+  }
+  if (!entry->mounted) {
+    throw std::logic_error("that container is not mounted, so it cannot be imported into");
+  }
+  // A decoy maintenance volume takes outside files only through its own
+  // protected path; this one would write past that protection.
+  if (entry->maintenance) {
+    throw std::logic_error("an encrypted import does not write into a maintenance volume");
+  }
+  if (password_utf8.empty()) {
+    throw std::invalid_argument("an encrypted import needs a password");
+  }
+  static_cast<void>(volume::resolve_volume_entry_path(entry->drive_letter, relative_directory));
+  // No `record_operation`, and no trace of the package or the destination.
+  return runtime_.import_package(absolute_package, password_utf8, entry->drive_letter,
+                                 relative_directory, cancelled, progress);
 }
 
 void CardLoginMountSessionCore::export_container_file(

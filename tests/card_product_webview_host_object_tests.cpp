@@ -581,6 +581,22 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
   std::vector<ExportCall> encrypted_exports;
 
+  std::wstring import_package_into_container(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view package,
+      const usb_vault::security::SecureBuffer&,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override {
+    progress(1, 10, 10);
+    if (cancelled()) throw std::system_error(ERROR_CANCELLED, std::system_category());
+    progress(2, 10, 10);
+    imports.push_back({.id = id,
+                       .directory = std::wstring(relative_directory),
+                       .destination = std::wstring(package)});
+    return L"Docs";
+  }
+  std::vector<ExportCall> imports;
+
   std::vector<ExportCall> exported_entries;
   std::vector<ExportCall> exported_files;
 
@@ -851,8 +867,13 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
+  [[nodiscard]] std::wstring choose_import_package() override {
+    return import_path;
+  }
+
   std::wstring directory_path;
   std::wstring existing_path;
+  std::wstring import_path;
   int directory_calls{};
   int existing_calls{};
 };
@@ -3555,8 +3576,8 @@ void test_an_encrypted_export_runs_on_the_worker() {
 
   require(start("long enough export pass", "long enough export pazz") == S_OK,
           "a mismatched export did not start its worker");
-  require(settle() == L"3,0,0,2", "a mismatched export password was not reported as such");
-  require(start("short", "short") == S_OK && settle() == L"3,0,0,3",
+  require(settle() == L"3,0,0,2,0", "a mismatched export password was not reported as such");
+  require(start("short", "short") == S_OK && settle() == L"3,0,0,3,0",
           "a weak export password was not reported as such");
   require(fixture.volume.encrypted_exports.empty(), "a refused export reached the session");
 
@@ -3580,7 +3601,7 @@ void test_an_encrypted_export_runs_on_the_worker() {
   require(fixture.volume.encrypted_exports.empty(), "a cancelled export completed anyway");
 
   require(start("long enough export pass", "long enough export pass") == S_OK &&
-              settle() == L"2,40,40,0",
+              settle() == L"2,40,40,0,2",
           "a completed export did not report its progress and success");
   require(fixture.volume.encrypted_exports.size() == 1 &&
               fixture.volume.encrypted_exports[0].id == 3 &&
@@ -3592,7 +3613,7 @@ void test_an_encrypted_export_runs_on_the_worker() {
   // A new card insertion retires the outcome: a later login must not learn
   // that an export happened, or how large it was.
   work.card_epoch.fetch_add(1);
-  require(status() == L"0,0,0,0", "a finished export outlived the card insertion that ran it");
+  require(status() == L"0,0,0,0,0", "a finished export outlived the card insertion that ran it");
 
   // A mistyped argument is refused, and the passwords are still wiped.
   std::array<VARIANTARG, 7> mistyped{};
@@ -3619,6 +3640,48 @@ void test_an_encrypted_export_runs_on_the_worker() {
   require_array_wiped(short_call[1], 23, "a refused export password survived the bridge");
   require_array_wiped(short_call[0], 23, "a refused export confirmation survived the bridge");
   clear_arguments(short_call.data(), 2);
+}
+
+// P5.9: an import is picked natively, so the page sees a file name and never
+// the path, and it runs on the worker like an export.
+void test_an_encrypted_import_runs_on_the_worker() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  fixture.chooser.import_path = L"E:\\Backups\\family photos";
+  VARIANT picked{};
+  require(invoke_named(*host.Get(), L"chooseImportPackage", nullptr, 0, &picked, nullptr) == S_OK &&
+              picked.vt == VT_BSTR &&
+              std::wstring(picked.bstrVal, ::SysStringLen(picked.bstrVal)) == L"family photos",
+          "the page was not given only the picked file name");
+  static_cast<void>(::VariantClear(&picked));
+
+  std::array<VARIANTARG, 3> values{};
+  values[2] = number_argument(5);
+  values[1] = text_argument(L"in");
+  initialize_byte_array(values[0], bytes("long enough export pass"));
+  VARIANT started{};
+  require(invoke_named(*host.Get(), L"beginEncryptedImport", values.data(), 3, &started, nullptr) == S_OK,
+          "the import did not start");
+  require_array_wiped(values[0], 23, "the import password survived the bridge");
+  clear_arguments(values.data(), 3);
+  static_cast<void>(::VariantClear(&started));
+
+  std::wstring text;
+  for (int i = 0; i < 4000; ++i) {
+    VARIANT value{};
+    require(invoke_named(*host.Get(), L"encryptedTransferStatus", nullptr, 0, &value, nullptr) == S_OK,
+            "the import status was unavailable");
+    text.assign(value.bstrVal, ::SysStringLen(value.bstrVal));
+    static_cast<void>(::VariantClear(&value));
+    if (!text.starts_with(L"1,")) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(text == L"2,10,10,0,2", "the import did not finish in its write phase");
+  require(fixture.volume.imports.size() == 1 && fixture.volume.imports[0].id == 5 &&
+              fixture.volume.imports[0].directory == L"in" &&
+              fixture.volume.imports[0].destination == L"E:\\Backups\\family photos",
+          "the import crossed the bridge out of order");
 }
 
 // The two exports cross the bridge like everything else: the container by
@@ -4549,6 +4612,7 @@ int main() {
     test_operation_history_query_failures_do_not_invent_facts();
     test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
     test_an_encrypted_export_runs_on_the_worker();
+    test_an_encrypted_import_runs_on_the_worker();
     test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password();
     test_opening_maintenance_runs_on_the_volume_worker();
     test_maintenance_facts_are_async_current_and_session_scoped();

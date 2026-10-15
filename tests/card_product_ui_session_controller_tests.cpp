@@ -436,6 +436,20 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::vector<ExportCall> encrypted_exports;
   std::vector<std::byte> encrypted_password;
 
+  std::wstring import_package_into_container(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view package,
+      const usb_vault::security::SecureBuffer& password,
+      const std::function<bool()>&,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) override {
+    imports.push_back({.id = id,
+                       .directory = std::wstring(relative_directory),
+                       .destination = std::wstring(package)});
+    encrypted_password.assign(password.bytes().begin(), password.bytes().end());
+    return L"Docs";
+  }
+  std::vector<ExportCall> imports;
+
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
     ++container_statuses_calls;
@@ -742,8 +756,13 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
+  [[nodiscard]] std::wstring choose_import_package() override {
+    return import_path;
+  }
+
   std::wstring directory_path;
   std::wstring existing_path;
+  std::wstring import_path;
   int directory_calls{};
   int existing_calls{};
 };
@@ -2178,6 +2197,47 @@ void test_encrypted_export_confirms_the_password_first() {
           "the encrypted export did not reach the session with its confirmed password");
 }
 
+// P5.9: the picked package path stays in the controller and reaches only the
+// session; the page sees its file name. A pick is consumed by one import.
+void test_an_import_uses_the_picked_package_once() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  fixture.chooser.import_path = L"E:\\Backups\\family photos";
+  require(fixture.controller.choose_import_package() == L"family photos",
+          "the page was not shown the picked file name");
+
+  std::vector<std::byte> password = bytes("long enough export pass");
+  const std::wstring taken = fixture.controller.take_import_package();
+  require(taken == L"E:\\Backups\\family photos" && fixture.controller.take_import_package().empty(),
+          "a pick was not handed over exactly once");
+  require(fixture.controller.import_package_into_container(5, L"in", taken, password, {}, {}) == L"Docs",
+          "the import did not return the restored name");
+  require(std::ranges::all_of(password, [](std::byte b) { return b == std::byte{0}; }),
+          "the import password was not wiped");
+  require(fixture.volume.imports.size() == 1 && fixture.volume.imports[0].id == 5 &&
+              fixture.volume.imports[0].directory == L"in" &&
+              fixture.volume.imports[0].destination == L"E:\\Backups\\family photos",
+          "the import did not carry the picked package to the session");
+
+  std::vector<std::byte> again = bytes("long enough export pass");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.import_package_into_container(5, L"in", L"", again, {}, {})); },
+      "an import without a package was accepted");
+  require(std::ranges::all_of(again, [](std::byte b) { return b == std::byte{0}; }),
+          "a refused import password was not wiped");
+
+  // A pick belongs to the login it was made under.
+  require(fixture.controller.choose_import_package() == L"family photos", "the second pick failed");
+  fixture.authentication.clear_authentication();
+  fixture.authentication.establish(root_secret());
+  require(fixture.controller.take_import_package().empty(),
+          "a pick made before a new login was handed over after it");
+
+  fixture.chooser.import_path.clear();
+  require(fixture.controller.choose_import_package().empty(), "a cancelled pick named a file");
+  require(fixture.volume.imports.size() == 1, "a refused import reached the session");
+}
+
 void test_exports_reach_the_session_unchanged() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2283,6 +2343,7 @@ int main() {
     test_exports_are_refused_off_the_authenticated_route();
     test_exports_reach_the_session_unchanged();
     test_encrypted_export_confirms_the_password_first();
+    test_an_import_uses_the_picked_package_once();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

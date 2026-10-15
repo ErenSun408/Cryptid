@@ -199,6 +199,18 @@ usb_vault_configure_target(export_package_file_tests)
 
 add_test(NAME export_package_file_tests COMMAND export_package_file_tests)
 
+add_executable(import_package_v1_tests
+  import_package_v1_tests.cpp
+)
+
+target_link_libraries(import_package_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(import_package_v1_tests)
+
+add_test(NAME import_package_v1_tests COMMAND import_package_v1_tests)
+
 add_executable(card_record_service_tests
   card_record_service_tests.cpp
 )

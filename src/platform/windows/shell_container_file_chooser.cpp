@@ -12,6 +12,7 @@ namespace {
 
 constexpr wchar_t kContainerDirectoryTitle[] = L"选择加密盘的保存位置";
 constexpr wchar_t kExistingContainerTitle[] = L"选择要打开的加密盘文件";
+constexpr wchar_t kImportPackageTitle[] = L"选择要导入的加密导出包";
 constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
     {L"安全盘文件", L"*.hc;*.sys;*.dat;*.bin"},
     {L"所有文件", L"*.*"},
@@ -146,6 +147,12 @@ std::wstring ShellContainerFileChooser::choose_container_directory() {
 std::wstring ShellContainerFileChooser::choose_existing_container() {
   return run_dialog(owner_, CLSID_FileOpenDialog, FOS_FILEMUSTEXIST,
                     kExistingContainerTitle, true);
+}
+
+// A package has no fixed extension, so no type filter is offered.
+std::wstring ShellContainerFileChooser::choose_import_package() {
+  return run_dialog(owner_, CLSID_FileOpenDialog, FOS_FILEMUSTEXIST,
+                    kImportPackageTitle, false);
 }
 
 }  // namespace usb_vault::platform::windows

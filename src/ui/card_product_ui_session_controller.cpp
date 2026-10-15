@@ -642,6 +642,47 @@ void CardProductUiSessionController::export_container_entry_encrypted(
       password, cancelled, progress);
 }
 
+std::wstring CardProductUiSessionController::choose_import_package() {
+  pending_import_package_.clear();
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("importing a package is not available in the current UI state");
+  }
+  std::wstring path = file_chooser_.choose_import_package();
+  if (path.empty()) return {};
+  const std::size_t separator = path.find_last_of(L"\\/");
+  std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
+  if (name.empty()) return {};
+  pending_import_package_ = std::move(path);
+  pending_import_generation_ = authentication_.generation();
+  return name;
+}
+
+std::wstring CardProductUiSessionController::take_import_package() {
+  std::wstring package = std::move(pending_import_package_);
+  pending_import_package_.clear();
+  if (state() != CardProductUiState::authenticated ||
+      pending_import_generation_ != authentication_.generation()) {
+    return {};
+  }
+  return package;
+}
+
+std::wstring CardProductUiSessionController::import_package_into_container(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view package, const std::span<std::byte> mutable_password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  MutableInputWiper wiper(mutable_password_utf8, {});
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("importing a package is not available in the current UI state");
+  }
+  if (package.empty()) throw std::logic_error("no import package has been picked");
+  security::SecureBuffer password = consume_password_utf8(mutable_password_utf8);
+  SecureBufferGuard password_guard(password);
+  return volume_session_.import_package_into_container(id, relative_directory, package,
+                                                       password, cancelled, progress);
+}
+
 void CardProductUiSessionController::move_container_entry(
     const std::uint32_t source_id,
     const std::wstring_view source_relative_directory,

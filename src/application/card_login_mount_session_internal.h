@@ -173,6 +173,14 @@ class CardLoginMountSessionRuntime {
                                       const std::function<void(std::uint64_t, std::uint64_t)>&) {
     throw std::logic_error("encrypted export is unavailable");
   }
+  // P5.9 import of a package into a directory of a mounted volume: verify
+  // first, then write. Returns the restored top-level name.
+  virtual std::wstring import_package(std::wstring_view, const security::SecureBuffer&,
+                                      wchar_t, std::wstring_view,
+                                      const std::function<bool()>&,
+                                      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("encrypted import is unavailable");
+  }
   virtual void copy_entry(std::wstring_view absolute_source,
                           std::wstring_view absolute_destination,
                           const volume::TransferCancellation& cancelled) = 0;
@@ -352,6 +360,11 @@ class CardLoginMountSessionCore final {
       std::wstring_view package_name, const security::SecureBuffer& password_utf8,
       const std::function<bool()>& cancelled,
       const std::function<void(std::uint64_t, std::uint64_t)>& progress);
+  std::wstring import_package_into_container(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view absolute_package, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;
