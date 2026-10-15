@@ -488,6 +488,24 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) = 0;
 
+  // P5.9 encrypted export. Packs one entry of a mounted container into a
+  // package that only this product opens, and only with `password_utf8`, at
+  // `absolute_destination_directory` under `package_name`, which must not be
+  // taken yet. The location rules are the plaintext export's: drive-absolute
+  // and not on a drive a container of this session is mounted on.
+  //
+  // The package carries the entry's own name and contents and nothing about
+  // the container, its kind, or the password the session was opened with.
+  // Nothing about the call is written down, for the same reason as the two
+  // exports above, and a failure leaves no partial package behind.
+  virtual void export_container_entry_encrypted(
+      std::uint32_t, std::wstring_view, std::wstring_view, std::wstring_view,
+      std::wstring_view, const security::SecureBuffer&,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("encrypted export is unavailable");
+  }
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -642,6 +660,12 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void export_container_file(
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
+  void export_container_entry_encrypted(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view name, std::wstring_view absolute_destination_directory,
+      std::wstring_view package_name, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   // Native owner only, never concurrent with session workers. No driver IO.
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;

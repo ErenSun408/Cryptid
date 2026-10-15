@@ -1,6 +1,8 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 #include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/application/container_index_v1.h"
+#include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/page_event_report.h"
 
 #include <chrono>
@@ -65,6 +67,14 @@ constexpr DISPID kBitLockerConfirmId = 117;
 constexpr DISPID kBitLockerHelpId = 118;
 constexpr DISPID kPartitionPairId = 119;
 constexpr DISPID kOpenCardBackupId = 230;
+// P5.9 encrypted transfers run on the shared session worker; while one runs,
+// only its status and its cancel are answered.
+constexpr DISPID kBeginEncryptedExportId = 140;
+constexpr DISPID kEncryptedTransferStatusId = 141;
+constexpr DISPID kCancelEncryptedTransferId = 142;
+bool is_encrypted_transfer_query(DISPID member) noexcept {
+  return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
+}
 constexpr DISPID kReturnToLoginId = 98;
 constexpr DISPID kExitApplicationId = 99;
 constexpr DISPID kCanLoginResetId = 90;
@@ -549,6 +559,9 @@ class PasswordArgumentsWiper final {
     case kBitLockerHelpId: return "openBitLockerHelp";
     case kOpenConfigurationId: return "openConfiguration";
     case kOpenCardBackupId: return "openCardBackup";
+    case kBeginEncryptedExportId: return "beginEncryptedExport";
+    case kEncryptedTransferStatusId: return "encryptedTransferStatus";
+    case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -740,6 +753,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getContainerExtension")) { ids[0] = kGetContainerExtensionId; return S_OK; }
     if (matches(names[0], L"setContainerExtension")) { ids[0] = kSetContainerExtensionId; return S_OK; }
     if (matches(names[0], L"openCardBackup")) { ids[0] = kOpenCardBackupId; return S_OK; }
+    if (matches(names[0], L"beginEncryptedExport")) { ids[0] = kBeginEncryptedExportId; return S_OK; }
+    if (matches(names[0], L"encryptedTransferStatus")) { ids[0] = kEncryptedTransferStatusId; return S_OK; }
+    if (matches(names[0], L"cancelEncryptedTransfer")) { ids[0] = kCancelEncryptedTransferId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1043,6 +1059,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         (creation_work_->volume_operation.load()
              ? (batch_mode_    ? !is_batch_query(member)
                 : survey_mode_ ? !is_survey_query(member)
+                : encrypted_mode_.load() ? !is_encrypted_transfer_query(member)
                                : member != kVolumeOperationStatusId)
              : member != kCreationProgressId &&
                    member != kCancelCreationId && member != kBitLockerProgressId &&
@@ -1561,6 +1578,37 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kExportContainerFileId:
         return invoke_export_container_file(parameters, result,
                                             argument_error);
+      case kBeginEncryptedExportId:
+        return begin_encrypted_export(parameters, result, argument_error);
+      case kEncryptedTransferStatusId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result == nullptr) return E_POINTER;
+        // A finished transfer belongs to the login that ran it. After the
+        // card changes or the session ends, its outcome and size are gone,
+        // so a later login cannot learn that an export happened.
+        if (!creation_work_->running.load() &&
+            (encrypted_epoch_.load() != creation_work_->card_epoch.load() ||
+             creation_work_->interrupted.load() ||
+             controller_.state() != CardProductUiState::authenticated)) {
+          encrypted_state_.store(0);
+          encrypted_done_.store(0);
+          encrypted_total_.store(0);
+          encrypted_error_.store(0);
+        }
+        try {
+          const std::wstring packed =
+              std::to_wstring(encrypted_state_.load()) + L"," +
+              std::to_wstring(encrypted_done_.load()) + L"," +
+              std::to_wstring(encrypted_total_.load()) + L"," +
+              std::to_wstring(encrypted_error_.load());
+          ::VariantInit(result);
+          return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+        } catch (...) { return E_FAIL; }
+      }
+      case kCancelEncryptedTransferId:
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        encrypted_cancel_.store(true);
+        return complete_selection(encrypted_state_.load() == 1, result);
       case kGetContainerCountId:
         return invoke_container_count(parameters, result);
       case kGetContainerIdId:
@@ -1739,6 +1787,165 @@ class CardProductWebViewHostObject final : public IDispatch {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       creation_work_->running.store(false);
       clear_batch();
+      return E_FAIL;
+    }
+  }
+
+  // Page-facing failure codes of an encrypted transfer. Role-neutral: none of
+  // them depends on which container or which login the transfer touched.
+  enum EncryptedFailure : unsigned int {
+    encrypted_failure_none = 0,
+    encrypted_failure_rejected = 1,
+    encrypted_failure_mismatch = 2,
+    encrypted_failure_weak = 3,
+    encrypted_failure_exists = 4,
+    encrypted_failure_space = 5,
+    encrypted_failure_source = 6,
+    encrypted_failure_other = 7,
+    encrypted_failure_target = 8,
+  };
+
+  // Seven arguments: container, directory, entry, location, package name, and
+  // the export password twice as byte arrays. Both arrays are consumed (and so
+  // wiped) before anything else is looked at.
+  HRESULT begin_encrypted_export(DISPPARAMS* const parameters, VARIANT* const result,
+                                 UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 7 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      security::SecureBuffer password = consume_webview_password_array(parameters->rgvarg[1]);
+      security::SecureBuffer confirmation = consume_webview_password_array(parameters->rgvarg[0]);
+      std::uint32_t id = 0;
+      std::wstring_view relative_directory, name, destination_directory, package_name;
+      if (!exact_uint32(parameters->rgvarg[6], id) ||
+          !exact_wstring(parameters->rgvarg[5], relative_directory) ||
+          !exact_wstring(parameters->rgvarg[4], name) ||
+          !exact_wstring(parameters->rgvarg[3], destination_directory) ||
+          !exact_wstring(parameters->rgvarg[2], package_name) || password.empty() ||
+          confirmation.empty()) {
+        if (argument_error != nullptr) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      if (creation_work_->interrupted.load() ||
+          controller_.state() != CardProductUiState::authenticated) {
+        return E_ACCESSDENIED;
+      }
+      return begin_encrypted_transfer(
+          [this, id, relative_directory = std::wstring(relative_directory),
+           name = std::wstring(name), destination_directory = std::wstring(destination_directory),
+           package_name = std::wstring(package_name), password = std::move(password),
+           confirmation = std::move(confirmation)](
+              const std::function<bool()>& cancelled,
+              const std::function<void(std::uint64_t, std::uint64_t)>& progress) mutable {
+            controller_.export_container_entry_encrypted(
+                id, relative_directory, name, destination_directory, package_name,
+                password.bytes(), confirmation.bytes(), cancelled, progress);
+          },
+          result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      wipe_available_arguments(parameters, 2);
+      return E_FAIL;
+    }
+  }
+
+  [[nodiscard]] static unsigned int encrypted_failure(const std::exception_ptr& failure) noexcept {
+    try {
+      std::rethrow_exception(failure);
+    } catch (const backup::ExportPackageRejected&) {
+      return encrypted_failure_rejected;
+    } catch (const security::PasswordConfirmationRejected& rejected) {
+      return rejected.reason() == security::PasswordConfirmationRejection::mismatch
+                 ? encrypted_failure_mismatch : encrypted_failure_weak;
+    } catch (const std::system_error& error) {
+      if (error.code().category() == std::system_category()) {
+        switch (error.code().value()) {
+          case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS: return encrypted_failure_exists;
+          case ERROR_DISK_FULL: case ERROR_HANDLE_DISK_FULL: case ERROR_FILE_TOO_LARGE:
+            return encrypted_failure_space;
+          default: break;
+        }
+      }
+      return encrypted_failure_other;
+    } catch (const std::invalid_argument&) {
+      return encrypted_failure_target;
+    } catch (const std::runtime_error&) {
+      return encrypted_failure_source;
+    } catch (...) {
+      return encrypted_failure_other;
+    }
+  }
+
+  [[nodiscard]] static bool cancelled_failure(const std::exception_ptr& failure) noexcept {
+    try {
+      std::rethrow_exception(failure);
+    } catch (const std::system_error& error) {
+      return error.code().category() == std::system_category() &&
+             error.code().value() == ERROR_CANCELLED;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  // Runs one encrypted transfer on the session worker. State: 1 running,
+  // 2 done, 3 failed (with a code), 4 cancelled. Card removal and session
+  // revocation cancel it exactly as the page's cancel does.
+  template <typename Operation>
+  HRESULT begin_encrypted_transfer(Operation operation, VARIANT* const result) {
+    if (creation_thread_.joinable()) creation_thread_.join();
+    const auto epoch = creation_work_->card_epoch.load();
+    encrypted_epoch_.store(epoch);
+    encrypted_cancel_.store(false);
+    encrypted_done_.store(0);
+    encrypted_total_.store(0);
+    encrypted_error_.store(encrypted_failure_none);
+    encrypted_state_.store(1);
+    creation_work_->finish();
+    creation_work_->volume_operation.store(true);
+    encrypted_mode_.store(true);
+    creation_work_->running.store(true);
+    try {
+      creation_thread_ = std::thread([this, epoch, operation = std::move(operation)]() mutable {
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const auto cancelled = [this, epoch] {
+          return encrypted_cancel_.load() || creation_work_->interrupted.load() ||
+                 creation_work_->card_epoch.load() != epoch;
+        };
+        const auto progress = [this](const std::uint64_t done, const std::uint64_t total) {
+          encrypted_total_.store(total);
+          encrypted_done_.store(done);
+        };
+        unsigned int state = 2;
+        try {
+          operation(cancelled, progress);
+        } catch (...) {
+          const auto failure = std::current_exception();
+          USB_VAULT_TRACE_FAILURE("页面桥", "加密传输失败", "");
+          if (cancelled_failure(failure)) {
+            state = 4;
+          } else {
+            state = 3;
+            encrypted_error_.store(encrypted_failure(failure));
+          }
+        }
+        if (SUCCEEDED(com)) ::CoUninitialize();
+        encrypted_state_.store(state);
+        // Running ends first: until it does, the gate must still let this
+        // transfer's own status and cancel through.
+        creation_work_->running.store(false);
+        encrypted_mode_.store(false);
+      });
+      return complete_selection(true, result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输线程未能启动", "");
+      encrypted_state_.store(3);
+      encrypted_error_.store(encrypted_failure_other);
+      encrypted_mode_.store(false);
+      creation_work_->running.store(false);
       return E_FAIL;
     }
   }
@@ -3527,6 +3734,13 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::uint64_t space_epoch_{};
   bool space_ready_{false};
   bool survey_mode_{false}; // Accessed only by the COM/window thread.
+  std::atomic<bool> encrypted_mode_{false};  // Cleared by the worker as it ends.
+  std::atomic<bool> encrypted_cancel_{false};
+  std::atomic<unsigned int> encrypted_state_{0};
+  std::atomic<std::uint64_t> encrypted_done_{0};
+  std::atomic<std::uint64_t> encrypted_total_{0};
+  std::atomic<unsigned int> encrypted_error_{0};
+  std::atomic<std::uint64_t> encrypted_epoch_{0};
   std::mutex survey_mutex_;
   std::vector<std::uint32_t> survey_found_;
   std::uint64_t survey_epoch_{};

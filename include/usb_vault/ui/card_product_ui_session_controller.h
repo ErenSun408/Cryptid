@@ -281,6 +281,18 @@ class CardProductUiSessionController final {
   void export_container_file(
       std::uint32_t id, std::wstring_view absolute_destination_directory);
 
+  // P5.9 encrypted export. The export password arrives twice in independent
+  // buffers, both wiped on every path, and must match and pass the offline
+  // password policy before anything is read: it protects a file that can be
+  // guessed against offline for as long as it exists.
+  void export_container_entry_encrypted(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view name, std::wstring_view absolute_destination_directory,
+      std::wstring_view package_name, std::span<std::byte> mutable_password_utf8,
+      std::span<std::byte> mutable_confirmation_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress);
+
   // The settings switches, both of them the same shape. Reading one needs no
   // session, so the page can show them in their real positions before anyone
   // logs in; changing one does, because the change is a session action like

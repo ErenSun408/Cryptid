@@ -739,10 +739,30 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (fail_copy) throw std::runtime_error("the copy failed");
   }
 
+  void export_encrypted_entry(const std::wstring_view source,
+                              const std::wstring_view destination,
+                              const usb_vault::security::SecureBuffer& password,
+                              const std::function<bool()>& cancelled,
+                              const std::function<void(std::uint64_t, std::uint64_t)>&) override {
+    if (cancelled && cancelled()) {
+      throw std::system_error(ERROR_CANCELLED, std::system_category());
+    }
+    encrypted_exports.push_back({std::wstring(source), std::wstring(destination), password.size()});
+    if (fail_copy) throw std::runtime_error("the encrypted export failed");
+  }
+
   [[nodiscard]] std::size_t storage_calls() const noexcept {
     return listed.size() + deleted.size() + created_directories.size() +
-           moved.size() + moved_by_copying.size() + copied.size();
+           moved.size() + moved_by_copying.size() + copied.size() +
+           encrypted_exports.size();
   }
+
+  struct EncryptedExport final {
+    std::wstring source;
+    std::wstring destination;
+    std::size_t password_bytes{};
+  };
+  std::vector<EncryptedExport> encrypted_exports;
 
   VolumeDirectoryListing listing;
   bool fail_copy{};
@@ -4019,6 +4039,81 @@ void test_a_shell_drop_needs_an_authenticated_session() {
   require(runtime.copied.empty(), "a drop copied without a card session");
 }
 
+// P5.9: the encrypted export reaches the storage layer with the resolved
+// entry and package path, refuses what the plaintext export refuses, and
+// leaves nothing behind whether it succeeds, fails or is refused.
+void test_an_encrypted_export_leaves_no_trace_and_refuses_containers() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::uint32_t id = session.create_container(
+      L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const std::uint32_t idle = session.create_container(
+      L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+  session.unmount_container(idle);
+  const std::size_t events_before = session.operation_history().size();
+  const std::size_t runtime_events_before = runtime.events.size();
+  const int index_writes_before = runtime.index_writes;
+  const auto nothing_was_written = [&](const char* const message) {
+    require(session.operation_history().size() == events_before &&
+                runtime.events.size() == runtime_events_before &&
+                runtime.index_writes == index_writes_before,
+            message);
+  };
+  const SecureBuffer password = bytes("export password 123");
+
+  session.export_container_entry_encrypted(id, L"reports", L"q1.txt", L"D:\\Out",
+                                           L"q1 package", password, {}, {});
+  require(runtime.encrypted_exports.size() == 1 &&
+              runtime.encrypted_exports[0].source == L"X:\\reports\\q1.txt" &&
+              runtime.encrypted_exports[0].destination == L"D:\\Out\\q1 package" &&
+              runtime.encrypted_exports[0].password_bytes == password.size(),
+          "the encrypted export did not reach the storage layer as resolved");
+  nothing_was_written("an encrypted export left a local trace");
+
+  runtime.fail_copy = true;
+  require_throws<std::runtime_error>(
+      [&] {
+        session.export_container_entry_encrypted(id, L"", L"q1.txt", L"D:\\Out",
+                                                 L"pkg", password, {}, {});
+      },
+      "a failing encrypted export did not report the failure");
+  runtime.fail_copy = false;
+  nothing_was_written("a failed encrypted export left a local trace");
+
+  const std::size_t calls = runtime.encrypted_exports.size();
+  for (const std::wstring_view inside : {L"X:\\", L"x:\\Out"}) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          session.export_container_entry_encrypted(id, L"", L"q1.txt", inside, L"pkg",
+                                                   password, {}, {});
+        },
+        "an encrypted export into a mounted container was accepted");
+  }
+  require_throws<std::invalid_argument>(
+      [&] {
+        session.export_container_entry_encrypted(id, L"", L"q1.txt", L"D:\\Out",
+                                                 L"sub\\pkg", password, {}, {});
+      },
+      "a package name that is a path was accepted");
+  require_throws<std::invalid_argument>(
+      [&] {
+        session.export_container_entry_encrypted(id, L"", L"q1.txt", L"D:\\Out",
+                                                 L"pkg", SecureBuffer{}, {}, {});
+      },
+      "an encrypted export without a password was accepted");
+  require_throws_plain_logic_error(
+      [&] {
+        session.export_container_entry_encrypted(idle, L"", L"q1.txt", L"D:\\Out",
+                                                 L"pkg", password, {}, {});
+      },
+      "an encrypted export from an unmounted container was accepted");
+  require(runtime.encrypted_exports.size() == calls,
+          "a refused encrypted export still reached the storage layer");
+  nothing_was_written("a refused encrypted export left a local trace");
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -5030,6 +5125,7 @@ int main() {
     test_renaming_stays_inside_one_directory();
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
+    test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_export_into_a_container_is_refused_as_a_copy();
     test_an_export_location_that_is_not_one_never_reaches_the_disk();
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();

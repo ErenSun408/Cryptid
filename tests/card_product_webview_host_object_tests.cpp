@@ -558,6 +558,29 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
          .destination = std::wstring(absolute_destination_directory)});
   }
 
+  void export_container_entry_encrypted(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view name,
+      const std::wstring_view absolute_destination_directory,
+      const std::wstring_view package_name,
+      const usb_vault::security::SecureBuffer&,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override {
+    await_volume_operation();
+    if (cancelled()) {
+      throw std::system_error(ERROR_CANCELLED, std::system_category());
+    }
+    progress(0, 40);
+    progress(40, 40);
+    encrypted_exports.push_back(
+        {.id = id,
+         .directory = std::wstring(relative_directory),
+         .name = std::wstring(name),
+         .destination = std::wstring(absolute_destination_directory) + L"|" +
+                        std::wstring(package_name)});
+  }
+  std::vector<ExportCall> encrypted_exports;
+
   std::vector<ExportCall> exported_entries;
   std::vector<ExportCall> exported_files;
 
@@ -3483,6 +3506,121 @@ void test_the_bridge_carries_each_file_manager_action() {
   clear_arguments(copy.data(), 5);
 }
 
+// P5.9: an encrypted export runs on the session worker. Its passwords are
+// wiped at the bridge, only its status and cancel answer while it runs, and
+// its outcome is a role-neutral state and code.
+void test_an_encrypted_export_runs_on_the_worker() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  usb_vault::ui::CreationWorkState work;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(
+              fixture.controller, nullptr, &host, nullptr, &work)),
+          "encrypted export host creation failed");
+  const auto start = [&](const std::string_view password, const std::string_view confirmation) {
+    std::array<VARIANTARG, 7> values{};
+    values[6] = number_argument(3);
+    values[5] = text_argument(L"reports");
+    values[4] = text_argument(L"q1.txt");
+    values[3] = text_argument(L"D:\\Out");
+    values[2] = text_argument(L"q1 package");
+    initialize_byte_array(values[1], bytes(password));
+    initialize_byte_array(values[0], bytes(confirmation));
+    VARIANT started{};
+    const HRESULT result = invoke_named(*host.Get(), L"beginEncryptedExport",
+                                        values.data(), 7, &started, nullptr);
+    require_array_wiped(values[1], password.size(), "the export password survived the bridge");
+    require_array_wiped(values[0], confirmation.size(), "the export confirmation survived the bridge");
+    static_cast<void>(::VariantClear(&started));
+    clear_arguments(values.data(), 7);
+    return result;
+  };
+  const auto status = [&] {
+    VARIANT value{};
+    require(invoke_named(*host.Get(), L"encryptedTransferStatus", nullptr, 0, &value, nullptr) == S_OK &&
+                value.vt == VT_BSTR,
+            "the encrypted transfer status was unavailable");
+    const std::wstring text(value.bstrVal, ::SysStringLen(value.bstrVal));
+    static_cast<void>(::VariantClear(&value));
+    return text;
+  };
+  const auto settle = [&] {
+    std::wstring text = status();
+    for (int i = 0; text.starts_with(L"1,") && i < 4000; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      text = status();
+    }
+    return text;
+  };
+
+  require(start("long enough export pass", "long enough export pazz") == S_OK,
+          "a mismatched export did not start its worker");
+  require(settle() == L"3,0,0,2", "a mismatched export password was not reported as such");
+  require(start("short", "short") == S_OK && settle() == L"3,0,0,3",
+          "a weak export password was not reported as such");
+  require(fixture.volume.encrypted_exports.empty(), "a refused export reached the session");
+
+  fixture.volume.pause_volume.store(true);
+  fixture.volume.volume_entered.store(false);
+  require(start("long enough export pass", "long enough export pass") == S_OK,
+          "the encrypted export did not start");
+  for (int i = 0; !fixture.volume.volume_entered.load() && i < 2000; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  VARIANT blocked{};
+  require(invoke_named(*host.Get(), L"getSessionState", nullptr, 0, &blocked, nullptr) == E_PENDING,
+          "the session answered while an encrypted export owned it");
+  require(status().starts_with(L"1,"), "a running export did not say so");
+  VARIANT cancelled{};
+  require(invoke_named(*host.Get(), L"cancelEncryptedTransfer", nullptr, 0, &cancelled, nullptr) == S_OK &&
+              cancelled.vt == VT_BOOL && cancelled.boolVal == VARIANT_TRUE,
+          "a running export could not be cancelled");
+  fixture.volume.pause_volume.store(false);
+  require(settle().starts_with(L"4,"), "a cancelled export was not reported as cancelled");
+  require(fixture.volume.encrypted_exports.empty(), "a cancelled export completed anyway");
+
+  require(start("long enough export pass", "long enough export pass") == S_OK &&
+              settle() == L"2,40,40,0",
+          "a completed export did not report its progress and success");
+  require(fixture.volume.encrypted_exports.size() == 1 &&
+              fixture.volume.encrypted_exports[0].id == 3 &&
+              fixture.volume.encrypted_exports[0].directory == L"reports" &&
+              fixture.volume.encrypted_exports[0].name == L"q1.txt" &&
+              fixture.volume.encrypted_exports[0].destination == L"D:\\Out|q1 package",
+          "the encrypted export crossed the bridge out of order");
+
+  // A new card insertion retires the outcome: a later login must not learn
+  // that an export happened, or how large it was.
+  work.card_epoch.fetch_add(1);
+  require(status() == L"0,0,0,0", "a finished export outlived the card insertion that ran it");
+
+  // A mistyped argument is refused, and the passwords are still wiped.
+  std::array<VARIANTARG, 7> mistyped{};
+  mistyped[6] = text_argument(L"3");
+  mistyped[5] = text_argument(L"reports");
+  mistyped[4] = text_argument(L"q1.txt");
+  mistyped[3] = text_argument(L"D:\\Out");
+  mistyped[2] = text_argument(L"pkg");
+  initialize_byte_array(mistyped[1], bytes("long enough export pass"));
+  initialize_byte_array(mistyped[0], bytes("long enough export pass"));
+  require(invoke_named(*host.Get(), L"beginEncryptedExport", mistyped.data(), 7, nullptr, nullptr) ==
+              DISP_E_TYPEMISMATCH,
+          "a mistyped encrypted export was accepted");
+  require_array_wiped(mistyped[1], 23, "a mistyped export password survived the bridge");
+  require_array_wiped(mistyped[0], 23, "a mistyped export confirmation survived the bridge");
+  clear_arguments(mistyped.data(), 7);
+
+  std::array<VARIANTARG, 2> short_call{};
+  initialize_byte_array(short_call[1], bytes("long enough export pass"));
+  initialize_byte_array(short_call[0], bytes("long enough export pass"));
+  require(invoke_named(*host.Get(), L"beginEncryptedExport", short_call.data(), 2, nullptr, nullptr) ==
+              DISP_E_BADPARAMCOUNT,
+          "an encrypted export with the wrong arity was accepted");
+  require_array_wiped(short_call[1], 23, "a refused export password survived the bridge");
+  require_array_wiped(short_call[0], 23, "a refused export confirmation survived the bridge");
+  clear_arguments(short_call.data(), 2);
+}
+
 // The two exports cross the bridge like everything else: the container by
 // identifier, and the location as text the session checks again.
 void test_the_bridge_carries_both_exports() {
@@ -4410,6 +4548,7 @@ int main() {
     test_operation_history_is_read_only_typed_and_clearable();
     test_operation_history_query_failures_do_not_invent_facts();
     test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
+    test_an_encrypted_export_runs_on_the_worker();
     test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password();
     test_opening_maintenance_runs_on_the_volume_worker();
     test_maintenance_facts_are_async_current_and_session_scoped();

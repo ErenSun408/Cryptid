@@ -16,8 +16,8 @@ namespace usb_vault::backup {
 // is refused with std::runtime_error before a byte is written. Following one
 // would pack whatever it names, which may be off the volume entirely.
 //
-// Throws std::invalid_argument when a name breaks a package rule, so the
-// export fails here rather than producing a package no import would accept,
+// Throws std::runtime_error when a name breaks a package rule, so the export
+// fails here rather than producing a package no import would accept,
 // std::length_error past the entry limit, and std::system_error for what the
 // file system refused, including ERROR_CANCELLED when asked to stop.
 [[nodiscard]] ExportManifest collect_export_manifest_v1(

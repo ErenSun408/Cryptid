@@ -614,6 +614,34 @@ void CardProductUiSessionController::export_container_file(
   volume_session_.export_container_file(id, absolute_destination_directory);
 }
 
+void CardProductUiSessionController::export_container_entry_encrypted(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name,
+    const std::wstring_view absolute_destination_directory,
+    const std::wstring_view package_name,
+    const std::span<std::byte> mutable_password_utf8,
+    const std::span<std::byte> mutable_confirmation_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  MutableInputWiper wiper(mutable_password_utf8, mutable_confirmation_utf8);
+  if (inputs_overlap(mutable_password_utf8, mutable_confirmation_utf8)) {
+    throw std::invalid_argument("export password inputs must be independent buffers");
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route(
+        "exporting an entry is not available in the current UI state");
+  }
+  security::SecureBuffer password =
+      std::move(security::confirm_password(
+                    password_policy_, consume_password_utf8(mutable_password_utf8),
+                    consume_password_utf8(mutable_confirmation_utf8)))
+          .take();
+  SecureBufferGuard password_guard(password);
+  volume_session_.export_container_entry_encrypted(
+      id, relative_directory, name, absolute_destination_directory, package_name,
+      password, cancelled, progress);
+}
+
 void CardProductUiSessionController::move_container_entry(
     const std::uint32_t source_id,
     const std::wstring_view source_relative_directory,

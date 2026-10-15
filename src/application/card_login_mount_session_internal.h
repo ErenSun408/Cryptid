@@ -166,6 +166,13 @@ class CardLoginMountSessionRuntime {
   virtual void copy_export_entry(std::wstring_view source, std::wstring_view destination) {
     copy_entry(source, destination, {});
   }
+  // P5.9 encrypted export of one entry to a package file that must not exist.
+  virtual void export_encrypted_entry(std::wstring_view, std::wstring_view,
+                                      const security::SecureBuffer&,
+                                      const std::function<bool()>&,
+                                      const std::function<void(std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("encrypted export is unavailable");
+  }
   virtual void copy_entry(std::wstring_view absolute_source,
                           std::wstring_view absolute_destination,
                           const volume::TransferCancellation& cancelled) = 0;
@@ -339,6 +346,12 @@ class CardLoginMountSessionCore final {
       std::wstring_view absolute_destination_directory);
   void export_container_file(
       std::uint32_t id, std::wstring_view absolute_destination_directory);
+  void export_container_entry_encrypted(
+      std::uint32_t id, std::wstring_view relative_directory,
+      std::wstring_view name, std::wstring_view absolute_destination_directory,
+      std::wstring_view package_name, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;

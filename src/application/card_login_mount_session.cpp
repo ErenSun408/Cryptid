@@ -1,4 +1,5 @@
 #include "usb_vault/application/card_login_mount_session.h"
+#include "usb_vault/backup/export_package_file.h"
 
 #include "application/card_login_mount_session_internal.h"
 #include "usb_vault/application/card_authentication_session.h"
@@ -348,6 +349,14 @@ class ProductionCardLoginMountSessionRuntime final
 
   void copy_export_entry(const std::wstring_view source, const std::wstring_view destination) override {
     volume::copy_volume_entry(source, destination, {}, true);
+  }
+
+  void export_encrypted_entry(const std::wstring_view source,
+                              const std::wstring_view destination,
+                              const security::SecureBuffer& password_utf8,
+                              const std::function<bool()>& cancelled,
+                              const std::function<void(std::uint64_t, std::uint64_t)>& progress) override {
+    backup::export_package_to_file_v1(source, destination, password_utf8, cancelled, progress);
   }
 
   void copy_entry(const std::wstring_view absolute_source,
@@ -858,6 +867,24 @@ void CardLoginMountSession::export_container_entry(
       [&] {
         impl_->core.export_container_entry(id, relative_directory, name,
                                            absolute_destination_directory);
+      });
+}
+
+void CardLoginMountSession::export_container_entry_encrypted(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name,
+    const std::wstring_view absolute_destination_directory,
+    const std::wstring_view package_name,
+    const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  // Only the container number is traced: the entry, the location and the
+  // package name are exactly what an export must not leave behind.
+  traced_call("加密导出条目", [&] { return "安全盘 #" + std::to_string(id); },
+      [&] {
+        impl_->core.export_container_entry_encrypted(
+            id, relative_directory, name, absolute_destination_directory,
+            package_name, password_utf8, cancelled, progress);
       });
 }
 
@@ -3295,6 +3322,38 @@ void CardLoginMountSessionCore::export_container_entry(
   SESSION_TRACE("导出条目", "安全盘 #" + std::to_string(id) + "；来源 " + wide_text(source) +
                                 "；目标 " + wide_text(destination));
   runtime_.copy_export_entry(source, destination);
+}
+
+void CardLoginMountSessionCore::export_container_entry_encrypted(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::wstring_view name,
+    const std::wstring_view absolute_destination_directory,
+    const std::wstring_view package_name,
+    const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  const wchar_t drive_letter = mounted_drive_letter(id);
+  if (password_utf8.empty()) {
+    throw std::invalid_argument("an encrypted export needs a password");
+  }
+  const std::wstring destination = volume::resolve_exported_entry_path(
+      absolute_destination_directory, package_name);
+  // The plaintext export's refusal: a package written into a mounted
+  // container would be a copy, and this entry point exists to leave.
+  for (const SessionContainer& container : state_.containers) {
+    if (container.mounted &&
+        upper_drive_letter(container.drive_letter) ==
+            upper_drive_letter(destination[0])) {
+      throw std::invalid_argument(
+          "that location is inside a container, which is a copy and not an "
+          "export");
+    }
+  }
+  const std::wstring source =
+      volume::resolve_volume_child_path(drive_letter, relative_directory, name);
+  // No `record_operation`, and no trace of the source or the destination.
+  runtime_.export_encrypted_entry(source, destination, password_utf8, cancelled,
+                                  progress);
 }
 
 void CardLoginMountSessionCore::export_container_file(

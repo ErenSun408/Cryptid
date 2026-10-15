@@ -213,7 +213,7 @@ ExportManifest collect_export_manifest_v1(const std::wstring_view absolute_sourc
   try {
     validate_export_manifest_v1(manifest);
   } catch (const ExportPackageRejected&) {
-    throw std::invalid_argument("an export source name breaks a package rule");
+    throw std::runtime_error("an export source name breaks a package rule");
   }
   return manifest;
 }

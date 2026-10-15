@@ -3,10 +3,12 @@
 
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/security/offline_card_password_policy.h"
 #include "usb_vault/volume/volume_space.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstddef>
@@ -414,6 +416,25 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   std::vector<ExportCall> exported_entries;
   std::vector<ExportCall> exported_files;
+
+  void export_container_entry_encrypted(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      const std::wstring_view name,
+      const std::wstring_view absolute_destination_directory,
+      const std::wstring_view package_name,
+      const usb_vault::security::SecureBuffer& password,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) override {
+    encrypted_exports.push_back(
+        {.id = id,
+         .directory = std::wstring(relative_directory),
+         .name = std::wstring(name),
+         .destination = std::wstring(absolute_destination_directory) + L"|" +
+                        std::wstring(package_name)});
+    encrypted_password.assign(password.bytes().begin(), password.bytes().end());
+  }
+  std::vector<ExportCall> encrypted_exports;
+  std::vector<std::byte> encrypted_password;
 
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
@@ -2110,6 +2131,53 @@ void test_exports_are_refused_off_the_authenticated_route() {
           "a refused export still reached the session");
 }
 
+// P5.9: the export password is confirmed and held to the offline policy
+// before the session is reached, and both page buffers are wiped either way.
+void test_encrypted_export_confirms_the_password_first() {
+  Fixture fixture;
+  const auto attempt = [&](const std::string_view first, const std::string_view second) {
+    std::vector<std::byte> password = bytes(first);
+    std::vector<std::byte> confirmation = bytes(second);
+    try {
+      fixture.controller.export_container_entry_encrypted(
+          3, L"reports", L"q1.txt", L"D:\\Out", L"pkg", password, confirmation, {}, {});
+    } catch (...) {
+      require(std::ranges::all_of(password, [](std::byte b) { return b == std::byte{0}; }) &&
+                  std::ranges::all_of(confirmation, [](std::byte b) { return b == std::byte{0}; }),
+              "a refused export password was not wiped");
+      throw;
+    }
+    require(std::ranges::all_of(password, [](std::byte b) { return b == std::byte{0}; }) &&
+                std::ranges::all_of(confirmation, [](std::byte b) { return b == std::byte{0}; }),
+            "an accepted export password was not wiped");
+  };
+
+  require_throws<std::system_error>(
+      [&] { attempt("long enough export pass", "long enough export pass"); },
+      "an unauthenticated route started an encrypted export");
+  fixture.authentication.establish(root_secret());
+  require_throws<usb_vault::security::PasswordConfirmationRejected>(
+      [&] { attempt("long enough export pass", "long enough export pazz"); },
+      "mismatched export passwords were accepted");
+  require_throws<usb_vault::security::PasswordConfirmationRejected>(
+      [&] { attempt("short", "short"); },
+      "a weak export password was accepted");
+  require(fixture.volume.encrypted_exports.empty(),
+          "a refused export password still reached the session");
+
+  attempt("long enough export pass", "long enough export pass");
+  const std::string_view expected = "long enough export pass";
+  require(fixture.volume.encrypted_exports.size() == 1 &&
+              fixture.volume.encrypted_exports[0].id == 3 &&
+              fixture.volume.encrypted_exports[0].directory == L"reports" &&
+              fixture.volume.encrypted_exports[0].name == L"q1.txt" &&
+              fixture.volume.encrypted_exports[0].destination == L"D:\\Out|pkg" &&
+              fixture.volume.encrypted_password.size() == expected.size() &&
+              std::equal(expected.begin(), expected.end(),
+                         reinterpret_cast<const char*>(fixture.volume.encrypted_password.data())),
+          "the encrypted export did not reach the session with its confirmed password");
+}
+
 void test_exports_reach_the_session_unchanged() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2214,6 +2282,7 @@ int main() {
     test_file_manager_actions_reach_the_session_unchanged();
     test_exports_are_refused_off_the_authenticated_route();
     test_exports_reach_the_session_unchanged();
+    test_encrypted_export_confirms_the_password_first();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
