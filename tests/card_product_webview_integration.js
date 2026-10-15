@@ -444,7 +444,7 @@ chrome.webview.postMessage("driver-loaded");
     return row.querySelector(".container-name").textContent ===
         "integration.sys" &&
       row.querySelector(".container-state").textContent === "已挂载" &&
-      facts.length === 2 && facts[0] === "64 MiB" && facts[1] === "D:" &&
+      facts.length === 3 && facts[0] === "—" && facts[1] === "64 MiB" && facts[2] === "D:" &&
       !containersCreate.hidden;
   })) {
     request("fail-creation-submit");
@@ -586,7 +586,7 @@ chrome.webview.postMessage("driver-loaded");
       dashboardUnmount.hidden ||
       dashboardVolumeState.textContent !== "已挂载" ||
       dashboardContainerCount.textContent !== "2" ||
-      containerFacts(containerRows()[0]).join("/") !== "64 MiB/D:") {
+      containerFacts(containerRows()[0]).join("/") !== "—/64 MiB/D:") {
     request("fail-login-success");
     return;
   }

@@ -3726,13 +3726,22 @@
     const now = Date.now();
     const edge = now - decoyLastActivationNotice > kDecoyActivationGapMs;
     decoyLastActivationNotice = now;
-    if (edge) scheduleDecoyActivationRefresh();
+    if (edge) {
+      scheduleDecoyActivationRefresh();
+      requestContainerInventoryRefresh();
+    }
   });
   window.addEventListener("blur", () => { decoyLastActivationNotice = 0; });
-  window.addEventListener("focus", scheduleDecoyActivationRefresh);
+  window.addEventListener("focus", () => {
+    scheduleDecoyActivationRefresh();
+    requestContainerInventoryRefresh();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) decoyLastActivationNotice = 0;
-    else scheduleDecoyActivationRefresh();
+    else {
+      scheduleDecoyActivationRefresh();
+      requestContainerInventoryRefresh();
+    }
   });
   window.addEventListener("pagehide", () => {
     clearTimeout(decoyActivationTimer);
@@ -4569,6 +4578,8 @@
     const facts = document.createElement("div");
     facts.className = "container-facts";
     facts.append(
+      containerFact("项目", container.mounted && Number.isSafeInteger(container.rootItemCount)
+        ? container.rootItemCount.toLocaleString("zh-CN") : "—"),
       // Capacity is the attached volume's, not the container file's: a
       // container holding a hidden volume is larger than the volume the user
       // actually gets. An unmounted container has no volume, so it reads the
@@ -4617,10 +4628,7 @@
       grid.append(
         containerFact("名称", container.name),
         containerFact("状态", container.conversion === 2 ? "加密已暂停" : container.conversion === 1 ? "转换未完成" : container.unavailable ? "无法读取卷状态" : container.mounted ? "已挂载" : "未挂载"),
-        containerFact("盘符", container.mounted ? container.drive : "—"),
-        containerFact("容量", container.mounted && container.sizeMib > 0 ? containerSizeText(container) : "—"),
-        containerFact("加密", "AES-256-XTS"),
-        containerFact("派生", "Argon2id 512M·2·1"));
+        containerFact("盘符", container.mounted ? container.drive : "—"));
       const operations = document.createElement("div");
       operations.className = "container-detail-actions";
       operations.appendChild(containerActionButton(container, "browse", "浏览文件"));
@@ -4827,9 +4835,9 @@
         stateTitle.textContent = "请插入安全卡";
         break;
       case nativeState.initializationRequired:
-        stateTitle.textContent = "初始化安全卡";
-        passwordLabel.textContent = "设置日常密码";
-        actionLabel.textContent = "初始化安全卡";
+        stateTitle.textContent = "初始化";
+        passwordLabel.textContent = "设置密码";
+        actionLabel.textContent = "初始化";
         break;
       case nativeState.loginRequired:
         stateTitle.textContent = "打开安全会话";
@@ -5119,8 +5127,12 @@
             typeof unavailable !== "boolean" || (unavailable && (!mounted || sizeMib !== 0))) {
           throw new Error("invalid container status");
         }
+        const rootListing = mounted && !unavailable && !isMaintenanceContainer(id)
+          ? await readContainerRoot(id) : null;
+        const rootItemCount = rootListing !== null && !rootListing.truncated
+          ? rootListing.entries.length : null;
         nextContainers.push({ id, name: displayContainerName(name, partition), sourceName: name,
-          mounted, sizeMib, drive, partition, conversion, unavailable });
+          mounted, sizeMib, drive, partition, conversion, unavailable, rootItemCount });
       }
 
     return nextContainers;
@@ -5248,7 +5260,8 @@
   };
   const refreshMountInventory = async () => {
     if (mountRefreshDisposed || !mountRefreshPending || mountRefreshRunning) return;
-    if (busy || containerRename || reorderState !== null || exitHotkeySaving || externalRefreshPending || !bridge) { scheduleMountRefresh(); return; }
+    if (busy || containerRename || reorderState !== null || exitHotkeySaving || externalRefreshPending ||
+        !fileNameDialog.hidden || !fileContextMenu.hidden || !bridge) { scheduleMountRefresh(); return; }
     if (currentState !== nativeState.authenticated) { mountRefreshPending = false; return; }
     const revision = batchSessionRevision;
     mountRefreshPending = false; mountRefreshRunning = true; busy = true;
@@ -5287,9 +5300,12 @@
       scheduleMountRefresh();
     }
   };
-  window.addEventListener("usb-vault-mounts-changed", () => {
-    mountRefreshPending = true; void refreshMountInventory();
-  });
+  const requestContainerInventoryRefresh = () => {
+    if (mountRefreshDisposed || !bridge || currentState !== nativeState.authenticated) return;
+    mountRefreshPending = true;
+    scheduleMountRefresh();
+  };
+  window.addEventListener("usb-vault-mounts-changed", requestContainerInventoryRefresh);
   window.addEventListener("pagehide", () => {
     mountRefreshDisposed = true; clearTimeout(mountRefreshTimer); mountRefreshTimer = null;
   });

@@ -1428,7 +1428,9 @@
             <div class="overview-heading">
               <div><h3>安全盘</h3><p class="overview-sub">按当前密码可打开的安全盘</p></div>
               <div class="overview-actions">
-                <button class="shell-button" type="button" data-mount-existing>导入</button>
+                <button class="shell-button" type="button" data-mount-existing>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10l4 10v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4L7 4zM3 14h5m8 0h5M12 7v7m-3-3 3 3 3-3M17 17h.01"></path></svg>导入安全盘
+                </button>
                 <button class="create-button" type="button" data-create-container>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>新建安全盘
                 </button>
@@ -1442,8 +1444,12 @@
           <div class="section-header">
             <nav id="file-breadcrumb" class="file-breadcrumb" aria-label="当前位置"><h2 id="files-title">安全盘管理</h2></nav>
             <div id="management-list-actions" class="overview-actions">
-              <button class="shell-button" type="button" data-mount-existing>导入安全盘</button>
-              <button class="create-button" type="button" data-create-container>新建安全盘</button>
+              <button class="shell-button" type="button" data-mount-existing>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10l4 10v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4L7 4zM3 14h5m8 0h5M12 7v7m-3-3 3 3 3-3M17 17h.01"></path></svg>导入安全盘
+              </button>
+              <button class="create-button" type="button" data-create-container>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>新建安全盘
+              </button>
             </div>
           </div>
           <div id="management-containers" class="container-list" data-container-list></div>
@@ -1740,10 +1746,6 @@
           <div class="settings-group">
             <h3>关于</h3>
             <div class="settings-card">
-              <div class="settings-kv"><span class="settings-kv-label">卷加密</span><span class="settings-kv-value">AES-256-XTS</span></div>
-              <div class="settings-kv"><span class="settings-kv-label">卷头 PRF</span><span class="settings-kv-value">HMAC-SHA-512</span></div>
-              <div class="settings-kv"><span class="settings-kv-label">卷密码派生</span><span class="settings-kv-value">Argon2id · m=512 MiB · t=2 · p=1</span></div>
-              <div class="settings-kv"><span class="settings-kv-label">安全卡记录</span><span class="settings-kv-value">216 字节 · AES-256-GCM + HMAC-SHA-256</span></div>
               <div class="settings-kv"><span class="settings-kv-label">产品版本</span><span class="settings-kv-value" id="settings-product-version">0.2.0</span></div>
             </div>
           </div>

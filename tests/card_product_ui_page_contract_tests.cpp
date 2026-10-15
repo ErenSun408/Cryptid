@@ -453,20 +453,12 @@ void test_settings_page_is_static_and_matches_the_native_facts() {
             "the product page persists state in browser storage");
   }
 
-  const std::string derivation =
-      "Argon2id · m=" +
-      std::to_string(usb_vault::security::kKdfV1MemoryKib / 1024U) +
-      " MiB · t=" +
-      std::to_string(usb_vault::security::kKdfV1Iterations) + " · p=" +
-      std::to_string(usb_vault::security::kKdfV1Parallelism);
-  const std::string record =
-      std::to_string(usb_vault::card::kCardRecordV1Size) +
-      " 字节 · AES-256-GCM + HMAC-SHA-256";
-  require(settings.find(derivation) != std::string::npos &&
-              settings.find(record) != std::string::npos &&
-              settings.find("AES-256-XTS") != std::string::npos &&
-              settings.find("HMAC-SHA-512") != std::string::npos,
-          "about facts have drifted from the native cryptographic baseline");
+  const std::size_t about_start = settings.find("<h3>关于</h3>");
+  require(about_start != std::string::npos, "settings about section is missing");
+  const std::string_view about = std::string_view(settings).substr(about_start);
+  require(count_occurrences(about, "class=\"settings-kv\"") == 1 &&
+              about.find("产品版本") != std::string::npos,
+          "settings about section must show only the product version");
   require(settings.find("id=\"settings-product-version\">" USB_VAULT_PRODUCT_VERSION
                         "<") != std::string::npos,
           "about version has drifted from the CMake product version");
