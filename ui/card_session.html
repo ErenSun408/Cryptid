@@ -423,12 +423,15 @@
     /* 导出页工具栏：三种方式与“下一步”同一行，吸附在内容区顶部，列表在其下滚动。 */
     .export-toolbar {
       position: sticky; top: calc(-1 * var(--content-pad-y)); z-index: 6;
-      display: flex; gap: .75rem; align-items: stretch;
+      display: flex; flex-direction: column; gap: .75rem; align-items: stretch;
       margin: 0 calc(-1 * var(--content-pad-x)) .75rem; padding: .9rem var(--content-pad-x);
       background: var(--ink-900); border-bottom: 1px solid var(--line);
     }
     .export-toolbar .picks { flex: 1; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: none; margin: 0; }
-    .export-toolbar > .create-button { align-self: center; flex: 0 0 auto; white-space: nowrap; }
+    .export-strategies { display: flex; gap: .75rem; align-items: stretch; }
+    .export-merge-control { display: flex; gap: .65rem; align-items: center; font-size: .8125rem; }
+    .export-merge-control:has(:disabled) { opacity: .45; }
+    .export-strategies > .create-button { align-self: center; flex: 0 0 auto; white-space: nowrap; }
     #import-dialog .picks { grid-template-columns: 1fr 1fr; }
     .pick {
       padding: 1rem; border: 1px solid var(--line-2); border-radius: .625rem;
@@ -1610,6 +1613,11 @@
             </p>
           </div>
           <div class="export-toolbar">
+            <div class="export-merge-control">
+              <button id="export-merge" class="settings-switch" type="button" role="switch" aria-checked="true" aria-labelledby="export-merge-label"></button>
+              <span id="export-merge-label">合并导出</span>
+            </div>
+            <div class="export-strategies">
             <div class="picks" role="group" aria-label="导出方式">
               <button id="export-mode-plain" class="pick" type="button" aria-pressed="true">
                 <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0 001.5-1.5V8.5z"></path><path d="M13.5 3.5V8.5h5"></path></svg></span>
@@ -1628,6 +1636,7 @@
               </button>
             </div>
             <button id="backup-export-confirm" class="create-button" type="button" disabled>下一步</button>
+            </div>
           </div>
           <output id="backup-export-status" class="creation-status" aria-live="polite"></output>
 
@@ -1860,7 +1869,7 @@
       <div class="modal-header"><h3 id="export-dialog-title">导出</h3></div>
       <div class="modal-body">
         <div id="export-dialog-name-field" class="xfield">
-          <label for="export-dialog-name">导出包名称</label>
+          <label id="export-dialog-name-label" for="export-dialog-name">导出包名称</label>
           <div class="line"><input id="export-dialog-name" class="xinp" type="text" autocomplete="off" spellcheck="false" maxlength="255"></div>
           <p id="export-dialog-name-hint" class="creation-hint">留空则使用所选条目在应用内的名称。</p>
         </div>

@@ -740,6 +740,16 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (fail_copy) throw std::runtime_error("the copy failed");
   }
 
+  void export_selection(std::span<const usb_vault::backup::ExportSelectionSourceV1> sources,
+      std::wstring_view destination, std::wstring_view folder, bool encrypted,
+      const SecureBuffer&, const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) override {
+    selected_sources.assign(sources.begin(), sources.end());
+    selected_destination = destination; selected_folder = folder; selected_encrypted = encrypted;
+  }
+  std::vector<usb_vault::backup::ExportSelectionSourceV1> selected_sources;
+  std::wstring selected_destination, selected_folder;
+  bool selected_encrypted{};
   void export_encrypted_entry(const std::wstring_view source,
                               const std::wstring_view destination,
                               const usb_vault::security::SecureBuffer& password,
@@ -4073,6 +4083,43 @@ void test_a_shell_drop_needs_an_authenticated_session() {
 // P5.9: the encrypted export reaches the storage layer with the resolved
 // entry and package path, refuses what the plaintext export refuses, and
 // leaves nothing behind whether it succeeds, fails or is refused.
+void test_selection_export_resolves_vault_groups_and_guards_routes() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.remember_paths = true;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto first = session.create_container(L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const auto second = session.create_container(L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+  session.rename_container(first, L"Documents");
+  session.rename_container(second, L"Documents");
+  const auto history = session.operation_history().size();
+  const auto writes = runtime.index_writes;
+  const std::vector<usb_vault::application::ExportSelectionEntry> selection{
+      {first, L"", L"same.txt"}, {second, L"sub", L"same.txt"}};
+  session.export_container_selection(selection, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
+  require(runtime.selected_sources.size() == 2 &&
+      runtime.selected_sources[0].output_name == L"Documents\\same.txt" &&
+      runtime.selected_sources[1].output_name == L"Documents (2)\\sub\\same.txt" &&
+      runtime.selected_destination == L"D:\\Out\\Combined" && !runtime.selected_encrypted,
+      "selection exports must group by display name and disambiguate equal vault names");
+  require(session.operation_history().size() == history && runtime.index_writes == writes,
+      "selection exports must not record history or indexes");
+  const SecureBuffer password = bytes("export password 123");
+  session.export_container_selection(selection, L"D:\\Out", L"Combined", true, password, {}, {});
+  require(runtime.selected_encrypted, "cipher selection exports must reach the encrypted path");
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection(selection, L"X:\\Out", L"Combined", true, password, {}, {});
+  }, "exports must refuse destinations on mounted containers");
+  session.unmount_container(second);
+  require_throws<std::logic_error>([&] {
+    session.export_container_selection(selection, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
+  }, "an unmounted selection must fail before storage");
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection({}, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
+  }, "an empty selection must be refused");
+}
+
 void test_an_encrypted_export_leaves_no_trace_and_refuses_containers() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -5276,6 +5323,7 @@ int main() {
     test_renaming_stays_inside_one_directory();
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
+    test_selection_export_resolves_vault_groups_and_guards_routes();
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();
     test_a_container_created_for_an_import_is_recorded_only_on_success();

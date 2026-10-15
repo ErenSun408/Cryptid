@@ -97,6 +97,7 @@
       </div>
     </section>
     <section id="dashboard-section-backup" class="dashboard-section">
+      <button id="export-merge" type="button" role="switch" aria-checked="true"></button>
       <button id="export-mode-plain" type="button" aria-pressed="true">明文导出</button>
       <button id="export-mode-encrypted" type="button" aria-pressed="false">密文导出</button>
       <button id="export-mode-migrate" type="button" aria-pressed="false">安全盘迁移</button>
@@ -109,7 +110,7 @@
       <div id="export-migrate-pane" hidden><div id="migrate-container-list"></div></div>
       <div id="export-dialog" hidden>
       <h3 id="export-dialog-title">导出</h3>
-      <div id="export-dialog-name-field"><label for="export-dialog-name">导出包名称</label><input id="export-dialog-name" type="text"><p id="export-dialog-name-hint"></p></div>
+      <div id="export-dialog-name-field"><label id="export-dialog-name-label" for="export-dialog-name">导出包名称</label><input id="export-dialog-name" type="text"><p id="export-dialog-name-hint"></p></div>
       <button id="export-dialog-location" type="button"></button>
       <button id="export-dialog-browse" type="button">浏览</button>
       <div id="export-dialog-secret-fields">

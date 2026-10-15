@@ -4,9 +4,39 @@
 #include "usb_vault/backup/export_package_v1.h"
 
 #include <functional>
+#include <span>
+#include <string>
 #include <string_view>
 
 namespace usb_vault::backup {
+
+struct ExportSelectionSourceV1 final {
+  std::wstring absolute_source;
+  std::wstring output_name;
+};
+
+struct ExportSelectionFileV1 final {
+  std::wstring absolute_path;
+  std::wstring expected_path;
+};
+
+// Physical paths remain in memory and are never encoded in the manifest.
+struct ExportSelectionPlanV1 final {
+  ExportManifest manifest;
+  std::vector<ExportSelectionFileV1> files;
+};
+
+[[nodiscard]] ExportSelectionPlanV1 collect_export_selection_v1(
+    std::span<const ExportSelectionSourceV1> sources, std::wstring_view folder_name,
+    const std::function<bool()>& cancelled = {});
+
+void write_export_selection_directory_v1(const ExportSelectionPlanV1& plan,
+    std::wstring_view staging_directory, const std::function<bool()>& cancelled = {},
+    const ExportProgress& progress = {});
+
+void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,
+    ExportPackageKeyV1 key, const ExportPackageWriterV1::Sink& sink,
+    const std::function<bool()>& cancelled = {}, const ExportProgress& progress = {});
 
 // Walks the file or directory about to be exported and lists it as a
 // manifest: the entry itself first, then its contents, every directory before

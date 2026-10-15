@@ -11,6 +11,7 @@
 
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/backup/import_package_v1.h"
+#include "usb_vault/backup/export_package_source.h"
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/security/secure_buffer.h"
@@ -168,6 +169,12 @@ class CardLoginMountSessionRuntime {
     copy_entry(source, destination, {});
   }
   // P5.9 encrypted export of one entry to a package file that must not exist.
+  virtual void export_selection(std::span<const backup::ExportSelectionSourceV1>,
+      std::wstring_view, std::wstring_view, bool, const security::SecureBuffer&,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("selection export is unavailable");
+  }
   virtual void export_encrypted_entry(std::wstring_view, std::wstring_view,
                                       const security::SecureBuffer&,
                                       const std::function<bool()>&,
@@ -382,6 +389,11 @@ class CardLoginMountSessionCore final {
       std::wstring_view absolute_destination_directory);
   void export_container_file(
       std::uint32_t id, std::wstring_view absolute_destination_directory);
+  void export_container_selection(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress);
   void export_container_entry_encrypted(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view name, std::wstring_view absolute_destination_directory,

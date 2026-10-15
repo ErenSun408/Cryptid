@@ -5,9 +5,11 @@ const wait=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await 
 (async()=>{for(const mode of ['success','partial','session']){
  const dom=new JSDOM(fs.readFileSync('ui/card_session.html','utf8'),{runScripts:'outside-only',pretendToBeVisual:true});const w=dom.window;w.TextEncoder=TextEncoder;
  try{
- w.eval(fs.readFileSync('tests/card_product_ui_navigation_mock.js','utf8'));let pending=[];w.chrome.webview.hostObjects.nativeBridge.exportContainerEntry=(...args)=>new Promise((resolve,reject)=>pending.push({resolve,reject,args}));
+ w.eval(fs.readFileSync('tests/card_product_ui_navigation_mock.js','utf8'));let pending=[];w.chrome.webview.hostObjects.nativeBridge.beginExportSelection=(...args)=>new Promise((resolve,reject)=>pending.push({resolve,reject,args}));
+ w.chrome.webview.hostObjects.nativeBridge.encryptedTransferStatus=()=> '2,1,1,0,2';
  w.eval(fs.readFileSync('ui/card_session.js','utf8'));await tick();const d=w.document,$=id=>d.getElementById(id);
  d.querySelector('[data-section=backup]').click();
+ $('export-merge').click();
  $('backup-export-confirm').dispatchEvent(new w.Event('click'));await tick();assert.equal(pending.length,0);
  d.querySelector('[data-export-select-all="1"]').click();await tick();
  $('backup-export-confirm').dispatchEvent(new w.Event('click'));await tick();assert.equal(pending.length,0);

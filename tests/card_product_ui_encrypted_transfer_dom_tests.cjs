@@ -18,7 +18,7 @@ const load = () => {
     calls.push({name, args: args.map(a => Array.isArray(a) ? [...a] : a), arrays: args.filter(Array.isArray)});
     return true;
   };
-  bridge.beginEncryptedExport = start('export');
+  bridge.beginExportSelection = start('export');
   bridge.beginEncryptedImport = start('import');
   bridge.beginVerifyImport = start('verify');
   bridge.beginImportIntoNewContainerMib = start('new');
@@ -59,6 +59,11 @@ const openBackup = async (d, $, mode) => {
       assert.equal($('export-mode-import'), null);
       assert.equal($('backup-export-confirm').textContent, '下一步');
       assert.equal($('backup-export-location'), null, 'no location field stays on the page');
+      assert.equal($('export-merge').getAttribute('aria-checked'), 'true');
+      $('export-mode-migrate').click();
+      assert.equal($('export-merge').disabled, true);
+      $('export-mode-plain').click();
+      assert.equal($('export-merge').disabled, false);
     } finally { w.close(); }
   }
 
@@ -74,7 +79,7 @@ const openBackup = async (d, $, mode) => {
       assert.equal($('export-dialog').hidden, false);
       assert.equal($('export-dialog-title').textContent, '密文导出');
       assert.equal($('export-dialog-secret-fields').hidden, false);
-      assert.equal($('export-dialog-name').disabled, true, 'separate packages retain project names');
+      assert.equal($('export-dialog-name').disabled, false, 'merged selections may be named');
       assert.equal($('export-dialog-start').disabled, true, 'a location comes first');
       $('export-dialog-location').click(); await tick();
       $('export-dialog-start').click(); await tick();
@@ -93,11 +98,44 @@ const openBackup = async (d, $, mode) => {
       const exports = calls.filter(c => c.name === 'export');
       assert.ok(exports.length >= 1);
       for (const call of exports) {
-        assert.equal(call.args[3], 'D:\\Vaults');
-        assert.equal(call.args[4], call.args[2]);
-        assert.equal(String.fromCharCode(...call.args[5]), 'long enough export pass');
+        assert.equal(call.args[2], 'D:\\Vaults');
+        assert.equal(call.args[3], '导出项目');
+        assert.equal(call.args[1].split('\u001e').length, 2, 'both projects enter one package');
+        assert.equal(String.fromCharCode(...call.args[4]), 'long enough export pass');
         for (const array of call.arrays) assert.ok(array.every(b => b === 0), 'passphrase arrays must be wiped');
       }
+    } finally { w.close(); }
+  }
+
+  for (const mode of ['plain', 'encrypted']) {
+    const {w, d, $, calls, setScript} = load();
+    try {
+      await tick(); await openBackup(d, $, 'export-mode-' + mode);
+      $('export-merge').click();
+      assert.equal($('export-merge').getAttribute('aria-checked'), 'false');
+      d.querySelector('[data-export-select-all="1"]').click(); await tick();
+      $('backup-export-confirm').click(); await tick();
+      assert.equal($('export-dialog-name-field').hidden, false);
+      assert.equal($('export-dialog-name').disabled, true);
+      $('export-dialog-name').value = 'ignored';
+      $('export-dialog-location').click(); await tick();
+      if (mode === 'encrypted') {
+        $('export-dialog-passphrase').value = 'long enough export pass';
+        $('export-dialog-passphrase-confirmation').value = 'long enough export pass';
+      }
+      setScript(['2,1,1,0,2']); $('export-dialog-start').click();
+      await wait(() => !$('export-result-confirm').disabled);
+      const exports = calls.filter(call => call.name === 'export');
+      assert.equal(exports.length, 2);
+      for (const {args} of exports) {
+        assert.equal(args[0], mode === 'encrypted');
+        assert.equal(args[1].split('\u001e').length, 1);
+        assert.equal(args[3], args[1].split('\u001f')[2]);
+        assert.notEqual(args[3], 'ignored');
+        if (mode === 'plain') assert.equal(args[4].length, 0);
+      }
+      w.dispatchEvent(new w.Event('usb-vault-session-changed')); await tick();
+      assert.equal($('export-merge').getAttribute('aria-checked'), 'true');
     } finally { w.close(); }
   }
 
@@ -119,7 +157,7 @@ const openBackup = async (d, $, mode) => {
       setScript(['2,1,1,0,2']);
       $('export-dialog-start').click();
       await wait(() => !$('export-result-confirm').disabled);
-      assert.equal(calls.find(c => c.name === 'export').args[4], '家庭照片');
+      assert.equal(calls.find(c => c.name === 'export').args[3], '家庭照片');
     } finally { w.close(); }
   }
 

@@ -558,6 +558,19 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
          .destination = std::wstring(absolute_destination_directory)});
   }
 
+  void export_container_selection(std::span<const usb_vault::application::ExportSelectionEntry> entries,
+      std::wstring_view destination, std::wstring_view folder, bool encrypted,
+      const usb_vault::security::SecureBuffer& password, const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override {
+    require(encrypted == !password.empty(), "selection export password and mode must agree");
+    selected_exports.assign(entries.begin(), entries.end());
+    selected_folder = folder; selected_destination = destination;
+    await_volume_operation();
+    if (cancelled()) throw std::system_error(ERROR_CANCELLED, std::system_category());
+    progress(40, 40);
+  }
+  std::vector<usb_vault::application::ExportSelectionEntry> selected_exports;
+  std::wstring selected_folder, selected_destination;
   void export_container_entry_encrypted(
       const std::uint32_t id, const std::wstring_view relative_directory,
       const std::wstring_view name,
@@ -3533,6 +3546,53 @@ void test_the_bridge_carries_each_file_manager_action() {
 // P5.9: an encrypted export runs on the session worker. Its passwords are
 // wiped at the bridge, only its status and cancel answer while it runs, and
 // its outcome is a role-neutral state and code.
+void test_selection_export_bridge_parses_bounds_and_wipes_inputs() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  const auto start = [&](std::wstring_view packed, bool encrypted) {
+    std::array<VARIANTARG, 6> values{};
+    values[5].vt = VT_BOOL;
+    values[5].boolVal = encrypted ? VARIANT_TRUE : VARIANT_FALSE;
+    values[4] = text_argument(std::wstring(packed));
+    values[3] = text_argument(L"D:\\Out");
+    values[2] = text_argument(L"Combined");
+    const auto secret = encrypted ? bytes("long enough export pass") : bytes("");
+    initialize_byte_array(values[1], secret); initialize_byte_array(values[0], secret);
+    VARIANT result{};
+    const auto hr = invoke_named(*host.Get(), L"beginExportSelection", values.data(), 6, &result, nullptr);
+    require_array_wiped(values[1], secret.size(), "selection password survived the bridge");
+    require_array_wiped(values[0], secret.size(), "selection confirmation survived the bridge");
+    for (std::size_t index = 2; index <= 4; ++index)
+      for (UINT unit = 0; unit < ::SysStringLen(values[index].bstrVal); ++unit)
+        require(values[index].bstrVal[unit] == 0, "selection text survived the bridge");
+    ::VariantClear(&result); clear_arguments(values.data(), 6); return hr;
+  };
+  const auto settle = [&] {
+    std::wstring status;
+    for (int i = 0; i < 4000; ++i) {
+      VARIANT value{};
+      require(invoke_named(*host.Get(), L"encryptedTransferStatus", nullptr, 0, &value, nullptr) == S_OK,
+          "selection status must be available");
+      status.assign(value.bstrVal, ::SysStringLen(value.bstrVal)); ::VariantClear(&value);
+      if (!status.starts_with(L"1,")) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return status;
+  };
+  require(start(L"3\x1f" L"reports\x1f" L"q1.txt\x1e" L"4\x1f\x1f" L"q1.txt", true) == S_OK &&
+      settle() == L"2,40,40,0,2", "grouped encrypted export must complete");
+  require(fixture.volume.selected_exports.size() == 2 &&
+      fixture.volume.selected_exports[0].directory == L"reports" &&
+      fixture.volume.selected_exports[1].id == 4 && fixture.volume.selected_folder == L"Combined" &&
+      fixture.volume.selected_destination == L"D:\\Out", "selection order and names must cross the bridge");
+  require(start(L"3\x1f\x1f" L"q1.txt", false) == S_OK && settle() == L"2,40,40,0,2",
+      "plaintext groups must accept empty password arrays");
+  for (const auto malformed : {L"0\x1f\x1f" L"q1.txt", L"4294967296\x1f\x1f" L"q1.txt",
+      L"3\x1f" L"missing", L"3\x1f\x1f", L"3\x1f\x1f" L"q1.txt\x1f"})
+    require(start(malformed, true) == E_INVALIDARG, "malformed selection packing must be refused");
+}
+
 void test_an_encrypted_export_runs_on_the_worker() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -4713,6 +4773,7 @@ int main() {
     test_operation_history_is_read_only_typed_and_clearable();
     test_operation_history_query_failures_do_not_invent_facts();
     test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
+    test_selection_export_bridge_parses_bounds_and_wipes_inputs();
     test_an_encrypted_export_runs_on_the_worker();
     test_an_encrypted_import_runs_on_the_worker();
     test_the_import_package_rename_bridge_validates_and_reports_collisions();

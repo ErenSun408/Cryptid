@@ -700,6 +700,29 @@ void CardProductUiSessionController::export_container_file(
   volume_session_.export_container_file(id, absolute_destination_directory);
 }
 
+void CardProductUiSessionController::export_container_selection(std::span<const application::ExportSelectionEntry> entries,
+      std::wstring_view destination_directory, std::wstring_view folder_name, bool encrypted,
+      std::span<std::byte> mutable_password_utf8, std::span<std::byte> mutable_confirmation_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  MutableInputWiper wiper(mutable_password_utf8, mutable_confirmation_utf8);
+  if (inputs_overlap(mutable_password_utf8, mutable_confirmation_utf8))
+    throw std::invalid_argument("export password inputs must be independent buffers");
+  if (state() != CardProductUiState::authenticated)
+    throw_wrong_route("selection export requires authentication");
+  security::SecureBuffer password;
+  if (encrypted) {
+    password = std::move(security::confirm_password(password_policy_,
+        consume_password_utf8(mutable_password_utf8),
+        consume_password_utf8(mutable_confirmation_utf8))).take();
+  } else if (!mutable_password_utf8.empty() || !mutable_confirmation_utf8.empty()) {
+    throw std::invalid_argument("plaintext export does not accept a password");
+  }
+  SecureBufferGuard guard(password);
+  volume_session_.export_container_selection(entries, destination_directory, folder_name,
+      encrypted, password, cancelled, progress);
+}
+
 void CardProductUiSessionController::export_container_entry_encrypted(
     const std::uint32_t id, const std::wstring_view relative_directory,
     const std::wstring_view name,

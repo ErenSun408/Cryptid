@@ -82,6 +82,7 @@ constexpr DISPID kChooseImportFileId = 149;
 constexpr DISPID kAdoptUndecidedImportId = 150;
 constexpr DISPID kTreatUndecidedAsPackageId = 151;
 constexpr DISPID kRenameImportPackageId = 152;
+constexpr DISPID kBeginExportSelectionId = 153;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -582,6 +583,7 @@ class PasswordArgumentsWiper final {
     case kAdoptUndecidedImportId: return "adoptUndecidedImportFile";
     case kTreatUndecidedAsPackageId: return "treatUndecidedImportAsPackage";
     case kRenameImportPackageId: return "renameImportPackage";
+    case kBeginExportSelectionId: return "beginExportSelection";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -783,6 +785,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginImportIntoNewContainerMib")) { ids[0] = kBeginImportNewContainerId; return S_OK; }
     if (matches(names[0], L"beginImportIntoNewContainerBMib")) { ids[0] = kBeginImportNewContainerBId; return S_OK; }
     if (matches(names[0], L"chooseImportFile")) { ids[0] = kChooseImportFileId; return S_OK; }
+    if (matches(names[0], L"beginExportSelection")) { ids[0] = kBeginExportSelectionId; return S_OK; }
     if (matches(names[0], L"renameImportPackage")) { ids[0] = kRenameImportPackageId; return S_OK; }
     if (matches(names[0], L"adoptUndecidedImportFile")) { ids[0] = kAdoptUndecidedImportId; return S_OK; }
     if (matches(names[0], L"treatUndecidedImportAsPackage")) { ids[0] = kTreatUndecidedAsPackageId; return S_OK; }
@@ -1019,7 +1022,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (member == kReportPageEventId)
       return report_page_event(iid, flags, parameters, result, argument_error);
     // The selected package name must never enter diagnostic argument traces.
-    if (member == kRenameImportPackageId)
+    if (member == kRenameImportPackageId || member == kBeginExportSelectionId)
       return invoke_unlogged(member, iid, locale, flags, parameters, result, exception, argument_error);
     if constexpr (!USB_VAULT_DEBUG_LOG) {
       return invoke_unlogged(member, iid, locale, flags, parameters, result, exception,
@@ -1611,6 +1614,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       case kExportContainerFileId:
         return invoke_export_container_file(parameters, result,
                                             argument_error);
+      case kBeginExportSelectionId:
+        return begin_export_selection(parameters, result, argument_error);
       case kBeginEncryptedExportId:
         return begin_encrypted_export(parameters, result, argument_error);
       case kChooseImportPackageId: {
@@ -1929,6 +1934,66 @@ class CardProductWebViewHostObject final : public IDispatch {
     encrypted_failure_rollback = 9,
     encrypted_failure_damaged = 10,
   };
+
+  // Six arguments: encrypted mode, packed selection, location, folder name,
+  // and the passphrase twice. Plaintext mode supplies two empty arrays.
+  HRESULT begin_export_selection(DISPPARAMS* parameters, VARIANT* result,
+      UINT* argument_error) noexcept {
+    if (!parameters || parameters->cArgs != 6 || parameters->cNamedArgs || !parameters->rgvarg) {
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      auto password = consume_webview_password_array(parameters->rgvarg[1]);
+      auto confirmation = consume_webview_password_array(parameters->rgvarg[0]);
+      std::wstring_view packed, destination, folder;
+      const auto& mode = parameters->rgvarg[5];
+      if (mode.vt != VT_BOOL || !exact_wstring(parameters->rgvarg[4], packed) ||
+          !exact_wstring(parameters->rgvarg[3], destination) ||
+          !exact_wstring(parameters->rgvarg[2], folder) || packed.empty() || packed.size() > 1048576) {
+        if (argument_error) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      std::vector<application::ExportSelectionEntry> entries;
+      std::size_t position = 0;
+      while (position < packed.size()) {
+        auto end = packed.find(L'\x1e', position);
+        if (end == std::wstring_view::npos) end = packed.size();
+        const auto row = packed.substr(position, end - position);
+        const auto first = row.find(L'\x1f');
+        const auto second = first == std::wstring_view::npos ? first : row.find(L'\x1f', first + 1);
+        if (first == 0 || first == std::wstring_view::npos || second == std::wstring_view::npos ||
+            second + 1 >= row.size() || row.find(L'\x1f', second + 1) != std::wstring_view::npos ||
+            entries.size() >= 4096) return E_INVALIDARG;
+        std::uint32_t id = 0;
+        for (const auto digit : row.substr(0, first)) {
+          if (digit < L'0' || digit > L'9' || id > (UINT32_MAX - static_cast<unsigned>(digit - L'0')) / 10)
+            return E_INVALIDARG;
+          id = id * 10 + static_cast<unsigned>(digit - L'0');
+        }
+        if (id == 0) return E_INVALIDARG;
+        entries.push_back({id, std::wstring(row.substr(first + 1, second - first - 1)),
+            std::wstring(row.substr(second + 1))});
+        position = end + 1;
+      }
+      if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
+        return E_ACCESSDENIED;
+      const bool encrypted = mode.boolVal != VARIANT_FALSE;
+      return begin_encrypted_transfer([this, entries = std::move(entries),
+          destination = std::wstring(destination), folder = std::wstring(folder), encrypted,
+          password = std::move(password), confirmation = std::move(confirmation)](
+          const std::function<bool()>& cancelled,
+          const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+        controller_.export_container_selection(entries, destination, folder, encrypted,
+            password.bytes(), confirmation.bytes(), cancelled,
+            [&](std::uint64_t done, std::uint64_t total) { progress(2, done, total); });
+      }, result);
+    } catch (...) {
+      wipe_available_arguments(parameters, 2);
+      return E_FAIL;
+    }
+  }
 
   // Seven arguments: container, directory, entry, location, package name,
   // and the export passphrase twice as independently consumed byte arrays.

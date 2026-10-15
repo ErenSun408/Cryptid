@@ -1,8 +1,11 @@
 #include "usb_vault/backup/export_package_source.h"
+#include "usb_vault/volume/volume_entry_path.h"
 
 #include <Windows.h>
 
 #include <algorithm>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -146,6 +149,8 @@ void add_entry(ExportManifest& manifest, ExportManifestEntry entry) {
   if (manifest.entries.size() >= kExportManifestV1MaximumEntries) {
     throw std::length_error("the export source holds too many entries");
   }
+  if (entry.size > std::numeric_limits<std::uint64_t>::max() - manifest.data_bytes)
+    throw std::length_error("the export data size is too large");
   manifest.data_bytes += entry.size;
   manifest.entries.push_back(std::move(entry));
 }
@@ -218,6 +223,132 @@ ExportManifest collect_export_manifest_v1(const std::wstring_view absolute_sourc
   return manifest;
 }
 
+ExportSelectionPlanV1 collect_export_selection_v1(
+    const std::span<const ExportSelectionSourceV1> sources, const std::wstring_view folder_name,
+    const std::function<bool()>& cancelled) {
+  if (sources.empty() || sources.size() > kExportManifestV1MaximumEntries)
+    throw std::invalid_argument("an export selection must contain entries");
+  static_cast<void>(volume::resolve_volume_child_path(L'C', L"", folder_name));
+  ExportSelectionPlanV1 plan;
+  add_entry(plan.manifest, {.kind = ExportEntryKind::directory, .relative_path = std::wstring(folder_name)});
+  plan.files.push_back({});
+  for (const auto& source : sources) {
+    check_cancelled(cancelled);
+    static_cast<void>(volume::resolve_volume_entry_path(L'C', source.output_name));
+    if (source.output_name.empty()) throw std::invalid_argument("empty export entry name");
+    for (auto separator = source.output_name.find(L'\\'); separator != std::wstring::npos;
+         separator = source.output_name.find(L'\\', separator + 1)) {
+      const auto path = std::wstring(folder_name) + L"\\" + source.output_name.substr(0, separator);
+      const auto existing = std::find_if(plan.manifest.entries.begin(), plan.manifest.entries.end(),
+          [&](const auto& entry) { return same_path(entry.relative_path, path); });
+      if (existing == plan.manifest.entries.end()) {
+        add_entry(plan.manifest, {.kind = ExportEntryKind::directory, .relative_path = path});
+        plan.files.push_back({});
+      } else if (existing->kind != ExportEntryKind::directory) {
+        throw std::invalid_argument("an export directory name is occupied");
+      }
+    }
+    const auto parent = source_parent(source.absolute_source);
+    const auto canonical = canonical_parent(parent);
+    if (!same_path(parent, canonical))
+      throw std::runtime_error("an export source parent contains a link or redirected path");
+    const auto part = collect_export_manifest_v1(source.absolute_source, cancelled);
+    const auto original_top = part.top_level_name();
+    for (const auto& entry : part.entries) {
+      auto projected = entry;
+      projected.relative_path = std::wstring(folder_name) + L"\\" + source.output_name +
+          entry.relative_path.substr(original_top.size());
+      add_entry(plan.manifest, std::move(projected));
+      plan.files.push_back(entry.kind == ExportEntryKind::file
+        ? ExportSelectionFileV1{parent + entry.relative_path, canonical + entry.relative_path}
+        : ExportSelectionFileV1{});
+    }
+  }
+  try { validate_export_manifest_v1(plan.manifest); }
+  catch (const ExportPackageRejected&) {
+    throw std::invalid_argument("the export selection contains conflicting or invalid paths");
+  }
+  return plan;
+}
+
+void write_export_selection_directory_v1(const ExportSelectionPlanV1& plan,
+    const std::wstring_view staging_directory, const std::function<bool()>& cancelled,
+    const ExportProgress& progress) {
+  validate_export_manifest_v1(plan.manifest);
+  if (plan.files.size() != plan.manifest.entries.size())
+    throw std::invalid_argument("the export selection plan is inconsistent");
+  const std::wstring staging(staging_directory);
+  const auto parent = source_parent(staging);
+  const FileHandle root(open_expected(staging, canonical_parent(parent) + staging.substr(parent.size()),
+      FILE_READ_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS));
+  const std::wstring expected = final_path(root.get()) + L"\\";
+  std::vector<std::unique_ptr<FileHandle>> directories;
+  WipedBytes block(kReadBlock);
+  std::uint64_t done = 0;
+  const auto total = plan.manifest.data_bytes;
+  if (progress) progress(done, total);
+  for (std::size_t index = 1; index < plan.manifest.entries.size(); ++index) {
+    check_cancelled(cancelled);
+    const auto& entry = plan.manifest.entries[index];
+    const auto suffix = entry.relative_path.substr(plan.manifest.top_level_name().size() + 1);
+    const auto destination = staging + L"\\" + suffix;
+    const auto expected_destination = expected + suffix;
+    if (entry.kind == ExportEntryKind::directory) {
+      if (::CreateDirectoryW(destination.c_str(), nullptr) == FALSE)
+        throw_last_error("create an export directory");
+      // Retained directory handles prevent junction replacement during writes.
+      const HANDLE handle = ::CreateFileW(destination.c_str(), FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (handle == INVALID_HANDLE_VALUE) throw_last_error("pin an export directory");
+      auto pin = std::make_unique<FileHandle>(handle);
+      BY_HANDLE_FILE_INFORMATION information{};
+      if (::GetFileInformationByHandle(handle, &information) == FALSE)
+        throw_last_error("inspect an export directory");
+      refuse_link(information.dwFileAttributes);
+      if (!same_path(final_path(handle), expected_destination))
+        throw std::runtime_error("an export directory moved");
+      directories.push_back(std::move(pin));
+      continue;
+    }
+    const auto& physical = plan.files[index];
+    const FileHandle input(open_expected(physical.absolute_path, physical.expected_path,
+        GENERIC_READ, FILE_FLAG_SEQUENTIAL_SCAN));
+    LARGE_INTEGER size{};
+    if (::GetFileSizeEx(input.get(), &size) == FALSE) throw_last_error("measure an export source");
+    if (size.QuadPart < 0 || static_cast<std::uint64_t>(size.QuadPart) != entry.size)
+      throw std::runtime_error("an export source changed");
+    const FileHandle output(::CreateFileW(destination.c_str(), GENERIC_WRITE, 0, nullptr,
+        CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (output.get() == INVALID_HANDLE_VALUE) throw_last_error("create an export file");
+    if (!same_path(final_path(output.get()), expected_destination))
+      throw std::runtime_error("an export destination moved");
+    auto left = entry.size;
+    while (left != 0) {
+      check_cancelled(cancelled);
+      DWORD read = 0;
+      if (::ReadFile(input.get(), block.bytes().data(),
+          static_cast<DWORD>(std::min<std::uint64_t>(left, kReadBlock)), &read, nullptr) == FALSE)
+        throw_last_error("read an export source");
+      if (read == 0) throw std::runtime_error("an export source changed");
+      DWORD written = 0;
+      if (::WriteFile(output.get(), block.bytes().data(), read, &written, nullptr) == FALSE)
+        throw_last_error("write an export file");
+      if (written != read) throw std::runtime_error("an export write was incomplete");
+      left -= read; done += read;
+      if (progress) progress(done, total);
+    }
+    std::byte extra{}; DWORD extra_read = 0;
+    if (::ReadFile(input.get(), &extra, 1, &extra_read, nullptr) == FALSE)
+      throw_last_error("finish reading an export source");
+    if (extra_read != 0) throw std::runtime_error("an export source changed");
+    FILETIME modified{static_cast<DWORD>(entry.last_write_time),
+        static_cast<DWORD>(entry.last_write_time >> 32)};
+    if (::SetFileTime(output.get(), nullptr, nullptr, &modified) == FALSE ||
+        ::FlushFileBuffers(output.get()) == FALSE) throw_last_error("finish an export file");
+  }
+}
+
 void write_export_package_v1(const std::wstring_view absolute_source,
                              const ExportManifest& manifest,
                              ExportPackageKeyV1 key,
@@ -230,6 +361,20 @@ void write_export_package_v1(const std::wstring_view absolute_source,
     throw std::invalid_argument("the manifest does not describe this source");
   }
   const std::wstring canonical = canonical_parent(parent);
+  ExportSelectionPlanV1 plan;
+  plan.manifest = manifest;
+  for (const auto& entry : manifest.entries) {
+    plan.files.push_back({parent + entry.relative_path, canonical + entry.relative_path});
+  }
+  write_export_selection_package_v1(plan, std::move(key), sink, cancelled, progress);
+}
+
+void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,
+    ExportPackageKeyV1 key, const ExportPackageWriterV1::Sink& sink,
+    const std::function<bool()>& cancelled, const ExportProgress& progress) {
+  const auto& manifest = plan.manifest;
+  if (plan.files.size() != manifest.entries.size())
+    throw std::invalid_argument("the export selection plan is inconsistent");
   WipedBytes encoded = encode_export_manifest_v1(manifest);
   ExportPackageWriterV1 writer(std::move(key),
                                export_package_v1_header(manifest, encoded.bytes().size()),
@@ -241,11 +386,13 @@ void write_export_package_v1(const std::wstring_view absolute_source,
   const std::uint64_t total = manifest.data_bytes;
   std::uint64_t done = 0;
   if (progress) progress(done, total);
-  for (const ExportManifestEntry& entry : manifest.entries) {
+  for (std::size_t index = 0; index < manifest.entries.size(); ++index) {
+    const ExportManifestEntry& entry = manifest.entries[index];
     if (entry.kind != ExportEntryKind::file) continue;
     check_cancelled(cancelled);
-    const FileHandle file(open_expected(parent + entry.relative_path,
-                                        canonical + entry.relative_path, GENERIC_READ,
+    const auto& source = plan.files[index];
+    const FileHandle file(open_expected(source.absolute_path,
+                                        source.expected_path, GENERIC_READ,
                                         FILE_FLAG_SEQUENTIAL_SCAN));
     BY_HANDLE_FILE_INFORMATION information{};
     if (::GetFileInformationByHandle(file.get(), &information) == FALSE) {

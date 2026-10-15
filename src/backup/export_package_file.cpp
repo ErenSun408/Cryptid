@@ -2,6 +2,9 @@
 
 #include "usb_vault/backup/export_package_source.h"
 
+#include "usb_vault/volume/volume_file_operations.h"
+#include "volume/volume_containment.h"
+
 #include <Windows.h>
 #include <bcrypt.h>
 
@@ -157,6 +160,60 @@ void export_package_to_file_v1(const std::wstring_view absolute_source,
       cancelled, progress);
   if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
   temporary.publish(destination);
+}
+
+void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> sources,
+    const std::wstring_view absolute_destination, const std::wstring_view folder_name,
+    const bool encrypted, const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled, const ExportProgress& progress) {
+  const std::wstring destination(absolute_destination);
+  volume::require_parent_stays_on_volume(destination, volume::require_drive_absolute(destination));
+  const auto directory = parent_of(destination);
+  require_absent(destination);
+  const auto plan = collect_export_selection_v1(sources, folder_name, cancelled);
+  const auto required = encrypted ? export_package_v1_size(export_package_v1_header(
+      plan.manifest, encode_export_manifest_v1(plan.manifest).bytes().size())) : plan.manifest.data_bytes;
+  ULARGE_INTEGER available{};
+  if (::GetDiskFreeSpaceExW(directory.c_str(), &available, nullptr, nullptr) == FALSE)
+    throw_last_error("measure the export destination");
+  if (available.QuadPart < required) throw_win32(ERROR_DISK_FULL, "the export does not fit");
+  if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+  if (encrypted) {
+    auto key = ExportPackageKeyV1::derive(password_utf8, generate_export_package_v1_salt());
+    TemporaryPackage temporary(temporary_name(directory));
+    write_export_selection_package_v1(plan, std::move(key),
+        [&](const std::span<const std::byte> bytes) { temporary.write(bytes); }, cancelled, progress);
+    if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+    temporary.publish(destination);
+    return;
+  }
+  const auto staging = temporary_name(directory);
+  if (::CreateDirectoryW(staging.c_str(), nullptr) == FALSE)
+    throw_last_error("create the plaintext export staging directory");
+  HANDLE pin = INVALID_HANDLE_VALUE;
+  bool published = false;
+  try {
+    pin = ::CreateFileW(staging.c_str(), DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (pin == INVALID_HANDLE_VALUE) throw_last_error("pin the export staging directory");
+    write_export_selection_directory_v1(plan, staging, cancelled, progress);
+    if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+    const auto name_bytes = destination.size() * sizeof(wchar_t);
+    std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + name_bytes);
+    auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
+    rename->ReplaceIfExists = FALSE; rename->RootDirectory = nullptr;
+    rename->FileNameLength = static_cast<DWORD>(name_bytes);
+    std::copy(destination.begin(), destination.end(), rename->FileName);
+    if (::SetFileInformationByHandle(pin, FileRenameInfo, rename,
+        static_cast<DWORD>(buffer.size())) == FALSE) throw_last_error("publish the export directory");
+    published = true;
+    ::CloseHandle(pin); pin = INVALID_HANDLE_VALUE;
+  } catch (...) {
+    if (pin != INVALID_HANDLE_VALUE) ::CloseHandle(pin);
+    if (!published) { try { volume::delete_volume_entry(staging); } catch (...) {} }
+    throw;
+  }
 }
 
 }  // namespace usb_vault::backup

@@ -381,6 +381,8 @@
   const backupExportStatus = document.getElementById("backup-export-status");
   const migrateContainerList =
     document.getElementById("migrate-container-list");
+  const exportMerge = document.getElementById("export-merge");
+  const exportDialogNameLabel = document.getElementById("export-dialog-name-label");
   const exportModePlain = document.getElementById("export-mode-plain");
   const exportModeMigrate = document.getElementById("export-mode-migrate");
   const exportPlainPane = document.getElementById("export-plain-pane");
@@ -1862,6 +1864,7 @@
   // Which of the two exports the pane is showing. Plain is what the section
   // opens on: it is the one the file manager hands entries to.
   let exportMode = "plain";
+  let mergeExport = true;
   let exportLocation = "";
   // The migration export names a container of its own: the one being taken to
   // another machine is rarely the one being browsed.
@@ -2508,6 +2511,9 @@
     exportModePlain.setAttribute("aria-pressed", exportMode === "plain" ? "true" : "false");
     exportModeEncrypted.setAttribute("aria-pressed", encrypted ? "true" : "false");
     exportModeMigrate.setAttribute("aria-pressed", migrate ? "true" : "false");
+    exportMerge.disabled = busy || migrate;
+    exportMerge.setAttribute("aria-disabled", exportMerge.disabled ? "true" : "false");
+    exportMerge.setAttribute("aria-checked", mergeExport ? "true" : "false");
     exportPlainPane.hidden = migrate;
     exportMigratePane.hidden = !migrate;
     for (const pick of [exportModePlain, exportModeEncrypted, exportModeMigrate]) pick.disabled = busy;
@@ -2739,14 +2745,8 @@
     }
   });
 
-  // 🔴 Every ticked entry is exported by the one entry point that may leave a
-  // volume, called once per entry. A directory goes across whole, because the
-  // copy underneath it already walks one.
-  //
-  // ⚠️ The calls run in order on the thread that draws this page, so a large
-  // selection freezes the window for as long as the whole of it takes. The
-  // asynchronous path and its cancellation are still not built; this panel
-  // makes that gap easier to reach, and nothing here hides it.
+  // A merged selection publishes one complete folder or encrypted package.
+  // Separate exports retain per-entry results and can retry failed selections.
   const runExport = async ({ location, packageName = "", password = null, confirmation = null }) => {
     if (busy || currentState !== nativeState.authenticated || exportSelection.size === 0 || location === "" || !exportResultDialog.hidden) {
       wipe(password); wipe(confirmation);
@@ -2754,6 +2754,8 @@
     }
     const encrypted = exportMode === "encrypted";
     const requests = [...exportSelection.values()];
+    const merged = mergeExport;
+    const groups = merged ? [requests] : requests.map(request => [request]);
     const revision = batchSessionRevision;
     const current = () => revision === batchSessionRevision && currentState === nativeState.authenticated;
     // The passphrase bytes are the dialog's; each package gets its own copies,
@@ -2763,7 +2765,7 @@
     let encryptedFailure = 0;
     busy = true;
     exportStopRequested = false;
-    exportResultCancel.hidden = !encrypted;
+    exportResultCancel.hidden = false;
     exportResultCancel.disabled = false;
     setBackupStatus("");
     exportResultItems = requests.map(item => ({ name: item.name, container: containers.find(c => c.id === item.id)?.name || "", state: "waiting" }));
@@ -2776,48 +2778,44 @@
     render(messageForCurrentState());
     const failed = [];
     try {
-      for (const [index, request] of requests.entries()) {
+      for (const group of groups) {
         if (!current()) return;
-        // A stop, or a password the policy refused, ends the run: every
-        // later entry would be refused the same way.
         if (exportStopRequested || encryptedFailure === -1 || encryptedFailure === 2 || encryptedFailure === 3) {
-          for (const item of exportResultItems.slice(index)) item.state = "failed";
-          failed.push(...requests.slice(index));
+          for (const [index, request] of requests.entries()) {
+            if (exportResultItems[index].state !== "waiting") continue;
+            exportResultItems[index].state = "failed";
+            failed.push(request);
+          }
           renderExportResults();
           break;
         }
-        exportResultItems[index].state = "running";
+        const indices = group.map(request => requests.indexOf(request));
+        for (const index of indices) exportResultItems[index].state = "running";
         renderExportResults();
-        await new Promise((resolve) => { setTimeout(resolve, 0); });
+        await new Promise(resolve => setTimeout(resolve, 0));
         if (!current()) return;
         try {
-          if (encrypted) {
-            let first = Array.from(exportPassword);
-            let second = Array.from(exportConfirmation);
-            try {
-              await bridge.beginEncryptedExport(request.id, request.directory, request.name,
-                                                location, packageName || request.name, first, second);
-            } finally {
-              wipe(first); wipe(second); first = null; second = null;
-            }
-            const outcome = await awaitEncryptedTransfer(revision, null);
-            if (outcome === null || !current()) return;
-            if (outcome.state !== 2) {
-              encryptedFailure = outcome.state === 4 ? -1 : outcome.error;
-              throw new Error("encrypted export did not complete");
-            }
-          } else {
-            await bridge.exportContainerEntry(request.id, request.directory, request.name, location);
+          const first = encrypted ? Array.from(exportPassword) : [];
+          const second = encrypted ? Array.from(exportConfirmation) : [];
+          const packed = group.map(request => [request.id, request.directory, request.name].join("\u001f")).join("\u001e");
+          const folder = merged ? (packageName || "导出项目") : group[0].name;
+          try {
+            await bridge.beginExportSelection(encrypted, packed, location, folder, first, second);
+          } finally { wipe(first); wipe(second); }
+          const outcome = await awaitEncryptedTransfer(revision, null);
+          if (outcome === null || !current()) return;
+          if (outcome.state !== 2) {
+            encryptedFailure = outcome.state === 4 ? -1 : outcome.error;
+            throw new Error("export selection did not complete");
           }
-          if (!current()) return;
-          exportSelection.delete(
-          exportKey(request.id, request.directory, request.name));
-          exportResultItems[index].state = "success";
+          for (const request of group)
+            exportSelection.delete(exportKey(request.id, request.directory, request.name));
+          for (const index of indices) exportResultItems[index].state = "success";
         } catch (pageError) {
           if (!current()) return;
           logCaughtPageError("runExport/1", pageError);
-          failed.push(request);
-          exportResultItems[index].state = "failed";
+          failed.push(...group);
+          for (const index of indices) exportResultItems[index].state = "failed";
         }
         renderExportResults();
       }
@@ -2825,7 +2823,7 @@
       catch (pageError) { logCaughtPageError("runExport/2", pageError); currentState = nativeState.unavailable; activeVolumes = true; }
       if (!current()) return;
       if (failed.length !== 0) {
-        setBackupStatus(encrypted && encryptedFailure !== 0
+        setBackupStatus(encryptedFailure !== 0
           ? encryptedFailureText(encryptedFailure)
           : "部分文件导出失败，请检查目标位置和可用空间后重试。", "error");
       } else {
@@ -3141,14 +3139,14 @@
   const openExportDialog = () => {
     if (busy || backupExportConfirm.disabled || currentState !== nativeState.authenticated) return;
     const encrypted = exportMode === "encrypted";
-    const single = exportSelection.size === 1;
     exportDialogTitle.textContent = { plain: "明文导出", encrypted: "密文导出", migrate: "安全盘迁移" }[exportMode];
-    exportDialogNameField.hidden = !encrypted;
+    exportDialogNameField.hidden = exportMode === "migrate";
+    exportDialogNameLabel.textContent = encrypted ? "导出包名称" : "导出文件夹名称";
     exportDialogName.value = "";
-    exportDialogName.disabled = !single;
-    exportDialogNameHint.textContent = single
-      ? "留空则使用所选条目在应用内的名称。"
-      : "已选择多个条目，每个导出包使用条目在应用内的名称。";
+    exportDialogName.disabled = !mergeExport;
+    exportDialogNameHint.textContent = mergeExport
+      ? "留空则命名为“导出项目”；内容按安全盘名称分目录。"
+      : "已关闭合并导出，每个项目分别导出到以项目名称命名的文件夹或密文包。";
     exportDialogSecretFields.hidden = !encrypted;
     clearExportDialogSecrets();
     exportDialogLocation = exportMode === "migrate" ? migrateLocation : exportLocation;
@@ -3173,14 +3171,13 @@
     }
     let password = null;
     let confirmation = null;
-    let packageName = "";
+    const packageName = mergeExport ? exportDialogName.value.trim() : "";
     if (mode === "encrypted") {
       const first = exportDialogPassphrase.value;
       const second = exportDialogPassphraseConfirmation.value;
       if (first === "" || second === "") { setExportDialogError("请输入两次加密口令。"); return; }
       if (first !== second) { setExportDialogError("两次输入的加密口令不一致。"); return; }
       if ([...first].length < 12) { setExportDialogError("加密口令太短，至少需要 12 个字符。"); return; }
-      packageName = exportSelection.size === 1 ? exportDialogName.value.trim() : "";
       password = new TextEncoder().encode(first);
       confirmation = new TextEncoder().encode(second);
     }
@@ -5807,6 +5804,7 @@
   window.addEventListener("usb-vault-session-changed", () => {
     mountRefreshPending = false; clearTimeout(mountRefreshTimer); mountRefreshTimer = null;
     ++batchSessionRevision;
+    mergeExport = true;
     clearExportResults();
     exportSelection.clear();
     exportLocation = "";
@@ -7211,6 +7209,11 @@
     setMigrateStatus("");
     renderBackupCentre();
   };
+  exportMerge.addEventListener("click", () => {
+    if (busy || exportMode === "migrate") return;
+    mergeExport = !mergeExport;
+    renderBackupCentre();
+  });
   exportModePlain.addEventListener("click", () => { chooseExportMode("plain"); });
   exportModeEncrypted.addEventListener("click", () => { chooseExportMode("encrypted"); });
 

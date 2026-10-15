@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,6 +26,12 @@ class ImportPackageV1;
 namespace usb_vault::application {
 
 // Session facts for selecting operations; no driver capacity query, path or type.
+struct ExportSelectionEntry final {
+  std::uint32_t id{};
+  std::wstring directory;
+  std::wstring name;
+};
+
 struct ContainerOperationTarget final {
   std::uint32_t id{};
   std::wstring name;
@@ -502,6 +509,17 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // the container, its kind, or the password the session was opened with.
   // Nothing about the call is written down, for the same reason as the two
   // exports above, and a failure leaves no partial package behind.
+  virtual void export_container_selection(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+    static_cast<void>(entries); static_cast<void>(destination_directory);
+    static_cast<void>(folder_name); static_cast<void>(encrypted); static_cast<void>(password);
+    static_cast<void>(cancelled); static_cast<void>(progress);
+    throw std::logic_error("selection export is unavailable");
+  }
+
   virtual void export_container_entry_encrypted(
       std::uint32_t, std::wstring_view, std::wstring_view, std::wstring_view,
       std::wstring_view, const security::SecureBuffer&,
@@ -698,6 +716,11 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void export_container_file(
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
+  void export_container_selection(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override;
   void export_container_entry_encrypted(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view name, std::wstring_view absolute_destination_directory,

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "usb_vault/backup/export_manifest_v1.h"
+#include "usb_vault/backup/export_package_source.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <functional>
@@ -28,5 +28,12 @@ void export_package_to_file_v1(std::wstring_view absolute_source,
                                const security::SecureBuffer& password_utf8,
                                const std::function<bool()>& cancelled = {},
                                const ExportProgress& progress = {});
+
+// Publishes a virtual folder, either as a plaintext directory or one encrypted
+// package. Physical source paths remain in memory; output names form the manifest.
+void export_selection_to_file_v1(std::span<const ExportSelectionSourceV1> sources,
+    std::wstring_view absolute_destination, std::wstring_view folder_name,
+    bool encrypted, const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled = {}, const ExportProgress& progress = {});
 
 }  // namespace usb_vault::backup

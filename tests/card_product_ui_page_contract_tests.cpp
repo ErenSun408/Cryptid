@@ -1339,12 +1339,16 @@ void test_the_backup_centre_owns_the_plaintext_export() {
 
   // 🔴 What succeeded leaves the selection as it goes, so a partial failure
   // leaves exactly the unfinished entries ticked and says how many.
-  require(script.find("exportSelection.delete(\n"
-                      "          exportKey(request.id, request.directory, "
-                      "request.name));") != std::string::npos &&
+  require(script.find("exportSelection.delete(exportKey(request.id, request.directory, request.name));") != std::string::npos &&
               script.find("exportLocation = \"\";\n        setBackupStatus(") !=
                   std::string::npos,
           "the page kept the exported entry or its location afterwards");
+
+  require(section.find("id=\"export-merge\"") != std::string::npos &&
+              script.find("let mergeExport = true;") != std::string::npos &&
+              script.find("bridge.beginExportSelection(") != std::string::npos &&
+              script.find("exportDialogName.disabled = !mergeExport;") != std::string::npos,
+          "selection export must expose default merging and conditional naming");
 
   // A run that half fails says how many landed and how many did not, and the
   // ones that did not stay ticked -- the page never reports a whole export
@@ -1361,11 +1365,12 @@ void test_the_backup_centre_owns_the_plaintext_export() {
                   std::string::npos,
           "the section does not carry the migration wording by its title");
 
-  // Every synchronous copy path yields before copying, including the current
-  // per-entry plaintext export and the whole-container migration.
+  // The two remaining synchronous copy paths yield before copying. Selection
+  // export yields separately before starting its cancellable native worker.
   require(count_occurrences(
               script, "await new Promise((resolve) => { setTimeout(resolve, "
-                      "0); });") == 3,
+                      "0); });") == 2 &&
+              script.find("await new Promise(resolve => setTimeout(resolve, 0));") != std::string::npos,
           "a copy starts before the page looks busy");
 }
 
