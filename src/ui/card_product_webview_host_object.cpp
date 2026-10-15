@@ -78,6 +78,9 @@ constexpr DISPID kBeginVerifyImportId = 145;
 constexpr DISPID kVerifiedImportMinimumMibId = 146;
 constexpr DISPID kBeginImportNewContainerId = 147;
 constexpr DISPID kBeginImportNewContainerBId = 148;
+constexpr DISPID kChooseImportFileId = 149;
+constexpr DISPID kAdoptUndecidedImportId = 150;
+constexpr DISPID kTreatUndecidedAsPackageId = 151;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -574,6 +577,9 @@ class PasswordArgumentsWiper final {
     case kVerifiedImportMinimumMibId: return "getVerifiedImportMinimumMib";
     case kBeginImportNewContainerId: return "beginImportIntoNewContainerMib";
     case kBeginImportNewContainerBId: return "beginImportIntoNewContainerBMib";
+    case kChooseImportFileId: return "chooseImportFile";
+    case kAdoptUndecidedImportId: return "adoptUndecidedImportFile";
+    case kTreatUndecidedAsPackageId: return "treatUndecidedImportAsPackage";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -774,6 +780,9 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getVerifiedImportMinimumMib")) { ids[0] = kVerifiedImportMinimumMibId; return S_OK; }
     if (matches(names[0], L"beginImportIntoNewContainerMib")) { ids[0] = kBeginImportNewContainerId; return S_OK; }
     if (matches(names[0], L"beginImportIntoNewContainerBMib")) { ids[0] = kBeginImportNewContainerBId; return S_OK; }
+    if (matches(names[0], L"chooseImportFile")) { ids[0] = kChooseImportFileId; return S_OK; }
+    if (matches(names[0], L"adoptUndecidedImportFile")) { ids[0] = kAdoptUndecidedImportId; return S_OK; }
+    if (matches(names[0], L"treatUndecidedImportAsPackage")) { ids[0] = kTreatUndecidedAsPackageId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1625,6 +1634,41 @@ class CardProductWebViewHostObject final : public IDispatch {
         result->vt = VT_UI4;
         result->ulVal = creation_work_->interrupted.load() ? 0U : controller_.verified_import_minimum_mib();
         return S_OK;
+      }
+      // "kind|name": 0 cancelled, 1 container (already adopted or mounted),
+      // 2 package (held for an import), 3 undecided (held for the page to
+      // settle). The path itself never crosses.
+      case kChooseImportFileId:
+      case kTreatUndecidedAsPackageId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result == nullptr) return E_POINTER;
+        if (creation_work_->interrupted.load() ||
+            controller_.state() != CardProductUiState::authenticated) {
+          return E_ACCESSDENIED;
+        }
+        try {
+          std::wstring packed;
+          if (member == kChooseImportFileId) {
+            const auto choice = controller_.choose_import_file();
+            packed = std::to_wstring(static_cast<unsigned int>(choice.kind)) + L"|" + choice.name;
+          } else {
+            packed = controller_.treat_undecided_import_as_package();
+          }
+          ::VariantInit(result);
+          return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+        } catch (...) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "选择导入文件失败", "");
+          return E_FAIL;
+        }
+      }
+      case kAdoptUndecidedImportId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        try {
+          return complete_selection(controller_.adopt_undecided_import_file(), result);
+        } catch (...) {
+          USB_VAULT_TRACE_FAILURE("页面桥", "导入安全盘失败", "");
+          return E_FAIL;
+        }
       }
       case kBeginImportNewContainerId:
       case kBeginImportNewContainerBId:

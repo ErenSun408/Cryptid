@@ -493,6 +493,11 @@ bool CardProductUiSessionController::mount_container() {
 
   const std::wstring path = file_chooser_.choose_existing_container();
   if (path.empty()) return false;
+  adopt_or_mount_container_file(path);
+  return true;
+}
+
+void CardProductUiSessionController::adopt_or_mount_container_file(const std::wstring& path) {
   // Picking a file says where a container is, not that it should be opened.
   // Unless the user asked for the mount, the import stops at the list, which
   // is also what a remembered path does at login.
@@ -501,7 +506,85 @@ bool CardProductUiSessionController::mount_container() {
   } else {
     static_cast<void>(volume_session_.adopt_container(path));
   }
+}
+
+namespace {
+
+[[nodiscard]] bool has_container_extension(const std::wstring& name) {
+  const std::size_t dot = name.find_last_of(L'.');
+  if (dot == std::wstring::npos) return false;
+  std::wstring extension = name.substr(dot + 1);
+  for (wchar_t& character : extension) {
+    if (character >= L'A' && character <= L'Z') character = static_cast<wchar_t>(character - L'A' + L'a');
+  }
+  return extension == L"hc" || extension == L"sys" || extension == L"dat" || extension == L"bin";
+}
+
+}  // namespace
+
+CardProductUiSessionController::ImportFileChoice
+CardProductUiSessionController::choose_import_file() {
+  {
+    const std::scoped_lock lock(import_mutex_);
+    undecided_import_file_.clear();
+    pending_import_package_.clear();
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("importing is not available in the current UI state");
+  }
+  std::wstring path = file_chooser_.choose_existing_container();
+  if (path.empty()) return {};
+  const std::size_t separator = path.find_last_of(L"\\/");
+  std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
+  if (name.empty()) return {};
+  std::error_code error;
+  const std::uintmax_t size = std::filesystem::file_size(path, error);
+  if (error) throw std::system_error(error, "inspect the file picked for import");
+  if (size % 512U != 0) {
+    const std::scoped_lock lock(import_mutex_);
+    pending_import_package_ = std::move(path);
+    pending_import_generation_ = authentication_.generation();
+    return {ImportFileKind::package, std::move(name)};
+  }
+  if (has_container_extension(name)) {
+    adopt_or_mount_container_file(path);
+    return {ImportFileKind::container, std::move(name)};
+  }
+  const std::scoped_lock lock(import_mutex_);
+  undecided_import_file_ = std::move(path);
+  undecided_import_generation_ = authentication_.generation();
+  return {ImportFileKind::undecided, std::move(name)};
+}
+
+bool CardProductUiSessionController::adopt_undecided_import_file() {
+  std::wstring path;
+  {
+    const std::scoped_lock lock(import_mutex_);
+    path = std::move(undecided_import_file_);
+    undecided_import_file_.clear();
+    if (undecided_import_generation_ != authentication_.generation()) path.clear();
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("importing is not available in the current UI state");
+  }
+  if (path.empty()) return false;
+  adopt_or_mount_container_file(path);
   return true;
+}
+
+std::wstring CardProductUiSessionController::treat_undecided_import_as_package() {
+  const std::scoped_lock lock(import_mutex_);
+  std::wstring path = std::move(undecided_import_file_);
+  undecided_import_file_.clear();
+  if (path.empty() || state() != CardProductUiState::authenticated ||
+      undecided_import_generation_ != authentication_.generation()) {
+    return {};
+  }
+  const std::size_t separator = path.find_last_of(L"\\/");
+  std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
+  pending_import_package_ = std::move(path);
+  pending_import_generation_ = authentication_.generation();
+  return name;
 }
 
 void CardProductUiSessionController::mount_container(
@@ -666,6 +749,9 @@ void CardProductUiSessionController::release_stale_import_state() noexcept {
   const bool current = state() == CardProductUiState::authenticated;
   if (!current || pending_import_generation_ != authentication_.generation()) {
     pending_import_package_.clear();
+  }
+  if (!current || undecided_import_generation_ != authentication_.generation()) {
+    undecided_import_file_.clear();
   }
   if (verified_import_ && (!current || verified_import_->generation != authentication_.generation())) {
     verified_import_.reset();

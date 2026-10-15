@@ -11,11 +11,13 @@ namespace usb_vault::platform::windows {
 namespace {
 
 constexpr wchar_t kContainerDirectoryTitle[] = L"选择加密盘的保存位置";
-constexpr wchar_t kExistingContainerTitle[] = L"选择要打开的加密盘文件";
+constexpr wchar_t kExistingContainerTitle[] = L"选择要导入的安全盘文件或密文导出包";
 constexpr wchar_t kImportPackageTitle[] = L"选择要导入的加密导出包";
+// The generic import takes containers and cipher export packages alike, and
+// a package has no fixed extension, so every file is offered first.
 constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
+    {L"安全盘文件和密文导出包", L"*.*"},
     {L"安全盘文件", L"*.hc;*.sys;*.dat;*.bin"},
-    {L"所有文件", L"*.*"},
 };
 
 // Neither dialog may leave a trace of the chosen location. `FOS_DONTADDTORECENT`

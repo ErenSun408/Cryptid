@@ -58,11 +58,11 @@ const wait=async p=>{for(let i=0;i<200;i++){if(p())return;await tick();}throw Er
    await wait(()=>state(1)==='未挂载');assert.equal(state(3),'已挂载');continue;
   }
   q('[data-section=backup]').click();q('[data-export-select-all="1"]').click();await tick();
-  assert.match(el('backup-export-confirm').textContent,/2/);
+  assert.equal(el('backup-export-confirm').disabled,false);assert.equal(q('#export-container-list .cbx.on')!==null,true);
   // Unsubmitted settings content must survive the mount-only refresh.
   el('exit-hotkey-key').value='unsaved draft';el('exit-hotkey-count').value='7';
   removed(1);notice();await wait(()=>state(1)==='未挂载');
-  assert.equal(state(3),'已挂载');assert.equal(el('backup-export-confirm').textContent,'开始导出');
+  assert.equal(state(3),'已挂载');assert.equal(el('backup-export-confirm').disabled,true);assert.equal(q('#export-container-list .cbx.on'),null);
   assert.equal(el('exit-hotkey-key').value,'unsaved draft');assert.equal(el('exit-hotkey-count').value,'7');
   assert.equal(el('dashboard-section-backup').classList.contains('active'),true);
   assert.equal(fixture.pageEvents.some(e=>/无法确认安全会话/.test(e.content)),false);

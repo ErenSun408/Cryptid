@@ -98,33 +98,36 @@
     </section>
     <section id="dashboard-section-backup" class="dashboard-section">
       <button id="export-mode-plain" type="button" aria-pressed="true">明文导出</button>
-      <button id="export-mode-encrypted" type="button" aria-pressed="false">加密导出</button>
-      <button id="export-mode-migrate" type="button" aria-pressed="false">密文迁移</button>
-      <button id="export-mode-import" type="button" aria-pressed="false">加密导入</button>
-      <div id="export-plain-pane">
-      <div id="export-container-list"></div>
+      <button id="export-mode-encrypted" type="button" aria-pressed="false">密文导出</button>
+      <button id="export-mode-migrate" type="button" aria-pressed="false">安全盘迁移</button>
+      <button id="backup-export-confirm" type="button" disabled>下一步</button>
+      <output id="backup-export-status"></output>
       <select id="settings-window-size"><option value="3">紧凑</option><option value="0">标准</option><option value="1" selected>宽敞</option><option value="2">最大化</option></select>
       <output id="settings-window-size-status"></output>
       <button type="button" role="switch" aria-checked="false" data-setting="close-to-tray">关闭时最小化到托盘</button>
-      <button id="backup-export-location" type="button"></button>
-      <button id="backup-export-browse" type="button">选择位置</button>
-      <div id="export-encrypted-fields" hidden>
-      <input id="encrypted-export-password" type="password">
-      <input id="encrypted-export-confirmation" type="password">
+      <div id="export-plain-pane"><div id="export-container-list"></div></div>
+      <div id="export-migrate-pane" hidden><div id="migrate-container-list"></div></div>
+      <div id="export-dialog" hidden>
+      <h3 id="export-dialog-title">导出</h3>
+      <div id="export-dialog-name-field"><input id="export-dialog-name" type="text"><p id="export-dialog-name-hint"></p></div>
+      <button id="export-dialog-location" type="button"></button>
+      <button id="export-dialog-browse" type="button">浏览</button>
+      <div id="export-dialog-secret-fields">
+      <input id="export-dialog-passphrase" type="password">
+      <input id="export-dialog-passphrase-confirmation" type="password">
       </div>
-      <button id="backup-export-confirm" type="button" disabled>导出</button>
-      <output id="backup-export-status"></output>
+      <p id="export-dialog-error" hidden></p>
+      <button id="export-dialog-cancel" type="button">取消</button>
+      <button id="export-dialog-start" type="button" disabled>开始导出</button>
       </div>
-      <div id="export-migrate-pane" hidden>
-      <div id="migrate-container-list"></div>
-      <button id="backup-migrate-location" type="button"></button>
-      <button id="backup-migrate-browse" type="button">选择位置</button>
-      <button id="backup-migrate-confirm" type="button" disabled>导出</button>
-      <output id="backup-migrate-status"></output>
+      <div id="import-kind-dialog" hidden>
+      <b id="import-kind-name"></b>
+      <button id="import-kind-cancel" type="button">取消</button>
+      <button id="import-kind-container" type="button">作为安全盘导入</button>
+      <button id="import-kind-package" type="button">作为密文导出包导入</button>
       </div>
-      <div id="import-pane" hidden>
-      <button id="import-package-name" type="button"></button>
-      <button id="import-package-browse" type="button">浏览</button>
+      <div id="import-dialog" hidden>
+      <span id="import-package-name"></span>
       <input id="import-password" type="password">
       <button id="import-target-existing" type="button" aria-pressed="true">导入到已有安全盘</button>
       <button id="import-target-new" type="button" aria-pressed="false">新建安全盘并导入</button>
@@ -142,9 +145,9 @@
       <input id="import-new-acknowledge" type="checkbox">
       </div>
       </div>
-      <button id="import-cancel" type="button" hidden>取消</button>
-      <button id="import-confirm" type="button" disabled>开始导入</button>
       <output id="import-status"></output>
+      <button id="import-cancel" type="button">取消</button>
+      <button id="import-confirm" type="button" disabled>开始导入</button>
       </div>
     </section>
     <section id="dashboard-section-history" class="dashboard-section">

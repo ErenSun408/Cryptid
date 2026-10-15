@@ -97,6 +97,13 @@ window.navigationFixture = {
       fixture.importNext = null;
       return true;
     },
+    // P5.9: the import button's pick; a fixture container is a container.
+    chooseImportFile: () => {
+      const next = fixture.importNext;
+      return bridge.mountContainer() ? `1|${next.name}` : "0|";
+    },
+    adoptUndecidedImportFile: () => bridge.mountContainer(),
+    treatUndecidedImportAsPackage: () => "",
     getForceUnmountEnabled: () => fixture.forceEnabled,
     getHideFileContainers: () => fixture.hideFileContainers ?? false,
     setHideFileContainers: value => { fixture.hideFileContainers = value; },

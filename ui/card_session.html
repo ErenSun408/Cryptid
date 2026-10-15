@@ -420,6 +420,16 @@
     .section-aside b { color: var(--text); font-weight: 600; }
 
     .picks { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; max-width: 47.5rem; margin: 0 0 1.15rem; }
+    /* 导出页工具栏：三种方式与“下一步”同一行，吸附在内容区顶部，列表在其下滚动。 */
+    .export-toolbar {
+      position: sticky; top: calc(-1 * var(--content-pad-y)); z-index: 6;
+      display: flex; gap: .75rem; align-items: stretch;
+      margin: 0 calc(-1 * var(--content-pad-x)) .75rem; padding: .9rem var(--content-pad-x);
+      background: var(--ink-900); border-bottom: 1px solid var(--line);
+    }
+    .export-toolbar .picks { flex: 1; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: none; margin: 0; }
+    .export-toolbar > .create-button { align-self: center; flex: 0 0 auto; white-space: nowrap; }
+    #import-dialog .picks { grid-template-columns: 1fr 1fr; }
     .pick {
       padding: 1rem; border: 1px solid var(--line-2); border-radius: .625rem;
       background: rgba(255, 255, 255, .02); color: inherit; font: inherit;
@@ -513,7 +523,10 @@
     button.xinp:disabled { cursor: default; opacity: .5; }
     .xacts { display: flex; gap: .5rem; margin-top: 1.125rem; }
 
-    .content { min-width: 0; padding: 1.5rem 1.75rem; overflow-y: auto; max-height: calc(100vh - 3.25rem); }
+    .content {
+      --content-pad-y: 1.5rem; --content-pad-x: 1.75rem;
+      min-width: 0; padding: var(--content-pad-y) var(--content-pad-x); overflow-y: auto; max-height: calc(100vh - 3.25rem);
+    }
     .dashboard-section { display: none; }
     .dashboard-section.active { display: block; }
     .section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
@@ -1581,150 +1594,40 @@
 
         <section id="dashboard-section-backup" class="dashboard-section" aria-labelledby="backup-title">
           <div class="section-header">
-            <div><h2 id="backup-title">导出、迁移与导入</h2></div>
+            <div><h2 id="backup-title">导出与迁移</h2></div>
             <p class="section-aside">
               <span class="ni"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z"></path></svg></span>
               <span>迁移只复制安全盘文件本身，<b>不导出根密钥、密码或任何恢复材料</b>。</span>
             </p>
           </div>
-          <div class="picks" role="group" aria-label="导出方式">
-            <button id="export-mode-plain" class="pick" type="button" aria-pressed="true">
-              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0 001.5-1.5V8.5z"></path><path d="M13.5 3.5V8.5h5"></path></svg></span>
-              <h4>明文导出</h4>
-              <p>把安全盘里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p>
-            </button>
-            <button id="export-mode-encrypted" class="pick" type="button" aria-pressed="false">
-              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="1.5"></rect><path d="M8.5 10.5V7.5a3.5 3.5 0 017 0v3"></path></svg></span>
-              <h4>加密导出</h4>
-              <p>把选中的文件或文件夹加密成导出包。导出包只能在本软件中凭导出密码导入，不需要安全卡。</p>
-            </button>
-            <button id="export-mode-migrate" class="pick" type="button" aria-pressed="false">
-              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"></path></svg></span>
-              <h4>密文迁移</h4>
-              <p>原样复制安全盘文件本身，用于换机或备份。仍需原卡与原密码才能打开。</p>
-            </button>
-            <button id="export-mode-import" class="pick" type="button" aria-pressed="false">
-              <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4"></path><path d="M5 15v4.5h14V15"></path></svg></span>
-              <h4>加密导入</h4>
-              <p>输入导出密码，把导出包导入已挂载的安全盘，或新建一个安全盘导入。</p>
-            </button>
+          <div class="export-toolbar">
+            <div class="picks" role="group" aria-label="导出方式">
+              <button id="export-mode-plain" class="pick" type="button" aria-pressed="true">
+                <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 3.5H7A1.5 1.5 0 005.5 5v14A1.5 1.5 0 007 20.5h10a1.5 1.5 0 001.5-1.5V8.5z"></path><path d="M13.5 3.5V8.5h5"></path></svg></span>
+                <h4>明文导出</h4>
+                <p>把安全盘里的文件解密后复制到指定位置。导出的内容不再受保护，任何人都能直接打开。</p>
+              </button>
+              <button id="export-mode-encrypted" class="pick" type="button" aria-pressed="false">
+                <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="1.5"></rect><path d="M8.5 10.5V7.5a3.5 3.5 0 017 0v3"></path></svg></span>
+                <h4>密文导出</h4>
+                <p>把选中的文件或文件夹加密成导出包。导出包只能在本软件中凭加密口令导入，不需要原安全卡。</p>
+              </button>
+              <button id="export-mode-migrate" class="pick" type="button" aria-pressed="false">
+                <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"></path></svg></span>
+                <h4>安全盘迁移</h4>
+                <p>原样复制安全盘文件本身，用于换机或备份。仍需原卡与原密码才能打开。</p>
+              </button>
+            </div>
+            <button id="backup-export-confirm" class="create-button" type="button" disabled>下一步</button>
           </div>
+          <output id="backup-export-status" class="creation-status" aria-live="polite"></output>
 
           <div id="export-plain-pane">
             <div id="export-container-list" class="xlist"></div>
-            <div class="xfield">
-              <label for="backup-export-browse">目标位置</label>
-              <div class="line">
-                <button id="backup-export-location" class="xinp ph" type="button" aria-label="选择明文导出目标位置">选择一个位置…</button>
-                <button id="backup-export-browse" class="shell-button" type="button">浏览</button>
-              </div>
-            </div>
-            <div id="export-encrypted-fields" hidden>
-              <div class="xfield">
-                <label for="encrypted-export-password">导出密码</label>
-                <div class="line"><input id="encrypted-export-password" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-              </div>
-              <div class="xfield">
-                <label for="encrypted-export-confirmation">再次输入导出密码</label>
-                <div class="line"><input id="encrypted-export-confirmation" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-              </div>
-              <p class="creation-hint">导出密码至少 12 个字符。每个选中的条目生成一个与其同名的导出包；拿到导出包的人可以离线反复猜测密码，导出包的安全性完全取决于这个密码，遗忘后无法恢复。</p>
-            </div>
-            <div class="xacts">
-              <button id="backup-export-confirm" class="create-button" type="button" disabled>开始导出</button>
-            </div>
-            <output id="backup-export-status" class="creation-status" aria-live="polite"></output>
           </div>
 
           <div id="export-migrate-pane" hidden>
             <div id="migrate-container-list" class="xlist"></div>
-            <div class="xfield">
-              <label for="backup-migrate-browse">目标位置</label>
-              <div class="line">
-                <button id="backup-migrate-location" class="xinp ph" type="button" aria-label="选择密文迁移目标位置">选择一个位置…</button>
-                <button id="backup-migrate-browse" class="shell-button" type="button">浏览</button>
-              </div>
-            </div>
-            <div class="xacts">
-              <button id="backup-migrate-confirm" class="create-button" type="button" disabled>开始迁移</button>
-            </div>
-            <output id="backup-migrate-status" class="creation-status" aria-live="polite"></output>
-          </div>
-
-          <div id="import-pane" hidden>
-            <div class="xfield">
-              <label for="import-package-browse">导出包</label>
-              <div class="line">
-                <button id="import-package-name" class="xinp ph" type="button">选择一个导出包…</button>
-                <button id="import-package-browse" class="shell-button" type="button">浏览</button>
-              </div>
-            </div>
-            <div class="xfield">
-              <label for="import-password">导出密码</label>
-              <div class="line"><input id="import-password" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-            </div>
-            <div class="picks" role="group" aria-label="导入位置">
-              <button id="import-target-existing" class="pick" type="button" aria-pressed="true">
-                <h4>导入到已有安全盘</h4>
-                <p>导入到所选已挂载安全盘的根目录。先完整校验导出包，再写入；同名内容不会被覆盖。</p>
-              </button>
-              <button id="import-target-new" class="pick" type="button" aria-pressed="false">
-                <h4>新建安全盘并导入</h4>
-                <p>先校验导出包，通过后再新建安全盘。导入没有完成时，新建的安全盘会被撤销。</p>
-              </button>
-            </div>
-            <div id="import-existing-fields">
-              <div id="import-container-list" class="xlist"></div>
-            </div>
-            <div id="import-new-fields" hidden>
-              <div class="xfield">
-                <label for="import-new-name">安全盘名称</label>
-                <div class="line"><input id="import-new-name" class="xinp" type="text" autocomplete="off" spellcheck="false" maxlength="64"></div>
-              </div>
-              <div class="xfield">
-                <label for="import-new-browse">保存位置</label>
-                <div class="line">
-                  <button id="import-new-location" class="xinp ph" type="button">选择一个位置…</button>
-                  <button id="import-new-browse" class="shell-button" type="button">浏览</button>
-                </div>
-              </div>
-              <div class="xfield">
-                <label for="import-new-size">容量（MiB）</label>
-                <div class="line"><input id="import-new-size" class="xinp" type="number" min="1" step="1" inputmode="numeric"></div>
-              </div>
-              <div class="xfield">
-                <label><input id="import-new-hidden" type="checkbox"> 带隐藏卷</label>
-              </div>
-              <div id="import-new-hidden-fields" hidden>
-                <div class="xfield">
-                  <label for="import-new-hidden-size">内层容量（MiB）</label>
-                  <div class="line"><input id="import-new-hidden-size" class="xinp" type="number" min="1" step="1" inputmode="numeric"></div>
-                </div>
-                <p class="creation-hint">内层卷至多占总容量的 3/4；导入的内容写入内层卷。</p>
-                <div class="xfield">
-                  <label for="import-new-second">为该安全盘设置诱饵密码</label>
-                  <div class="line"><input id="import-new-second" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-                </div>
-                <div class="xfield">
-                  <label for="import-new-second-confirmation">再次输入诱饵密码</label>
-                  <div class="line"><input id="import-new-second-confirmation" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-                </div>
-                <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
-                <div class="creation-note">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
-                  <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。若您曾用本卡创建过含隐藏卷的安全盘，诱饵密码不一致可能使本卡原有密码失效，导致此前安全盘中的数据永久无法访问。</span>
-                </div>
-                <label class="creation-check" for="import-new-acknowledge">
-                  <input id="import-new-acknowledge" type="checkbox">
-                  <span>我已知悉诱饵密码不一致可能带来的永久性后果。</span>
-                </label>
-              </div>
-            </div>
-            <div class="xacts">
-              <button id="import-cancel" class="shell-button" type="button" hidden>取消</button>
-              <button id="import-confirm" class="create-button" type="button" disabled>开始导入</button>
-            </div>
-            <output id="import-status" class="creation-status" aria-live="polite"></output>
           </div>
         </section>
 
@@ -1943,6 +1846,131 @@
   </div>
 
 
+  <div id="export-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title" tabindex="-1" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="export-dialog-title">导出</h3></div>
+      <div class="modal-body">
+        <div id="export-dialog-name-field" class="xfield">
+          <label for="export-dialog-name">导出包名称</label>
+          <div class="line"><input id="export-dialog-name" class="xinp" type="text" autocomplete="off" spellcheck="false" maxlength="255"></div>
+          <p id="export-dialog-name-hint" class="creation-hint">留空则使用所选条目在应用内的名称。</p>
+        </div>
+        <div class="xfield">
+          <label for="export-dialog-browse">目标位置</label>
+          <div class="line">
+            <button id="export-dialog-location" class="xinp ph" type="button">选择一个位置…</button>
+            <button id="export-dialog-browse" class="shell-button" type="button">浏览</button>
+          </div>
+        </div>
+        <div id="export-dialog-secret-fields">
+          <div class="xfield">
+            <label for="export-dialog-passphrase">加密口令</label>
+            <div class="line"><input id="export-dialog-passphrase" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          </div>
+          <div class="xfield">
+            <label for="export-dialog-passphrase-confirmation">再次输入加密口令</label>
+            <div class="line"><input id="export-dialog-passphrase-confirmation" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          </div>
+          <p class="creation-hint">加密口令至少 12 个字符。拿到导出包的人可以离线反复猜测口令，导出包的安全性完全取决于它，遗忘后无法恢复。</p>
+        </div>
+        <p id="export-dialog-error" class="creation-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button id="export-dialog-cancel" class="modal-button" type="button">取消</button>
+        <button id="export-dialog-start" class="modal-button primary" type="button" disabled>开始导出</button>
+      </div>
+    </div>
+  </div>
+  <div id="import-kind-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="import-kind-title" tabindex="-1" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="import-kind-title">选择导入方式</h3></div>
+      <div class="modal-body">
+        <p>无法仅凭文件判断 <b id="import-kind-name"></b> 是安全盘文件还是密文导出包，请选择导入方式。</p>
+      </div>
+      <div class="modal-footer">
+        <button id="import-kind-cancel" class="modal-button" type="button">取消</button>
+        <button id="import-kind-container" class="modal-button" type="button">作为安全盘导入</button>
+        <button id="import-kind-package" class="modal-button primary" type="button">作为密文导出包导入</button>
+      </div>
+    </div>
+  </div>
+  <div id="import-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title" tabindex="-1" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="import-dialog-title">导入密文导出包</h3></div>
+      <div class="modal-body">
+        <div class="xfield">
+          <label>导出包</label>
+          <div class="line"><span id="import-package-name" class="xinp"></span></div>
+        </div>
+        <div class="xfield">
+          <label for="import-password">加密口令</label>
+          <div class="line"><input id="import-password" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        </div>
+        <div class="picks" role="group" aria-label="导入位置">
+          <button id="import-target-existing" class="pick" type="button" aria-pressed="true">
+            <h4>导入到已有安全盘</h4>
+            <p>导入到所选已挂载安全盘的根目录。先完整校验导出包，再写入；同名内容不会被覆盖。</p>
+          </button>
+          <button id="import-target-new" class="pick" type="button" aria-pressed="false">
+            <h4>新建安全盘并导入</h4>
+            <p>先校验导出包，通过后再新建安全盘。导入没有完成时，新建的安全盘会被撤销。</p>
+          </button>
+        </div>
+        <div id="import-existing-fields">
+          <div id="import-container-list" class="xlist"></div>
+        </div>
+        <div id="import-new-fields" hidden>
+          <div class="xfield">
+            <label for="import-new-name">安全盘名称</label>
+            <div class="line"><input id="import-new-name" class="xinp" type="text" autocomplete="off" spellcheck="false" maxlength="64"></div>
+          </div>
+          <div class="xfield">
+            <label for="import-new-browse">保存位置</label>
+            <div class="line">
+              <button id="import-new-location" class="xinp ph" type="button">选择一个位置…</button>
+              <button id="import-new-browse" class="shell-button" type="button">浏览</button>
+            </div>
+          </div>
+          <div class="xfield">
+            <label for="import-new-size">容量（MiB）</label>
+            <div class="line"><input id="import-new-size" class="xinp" type="number" min="1" step="1" inputmode="numeric"></div>
+          </div>
+          <div class="xfield">
+            <label><input id="import-new-hidden" type="checkbox"> 带隐藏卷</label>
+          </div>
+          <div id="import-new-hidden-fields" hidden>
+            <div class="xfield">
+              <label for="import-new-hidden-size">内层容量（MiB）</label>
+              <div class="line"><input id="import-new-hidden-size" class="xinp" type="number" min="1" step="1" inputmode="numeric"></div>
+            </div>
+            <p class="creation-hint">内层卷至多占总容量的 3/4；导入的内容写入内层卷。</p>
+            <div class="xfield">
+              <label for="import-new-second">为该安全盘设置诱饵密码</label>
+              <div class="line"><input id="import-new-second" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+            </div>
+            <div class="xfield">
+              <label for="import-new-second-confirmation">再次输入诱饵密码</label>
+              <div class="line"><input id="import-new-second-confirmation" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+            </div>
+            <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
+            <div class="creation-note">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+              <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。若您曾用本卡创建过含隐藏卷的安全盘，诱饵密码不一致可能使本卡原有密码失效，导致此前安全盘中的数据永久无法访问。</span>
+            </div>
+            <label class="creation-check" for="import-new-acknowledge">
+              <input id="import-new-acknowledge" type="checkbox">
+              <span>我已知悉诱饵密码不一致可能带来的永久性后果。</span>
+            </label>
+          </div>
+        </div>
+        <output id="import-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="import-cancel" class="modal-button" type="button">取消</button>
+        <button id="import-confirm" class="modal-button primary" type="button" disabled>开始导入</button>
+      </div>
+    </div>
+  </div>
   <div id="export-result-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="export-result-title" tabindex="-1" hidden>
     <div class="modal">
       <div class="modal-header"><h3 id="export-result-title">导出结果</h3></div>

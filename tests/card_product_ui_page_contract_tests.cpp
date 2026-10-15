@@ -224,7 +224,7 @@ void test_page_has_route_specific_password_surfaces() {
       read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE), "configuration-surface");
   // Two session inputs, two creation inputs, one read-only review preview and
   // the one the maintenance column asks for. The password the session was
-  // opened under is not among them. P5.9 adds five: the export password twice,
+  // opened under is not among them. P5.9 adds five: the export passphrase twice,
   // the import password, and the second password twice for a hidden-volume
   // container created by an import.
   require(count_occurrences(page, "type=\"password\"") == 11,
@@ -241,10 +241,11 @@ void test_page_has_route_specific_password_surfaces() {
   // maintenance column's password. A remembered container path is exactly what
   // section 8.4 forbids, so browser assistance is off on those too; a file
   // name inside a container is the content of an encrypted volume, which is at
-  // least as good a reason. P5.9 adds six: its five password fields and the
-  // name of a container created by an import.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 17 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 17,
+  // least as good a reason. P5.9 adds seven: its five password fields, the
+  // name of a container created by an import and the export package name.
+  // The editable import package name adds one more protected text control.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 18 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 18,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");
@@ -558,7 +559,10 @@ void test_bridge_calls_are_narrow_and_route_specific() {
               script.find("await bridge.getContainerDriveLetter(index);") !=
                   std::string::npos,
           "authenticated dashboard does not query the live container list");
-  require(script.find("bridge.mountContainer()") != std::string::npos &&
+  // P5.9: the import button picks through chooseImportFile, which adopts a
+  // container natively or hands a package to the import dialog.
+  require(script.find("bridge.chooseImportFile()") != std::string::npos &&
+              script.find("bridge.adoptUndecidedImportFile()") != std::string::npos &&
               script.find("bridge.beginMountAdoptedContainer(id)") !=
                   std::string::npos &&
               script.find("bridge.beginUnmountContainer(id)") != std::string::npos,
@@ -1282,19 +1286,18 @@ void test_the_backup_centre_owns_the_plaintext_export() {
   const std::string section = dashboard_section(page, "backup");
   const std::string files = dashboard_section(page, "files");
 
+  // The location is asked for in the export dialog that "next" opens.
   require(section.find("id=\"export-container-list\"") != std::string::npos &&
-              section.find("id=\"backup-export-location\"") !=
+              page.find("id=\"export-dialog-location\"") !=
                   std::string::npos &&
-              section.find("id=\"backup-export-browse\"") !=
+              page.find("id=\"export-dialog-browse\"") !=
                   std::string::npos &&
               section.find("id=\"backup-export-confirm\"") !=
                   std::string::npos &&
               section.find("id=\"backup-export-status\"") != std::string::npos,
           "the backup centre cannot pick a file, a location, or export");
 
-  // The panel picks by ticking containers open, not by naming one entry. Every
-  // ticked entry goes through the one entry point that may leave a volume, so
-  // a selection is many calls to it rather than a second, bulk way out.
+  // Container cards collect selections for the authenticated selection export.
   require(section.find("class=\"xlist\"") != std::string::npos &&
               script.find("const exportSelection = new Map();") !=
                   std::string::npos &&
@@ -1358,10 +1361,8 @@ void test_the_backup_centre_owns_the_plaintext_export() {
                   std::string::npos,
           "the section does not carry the migration wording by its title");
 
-  // Every call that copies bytes on the drawing thread paints the disabled
-  // state first: a transfer between containers, a plaintext export, and a
-  // whole-container migration. The count is here so a fourth one cannot be
-  // added without deciding about this.
+  // Every synchronous copy path yields before copying, including the current
+  // per-entry plaintext export and the whole-container migration.
   require(count_occurrences(
               script, "await new Promise((resolve) => { setTimeout(resolve, "
                       "0); });") == 3,
@@ -1375,14 +1376,14 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
   const std::string section = dashboard_section(page, "backup");
 
+  // The three ways share one "next" and one status line; the location is
+  // asked for in the export dialog.
   require(section.find("id=\"migrate-container-list\"") != std::string::npos &&
-              section.find("id=\"backup-migrate-location\"") !=
+              section.find("id=\"backup-export-confirm\"") !=
                   std::string::npos &&
-              section.find("id=\"backup-migrate-browse\"") !=
+              section.find("id=\"backup-export-status\"") !=
                   std::string::npos &&
-              section.find("id=\"backup-migrate-confirm\"") !=
-                  std::string::npos &&
-              section.find("id=\"backup-migrate-status\"") !=
+              page.find("id=\"export-dialog-location\"") !=
                   std::string::npos,
           "the migration export cannot pick a container, a location, or run");
 
@@ -1396,10 +1397,12 @@ void test_the_migration_export_says_what_it_does_and_does_not_do() {
                   std::string::npos,
           "the migration export does not say what it is and is not");
 
-  // The section action directly starts export after content and destination selection.
+  // "Next" opens the export dialog, whose own button starts the export; no
+  // typed confirmation phrase comes back.
   require(page.find("id=\"export-confirm-dialog\"") == std::string::npos &&
               script.find("exportConfirmPhrase") == std::string::npos &&
-              script.find("backupExportConfirm.addEventListener(\"click\", async () => { await runExport(); });") != std::string::npos,
+              script.find("backupExportConfirm.addEventListener(\"click\", () => { openExportDialog(); });") != std::string::npos &&
+              script.find("exportDialogStart.addEventListener(\"click\", async () => { await startExportFromDialog(); });") != std::string::npos,
           "plaintext export retained its retired confirmation page");
   require(count_occurrences(script, "bridge.exportContainerFile") == 1 &&
               script.find("await bridge.exportContainerFile(id, location);") !=

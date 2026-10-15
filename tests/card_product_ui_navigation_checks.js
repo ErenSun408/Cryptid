@@ -853,22 +853,34 @@
     selectAll(1).click();
     check(!all("#export-container-list .xfile .cbx.on").length,
       "Expanded select-all still clears the file selection");
-    $("#backup-export-location").click();
+    check($("#backup-export-confirm").disabled && $("#backup-export-confirm").textContent === "下一步",
+      "Next waits for a selection");
+    selectAll(1).click();
+    await wait(() => !$("#backup-export-confirm").disabled);
+    $("#backup-export-confirm").click();
+    check(!$("#export-dialog").hidden && $("#export-dialog-start").disabled,
+      "Next opens the export dialog, which waits for a location");
+    $("#export-dialog-location").click();
     await tick();
-    check($("#backup-export-location").textContent === "D:\\Export" && window.navigationFixture.pickerCalls === 1,
-      "Plain export location opens the directory picker");
+    check($("#export-dialog-location").textContent === "D:\\Export" && window.navigationFixture.pickerCalls === 1,
+      "Export location opens the directory picker");
     window.navigationFixture.chosenLocation = "";
-    $("#backup-export-browse").click();
+    $("#export-dialog-browse").click();
     await tick();
-    check($("#backup-export-location").textContent === "D:\\Export",
+    check($("#export-dialog-location").textContent === "D:\\Export",
       "Cancelling the picker preserves the selected location");
+    $("#export-dialog-cancel").click();
+    check($("#export-dialog").hidden, "The export dialog closes without exporting");
     $("#export-mode-migrate").click();
     window.navigationFixture.chosenLocation = "D:\\Migration";
-    $("#backup-migrate-location").click();
+    $('[data-migrate-select="2"]').click();
+    await wait(() => !$("#backup-export-confirm").disabled);
+    $("#backup-export-confirm").click();
+    $("#export-dialog-location").click();
     await tick();
-    check($("#backup-migrate-location").textContent === "D:\\Migration" &&
-      $("#backup-export-location").textContent === "D:\\Export" && window.navigationFixture.pickerCalls === 3,
+    check($("#export-dialog-location").textContent === "D:\\Migration" && window.navigationFixture.pickerCalls === 3,
       "Migration location uses the picker and stays separate from plain export");
+    $("#export-dialog-cancel").click();
     $("[data-section=files]").click();
     check(!$(manager).hidden && $("#management-files").hidden, "Management navigation starts at containers");
     $(manager + ' [data-row-container="1"] .container-state').click();

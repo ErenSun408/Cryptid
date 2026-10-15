@@ -2353,6 +2353,57 @@ void test_an_import_into_a_new_container_is_all_or_nothing() {
           "a verified package survived the end of its login");
 }
 
+// P5.9: the generic import button tells containers and packages apart by
+// size alone: a file container is whole sectors, a package is almost never.
+void test_the_generic_import_sorts_containers_from_packages() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  using Kind = usb_vault::ui::CardProductUiSessionController::ImportFileKind;
+  const std::filesystem::path root(fixture.directory.wide());
+  const auto make = [&](const wchar_t* const name, const std::size_t size) {
+    const std::filesystem::path path = root / name;
+    std::ofstream(path, std::ios::binary) << std::string(size, 'x');
+    return path.wstring();
+  };
+
+  fixture.chooser.existing_path = make(L"photos backup", 1000);
+  auto choice = fixture.controller.choose_import_file();
+  require(choice.kind == Kind::package && choice.name == L"photos backup",
+          "a file that is not whole sectors was not taken as a package");
+  require(fixture.controller.take_import_package() == fixture.chooser.existing_path,
+          "the package pick was not held for an import");
+  require(fixture.volume.adopt_calls == 0 && fixture.volume.mount_calls == 0,
+          "a package was treated as a container");
+
+  fixture.chooser.existing_path = make(L"vault.HC", 2048);
+  choice = fixture.controller.choose_import_file();
+  require(choice.kind == Kind::container && fixture.volume.adopted_path == fixture.chooser.existing_path,
+          "a sector-sized container file was not adopted as before");
+
+  fixture.chooser.existing_path = make(L"unnamed", 4096);
+  choice = fixture.controller.choose_import_file();
+  require(choice.kind == Kind::undecided && choice.name == L"unnamed",
+          "a sector-sized file without a container extension was decided for the user");
+  require(fixture.controller.treat_undecided_import_as_package() == L"unnamed" &&
+              fixture.controller.take_import_package() == fixture.chooser.existing_path,
+          "an undecided file could not be imported as a package");
+  require(!fixture.controller.adopt_undecided_import_file(), "a settled pick was settled twice");
+
+  choice = fixture.controller.choose_import_file();
+  require(choice.kind == Kind::undecided && fixture.controller.adopt_undecided_import_file() &&
+              fixture.volume.adopted_path == fixture.chooser.existing_path,
+          "an undecided file could not be imported as a container");
+
+  choice = fixture.controller.choose_import_file();
+  fixture.authentication.clear_authentication();
+  fixture.authentication.establish(root_secret());
+  require(fixture.controller.treat_undecided_import_as_package().empty(),
+          "an undecided pick outlived its login");
+
+  fixture.chooser.existing_path.clear();
+  require(fixture.controller.choose_import_file().kind == Kind::cancelled, "a cancelled pick named a file");
+}
+
 void test_exports_reach_the_session_unchanged() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2460,6 +2511,7 @@ int main() {
     test_encrypted_export_confirms_the_password_first();
     test_an_import_uses_the_picked_package_once();
     test_an_import_into_a_new_container_is_all_or_nothing();
+    test_the_generic_import_sorts_containers_from_packages();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
