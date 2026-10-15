@@ -18,6 +18,10 @@
 #include <string_view>
 #include <vector>
 
+namespace usb_vault::backup {
+class ImportPackageV1;
+}  // namespace usb_vault::backup
+
 namespace usb_vault::application {
 
 // Session facts for selecting operations; no driver capacity query, path or type.
@@ -519,6 +523,27 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("encrypted import is unavailable");
   }
 
+  // P5.9 import into a container created for it. The write pass of an already
+  // verified package into a directory of a normally mounted container.
+  virtual std::wstring write_verified_import(
+      std::uint32_t, std::wstring_view, backup::ImportPackageV1&,
+      const security::SecureBuffer&, const std::function<bool()>&,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("encrypted import is unavailable");
+  }
+  // From defer to settle, what the session would add to the operation
+  // history is held back; settling keeps it or drops it. A container created
+  // for an import that then fails is never recorded.
+  virtual void defer_operation_records() {
+    throw std::logic_error("record deferral is unavailable");
+  }
+  virtual void settle_operation_records(bool) {}
+  // Undoes a container this session just created: unmounts it, drops it from
+  // the session and the index, and deletes its file and protected folder.
+  virtual void discard_new_container(std::uint32_t) {
+    throw std::logic_error("container discard is unavailable");
+  }
+
   // Returns the live, non-secret facts for every container adopted by this
   // session, in adoption order. Nothing is persisted between sessions.
   [[nodiscard]] virtual std::vector<ContainerStatus> container_statuses() = 0;
@@ -684,6 +709,14 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
       std::wstring_view absolute_package, const security::SecureBuffer& password_utf8,
       const std::function<bool()>& cancelled,
       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override;
+  std::wstring write_verified_import(
+      std::uint32_t id, std::wstring_view relative_directory,
+      backup::ImportPackageV1& package, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override;
+  void defer_operation_records() override;
+  void settle_operation_records(bool keep) override;
+  void discard_new_container(std::uint32_t id) override;
   [[nodiscard]] std::vector<ContainerStatus> container_statuses() override;
   // Native owner only, never concurrent with session workers. No driver IO.
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;

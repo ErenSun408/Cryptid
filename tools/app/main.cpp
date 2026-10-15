@@ -823,6 +823,8 @@ void service_mount_monitor() noexcept {
 }
 
 void notify_webview_session_changed() noexcept {
+  // A picked or verified import package belongs to the login it was made in.
+  if (g_ui_session) g_ui_session->release_stale_import_state();
   if (!g_webview || !g_webview_startup.current(g_page_generation)) return;
   // Only the bounded numeric failure snapshot crosses this boundary. Never
   // insert an exception message, SDK payload, file path, or card identity.

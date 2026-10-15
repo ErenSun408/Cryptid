@@ -74,6 +74,10 @@ constexpr DISPID kEncryptedTransferStatusId = 141;
 constexpr DISPID kCancelEncryptedTransferId = 142;
 constexpr DISPID kChooseImportPackageId = 143;
 constexpr DISPID kBeginEncryptedImportId = 144;
+constexpr DISPID kBeginVerifyImportId = 145;
+constexpr DISPID kVerifiedImportMinimumMibId = 146;
+constexpr DISPID kBeginImportNewContainerId = 147;
+constexpr DISPID kBeginImportNewContainerBId = 148;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -566,6 +570,10 @@ class PasswordArgumentsWiper final {
     case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
     case kChooseImportPackageId: return "chooseImportPackage";
     case kBeginEncryptedImportId: return "beginEncryptedImport";
+    case kBeginVerifyImportId: return "beginVerifyImport";
+    case kVerifiedImportMinimumMibId: return "getVerifiedImportMinimumMib";
+    case kBeginImportNewContainerId: return "beginImportIntoNewContainerMib";
+    case kBeginImportNewContainerBId: return "beginImportIntoNewContainerBMib";
     case kPartitionToolId: return "openDiskManagement";
     case kRenameContainerEntryId: return "renameContainerEntry";
     case kReorderContainersId: return "reorderContainers";
@@ -762,6 +770,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"cancelEncryptedTransfer")) { ids[0] = kCancelEncryptedTransferId; return S_OK; }
     if (matches(names[0], L"chooseImportPackage")) { ids[0] = kChooseImportPackageId; return S_OK; }
     if (matches(names[0], L"beginEncryptedImport")) { ids[0] = kBeginEncryptedImportId; return S_OK; }
+    if (matches(names[0], L"beginVerifyImport")) { ids[0] = kBeginVerifyImportId; return S_OK; }
+    if (matches(names[0], L"getVerifiedImportMinimumMib")) { ids[0] = kVerifiedImportMinimumMibId; return S_OK; }
+    if (matches(names[0], L"beginImportIntoNewContainerMib")) { ids[0] = kBeginImportNewContainerId; return S_OK; }
+    if (matches(names[0], L"beginImportIntoNewContainerBMib")) { ids[0] = kBeginImportNewContainerBId; return S_OK; }
     if (matches(names[0], L"openConfiguration")) { ids[0] = kOpenConfigurationId; return S_OK; }
     if (matches(names[0], L"getStartupView")) { ids[0] = kGetStartupViewId; return S_OK; }
     if (matches(names[0], L"getAutoMountEnabled")) { ids[0] = kGetAutoMountId; return S_OK; }
@@ -1604,6 +1616,20 @@ class CardProductWebViewHostObject final : public IDispatch {
       }
       case kBeginEncryptedImportId:
         return begin_encrypted_import(parameters, result, argument_error);
+      case kBeginVerifyImportId:
+        return begin_verify_import(parameters, result, argument_error);
+      case kVerifiedImportMinimumMibId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result == nullptr) return E_POINTER;
+        ::VariantInit(result);
+        result->vt = VT_UI4;
+        result->ulVal = creation_work_->interrupted.load() ? 0U : controller_.verified_import_minimum_mib();
+        return S_OK;
+      }
+      case kBeginImportNewContainerId:
+      case kBeginImportNewContainerBId:
+        return begin_import_new_container(member == kBeginImportNewContainerBId, parameters,
+                                          result, argument_error);
       case kEncryptedTransferStatusId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (result == nullptr) return E_POINTER;
@@ -1829,6 +1855,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     encrypted_failure_source = 6,
     encrypted_failure_other = 7,
     encrypted_failure_target = 8,
+    encrypted_failure_rollback = 9,
   };
 
   // Seven arguments: container, directory, entry, location, package name, and
@@ -1925,11 +1952,115 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
   }
 
+  // One argument: the export password as a byte array. Verifies the picked
+  // package for an import into a new container, without creating anything.
+  HRESULT begin_verify_import(DISPPARAMS* const parameters, VARIANT* const result,
+                              UINT* const argument_error) noexcept {
+    if (parameters == nullptr || parameters->cArgs != 1 ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      security::SecureBuffer password = consume_webview_password_array(parameters->rgvarg[0]);
+      if (password.empty()) {
+        if (argument_error != nullptr) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      if (creation_work_->interrupted.load() ||
+          controller_.state() != CardProductUiState::authenticated) {
+        return E_ACCESSDENIED;
+      }
+      std::wstring package = controller_.take_import_package();
+      if (package.empty()) return E_ACCESSDENIED;
+      return begin_encrypted_transfer(
+          [this, package = std::move(package), password = std::move(password)](
+              const std::function<bool()>& cancelled,
+              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+            controller_.verify_import(package, password.bytes(), cancelled, progress);
+          },
+          result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      wipe_available_arguments(parameters, 1);
+      return E_FAIL;
+    }
+  }
+
+  // Creates a container from the creation form's values and restores the
+  // verified package into it. Plain: name, directory, size in MiB. With a
+  // hidden volume: name, directory, outer and hidden MiB, and the new second
+  // password twice as byte arrays.
+  HRESULT begin_import_new_container(const bool hidden, DISPPARAMS* const parameters,
+                                     VARIANT* const result, UINT* const argument_error) noexcept {
+    const UINT expected = hidden ? 6U : 3U;
+    if (parameters == nullptr || parameters->cArgs != expected ||
+        parameters->cNamedArgs != 0 || parameters->rgvarg == nullptr) {
+      wipe_available_arguments(parameters, parameters ? parameters->cArgs : 0);
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      security::SecureBuffer second, confirmation;
+      if (hidden) {
+        second = consume_webview_password_array(parameters->rgvarg[1]);
+        confirmation = consume_webview_password_array(parameters->rgvarg[0]);
+      }
+      std::wstring_view name, directory;
+      std::uint32_t size_mib = 0, hidden_mib = 0;
+      if (!exact_wstring(parameters->rgvarg[expected - 1], name) ||
+          !exact_wstring(parameters->rgvarg[expected - 2], directory) ||
+          !exact_uint32(parameters->rgvarg[expected - 3], size_mib) ||
+          (hidden && (!exact_uint32(parameters->rgvarg[2], hidden_mib) || second.empty() ||
+                      confirmation.empty()))) {
+        if (argument_error != nullptr) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      if (creation_work_->interrupted.load() ||
+          controller_.state() != CardProductUiState::authenticated) {
+        return E_ACCESSDENIED;
+      }
+      auto verified = controller_.take_verified_import();
+      if (!verified) return E_ACCESSDENIED;
+      return begin_encrypted_transfer(
+          [this, hidden, name = std::wstring(name), directory = std::wstring(directory), size_mib,
+           hidden_mib, verified = std::move(verified), second = std::move(second),
+           confirmation = std::move(confirmation)](
+              const std::function<bool()>& cancelled,
+              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+            // Creation asks the same cancellation as the rest of the transfer.
+            controller_.set_creation_cancellation(cancelled);
+            try {
+              if (hidden) {
+                static_cast<void>(controller_.import_into_new_container_b(
+                    std::move(verified), name, directory, size_mib, hidden_mib,
+                    second.bytes(), confirmation.bytes(), cancelled, progress));
+              } else {
+                static_cast<void>(controller_.import_into_new_container(
+                    std::move(verified), name, directory, size_mib, cancelled, progress));
+              }
+            } catch (...) {
+              controller_.set_creation_cancellation({});
+              throw;
+            }
+            controller_.set_creation_cancellation({});
+          },
+          result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      wipe_available_arguments(parameters, hidden ? 2U : 0U);
+      return E_FAIL;
+    }
+  }
+
   [[nodiscard]] static unsigned int encrypted_failure(const std::exception_ptr& failure) noexcept {
     try {
       std::rethrow_exception(failure);
     } catch (const backup::ExportPackageRejected&) {
       return encrypted_failure_rejected;
+    } catch (const CardProductUiSessionController::ImportRollbackIncomplete&) {
+      return encrypted_failure_rollback;
     } catch (const security::PasswordConfirmationRejected& rejected) {
       return rejected.reason() == security::PasswordConfirmationRejection::mismatch
                  ? encrypted_failure_mismatch : encrypted_failure_weak;

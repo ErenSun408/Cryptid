@@ -365,7 +365,7 @@ void CardProductUiSessionController::create_partition(
   static_cast<void>(volume_session_.create_partition(target, confirm));
 }
 
-void CardProductUiSessionController::create_container(
+std::uint32_t CardProductUiSessionController::create_container(
     const std::wstring_view name, const std::wstring_view directory,
     const std::uint32_t size_mib) {
   if (state() != CardProductUiState::authenticated) {
@@ -379,11 +379,11 @@ void CardProductUiSessionController::create_container(
 
   const auto size_bytes = static_cast<std::uint64_t>(size_mib) * kBytesPerMib;
   const std::wstring path = resolve_target_path(directory, name, size_bytes);
-  static_cast<void>(volume_session_.create_protected_container(
-      path, size_bytes, container_display_name(name)));
+  return volume_session_.create_protected_container(
+      path, size_bytes, container_display_name(name));
 }
 
-void CardProductUiSessionController::create_container_b(
+std::uint32_t CardProductUiSessionController::create_container_b(
     const std::wstring_view name, const std::wstring_view directory,
     const std::uint32_t outer_size_mib, const std::uint32_t hidden_size_mib,
     const std::span<std::byte> mutable_second_password_utf8,
@@ -432,10 +432,10 @@ void CardProductUiSessionController::create_container_b(
   // opened with the second password would block every retry, while a second
   // password that opens nothing yet is harmless and can be set again.
   entry_.set_second_card_password(duplicate(login), duplicate(second));
-  static_cast<void>(volume_session_.create_protected_container_b(
+  return volume_session_.create_protected_container_b(
       path, outer_size_bytes,
       static_cast<std::uint64_t>(hidden_size_mib) * kBytesPerMib, second,
-      container_display_name(name)));
+      container_display_name(name));
 }
 
 void CardProductUiSessionController::create_partition_pair(
@@ -643,7 +643,10 @@ void CardProductUiSessionController::export_container_entry_encrypted(
 }
 
 std::wstring CardProductUiSessionController::choose_import_package() {
-  pending_import_package_.clear();
+  {
+    const std::scoped_lock lock(import_mutex_);
+    pending_import_package_.clear();
+  }
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("importing a package is not available in the current UI state");
   }
@@ -652,12 +655,25 @@ std::wstring CardProductUiSessionController::choose_import_package() {
   const std::size_t separator = path.find_last_of(L"\\/");
   std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
   if (name.empty()) return {};
+  const std::scoped_lock lock(import_mutex_);
   pending_import_package_ = std::move(path);
   pending_import_generation_ = authentication_.generation();
   return name;
 }
 
+void CardProductUiSessionController::release_stale_import_state() noexcept {
+  const std::scoped_lock lock(import_mutex_);
+  const bool current = state() == CardProductUiState::authenticated;
+  if (!current || pending_import_generation_ != authentication_.generation()) {
+    pending_import_package_.clear();
+  }
+  if (verified_import_ && (!current || verified_import_->generation != authentication_.generation())) {
+    verified_import_.reset();
+  }
+}
+
 std::wstring CardProductUiSessionController::take_import_package() {
+  const std::scoped_lock lock(import_mutex_);
   std::wstring package = std::move(pending_import_package_);
   pending_import_package_.clear();
   if (state() != CardProductUiState::authenticated ||
@@ -665,6 +681,125 @@ std::wstring CardProductUiSessionController::take_import_package() {
     return {};
   }
   return package;
+}
+
+void CardProductUiSessionController::verify_import(
+    const std::wstring_view package, const std::span<std::byte> mutable_password_utf8,
+    const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  MutableInputWiper wiper(mutable_password_utf8, {});
+  {
+    const std::scoped_lock lock(import_mutex_);
+    verified_import_.reset();
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("importing a package is not available in the current UI state");
+  }
+  if (package.empty()) throw std::logic_error("no import package has been picked");
+  auto verified = std::make_unique<VerifiedImport>(package);
+  verified->password = consume_password_utf8(mutable_password_utf8);
+  verified->generation = authentication_.generation();
+  static_cast<void>(verified->package_file.verify(verified->password, cancelled, progress));
+  const std::scoped_lock lock(import_mutex_);
+  // A login that ended while this ran keeps nothing of it.
+  if (state() != CardProductUiState::authenticated ||
+      verified->generation != authentication_.generation()) {
+    throw std::logic_error("the login changed while the package was verified");
+  }
+  verified_import_ = std::move(verified);
+}
+
+namespace {
+
+// Room for the file system's own structures on top of what the package
+// needs, generously, so a container sized at the minimum is not full.
+[[nodiscard]] std::uint32_t minimum_mib_for(const std::uint64_t required_bytes) {
+  const std::uint64_t padded = required_bytes + required_bytes / 8 + 16ULL * kBytesPerMib;
+  const std::uint64_t mib = (padded + kBytesPerMib - 1) / kBytesPerMib;
+  return static_cast<std::uint32_t>(
+      std::clamp<std::uint64_t>(mib, kContainerCreationMinimumMib, 0xFFFFFFFFULL));
+}
+
+}  // namespace
+
+std::uint32_t CardProductUiSessionController::verified_import_minimum_mib() const {
+  const std::scoped_lock lock(import_mutex_);
+  if (!verified_import_ || state() != CardProductUiState::authenticated ||
+      verified_import_->generation != authentication_.generation()) {
+    return 0;
+  }
+  return minimum_mib_for(verified_import_->package_file.required_bytes());
+}
+
+std::unique_ptr<CardProductUiSessionController::VerifiedImport>
+CardProductUiSessionController::take_verified_import() {
+  const std::scoped_lock lock(import_mutex_);
+  std::unique_ptr<VerifiedImport> verified = std::move(verified_import_);
+  if (!verified || state() != CardProductUiState::authenticated ||
+      verified->generation != authentication_.generation()) {
+    return {};
+  }
+  return verified;
+}
+
+template <typename Create>
+std::uint32_t CardProductUiSessionController::import_into_created(
+    std::unique_ptr<VerifiedImport> verified, const std::uint32_t mounted_mib, Create&& create,
+    const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  if (!verified || state() != CardProductUiState::authenticated ||
+      verified->generation != authentication_.generation()) {
+    throw std::logic_error("no verified import belongs to this login");
+  }
+  if (mounted_mib < minimum_mib_for(verified->package_file.required_bytes())) {
+    throw std::invalid_argument("the new container is too small for the package");
+  }
+  volume_session_.defer_operation_records();
+  std::uint32_t id = 0;
+  try {
+    id = create();
+    static_cast<void>(volume_session_.write_verified_import(
+        id, L"", verified->package_file, verified->password, cancelled, progress));
+  } catch (...) {
+    bool undone = true;
+    if (id != 0) {
+      try {
+        volume_session_.discard_new_container(id);
+      } catch (...) {
+        undone = false;
+      }
+    }
+    volume_session_.settle_operation_records(false);
+    if (!undone) throw ImportRollbackIncomplete();
+    throw;
+  }
+  volume_session_.settle_operation_records(true);
+  return id;
+}
+
+std::uint32_t CardProductUiSessionController::import_into_new_container(
+    std::unique_ptr<VerifiedImport> verified, const std::wstring_view name,
+    const std::wstring_view directory, const std::uint32_t size_mib,
+    const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  return import_into_created(std::move(verified), size_mib,
+                             [&] { return create_container(name, directory, size_mib); },
+                             cancelled, progress);
+}
+
+std::uint32_t CardProductUiSessionController::import_into_new_container_b(
+    std::unique_ptr<VerifiedImport> verified, const std::wstring_view name,
+    const std::wstring_view directory, const std::uint32_t outer_size_mib,
+    const std::uint32_t hidden_size_mib, const std::span<std::byte> mutable_second_password_utf8,
+    const std::span<std::byte> mutable_second_confirmation_utf8,
+    const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  MutableInputWiper wiper(mutable_second_password_utf8, mutable_second_confirmation_utf8);
+  // The import lands in the volume the session mounts for a new container of
+  // this kind, which is the inner one, so that is the size that must fit.
+  return import_into_created(
+      std::move(verified), hidden_size_mib,
+      [&] {
+        return create_container_b(name, directory, outer_size_mib, hidden_size_mib,
+                                  mutable_second_password_utf8, mutable_second_confirmation_utf8);
+      },
+      cancelled, progress);
 }
 
 std::wstring CardProductUiSessionController::import_package_into_container(

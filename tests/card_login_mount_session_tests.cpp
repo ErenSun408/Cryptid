@@ -3,6 +3,7 @@
 
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/container_index_v1.h"
+#include "usb_vault/backup/import_package_v1.h"
 #include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/diagnostics/debug_log.h"
@@ -769,6 +770,22 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (fail_copy) throw std::runtime_error("the import failed");
     return L"Docs";
   }
+
+  std::wstring write_import(usb_vault::backup::ImportPackageV1&,
+                            const usb_vault::security::SecureBuffer&,
+                            const wchar_t drive_letter,
+                            const std::wstring_view relative_directory,
+                            const std::function<bool()>&, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) override {
+    import_writes.push_back(std::wstring(1, drive_letter) + L"|" + std::wstring(relative_directory));
+    if (fail_copy) throw std::runtime_error("the import write failed");
+    return L"Docs";
+  }
+
+  void delete_container_file(const std::wstring_view path) override {
+    deleted_containers.emplace_back(path);
+  }
+  std::vector<std::wstring> import_writes;
+  std::vector<std::wstring> deleted_containers;
 
   struct EncryptedExport final {
     std::wstring source;
@@ -4181,6 +4198,73 @@ void test_an_encrypted_import_reaches_a_mounted_container_without_a_trace() {
   nothing_was_written("a refused encrypted import left a local trace");
 }
 
+// P5.9: a container created for an import is recorded only once the import
+// has succeeded, and one whose import fails is undone without a record.
+void test_a_container_created_for_an_import_is_recorded_only_on_success() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const std::size_t events_before = session.operation_history().size();
+
+  // Any file will do as the package handle: the fake runtime does the write.
+  const std::filesystem::path package_path =
+      std::filesystem::temp_directory_path() / L"usb-vault-p596-session-package";
+  { std::ofstream(package_path, std::ios::binary) << "package"; }
+  {
+    usb_vault::backup::ImportPackageV1 package(package_path.wstring());
+    const SecureBuffer password = bytes("export password 123");
+
+    const int index_writes_before = runtime.index_writes;
+    session.defer_operation_records();
+    const std::uint32_t kept = session.create_container(L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+    require(session.operation_history().size() == events_before,
+            "a container created for an import was recorded before the import");
+    require(runtime.index_writes == index_writes_before,
+            "a container created for an import reached the index before the import");
+    require(session.write_verified_import(kept, L"", package, password, {}, {}) == L"Docs" &&
+                runtime.import_writes.size() == 1 && runtime.import_writes[0] == L"X|",
+            "the verified import was not written to the new container's root");
+    session.settle_operation_records(true);
+    require(session.operation_history().size() == events_before + 2,
+            "a successful import did not record its new container");
+    require(runtime.index_writes > index_writes_before,
+            "a successful import did not remember its new container");
+
+    const std::uint32_t other = session.create_container(L"C:\\vault\\three.hc", 64ULL * 1024ULL * 1024ULL);
+    const std::size_t events_after = session.operation_history().size();
+    const int index_writes_after = runtime.index_writes;
+    session.defer_operation_records();
+    const std::uint32_t dropped = session.create_container(L"C:\\vault\\two.hc", 64ULL * 1024ULL * 1024ULL);
+    // Something unrelated that happens meanwhile is still recorded.
+    session.unmount_container(other);
+    runtime.fail_copy = true;
+    require_throws<std::runtime_error>(
+        [&] { static_cast<void>(session.write_verified_import(dropped, L"", package, password, {}, {})); },
+        "a failing import write did not report the failure");
+    runtime.fail_copy = false;
+    session.discard_new_container(dropped);
+    session.settle_operation_records(false);
+    require(session.operation_history().size() == events_after + 1,
+            "a discarded container left a record, or an unrelated record was lost");
+    require(runtime.index_writes == index_writes_after,
+            "a discarded container reached the index");
+    require(runtime.deleted_containers.size() == 1 &&
+                runtime.deleted_containers[0] == L"C:\\vault\\two.hc",
+            "the discarded container's file was not deleted");
+    const auto statuses = session.container_statuses();
+    require(statuses.size() == 2 &&
+                std::ranges::none_of(statuses, [&](const auto& status) { return status.id == dropped; }),
+            "the discarded container stayed in the session");
+
+    session.unmount_container(kept);
+    require_throws_plain_logic_error(
+        [&] { static_cast<void>(session.write_verified_import(kept, L"", package, password, {}, {})); },
+        "a verified import into an unmounted container was accepted");
+  }
+  std::filesystem::remove(package_path);
+}
+
 void test_no_export_leaves_a_single_local_trace() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -5194,6 +5278,7 @@ int main() {
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();
+    test_a_container_created_for_an_import_is_recorded_only_on_success();
     test_an_export_into_a_container_is_refused_as_a_copy();
     test_an_export_location_that_is_not_one_never_reaches_the_disk();
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();

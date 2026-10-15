@@ -1,6 +1,7 @@
 #include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
+#include "usb_vault/backup/export_package_file.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/security/confirmed_password.h"
@@ -13,6 +14,7 @@
 #include <concepts>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -449,6 +451,26 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     return L"Docs";
   }
   std::vector<ExportCall> imports;
+
+  std::wstring write_verified_import(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      usb_vault::backup::ImportPackageV1&, const usb_vault::security::SecureBuffer&,
+      const std::function<bool()>&, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) override {
+    import_events.push_back(L"write:" + std::to_wstring(id) + L":" + std::wstring(relative_directory));
+    if (fail_import_write) throw std::runtime_error("the import write failed");
+    return L"Docs";
+  }
+  void defer_operation_records() override { import_events.push_back(L"defer"); }
+  void settle_operation_records(const bool keep) override {
+    import_events.push_back(keep ? L"settle:keep" : L"settle:drop");
+  }
+  void discard_new_container(const std::uint32_t id) override {
+    import_events.push_back(L"discard:" + std::to_wstring(id));
+    if (fail_discard) throw std::runtime_error("the discard failed");
+  }
+  bool fail_discard{};
+  std::vector<std::wstring> import_events;
+  bool fail_import_write{};
 
   [[nodiscard]] std::vector<usb_vault::application::ContainerStatus>
   container_statuses() override {
@@ -2238,6 +2260,99 @@ void test_an_import_uses_the_picked_package_once() {
   require(fixture.volume.imports.size() == 1, "a refused import reached the session");
 }
 
+// P5.9: an import into a new container verifies first, creates through the
+// ordinary creation path, and keeps the records only when both succeed.
+void test_an_import_into_a_new_container_is_all_or_nothing() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  const std::filesystem::path source = std::filesystem::path(fixture.directory.wide()) / L"note.txt";
+  { std::ofstream(source, std::ios::binary) << "restored content"; }
+  const std::filesystem::path package = std::filesystem::path(fixture.directory.wide()) / L"note package";
+  {
+    const std::string_view text = "long enough export pass";
+    SecureBuffer password(text.size());
+    std::ranges::copy(std::as_bytes(std::span(text.data(), text.size())), password.bytes().begin());
+    usb_vault::backup::export_package_to_file_v1(source.wstring(), package.wstring(), password);
+  }
+  const auto verify = [&] {
+    std::vector<std::byte> password = bytes("long enough export pass");
+    fixture.controller.verify_import(package.wstring(), password, {}, {});
+    require(std::ranges::all_of(password, [](std::byte b) { return b == std::byte{0}; }),
+            "the verification password was not wiped");
+  };
+
+  require(fixture.controller.verified_import_minimum_mib() == 0, "a minimum was given before verifying");
+  verify();
+  const std::uint32_t minimum = fixture.controller.verified_import_minimum_mib();
+  require(minimum >= 1, "a verified package gave no minimum size");
+  auto verified = fixture.controller.take_verified_import();
+  require(verified != nullptr && fixture.controller.take_verified_import() == nullptr,
+          "a verified package was not handed over exactly once");
+
+  const std::uint32_t id = fixture.controller.import_into_new_container(
+      std::move(verified), L"restored", fixture.directory.wide(), std::max<std::uint32_t>(minimum, 64), {}, {});
+  require(fixture.volume.import_events ==
+              std::vector<std::wstring>{L"defer", L"write:" + std::to_wstring(id) + L":", L"settle:keep"},
+          "a successful import into a new container did not keep its records");
+
+  fixture.volume.import_events.clear();
+  verify();
+  fixture.volume.fail_import_write = true;
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(fixture.controller.import_into_new_container(
+            fixture.controller.take_verified_import(), L"failed", fixture.directory.wide(),
+            std::max<std::uint32_t>(minimum, 64), {}, {}));
+      },
+      "a failed import into a new container did not report the failure");
+  require(fixture.volume.import_events.size() == 4 && fixture.volume.import_events[3] == L"settle:drop",
+          "a failed import did not drop its records");
+  const std::vector<std::wstring> failed_events = fixture.volume.import_events;
+  fixture.volume.import_events.clear();
+  verify();
+  fixture.volume.fail_discard = true;
+  require_throws<usb_vault::ui::CardProductUiSessionController::ImportRollbackIncomplete>(
+      [&] {
+        static_cast<void>(fixture.controller.import_into_new_container(
+            fixture.controller.take_verified_import(), L"stuck", fixture.directory.wide(),
+            std::max<std::uint32_t>(minimum, 64), {}, {}));
+      },
+      "an incomplete rollback was not reported as such");
+  fixture.volume.fail_discard = false;
+  fixture.volume.fail_import_write = false;
+  fixture.volume.import_events = failed_events;
+  require(fixture.volume.import_events.size() == 4 && fixture.volume.import_events[0] == L"defer" &&
+              fixture.volume.import_events[2].starts_with(L"discard:") &&
+              fixture.volume.import_events[3] == L"settle:drop",
+          "a failed import did not discard its new container and drop its records");
+
+  fixture.volume.import_events.clear();
+  verify();
+  require_throws<std::invalid_argument>(
+      [&] {
+        static_cast<void>(fixture.controller.import_into_new_container(
+            fixture.controller.take_verified_import(), L"small", fixture.directory.wide(), 1, {}, {}));
+      },
+      "a container smaller than the package was accepted");
+  require(fixture.volume.import_events.empty(), "a refused size still started an import");
+
+  // A verified package belongs to the login it was verified under.
+  verify();
+  fixture.authentication.clear_authentication();
+  fixture.authentication.establish(root_secret());
+  require(fixture.controller.verified_import_minimum_mib() == 0 &&
+              fixture.controller.take_verified_import() == nullptr,
+          "a package verified before a new login was handed over after it");
+
+  // A session change releases what an import held, without waiting for use.
+  verify();
+  fixture.authentication.clear_authentication();
+  fixture.controller.release_stale_import_state();
+  fixture.authentication.establish(root_secret());
+  require(fixture.controller.take_verified_import() == nullptr,
+          "a verified package survived the end of its login");
+}
+
 void test_exports_reach_the_session_unchanged() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -2344,6 +2459,7 @@ int main() {
     test_exports_reach_the_session_unchanged();
     test_encrypted_export_confirms_the_password_first();
     test_an_import_uses_the_picked_package_once();
+    test_an_import_into_a_new_container_is_all_or_nothing();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

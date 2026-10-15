@@ -3684,6 +3684,50 @@ void test_an_encrypted_import_runs_on_the_worker() {
           "the import crossed the bridge out of order");
 }
 
+// P5.9: an import into a new container needs a fresh pick to verify and a
+// verified package to create from; without them nothing starts.
+void test_an_import_into_a_new_container_needs_a_verified_package() {
+  Fixture fixture;
+  fixture.authentication.establish(root_secret());
+  ComPtr<IDispatch> host = make_host(fixture.controller);
+  std::array<VARIANTARG, 1> verify{};
+  initialize_byte_array(verify[0], bytes("long enough export pass"));
+  require(invoke_named(*host.Get(), L"beginVerifyImport", verify.data(), 1, nullptr, nullptr) ==
+              E_ACCESSDENIED,
+          "a verification started without a picked package");
+  require_array_wiped(verify[0], 23, "a refused verification password survived the bridge");
+  clear_arguments(verify.data(), 1);
+
+  VARIANT minimum{};
+  require(invoke_named(*host.Get(), L"getVerifiedImportMinimumMib", nullptr, 0, &minimum, nullptr) == S_OK &&
+              minimum.vt == VT_UI4 && minimum.ulVal == 0,
+          "a minimum size was given without a verified package");
+
+  std::array<VARIANTARG, 3> plain{};
+  plain[2] = text_argument(L"restored");
+  plain[1] = text_argument(L"D:\\Vaults");
+  plain[0] = number_argument(64);
+  require(invoke_named(*host.Get(), L"beginImportIntoNewContainerMib", plain.data(), 3, nullptr, nullptr) ==
+              E_ACCESSDENIED,
+          "a container was created for an import that was never verified");
+  clear_arguments(plain.data(), 3);
+
+  std::array<VARIANTARG, 6> hidden{};
+  hidden[5] = text_argument(L"restored");
+  hidden[4] = text_argument(L"D:\\Vaults");
+  hidden[3] = number_argument(128);
+  hidden[2] = number_argument(64);
+  initialize_byte_array(hidden[1], bytes("second password 123"));
+  initialize_byte_array(hidden[0], bytes("second password 123"));
+  require(invoke_named(*host.Get(), L"beginImportIntoNewContainerBMib", hidden.data(), 6, nullptr, nullptr) ==
+              E_ACCESSDENIED,
+          "a hidden container was created for an import that was never verified");
+  require_array_wiped(hidden[1], 19, "a refused second password survived the bridge");
+  require_array_wiped(hidden[0], 19, "a refused second confirmation survived the bridge");
+  clear_arguments(hidden.data(), 6);
+  require(fixture.volume.created_path.empty(), "a refused import still created a container");
+}
+
 // The two exports cross the bridge like everything else: the container by
 // identifier, and the location as text the session checks again.
 void test_the_bridge_carries_both_exports() {
@@ -4613,6 +4657,7 @@ int main() {
     test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers();
     test_an_encrypted_export_runs_on_the_worker();
     test_an_encrypted_import_runs_on_the_worker();
+    test_an_import_into_a_new_container_needs_a_verified_package();
     test_a_decoy_survey_stops_when_asked_and_refuses_what_is_not_a_password();
     test_opening_maintenance_runs_on_the_volume_worker();
     test_maintenance_facts_are_async_current_and_session_scoped();

@@ -3,6 +3,7 @@
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/application/card_login_mount_session.h"
+#include "usb_vault/backup/import_package_v1.h"
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/container_file_chooser.h"
 
@@ -10,6 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <span>
 #include <string>
 #include <string_view>
@@ -149,8 +153,8 @@ class CardProductUiSessionController final {
       const std::function<bool(const volume::PartitionCandidate&)>& confirm);
 
 
-  void create_container(std::wstring_view name, std::wstring_view directory,
-                        std::uint32_t size_mib);
+  std::uint32_t create_container(std::wstring_view name, std::wstring_view directory,
+                                 std::uint32_t size_mib);
 
   // Creates one hidden-volume container at the same kind of caller-named
   // location and commits the second card password that opens its outer volume.
@@ -163,7 +167,7 @@ class CardProductUiSessionController final {
   // is resolved and checked before either password is consumed, and the card
   // record is updated after that and before the volume is created, so a failed
   // creation leaves a retryable state instead of a container nobody can open.
-  void create_container_b(
+  std::uint32_t create_container_b(
       std::wstring_view name, std::wstring_view directory,
       std::uint32_t outer_size_mib, std::uint32_t hidden_size_mib,
       std::span<std::byte> mutable_second_password_utf8,
@@ -304,6 +308,58 @@ class CardProductUiSessionController final {
   // chosen before a logout can never be imported after the next login.
   [[nodiscard]] std::wstring take_import_package();
 
+  // Thrown when an import into a new container failed and the container it
+  // created could not be fully undone: it may still be listed or on disk.
+  class ImportRollbackIncomplete final : public std::runtime_error {
+   public:
+    ImportRollbackIncomplete()
+        : std::runtime_error("the container created for a failed import was not fully removed") {}
+  };
+
+  // Forgets a picked or verified package that belongs to no current login:
+  // its handle closes and the retained password copy is wiped. Called when
+  // the session changes, so nothing of an import outlives the login.
+  void release_stale_import_state() noexcept;
+
+  // P5.9 import into a new container. A package verified for this login,
+  // held open together with a page-locked copy of its password until it is
+  // taken or the login ends.
+  struct VerifiedImport final {
+    explicit VerifiedImport(std::wstring_view package) : package_file(package) {}
+    backup::ImportPackageV1 package_file;
+    security::SecureBuffer password;
+    std::uint64_t generation{};
+  };
+
+  // The read-only pass for an import into a new container; runs on the
+  // session worker. On success the package stays open and verified here.
+  void verify_import(std::wstring_view package, std::span<std::byte> mutable_password_utf8,
+                     const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+
+  // Smallest container, in MiB, the verified package fits into; zero when
+  // nothing verified belongs to the current login.
+  [[nodiscard]] std::uint32_t verified_import_minimum_mib() const;
+
+  // Hands over the verified package, or nothing when it belongs to another
+  // login. Forgotten either way.
+  [[nodiscard]] std::unique_ptr<VerifiedImport> take_verified_import();
+
+  // Creates a container exactly as the creation form does and restores the
+  // verified package into its root. Nothing is recorded unless both succeed;
+  // a failure after creation unmounts and deletes the new container. The
+  // mounted volume must be at least verified_import_minimum_mib(). Returns
+  // the new container's identifier.
+  std::uint32_t import_into_new_container(
+      std::unique_ptr<VerifiedImport> verified, std::wstring_view name,
+      std::wstring_view directory, std::uint32_t size_mib,
+      const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+  std::uint32_t import_into_new_container_b(
+      std::unique_ptr<VerifiedImport> verified, std::wstring_view name,
+      std::wstring_view directory, std::uint32_t outer_size_mib, std::uint32_t hidden_size_mib,
+      std::span<std::byte> mutable_second_password_utf8,
+      std::span<std::byte> mutable_second_confirmation_utf8,
+      const std::function<bool()>& cancelled, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+
   // Imports a taken package into a directory of a mounted container. The
   // password buffer is wiped on every path.
   std::wstring import_package_into_container(
@@ -380,6 +436,15 @@ class CardProductUiSessionController final {
   IContainerFileChooser& file_chooser_;
   std::wstring pending_import_package_;
   std::uint64_t pending_import_generation_{};
+  std::unique_ptr<VerifiedImport> verified_import_;
+  // Guards the pick and the verified package, which the session worker sets
+  // and the window thread may release.
+  mutable std::mutex import_mutex_;
+  template <typename Create>
+  std::uint32_t import_into_created(std::unique_ptr<VerifiedImport> verified,
+                                    std::uint32_t mounted_mib, Create&& create,
+                                    const std::function<bool()>& cancelled,
+                                    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
 };
 
 }  // namespace usb_vault::ui

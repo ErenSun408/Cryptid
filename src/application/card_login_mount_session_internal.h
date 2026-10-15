@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/backup/import_package_v1.h"
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/mount_orchestrator.h"
 #include "usb_vault/security/secure_buffer.h"
@@ -181,6 +182,16 @@ class CardLoginMountSessionRuntime {
                                       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
     throw std::logic_error("encrypted import is unavailable");
   }
+  // P5.9 write pass of an already verified package.
+  virtual std::wstring write_import(backup::ImportPackageV1&, const security::SecureBuffer&,
+                                    wchar_t, std::wstring_view, const std::function<bool()>&,
+                                    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("encrypted import is unavailable");
+  }
+  // Deletes a published container file that a failed import created.
+  virtual void delete_container_file(std::wstring_view) {
+    throw std::logic_error("container deletion is unavailable");
+  }
   virtual void copy_entry(std::wstring_view absolute_source,
                           std::wstring_view absolute_destination,
                           const volume::TransferCancellation& cancelled) = 0;
@@ -241,6 +252,23 @@ struct CardLoginMountSessionState final {
   std::size_t operation_count{};
   bool operation_logging_enabled{true};
   std::uint64_t next_operation_sequence{1};
+  // P5.9: while an import creates a container, what it would record is held
+  // here and only reaches the history if the import succeeds.
+  struct DeferredOperation final {
+    OperationKind kind{};
+    OperationOutcome outcome{};
+    std::wstring container_name;
+    wchar_t drive_letter{};
+  };
+  bool deferring_operations{false};
+  std::vector<DeferredOperation> deferred_operations;
+  // Index entries a deferred creation would write, kept back the same way so
+  // a discarded container never reaches the index, even when the card is
+  // gone by the time it is discarded.
+  std::vector<std::pair<std::wstring, std::wstring>> deferred_paths;
+  // Names of containers discarded while deferring: only their own records are
+  // dropped; anything else that happened meanwhile is kept.
+  std::vector<std::wstring> discarded_names;
   // The password this session was opened under. Unlike the derived value
   // above it is the password itself, kept for the one operation that cannot
   // use a derivative: rewriting the card record so a second password opens it
@@ -365,6 +393,14 @@ class CardLoginMountSessionCore final {
       std::wstring_view absolute_package, const security::SecureBuffer& password_utf8,
       const std::function<bool()>& cancelled,
       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+  std::wstring write_verified_import(
+      std::uint32_t id, std::wstring_view relative_directory,
+      backup::ImportPackageV1& package, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+  void defer_operation_records();
+  void settle_operation_records(bool keep);
+  void discard_new_container(std::uint32_t id);
   [[nodiscard]] std::vector<::usb_vault::application::ContainerStatus>
   container_statuses();
   [[nodiscard]] std::vector<volume::WatchedMount> mount_watch_targets() const;

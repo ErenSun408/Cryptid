@@ -371,6 +371,26 @@ class ProductionCardLoginMountSessionRuntime final
     return package.write_into(password_utf8, drive_letter, relative_directory, cancelled, progress);
   }
 
+  std::wstring write_import(backup::ImportPackageV1& package,
+                            const security::SecureBuffer& password_utf8,
+                            const wchar_t drive_letter,
+                            const std::wstring_view relative_directory,
+                            const std::function<bool()>& cancelled,
+                            const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override {
+    return package.write_into(password_utf8, drive_letter, relative_directory, cancelled, progress);
+  }
+
+  void delete_container_file(const std::wstring_view path) override {
+    const std::wstring file(path);
+    static_cast<void>(::SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL));
+    if (::DeleteFileW(file.c_str()) != FALSE) return;
+    const DWORD error = ::GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+      throw std::system_error(static_cast<int>(error), std::system_category(),
+                              "delete a discarded container");
+    }
+  }
+
   void copy_entry(const std::wstring_view absolute_source,
                   const std::wstring_view absolute_destination,
                   const volume::TransferCancellation& cancelled) override {
@@ -914,6 +934,31 @@ std::wstring CardLoginMountSession::import_package_into_container(
       });
 }
 
+std::wstring CardLoginMountSession::write_verified_import(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    backup::ImportPackageV1& package, const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  return traced_call("写入已校验的导入包", [&] { return "安全盘 #" + std::to_string(id); },
+      [&] {
+        return impl_->core.write_verified_import(id, relative_directory, package,
+                                                 password_utf8, cancelled, progress);
+      });
+}
+
+void CardLoginMountSession::defer_operation_records() {
+  impl_->core.defer_operation_records();
+}
+
+void CardLoginMountSession::settle_operation_records(const bool keep) {
+  impl_->core.settle_operation_records(keep);
+}
+
+void CardLoginMountSession::discard_new_container(const std::uint32_t id) {
+  traced_call("撤销新建安全盘", [&] { return "安全盘 #" + std::to_string(id); },
+              [&] { impl_->core.discard_new_container(id); });
+}
+
 void CardLoginMountSession::export_container_file(
     const std::uint32_t id,
     const std::wstring_view absolute_destination_directory) {
@@ -1357,6 +1402,14 @@ void CardLoginMountSessionCore::record_operation(
     const std::wstring_view container_name,
     const wchar_t drive_letter) noexcept {
   if (!state_.operation_logging_enabled) return;
+  if (state_.deferring_operations) {
+    try {
+      state_.deferred_operations.push_back(
+          {kind, outcome, std::wstring(container_name), drive_letter});
+    } catch (...) {
+    }
+    return;
+  }
   try {
     const auto completed =
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1523,6 +1576,13 @@ security::SecureBuffer CardLoginMountSessionCore::container_index_key() {
 
 void CardLoginMountSessionCore::remember_container_path(
     const std::wstring_view path, const std::wstring_view alias) noexcept {
+  if (state_.deferring_operations) {
+    try {
+      state_.deferred_paths.emplace_back(std::wstring(path), std::wstring(alias));
+    } catch (...) {
+    }
+    return;
+  }
   // Every failure here is swallowed on purpose. The container file already
   // exists; refusing the whole operation because its path could not be written
   // down would throw away a finished container to protect a convenience. The
@@ -3410,6 +3470,73 @@ std::wstring CardLoginMountSessionCore::import_package_into_container(
   // No `record_operation`, and no trace of the package or the destination.
   return runtime_.import_package(absolute_package, password_utf8, entry->drive_letter,
                                  relative_directory, cancelled, progress);
+}
+
+std::wstring CardLoginMountSessionCore::write_verified_import(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    backup::ImportPackageV1& package, const security::SecureBuffer& password_utf8,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error("an encrypted import requires an authenticated card session");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument("no container is adopted under that identifier");
+  }
+  if (!entry->mounted || entry->maintenance) {
+    throw std::logic_error("an encrypted import needs a normally mounted container");
+  }
+  static_cast<void>(volume::resolve_volume_entry_path(entry->drive_letter, relative_directory));
+  return runtime_.write_import(package, password_utf8, entry->drive_letter, relative_directory,
+                               cancelled, progress);
+}
+
+void CardLoginMountSessionCore::defer_operation_records() {
+  if (state_.deferring_operations) throw std::logic_error("records are already deferred");
+  state_.deferred_operations.clear();
+  state_.deferred_paths.clear();
+  state_.discarded_names.clear();
+  state_.deferring_operations = true;
+}
+
+void CardLoginMountSessionCore::settle_operation_records(const bool keep) {
+  std::vector<CardLoginMountSessionState::DeferredOperation> held = std::move(state_.deferred_operations);
+  std::vector<std::pair<std::wstring, std::wstring>> paths = std::move(state_.deferred_paths);
+  std::vector<std::wstring> discarded = std::move(state_.discarded_names);
+  state_.deferred_operations.clear();
+  state_.deferred_paths.clear();
+  state_.discarded_names.clear();
+  state_.deferring_operations = false;
+  for (const auto& operation : held) {
+    // Without keep, only what a discarded container recorded about itself
+    // goes; records about anything else that happened meanwhile stay.
+    if (!keep && std::ranges::find(discarded, operation.container_name) != discarded.end()) continue;
+    record_operation(operation.kind, operation.outcome, operation.container_name,
+                     operation.drive_letter);
+  }
+  if (!keep) return;
+  for (const auto& [path, alias] : paths) remember_container_path(path, alias);
+}
+
+void CardLoginMountSessionCore::discard_new_container(const std::uint32_t id) {
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) return;
+  if (entry->partition) throw std::logic_error("a partition is never discarded");
+  const std::wstring path = entry->path;
+  const std::wstring protected_directory =
+      entry->display_alias.empty() ? std::wstring{} : protected_directory_of(path);
+  if (state_.deferring_operations) state_.discarded_names.push_back(display_name(*entry));
+  // The file goes before the entry: a failure part-way leaves the container
+  // listed, where it can be seen and removed, rather than an unlisted file.
+  if (entry->mounted) unmount_container_impl(id, true);
+  runtime_.delete_container_file(path);
+  if (!protected_directory.empty()) runtime_.remove_empty_directory(protected_directory);
+  forget_container(id);
+  if (state_.deferring_operations) {
+    std::erase_if(state_.deferred_paths, [&](const auto& item) { return item.first == path; });
+  }
+  SESSION_TRACE("新建安全盘已撤销", "安全盘 #" + std::to_string(id));
 }
 
 void CardLoginMountSessionCore::export_container_file(
