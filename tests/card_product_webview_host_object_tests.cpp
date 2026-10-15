@@ -3800,11 +3800,12 @@ void test_the_import_package_rename_bridge_validates_and_reports_collisions() {
     static_cast<void>(::VariantClear(&result));
     return code;
   };
-  require(rename(L"..\\escape") == 8 && rename(L"existing package") == 4,
-          "the rename bridge did not distinguish invalid names and collisions");
-  require(rename(L"renamed package") == 0 &&
-              fixture.controller.selected_import_package() == (root / L"renamed package").wstring(),
-          "the rename bridge did not update the selected package");
+  require(rename(L"..\\escape") == 8, "the naming bridge accepted a name a volume cannot hold");
+  // Naming the import never renames the package, so a name beside it is fine.
+  require(rename(L"existing package") == 0 && rename(L"renamed package") == 0 &&
+              fixture.controller.selected_import_package() == original.wstring() &&
+              std::filesystem::exists(original) && !std::filesystem::exists(root / L"renamed package"),
+          "the naming bridge renamed or moved the package file");
   fixture.authentication.clear_authentication();
   require(rename(L"later login") == 7, "a stale login renamed a package");
 }

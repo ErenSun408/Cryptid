@@ -1679,7 +1679,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         if (result == nullptr) return E_POINTER;
         unsigned int code = 0;
         try {
-          controller_.rename_selected_import_package(name);
+          controller_.set_selected_import_name(name);
         } catch (const std::invalid_argument&) {
           code = 8;
         } catch (const std::system_error& error) {

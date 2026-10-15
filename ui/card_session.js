@@ -3056,16 +3056,16 @@
       setImportStatus(verifying ? "正在校验导出包…" : "正在准备…");
       renderBackupCentre();
       render(messageForCurrentState());
-      if (requestedPackageName !== importPicked) {
-        const renameError = Number(await bridge.renameImportPackage(requestedPackageName));
+      // The field names what the import restores in the vault; the package
+      // file keeps its own name.
+      {
+        const nameError = Number(await bridge.renameImportPackage(requestedPackageName.trim()));
         if (!current()) return;
-        if (renameError !== 0) {
+        if (nameError !== 0) {
           resetImportAttempt();
-          setImportStatus(renameError === 4 ? "导入包所在位置已有同名文件，请修改名称。" :
-            renameError === 8 ? "导入包名称不符合要求。" : "无法修改导入包文件名，请检查文件是否被占用或位置是否可写。", "error");
+          setImportStatus(nameError === 8 ? "导入名称不符合要求。" : "无法使用该导入名称，请稍后重试。", "error");
           return;
         }
-        importPicked = requestedPackageName;
       }
       if (!toNew) {
         first = passwordArray(importPassword);

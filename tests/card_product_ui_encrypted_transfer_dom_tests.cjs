@@ -285,7 +285,8 @@ const openBackup = async (d, $, mode) => {
     } finally { w.close(); }
   }
 
-  // The editable name is applied natively only on next; a collision can be retried.
+  // The editable name names what the import restores; it is set natively on
+  // every attempt, an invalid one is reported, and the package file is never renamed.
   {
     const {w, d, $, calls, setScript} = load();
     try {
@@ -299,9 +300,9 @@ const openBackup = async (d, $, mode) => {
       $('import-package-name').dispatchEvent(new w.Event('input'));
       assert.equal(calls.filter(c => c.name === 'rename').length, 0);
       const bridge = w.chrome.webview.hostObjects.nativeBridge;
-      bridge.renameImportPackage = name => { calls.push({name: 'rename', args: [name]}); return 4; };
+      bridge.renameImportPackage = name => { calls.push({name: 'rename', args: [name]}); return 8; };
       $('import-password').value = 'export password'; $('import-confirm').click();
-      await wait(() => /已有同名/.test($('import-status').textContent) && !$('import-password').disabled);
+      await wait(() => /导入名称不符合要求/.test($('import-status').textContent) && !$('import-password').disabled);
       assert.equal(calls.filter(c => c.name === 'import').length, 0);
       bridge.renameImportPackage = name => { calls.push({name: 'rename', args: [name]}); return 0; };
       setScript(['3,0,0,1,1']);
@@ -312,7 +313,9 @@ const openBackup = async (d, $, mode) => {
       $('import-password').value = 'correct password'; $('import-confirm').click();
       await wait(() => $('import-status').textContent === '导入成功' && $('import-cancel').textContent === '关闭');
       assert.equal($('import-dialog').hidden, false);
-      assert.equal(calls.filter(c => c.name === 'rename').length, 2, 'retry must reuse the renamed source path');
+      const named = calls.filter(c => c.name === 'rename');
+      assert.equal(named.length, 3, 'every attempt names the import');
+      assert.ok(named.every(c => c.args[0] === 'Renamed package'));
     } finally { w.close(); }
   }
 

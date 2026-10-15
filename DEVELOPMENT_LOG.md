@@ -6100,3 +6100,15 @@
 - 实现：移除 IContainerFileChooser::choose_import_package 及 Windows 实现、控制器 choose_import_package、页面桥 chooseImportPackage；相关测试改为经 choose_import_file 用真实文件选择导出包。通用导入另增：选中的不是普通文件时拒绝，不再把文件夹当作无法判断的文件。
 - 验证：p46 应用与测试目标构建通过（USB Vault.exe 02:12:29）；card_product_ui_session_controller、card_product_webview_host_object、card_product_ui_page_contract 通过；部署页面与源码一致。
 - 提交：按明确决定与本日其余界面修订合并为一个 [ui] 提交；禁止推送。
+
+### 2026-10-15 — ui / 导入普通安全盘默认命名为本地磁盘
+- 范围与审计：导入的普通安全盘原显示文件名（产品新建者为“{GUID}”）。现有重名编号规则（导出同名分组、导入文件撞名）为“名称 (n)”，自 (2) 起、忽略大小写，按此复用。
+- 实现：控制器在通用导入收录或挂载后，若该安全盘为新加入列表，则以“本地磁盘”为基名，对列表中其余名称去重后设为显示别名；已在列表中的不改名；别名保存失败不影响导入。需求清单同步补记。
+- 验证：card_product_ui_session_controller（首个为“本地磁盘”、第二个为“本地磁盘 (2)”、重复导入不改名）与 card_product_webview_host_object 通过；p46 应用已重新构建（02:24:34）。
+- 提交：按明确决定与导入名称修正合并为一个 [fix] 提交；禁止推送。
+
+### 2026-10-15 — ui / 导入名称不再重命名导出包文件
+- 范围与审计：此前修改“导入包命名”会先在磁盘上重命名导出包文件，再以同名作为导入后名称；导出包可能位于只读介质、同步目录或他人驱动器，改名会改动外部文件并可能失败。按明确要求改为只设置导入到安全盘的名称。
+- 实现：控制器 rename_selected_import_package 改为 set_selected_import_name，仅校验并保存导入后顶层名称，不打开、不重命名导出包；页面桥沿用 renameImportPackage 成员；页面标签改为“导入名称”，每次导入前都以输入框的值设置名称，错误提示改为“导入名称不符合要求。”；重名在写入阶段按既有规则拒绝。
+- 验证：card_product_ui_session_controller（无效名称拒绝、命名后导出包文件名与内容不变、旁边同名文件不受影响、跨登录拒绝）、card_product_webview_host_object（命名不移动导出包）、card_product_ui_page_contract、card_product_ui_encrypted_transfer_dom_tests 通过；其余 DOM 测试中 7 项与 HEAD 同样失败。p46 已重新构建（02:41:39），部署页面与源码一致。
+- 提交：按明确决定与导入名称修正合并为一个 [fix] 提交；禁止推送。

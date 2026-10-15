@@ -499,13 +499,31 @@ bool CardProductUiSessionController::mount_container() {
 }
 
 void CardProductUiSessionController::adopt_or_mount_container_file(const std::wstring& path) {
+  std::vector<application::ContainerStatus> before = volume_session_.container_statuses();
   // Picking a file says where a container is, not that it should be opened.
   // Unless the user asked for the mount, the import stops at the list, which
   // is also what a remembered path does at login.
-  if (volume_session_.mounting_imported_containers()) {
-    static_cast<void>(volume_session_.mount_container(path));
-  } else {
-    static_cast<void>(volume_session_.adopt_container(path));
+  const std::uint32_t id = volume_session_.mounting_imported_containers()
+                               ? volume_session_.mount_container(path)
+                               : volume_session_.adopt_container(path);
+  if (std::ranges::any_of(before, [id](const auto& status) { return status.id == id; })) return;
+  // A container new to the list is shown as "本地磁盘", numbered the way the
+  // product numbers other clashing names -- "本地磁盘 (2)", "本地磁盘 (3)" --
+  // ignoring case, against every name already in the list. The name is only
+  // the display alias; the file keeps its own name. Failing to store it
+  // leaves the file name showing and does not undo the import.
+  constexpr std::wstring_view base = L"本地磁盘";
+  std::wstring candidate(base);
+  const auto taken = [&](const application::ContainerStatus& status) {
+    return status.id != id &&
+           ::CompareStringOrdinal(status.name.c_str(), -1, candidate.c_str(), -1, TRUE) == CSTR_EQUAL;
+  };
+  for (unsigned int ordinal = 2; std::ranges::any_of(before, taken); ++ordinal) {
+    candidate = std::wstring(base) + L" (" + std::to_wstring(ordinal) + L")";
+  }
+  try {
+    volume_session_.rename_container(id, candidate);
+  } catch (...) {
   }
 }
 
@@ -818,48 +836,18 @@ std::wstring CardProductUiSessionController::selected_import_package() {
   return pending_import_package_;
 }
 
-void CardProductUiSessionController::rename_selected_import_package(const std::wstring_view name) {
+void CardProductUiSessionController::set_selected_import_name(const std::wstring_view name) {
+  // The name the import gives its restored entry inside the vault. The
+  // package file itself is never renamed: it may sit on read-only media, in
+  // a synchronised folder or on someone else's drive, and naming what comes
+  // into the app is no reason to change what lies outside it.
   static_cast<void>(volume::resolve_volume_child_path(L'C', L"", name));
   const std::scoped_lock lock(import_mutex_);
   if (state() != CardProductUiState::authenticated || pending_import_package_.empty() ||
       pending_import_generation_ != authentication_.generation()) {
     throw std::logic_error("no selected package belongs to this login");
   }
-  const std::filesystem::path current(pending_import_package_);
-  if (current.filename().wstring() == name) return;
-  std::wstring renamed = (current.parent_path() / name).wstring();
-  std::wstring restored(name);
-  const std::size_t name_bytes = renamed.size() * sizeof(wchar_t);
-  std::vector<std::byte> rename_buffer(sizeof(FILE_RENAME_INFO) + name_bytes);
-  auto* const rename = reinterpret_cast<FILE_RENAME_INFO*>(rename_buffer.data());
-  rename->ReplaceIfExists = FALSE;
-  rename->RootDirectory = nullptr;
-  rename->FileNameLength = static_cast<DWORD>(name_bytes);
-  std::copy(renamed.begin(), renamed.end(), rename->FileName);
-  verified_import_.reset();
-  // Pin the selected entry while renaming. A file link is renamed itself,
-  // never its target, and directories cannot enter this operation.
-  const HANDLE raw = ::CreateFileW(pending_import_package_.c_str(), DELETE | FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-      FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-  if (raw == INVALID_HANDLE_VALUE) {
-    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "open the selected import package");
-  }
-  const auto close_source = [](void* handle) { static_cast<void>(::CloseHandle(handle)); };
-  const std::unique_ptr<void, decltype(close_source)> source(raw, close_source);
-  BY_HANDLE_FILE_INFORMATION information{};
-  if (!::GetFileInformationByHandle(raw, &information)) {
-    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "inspect the selected import package");
-  }
-  if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || ::GetFileType(raw) != FILE_TYPE_DISK)
-    throw std::invalid_argument("the selected import package is not a file");
-  if (!::SetFileInformationByHandle(raw, FileRenameInfo, rename,
-                                    static_cast<DWORD>(rename_buffer.size()))) {
-    throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(),
-                            "rename the selected import package");
-  }
-  pending_import_package_.swap(renamed);
-  pending_import_restored_name_.swap(restored);
+  pending_import_restored_name_.assign(name);
 }
 
 void CardProductUiSessionController::verify_import(

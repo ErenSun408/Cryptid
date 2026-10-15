@@ -340,9 +340,11 @@ class CardProductUiSessionController final {
   // Copies the selected path for retries within the same login. Another pick
   // or a login change releases it; no password or decrypted data is cached.
   [[nodiscard]] std::wstring selected_import_package();
-  // Renames the selected package in its existing directory without replacing
-  // a file; the same single-component name becomes its restored top name.
-  void rename_selected_import_package(std::wstring_view name);
+  // Names what the selected package restores inside the vault. Only that
+  // name changes; the package file keeps its own name and place. Throws
+  // std::invalid_argument for a name a volume cannot hold and
+  // std::logic_error when no package of this login is selected.
+  void set_selected_import_name(std::wstring_view name);
 
   // Thrown when an import into a new container failed and the container it
   // created could not be fully undone: it may still be listed or on disk.
