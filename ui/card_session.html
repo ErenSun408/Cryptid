@@ -1208,6 +1208,7 @@
     /* Cancelled is neither of the two: nothing went wrong and nothing was
        made, so it reads as a caution rather than a failure. */
     .creation-status[data-tone="cancelled"] { color: var(--warn); }
+    #import-notice-dialog .modal { width: min(20rem, 100%); }
     #import-dialog .modal { height: min(50rem, calc(100dvh - 3rem)); display: flex; flex-direction: column; }
     #import-dialog .modal-header, #import-dialog .modal-footer { flex: 0 0 auto; }
     #import-dialog .modal-body { display: flex; flex-direction: column; flex: 1; min-height: 0; max-height: none; overflow: hidden; }
@@ -1905,11 +1906,18 @@
       </div>
     </div>
   </div>
+  <div id="import-notice-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="import-notice-title" tabindex="-1" hidden>
+    <div class="modal">
+      <div class="modal-header"><h3 id="import-notice-title">导入安全盘</h3></div>
+      <div class="modal-body"><p id="import-notice-message"></p></div>
+      <div class="modal-footer"><button id="import-notice-confirm" class="modal-button primary" type="button">确定</button></div>
+    </div>
+  </div>
   <div id="import-kind-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="import-kind-title" tabindex="-1" hidden>
     <div class="modal">
       <div class="modal-header"><h3 id="import-kind-title">选择导入方式</h3></div>
       <div class="modal-body">
-        <p>无法仅凭文件判断 <b id="import-kind-name"></b> 是安全盘文件还是密文导出包，请选择导入方式。</p>
+        <p>无法判断 <b id="import-kind-name"></b> 为安全盘文件还是密文导出包，请选择导入方式。</p>
       </div>
       <div class="modal-footer">
         <button id="import-kind-cancel" class="modal-button" type="button">取消</button>

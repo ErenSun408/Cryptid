@@ -511,6 +511,22 @@ void CardProductUiSessionController::adopt_or_mount_container_file(const std::ws
 
 namespace {
 
+// Product file containers are named "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
+// with no extension (resolve_protected_container_target_path).
+[[nodiscard]] bool has_container_guid_name(const std::wstring& name) {
+  if (name.size() != 38 || name.front() != L'{' || name.back() != L'}') return false;
+  for (std::size_t index = 1; index < 37; ++index) {
+    const wchar_t character = name[index];
+    if (index == 9 || index == 14 || index == 19 || index == 24) {
+      if (character != L'-') return false;
+    } else if (!((character >= L'0' && character <= L'9') || (character >= L'A' && character <= L'F') ||
+                 (character >= L'a' && character <= L'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 [[nodiscard]] bool has_container_extension(const std::wstring& name) {
   const std::size_t dot = name.find_last_of(L'.');
   if (dot == std::wstring::npos) return false;
@@ -548,6 +564,12 @@ CardProductUiSessionController::choose_import_file() {
   std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
   if (name.empty()) return {};
   std::error_code error;
+  // Only a regular file can be a container or a package; the picker offers
+  // files only, and this holds even if something else reaches here.
+  if (!std::filesystem::is_regular_file(path, error)) {
+    if (!error) error = std::make_error_code(std::errc::not_a_directory);
+    throw std::system_error(error, "the file picked for import is not a regular file");
+  }
   const std::uintmax_t size = std::filesystem::file_size(path, error);
   if (error) throw std::system_error(error, "inspect the file picked for import");
   if (size % 512U != 0) {
@@ -556,7 +578,7 @@ CardProductUiSessionController::choose_import_file() {
     pending_import_generation_ = authentication_.generation();
     return {ImportFileKind::package, std::move(name)};
   }
-  if (has_container_extension(name)) {
+  if (has_container_extension(name) || has_container_guid_name(name)) {
     adopt_or_mount_container_file(path);
     return {ImportFileKind::container, std::move(name)};
   }
@@ -766,27 +788,6 @@ void CardProductUiSessionController::export_container_entry_encrypted(
   volume_session_.export_container_entry_encrypted(
       id, relative_directory, name, absolute_destination_directory, package_name,
       password, cancelled, progress);
-}
-
-std::wstring CardProductUiSessionController::choose_import_package() {
-  {
-    const std::scoped_lock lock(import_mutex_);
-    pending_import_package_.clear();
-    pending_import_restored_name_.clear();
-    verified_import_.reset();
-  }
-  if (state() != CardProductUiState::authenticated) {
-    throw_wrong_route("importing a package is not available in the current UI state");
-  }
-  std::wstring path = file_chooser_.choose_import_package();
-  if (path.empty()) return {};
-  const std::size_t separator = path.find_last_of(L"\\/");
-  std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
-  if (name.empty()) return {};
-  const std::scoped_lock lock(import_mutex_);
-  pending_import_package_ = std::move(path);
-  pending_import_generation_ = authentication_.generation();
-  return name;
 }
 
 void CardProductUiSessionController::release_stale_import_state() noexcept {

@@ -43,11 +43,6 @@ class IContainerFileChooser {
   // empty string when the user cancels. The path stays on this side.
   [[nodiscard]] virtual std::wstring choose_existing_container() = 0;
 
-  // P5.9: returns the absolute path of an encrypted export package to import,
-  // or an empty string when the user cancels. Like adoption, the path stays
-  // on this side; the page learns only the file name.
-  [[nodiscard]] virtual std::wstring choose_import_package() { return {}; }
-
  protected:
   IContainerFileChooser() noexcept = default;
 };

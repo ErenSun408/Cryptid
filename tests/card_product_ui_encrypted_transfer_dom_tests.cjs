@@ -190,6 +190,26 @@ const openBackup = async (d, $, mode) => {
     } finally { w.close(); }
   }
 
+  // Mounting a vault from the export list opens its files; unmounting it
+  // folds it shut again.
+  {
+    const {w, d, $} = load();
+    try {
+      await tick();
+      await openBackup(d, $, 'export-mode-encrypted');
+      const toggle = () => d.querySelector('[data-export-toggle="2"]');
+      assert.equal(toggle().getAttribute('aria-expanded'), 'false');
+      d.querySelector('#export-container-list [data-row-mount="2"]').click();
+      await wait(() => toggle().getAttribute('aria-expanded') === 'true' &&
+                       !/正在读取/.test(d.querySelector('#export-container-list .xfiles')?.textContent || '正在读取'));
+      await wait(() => !$('volume-operation-confirm').hidden);
+      $('volume-operation-confirm').click(); await tick();
+      d.querySelector('#export-container-list [data-row-mount="2"]').click();
+      await wait(() => toggle().getAttribute('aria-expanded') === 'false');
+      for (let i = 0; i < 10; i++) await tick();
+    } finally { w.close(); }
+  }
+
   // Unmounting a container clears what was selected in it.
   {
     const {w, d, $} = load();
@@ -317,6 +337,17 @@ const openBackup = async (d, $, mode) => {
       // Let the container action finish before the window goes.
       for (let i = 0; i < 10; i++) await tick();
       assert.equal($('import-dialog').hidden, true);
+      assert.equal($('import-notice-dialog').hidden, false, 'a container that was already listed says so');
+      assert.match($('import-notice-message').textContent, /已在列表中/);
+      $('import-notice-confirm').click(); await tick();
+      assert.equal($('import-notice-dialog').hidden, true);
+
+      // The same answer when the import button picks a listed container directly.
+      w.chrome.webview.hostObjects.nativeBridge.chooseImportFile = () => '1|{37218019-3B14-40C2-BBCA-17C3FF88C262}';
+      d.querySelector('[data-mount-existing]').click();
+      await wait(() => !$('import-notice-dialog').hidden);
+      assert.match($('import-notice-message').textContent, /已在列表中/);
+      $('import-notice-confirm').click(); await tick();
     } finally { w.close(); }
   }
 

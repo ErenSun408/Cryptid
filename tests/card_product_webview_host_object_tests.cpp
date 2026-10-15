@@ -893,13 +893,8 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
-  [[nodiscard]] std::wstring choose_import_package() override {
-    return import_path;
-  }
-
   std::wstring directory_path;
   std::wstring existing_path;
-  std::wstring import_path;
   int directory_calls{};
   int existing_calls{};
 };
@@ -3721,11 +3716,13 @@ void test_an_encrypted_import_runs_on_the_worker() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
   ComPtr<IDispatch> host = make_host(fixture.controller);
-  fixture.chooser.import_path = L"E:\\Backups\\family photos";
+  const std::filesystem::path package = std::filesystem::path(fixture.directory.wide()) / L"family photos";
+  { std::ofstream(package, std::ios::binary) << std::string(1000, 'x'); }
+  fixture.chooser.existing_path = package.wstring();
   VARIANT picked{};
-  require(invoke_named(*host.Get(), L"chooseImportPackage", nullptr, 0, &picked, nullptr) == S_OK &&
+  require(invoke_named(*host.Get(), L"chooseImportFile", nullptr, 0, &picked, nullptr) == S_OK &&
               picked.vt == VT_BSTR &&
-              std::wstring(picked.bstrVal, ::SysStringLen(picked.bstrVal)) == L"family photos",
+              std::wstring(picked.bstrVal, ::SysStringLen(picked.bstrVal)) == L"2|family photos",
           "the page was not given only the picked file name");
   static_cast<void>(::VariantClear(&picked));
 
@@ -3779,7 +3776,7 @@ void test_an_encrypted_import_runs_on_the_worker() {
   require(text == L"2,10,10,0,2", "the import did not finish in its write phase");
   require(fixture.volume.imports.size() == 1 && fixture.volume.imports[0].id == 5 &&
               fixture.volume.imports[0].directory == L"in" &&
-              fixture.volume.imports[0].destination == L"E:\\Backups\\family photos",
+              fixture.volume.imports[0].destination == package.wstring(),
           "the import crossed the bridge out of order");
 }
 
@@ -3790,8 +3787,8 @@ void test_the_import_package_rename_bridge_validates_and_reports_collisions() {
   const auto original = root / L"original package";
   { std::ofstream(original, std::ios::binary) << "ciphertext";
     std::ofstream(root / L"existing package", std::ios::binary) << "keep"; }
-  fixture.chooser.import_path = original.wstring();
-  static_cast<void>(fixture.controller.choose_import_package());
+  fixture.chooser.existing_path = original.wstring();
+  static_cast<void>(fixture.controller.choose_import_file());
   ComPtr<IDispatch> host = make_host(fixture.controller);
   const auto rename = [&](const std::wstring_view name) {
     VARIANTARG argument = text_argument(std::wstring(name));

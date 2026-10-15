@@ -72,7 +72,6 @@ constexpr DISPID kOpenCardBackupId = 230;
 constexpr DISPID kBeginEncryptedExportId = 140;
 constexpr DISPID kEncryptedTransferStatusId = 141;
 constexpr DISPID kCancelEncryptedTransferId = 142;
-constexpr DISPID kChooseImportPackageId = 143;
 constexpr DISPID kBeginEncryptedImportId = 144;
 constexpr DISPID kBeginVerifyImportId = 145;
 constexpr DISPID kVerifiedImportMinimumMibId = 146;
@@ -575,7 +574,6 @@ class PasswordArgumentsWiper final {
     case kBeginEncryptedExportId: return "beginEncryptedExport";
     case kEncryptedTransferStatusId: return "encryptedTransferStatus";
     case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
-    case kChooseImportPackageId: return "chooseImportPackage";
     case kBeginEncryptedImportId: return "beginEncryptedImport";
     case kBeginVerifyImportId: return "beginVerifyImport";
     case kVerifiedImportMinimumMibId: return "getVerifiedImportMinimumMib";
@@ -780,7 +778,6 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"beginEncryptedExport")) { ids[0] = kBeginEncryptedExportId; return S_OK; }
     if (matches(names[0], L"encryptedTransferStatus")) { ids[0] = kEncryptedTransferStatusId; return S_OK; }
     if (matches(names[0], L"cancelEncryptedTransfer")) { ids[0] = kCancelEncryptedTransferId; return S_OK; }
-    if (matches(names[0], L"chooseImportPackage")) { ids[0] = kChooseImportPackageId; return S_OK; }
     if (matches(names[0], L"beginEncryptedImport")) { ids[0] = kBeginEncryptedImportId; return S_OK; }
     if (matches(names[0], L"beginVerifyImport")) { ids[0] = kBeginVerifyImportId; return S_OK; }
     if (matches(names[0], L"getVerifiedImportMinimumMib")) { ids[0] = kVerifiedImportMinimumMibId; return S_OK; }
@@ -1626,22 +1623,6 @@ class CardProductWebViewHostObject final : public IDispatch {
         return begin_export_selection(parameters, result, argument_error);
       case kBeginEncryptedExportId:
         return begin_encrypted_export(parameters, result, argument_error);
-      case kChooseImportPackageId: {
-        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
-        if (result == nullptr) return E_POINTER;
-        if (creation_work_->interrupted.load() ||
-            controller_.state() != CardProductUiState::authenticated) {
-          return E_ACCESSDENIED;
-        }
-        try {
-          const std::wstring name = controller_.choose_import_package();
-          ::VariantInit(result);
-          return complete_string(name.c_str(), static_cast<UINT>(name.size()), result);
-        } catch (...) {
-          USB_VAULT_TRACE_FAILURE("页面桥", "选择导入包失败", "");
-          return E_FAIL;
-        }
-      }
       case kBeginEncryptedImportId:
         return begin_encrypted_import(parameters, result, argument_error);
       case kBeginVerifyImportId:
@@ -2055,7 +2036,7 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   // Three arguments: the container, the directory shown, and the export
   // password as a byte array. The package is the one picked through
-  // chooseImportPackage, whose path remains available for same-login retries.
+  // chooseImportFile, whose path remains available for same-login retries.
   HRESULT begin_encrypted_import(DISPPARAMS* const parameters, VARIANT* const result,
                                  UINT* const argument_error) noexcept {
     if (parameters == nullptr || parameters->cArgs != 3 ||

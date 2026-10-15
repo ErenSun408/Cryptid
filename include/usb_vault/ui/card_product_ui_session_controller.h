@@ -310,8 +310,9 @@ class CardProductUiSessionController final {
   // P5.9 generic import. One pick serves containers and cipher export
   // packages. A VeraCrypt file container is always a whole number of 512-byte
   // sectors, so any other size is a package. A sector-sized file with a
-  // container extension is taken as a container, as before; one without is
-  // left for the user to decide. Nothing is read from the file to decide.
+  // container extension, or named the way this product names new containers
+  // ("{GUID}" with no extension), is taken as a container, as before; any
+  // other is left for the user to decide. Nothing is read from the file.
   enum class ImportFileKind : unsigned int {
     cancelled = 0,
     container = 1,
@@ -323,8 +324,9 @@ class CardProductUiSessionController final {
     std::wstring name;
   };
   // Picks a file natively. A container is adopted (or mounted) at once, as the
-  // import button always did; a package is held like choose_import_package();
-  // an undecided file is held until one of the two calls below settles it.
+  // import button always did; a package is held for the import dialog, in
+  // memory only and for this login only, and its path never crosses to the
+  // page; an undecided file is held until one of the two calls below settles it.
   [[nodiscard]] ImportFileChoice choose_import_file();
 
   // Deletes an unmounted file container from disk, then from the list.
@@ -334,12 +336,6 @@ class CardProductUiSessionController final {
   // Settles an undecided pick as a package and returns its name; empty when
   // nothing is held for this login.
   [[nodiscard]] std::wstring treat_undecided_import_as_package();
-
-  // P5.9: lets the user pick a package to import. The path is held here, in
-  // memory only and for this login only, and never crosses to the page; the
-  // file name is returned so the page can show what was picked. Empty when
-  // cancelled.
-  [[nodiscard]] std::wstring choose_import_package();
 
   // Copies the selected path for retries within the same login. Another pick
   // or a login change releases it; no password or decrypted data is cached.

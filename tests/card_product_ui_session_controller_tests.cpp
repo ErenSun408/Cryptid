@@ -790,13 +790,8 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
-  [[nodiscard]] std::wstring choose_import_package() override {
-    return import_path;
-  }
-
   std::wstring directory_path;
   std::wstring existing_path;
-  std::wstring import_path;
   int directory_calls{};
   int existing_calls{};
 };
@@ -2236,13 +2231,15 @@ void test_encrypted_export_confirms_the_password_first() {
 void test_an_import_uses_the_picked_package_once() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
-  fixture.chooser.import_path = L"E:\\Backups\\family photos";
-  require(fixture.controller.choose_import_package() == L"family photos",
+  const std::filesystem::path picked = std::filesystem::path(fixture.directory.wide()) / L"family photos";
+  { std::ofstream(picked, std::ios::binary) << std::string(1000, 'x'); }
+  fixture.chooser.existing_path = picked.wstring();
+  require(fixture.controller.choose_import_file().name == L"family photos",
           "the page was not shown the picked file name");
 
   std::vector<std::byte> password = bytes("long enough export pass");
   const std::wstring taken = fixture.controller.selected_import_package();
-  require(taken == L"E:\\Backups\\family photos" && fixture.controller.selected_import_package() == taken,
+  require(taken == picked.wstring() && fixture.controller.selected_import_package() == taken,
           "a pick was not retained for same-login retries");
   require(fixture.controller.import_package_into_container(5, L"in", taken, password, {}, {}) == L"Docs",
           "the import did not return the restored name");
@@ -2250,7 +2247,7 @@ void test_an_import_uses_the_picked_package_once() {
           "the import password was not wiped");
   require(fixture.volume.imports.size() == 1 && fixture.volume.imports[0].id == 5 &&
               fixture.volume.imports[0].directory == L"in" &&
-              fixture.volume.imports[0].destination == L"E:\\Backups\\family photos",
+              fixture.volume.imports[0].destination == picked.wstring(),
           "the import did not carry the picked package to the session");
 
   std::vector<std::byte> again = bytes("long enough export pass");
@@ -2261,14 +2258,16 @@ void test_an_import_uses_the_picked_package_once() {
           "a refused import password was not wiped");
 
   // A pick belongs to the login it was made under.
-  require(fixture.controller.choose_import_package() == L"family photos", "the second pick failed");
+  require(fixture.controller.choose_import_file().name == L"family photos", "the second pick failed");
   fixture.authentication.clear_authentication();
   fixture.authentication.establish(root_secret());
   require(fixture.controller.selected_import_package().empty(),
           "a pick made before a new login was handed over after it");
 
-  fixture.chooser.import_path.clear();
-  require(fixture.controller.choose_import_package().empty(), "a cancelled pick named a file");
+  fixture.chooser.existing_path.clear();
+  require(fixture.controller.choose_import_file().kind ==
+              usb_vault::ui::CardProductUiSessionController::ImportFileKind::cancelled,
+          "a cancelled pick named a file");
   require(fixture.volume.imports.size() == 1, "a refused import reached the session");
 }
 
@@ -2280,8 +2279,8 @@ void test_a_selected_import_package_can_be_renamed_without_overwriting() {
   const auto existing = root / L"already here";
   { std::ofstream(source, std::ios::binary) << "ciphertext stays identical";
     std::ofstream(existing, std::ios::binary) << "keep this file"; }
-  fixture.chooser.import_path = source.wstring();
-  static_cast<void>(fixture.controller.choose_import_package());
+  fixture.chooser.existing_path = source.wstring();
+  static_cast<void>(fixture.controller.choose_import_file());
   for (const auto name : {L"", L"..\\escape", L"CON", L"stream:name", L"trailing."}) {
     require_throws<std::invalid_argument>([&] { fixture.controller.rename_selected_import_package(name); },
                                          "a name that can escape the selected directory was accepted");
@@ -2301,10 +2300,11 @@ void test_a_selected_import_package_can_be_renamed_without_overwriting() {
   content.close();
   const auto directory = root / L"a directory";
   std::filesystem::create_directory(directory);
-  fixture.chooser.import_path = directory.wstring();
-  static_cast<void>(fixture.controller.choose_import_package());
-  require_throws<std::invalid_argument>([&] { fixture.controller.rename_selected_import_package(L"renamed directory"); },
-                                        "a directory was renamed as an import package");
+  // A directory is not a package and is never held as one.
+  fixture.chooser.existing_path = directory.wstring();
+  require_throws<std::system_error>([&] { static_cast<void>(fixture.controller.choose_import_file()); },
+                                    "a directory was picked as an import file");
+  require(fixture.controller.selected_import_package().empty(), "a directory pick left a selection");
   require(std::filesystem::is_directory(directory), "a refused directory rename changed the source");
   fixture.authentication.clear_authentication();
   fixture.authentication.establish(root_secret());
@@ -2323,8 +2323,10 @@ void test_a_renamed_package_is_verified_again_before_any_import_write() {
   SecureBuffer password(raw_password.size());
   std::ranges::copy(raw_password, password.bytes().begin());
   usb_vault::backup::export_package_to_file_v1(source.wstring(), package.wstring(), password);
-  fixture.chooser.import_path = package.wstring();
-  static_cast<void>(fixture.controller.choose_import_package());
+  fixture.chooser.existing_path = package.wstring();
+  require(fixture.controller.choose_import_file().kind ==
+              usb_vault::ui::CardProductUiSessionController::ImportFileKind::package,
+          "an export package was not picked as a package");
   fixture.controller.rename_selected_import_package(L"restored note.txt");
   const auto selected = fixture.controller.selected_import_package();
   auto wrong = bytes("incorrect password");
@@ -2458,6 +2460,15 @@ void test_the_generic_import_sorts_containers_from_packages() {
   choice = fixture.controller.choose_import_file();
   require(choice.kind == Kind::container && fixture.volume.adopted_path == fixture.chooser.existing_path,
           "a sector-sized container file was not adopted as before");
+
+  // The name this product gives new containers: a braced GUID, no suffix.
+  fixture.chooser.existing_path = make(L"{37218019-3B14-40C2-BBCA-17C3FF88C262}", 2048);
+  choice = fixture.controller.choose_import_file();
+  require(choice.kind == Kind::container && fixture.volume.adopted_path == fixture.chooser.existing_path,
+          "a container named the product's way was not adopted directly");
+  fixture.chooser.existing_path = make(L"{37218019-3B14-40C2-BBCA-17C3FF88C26}", 2048);
+  require(fixture.controller.choose_import_file().kind == Kind::undecided,
+          "a name that is almost a braced GUID was taken as a container");
 
   fixture.chooser.existing_path = make(L"unnamed", 4096);
   choice = fixture.controller.choose_import_file();

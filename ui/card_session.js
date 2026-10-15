@@ -403,6 +403,9 @@
   const exportDialogStart = document.getElementById("export-dialog-start");
   const importDialog = document.getElementById("import-dialog");
   const importKindDialog = document.getElementById("import-kind-dialog");
+  const importNoticeDialog = document.getElementById("import-notice-dialog");
+  const importNoticeMessage = document.getElementById("import-notice-message");
+  const importNoticeConfirm = document.getElementById("import-notice-confirm");
   const importKindName = document.getElementById("import-kind-name");
   const importKindCancel = document.getElementById("import-kind-cancel");
   const importKindContainer = document.getElementById("import-kind-container");
@@ -2394,7 +2397,32 @@
   // 🔴 A card lists one container's root and nothing deeper. Ticking is what
   // this pane is for; browsing is the file manager's job, and building a
   // second one here would mean two places that can walk a volume.
+  // A vault that becomes mounted opens in the export list on its own; one
+  // that is unmounted folds shut below. Vaults already mounted when the
+  // page first sees them stay as they are.
+  let exportMountSeen = null;
+  let exportAutoOpenId = 0;
+  const followExportMounts = () => {
+    const mountedNow = new Set(containers.filter((container) => container.mounted).map((container) => container.id));
+    if (exportMountSeen !== null) {
+      const fresh = [...mountedNow].filter((id) => !exportMountSeen.has(id) && !isMaintenanceContainer(id));
+      if (fresh.length !== 0) exportAutoOpenId = fresh[fresh.length - 1];
+    }
+    exportMountSeen = mountedNow;
+    if (exportAutoOpenId === 0 || busy) return;
+    const id = exportAutoOpenId;
+    exportAutoOpenId = 0;
+    if (openExportContainer === id) return;
+    setTimeout(() => {
+      if (!busy && openExportContainer !== id &&
+          containers.some((container) => container.id === id && container.mounted)) {
+        void toggleExportContainer(id);
+      }
+    }, 0);
+  };
+
   const renderExportContainers = () => {
+    followExportMounts();
     // A container that is no longer mounted keeps nothing ticked and folds
     // shut: what was selected in it cannot be exported any more.
     const mountedNow = (id) => containers.some((container) => container.id === id && container.mounted);
@@ -3108,7 +3136,7 @@
 
   // These dialogs make the dashboard inert only when nothing else already
   // has, and give it back only what they took, as the other dialogs do.
-  const modalDialogs = () => [exportDialog, importDialog, importKindDialog];
+  const modalDialogs = () => [exportDialog, importDialog, importKindDialog, importNoticeDialog];
   let modalOwnsInert = false;
   const openModal = (dialog, focus) => {
     if (modalDialogs().every((item) => item.hidden) && !dashboard.hasAttribute("inert")) {
@@ -5848,6 +5876,8 @@
   window.addEventListener("usb-vault-session-changed", () => {
     mountRefreshPending = false; clearTimeout(mountRefreshTimer); mountRefreshTimer = null;
     ++batchSessionRevision;
+    exportMountSeen = null;
+    exportAutoOpenId = 0;
     mergeExport = true;
     clearExportResults();
     exportSelection.clear();
@@ -5857,7 +5887,7 @@
     clearExportDialogSecrets();
     resetImportForm();
     setImportStatus("");
-    for (const dialog of [exportDialog, importDialog, importKindDialog]) {
+    for (const dialog of [exportDialog, importDialog, importKindDialog, importNoticeDialog]) {
       if (!dialog.hidden) closeModal(dialog);
     }
     cancelContainerRename();
@@ -6549,8 +6579,20 @@
   // One import button for containers and cipher export packages. Native code
   // decides by size; a container goes on as before, a package opens the
   // import dialog, and a file it cannot place is left to the user.
+  // A container already in the list comes back as itself; say so rather
+  // than leave the click looking as if nothing happened.
+  const reportListedContainer = (previousIds, adopted) => {
+    if (adopted && currentState === nativeState.authenticated && !busy &&
+        !containers.some((container) => !previousIds.has(container.id))) {
+      // A dialog, not the status line: the click must visibly answer.
+      importNoticeMessage.textContent = "该安全盘已在列表中。";
+      openModal(importNoticeDialog, importNoticeConfirm);
+    }
+  };
   const mountExistingContainer = async () => {
     let picked = null;
+    let adopted = false;
+    const previousIds = new Set(containers.map((container) => container.id));
     await runContainerAction(async () => {
       const raw = String(await bridge.chooseImportFile());
       const bar = raw.indexOf("|");
@@ -6558,8 +6600,10 @@
       if (bar < 1 || !Number.isInteger(kind) || kind < 0 || kind > 3) throw new Error("invalid import choice");
       if (kind === 0) return false;
       if (kind >= 2) picked = { kind, name: raw.slice(bar + 1) };
+      adopted = kind === 1;
       return true;
     }, "无法导入该文件，请确认文件仍在原位置；安全盘文件还须与当前安全卡匹配。", null, true);
+    reportListedContainer(previousIds, adopted);
     if (picked === null || currentState !== nativeState.authenticated) return;
     if (picked.kind === 2) openImportDialog(picked.name);
     else openImportKindDialog(picked.name);
@@ -7014,7 +7058,7 @@
     const revision = batchSessionRevision;
     partitionErase.checked = false;
     busy = true;
-    creationStatus.textContent = "正在创建加密盘，正在使用本次管理员授权。";
+    creationStatus.textContent = "正在创建安全盘，正在使用本次管理员授权。";
     creationStatus.dataset.tone = "";
     render(messageForCurrentState());
     let creationAccepted = false;
@@ -7030,7 +7074,7 @@
       busy = false;
       render(messageForCurrentState());
       creationCompleted = true;
-      setCreationDescription("加密盘已经创建并挂载。");
+      setCreationDescription("安全盘已经创建并挂载。");
       creationStatus.textContent = "创建成功，可以开始使用。";
       creationStatus.dataset.tone = "success";
     } catch (pageError) { logCaughtPageError("createPartition/1", pageError);
@@ -7234,10 +7278,21 @@
     trapTab(importKindDialog, event);
   });
   importKindCancel.addEventListener("click", () => { closeModal(importKindDialog); });
+  importNoticeConfirm.addEventListener("click", () => { closeModal(importNoticeDialog); });
+  importNoticeDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" || event.key === "Enter") { event.preventDefault(); closeModal(importNoticeDialog); }
+    trapTab(importNoticeDialog, event);
+  });
   importKindContainer.addEventListener("click", async () => {
     closeModal(importKindDialog);
-    await runContainerAction(() => bridge.adoptUndecidedImportFile(),
+    const previousIds = new Set(containers.map((container) => container.id));
+    let adopted = false;
+    await runContainerAction(async () => {
+      adopted = Boolean(await bridge.adoptUndecidedImportFile());
+      return adopted;
+    },
       "无法导入该安全盘，请确认文件仍在原位置且与当前安全卡匹配。", null, true);
+    reportListedContainer(previousIds, adopted);
   });
   importKindPackage.addEventListener("click", async () => {
     closeModal(importKindDialog);
