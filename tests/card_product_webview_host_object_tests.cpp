@@ -4278,6 +4278,8 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   int check_calls{};
   bool missing{};
   bool duplicate{};
+  bool external_item{};
+  bool ntfs_item{true};
   usb_vault::ui::CreationWorkState* expire_on_read{};
   std::vector<usb_vault::volume::PartitionCandidate> enumerate() override {
     while (delay.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -4294,9 +4296,12 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
     if (device_replaced) ++item.device_id[0];
     if (expire_on_read) expire_on_read->card_epoch.fetch_add(1);
     item.availability = usb_vault::volume::PartitionAvailability::candidate;
+    item.external = external_item;
+    item.ntfs = ntfs_item;
     if (missing) return {};
     if (duplicate) return {item, item};
     auto blocked = item;
+    blocked.external = false;
     blocked.volume_path = L"other-private-identity";
     blocked.availability = usb_vault::volume::PartitionAvailability::windows_volume;
     return {item, blocked};
@@ -4487,6 +4492,51 @@ void test_partition_selection_lifecycle() {
     require(check_pending && blocked && FAILED(call(L"getSelectedPartition")), "helper failure retained selection or allowed concurrent action");
     if (!expire) require(SUCCEEDED(call(L"getPartitionCheckStatus")) && result.ulVal == 3, "helper failure state missing");
   }
+  ::VariantClear(&result);
+}
+
+// The removable flow lists external media only, and never starts in-place
+// encryption on a filesystem other than NTFS.
+void test_external_partition_scope() {
+  Fixture fixture;
+  usb_vault::ui::CreationWorkState work;
+  FakePartitionServices services;
+  ComPtr<IDispatch> host;
+  require(SUCCEEDED(create_card_product_webview_host_object(fixture.controller, nullptr, &host, nullptr, &work, nullptr, &services)), "external host");
+  fixture.authentication.establish(root_secret());
+  VARIANT result{};
+  const auto call = [&](const wchar_t* name) { ::VariantClear(&result); return invoke_no_arguments(*host.Get(), name, &result); };
+  const auto number = [&](const wchar_t* name, unsigned id) { ::VariantClear(&result); return invoke_with_number(*host.Get(), name, id, &result, nullptr); };
+  const auto wait = [&] {
+    for (int i = 0; work.running.load() && i < 3000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(!work.running.load(), "external scan timeout");
+  };
+  const auto list = [&] { require(SUCCEEDED(call(L"getPartitionList")) && result.vt == VT_BSTR, "external list"); return std::wstring(result.bstrVal); };
+  require(number(L"beginPartitionRefresh", 2) == DISP_E_TYPEMISMATCH, "unknown scope accepted");
+  require(SUCCEEDED(number(L"beginPartitionRefresh", 1)), "external scan"); wait();
+  require(list().empty(), "internal volume listed as external");
+  services.external_item = true;
+  require(SUCCEEDED(number(L"beginPartitionRefresh", 1)), "external rescan"); wait();
+  auto rows = list();
+  require(rows.find(L'\n') == std::wstring::npos && rows.ends_with(L",1073741824,0"), "external scan kept internal volumes");
+  auto id = static_cast<unsigned int>(std::stoul(rows));
+  require(SUCCEEDED(number(L"getPartitionNtfs", id)) && result.vt == VT_BOOL && result.boolVal == VARIANT_TRUE, "NTFS fact missing");
+  require(number(L"getPartitionNtfs", 999) == E_ACCESSDENIED, "unknown NTFS id accepted");
+  require(SUCCEEDED(call(L"beginPartitionRefresh")), "full scan"); wait();
+  require(list().find(L'\n') != std::wstring::npos, "full scan dropped volumes");
+
+  services.ntfs_item = false;
+  require(SUCCEEDED(number(L"beginPartitionRefresh", 1)), "exFAT scan"); wait();
+  id = static_cast<unsigned int>(std::stoul(list()));
+  require(SUCCEEDED(number(L"getPartitionNtfs", id)) && result.boolVal == VARIANT_FALSE, "non-NTFS reported as NTFS");
+  require(SUCCEEDED(number(L"selectPartition", id)), "exFAT select");
+  require(number(L"beginPartitionConversion", id) == E_ACCESSDENIED && fixture.volume.partition_creations == 0,
+          "in-place encryption started on a non-NTFS medium");
+  require(SUCCEEDED(number(L"beginPartitionRefresh", 1)), "exFAT rescan"); wait();
+  id = static_cast<unsigned int>(std::stoul(list()));
+  require(SUCCEEDED(number(L"selectPartition", id)) && SUCCEEDED(number(L"beginPartitionCreate", id)), "erasing a non-NTFS medium refused");
+  wait();
+  require(fixture.volume.partition_creations == 1, "erase on an external medium did not run");
   ::VariantClear(&result);
 }
 
@@ -4841,6 +4891,7 @@ int main() {
     test_partition_resume_pause_and_revocation();
     test_partition_creation_snapshot_and_epoch();
     test_partition_creation_snapshot_and_epoch(L"beginPartitionConversion");
+    test_external_partition_scope();
     test_login_reset_bridge_lifecycle();
     test_protection_query_is_boolean_scoped_and_serialized();
     test_import_capacity_warning_rejects_stale_events_and_shares_protection_latch();

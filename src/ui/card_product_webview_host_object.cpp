@@ -86,6 +86,8 @@ constexpr DISPID kDeleteContainerFromDiskId = 154;
 // Opening Explorer reads the session list and mutates nothing.
 constexpr DISPID kOpenContainerDriveId = 155;
 constexpr DISPID kOpenThisPcId = 156;
+// Whether a listed partition holds NTFS, the only filesystem encrypted in place.
+constexpr DISPID kPartitionNtfsId = 157;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -521,6 +523,7 @@ class PasswordArgumentsWiper final {
     case kDeleteContainerFromDiskId: return "deleteContainerFromDisk";
     case kOpenContainerDriveId: return "openContainerDrive";
     case kOpenThisPcId: return "openThisPc";
+    case kPartitionNtfsId: return "getPartitionNtfs";
     case kGetAutoMountId: return "getAutoMountEnabled";
     case kBatchItemIdId: return "getBatchItemId";
     case kBatchItemNameId: return "getBatchItemName";
@@ -873,6 +876,7 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
     if (matches(names[0], L"openContainerDrive")) { ids[0] = kOpenContainerDriveId; return S_OK; }
     if (matches(names[0], L"openThisPc")) { ids[0] = kOpenThisPcId; return S_OK; }
+    if (matches(names[0], L"getPartitionNtfs")) { ids[0] = kPartitionNtfsId; return S_OK; }
     if (matches(names[0], kForgetContainerName)) {
       ids[0] = kForgetContainerId;
       return S_OK;
@@ -1127,11 +1131,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     }
 
     if (!creation_work_->running.load() &&
-        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId)) partition_mode_ = false;
+        !((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId || member==kPartitionNtfsId)) partition_mode_ = false;
     if (!creation_work_->running.load() &&
         (controller_.state() != CardProductUiState::authenticated ||
          partition_epoch_ != creation_work_->card_epoch.load())) clear_partitions();
-    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId)
+    if ((member >= kPartitionBeginId && member <= kPartitionCreateId) || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId || member==kPartitionNtfsId)
       return invoke_partition(member, parameters, result);
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
@@ -2326,9 +2330,17 @@ class CardProductWebViewHostObject final : public IDispatch {
       DISPPARAMS* args;
       ~PairWiper() { if (args) wipe_available_arguments(args, args->cArgs); }
     } pair_wiper{member == kPartitionPairId ? parameters : nullptr};
-    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId) {
+    // beginPartitionRefresh(1) lists external media only; without an argument
+    // it lists every volume, as the disk flow always did.
+    bool external_only = false;
+    if (member == kPartitionSelectId || member == kPartitionCreateId || member==kPartitionConvertId || member==kPartitionResumeId || member==kPartitionDisplayId || member==kPartitionPairId || member==kPartitionNtfsId) {
       if (!parameters || parameters->cArgs != (member == kPartitionPairId ? 4u : 1u) || parameters->cNamedArgs || !parameters->rgvarg)
         return DISP_E_BADPARAMCOUNT;
+    } else if (member == kPartitionBeginId && parameters && parameters->cArgs == 1) {
+      std::uint32_t scope{};
+      if (parameters->cNamedArgs || !parameters->rgvarg || !exact_uint32(parameters->rgvarg[0], scope) || scope > 1)
+        return DISP_E_TYPEMISMATCH;
+      external_only = scope == 1;
     } else if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
     if (!result) return E_POINTER;
     if ((member == kPartitionStatusId || member == kPartitionCheckStatusId) && creation_work_->running.load()) {
@@ -2360,6 +2372,9 @@ class CardProductWebViewHostObject final : public IDispatch {
             return E_ACCESSDENIED;
           target = found->target;
         }
+        // Only NTFS can be encrypted in place; the plan would refuse anything
+        // else later, but no worker starts for it.
+        if (member == kPartitionConvertId && !target.ntfs) return E_ACCESSDENIED;
         std::uint32_t hidden_mib{};
         security::SecureBuffer second, confirmation;
         if (member == kPartitionPairId) {
@@ -2396,9 +2411,10 @@ class CardProductWebViewHostObject final : public IDispatch {
         partition_status_.store(1);
         creation_work_->volume_operation.store(true);
         creation_work_->running.store(true);
-        creation_thread_ = std::thread([this, epoch] {
+        creation_thread_ = std::thread([this, epoch, external_only] {
           try {
             auto discovered = partition_services_.enumerate();
+            if (external_only) std::erase_if(discovered, [](const auto& item) { return !item.external; });
             std::lock_guard lock(partition_mutex_);
             if (creation_work_->interrupted.load() || creation_work_->card_epoch.load() != epoch) {
               partition_status_.store(4);
@@ -2479,6 +2495,13 @@ class CardProductWebViewHostObject final : public IDispatch {
         const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
         if (found == partition_items_.end()) return E_ACCESSDENIED;
         return complete_string(found->display.c_str(), static_cast<UINT>(found->display.size()), result);
+      }
+      if (member == kPartitionNtfsId) {
+        std::uint32_t id{};
+        if (!exact_uint32(parameters->rgvarg[0], id) || !id) return DISP_E_TYPEMISMATCH;
+        const auto found = std::ranges::find(partition_items_, id, &PartitionItem::id);
+        if (found == partition_items_.end()) return E_ACCESSDENIED;
+        return complete_selection(found->target.ntfs, result);
       }
       if (member == kPartitionSelectedId) return partition_number(partition_selected_, result);
       if (member == kPartitionSelectId) {
