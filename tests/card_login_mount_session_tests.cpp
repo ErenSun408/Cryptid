@@ -5333,6 +5333,27 @@ void test_monitor_reconciliation_preserves_session_and_new_mounts() {
   require(!session.reconcile_mounts(targets,observations),"mismatched observation accepted");
 }
 
+// A pulled medium: the driver still holds the volume, so the session forces
+// it off and releases the row; a failed force keeps the row mounted.
+void test_monitor_forces_off_a_volume_whose_medium_is_gone() {
+  using usb_vault::volume::MountObservation;
+  using usb_vault::volume::MountPresence;
+  for (const bool fail : {false, true}) {
+    CardAuthenticationSession auth; FakeRuntime runtime;
+    CardLoginMountSessionCore session(auth,runtime,layout());
+    session.consume_authenticated_login(root_secret(),bytes("login"));
+    const auto id=session.create_container(L"C:\\vault\\watch-usb.hc",64ULL*1024*1024);
+    const auto targets=session.mount_watch_targets();
+    require(targets.size()==1,"mount baseline missing");
+    runtime.fail_manual_force=fail;
+    const auto attempts=runtime.forced_unmount_attempts;
+    const std::vector<MountObservation> observations{{id,MountPresence::backing_lost}};
+    require(session.reconcile_mounts(targets,observations)==!fail && session.mounted()==fail &&
+            runtime.forced_unmount_attempts==attempts+1,"lost medium was not forced off exactly once");
+    require(session.mount_watch_targets().size()==(fail?1u:0u),"failed force released the row");
+  }
+}
+
 void test_monitor_absence_after_identity_failure() {
   using usb_vault::volume::MountObservation;
   using usb_vault::volume::MountPresence;
@@ -5487,6 +5508,7 @@ int main() {
     test_import_rechecks_identity_before_and_after_copy();
     test_no_export_leaves_a_single_local_trace();
     test_monitor_reconciliation_preserves_session_and_new_mounts();
+    test_monitor_forces_off_a_volume_whose_medium_is_gone();
     test_monitor_absence_after_identity_failure();
     test_monitor_releases_maintenance_facts_without_unmount();
     std::cout << "card_login_mount_session_tests passed\n";

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -23,7 +24,9 @@ struct WatchedMount final {
   std::uint64_t mount_revision{};
   friend bool operator==(const WatchedMount&, const WatchedMount&) = default;
 };
-enum class MountPresence { present, missing, replaced, unknown };
+// backing_lost: the driver still holds the volume, but the partition or the
+// drive its container file lived on has gone, as when a USB medium is pulled.
+enum class MountPresence { present, missing, replaced, unknown, backing_lost };
 struct MountObservation final {
   std::uint32_t container_id{};
   MountPresence presence{MountPresence::unknown};
@@ -41,7 +44,13 @@ class IMountStateReader {
   virtual ~IMountStateReader() = default;
   virtual std::vector<MountedVolume> inventory() = 0;
   virtual MountIdentity identity(wchar_t drive) = 0;
+  // False only when the backing is definitely gone; empty when undecided.
+  virtual std::optional<bool> backing_present(std::wstring_view) { return std::nullopt; }
 };
+// Reads a driver volume path: \Device\HarddiskN\PartitionM is gone when it can
+// no longer be opened, a \??\X:\ file when drive X: no longer exists at all.
+// Any other answer, or any other error, is undecided.
+[[nodiscard]] std::optional<bool> backing_device_present(std::wstring_view volume_path) noexcept;
 [[nodiscard]] std::vector<MountObservation> inspect_mount_states(
     IMountStateReader& reader, std::span<const WatchedMount> targets);
 [[nodiscard]] std::vector<MountObservation> read_driver_mount_states(

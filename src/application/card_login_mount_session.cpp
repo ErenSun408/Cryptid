@@ -3768,9 +3768,22 @@ bool CardLoginMountSessionCore::reconcile_mounts(std::span<const volume::Watched
   bool changed = false;
   for (std::size_t i=0; i<targets.size(); ++i) {
     const auto presence = observations[i].presence;
-    if (presence != volume::MountPresence::missing && presence != volume::MountPresence::replaced) continue;
+    if (presence != volume::MountPresence::missing && presence != volume::MountPresence::replaced &&
+        presence != volume::MountPresence::backing_lost) continue;
     auto* entry = find_by_id(state_, targets[i].container_id);
     if (!entry || !entry->mounted || !entry->watched_mount || *entry->watched_mount != targets[i]) continue;
+    if (presence == volume::MountPresence::backing_lost) {
+      // The medium is gone, so nothing unwritten can reach it any more; the
+      // driver must still let go of the volume. A failure leaves the row
+      // mounted for a manual forced unmount.
+      const bool helper = entry->maintenance && maintenance_helper_target_ == entry->id;
+      SESSION_TRACE("安全盘所在介质已移除，强制卸载", container_text(*entry));
+      try { unmount_container_impl(entry->id, true); }
+      catch (...) { SESSION_TRACE_FAILURE("介质移除后强制卸载失败", container_text(*entry)); continue; }
+      if (helper) maintenance_helper_target_ = 0;
+      changed = true;
+      continue;
+    }
     const bool helper = entry->maintenance && maintenance_helper_target_ == entry->id;
     mark_released(*entry);
     changed = true;

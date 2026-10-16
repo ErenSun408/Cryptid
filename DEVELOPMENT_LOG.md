@@ -5436,7 +5436,7 @@
 - 代理盘符评估：WinFsp／Dokan 提供创建、扩容、写入和刷新回调，能把 Explorer 等调用者转成受控写入请求；建议优先研究该路径，应用导入与代理必须共用同卷预算及分配引擎，成功／满盘状态在可报告错误的操作阶段返回。
 - 核心边界：代理若只是把写入转发给原 NTFS，仍继承 MFT／日志风险；要宣称安全区硬上界，需先解决后端元数据或真正掌握分配器。更换为自管文件系统会影响现有格式与互操作性，不能当作透明替换 NTFS。
 - 与导入的差异：普通文件请求不保证提供最终总大小，须按创建／扩容预留预算并在每次增长前拒绝；不能承诺所有复制在开始前整文件拒绝，也不能等 close／cleanup 才刷盘并报告失败。不支持的稀疏、压缩、映射、链接或控制操作须明确拒绝或完成专项实现。
-- 安全审查：当前挂载请求固定 mount_manager=1，尚无私有后端接口；只隐藏盘符不能阻止 GLOBALROOT 访问。需验证设备访问控制、代理独占写入通路、挂载身份与会话撤销，禁止明文落到宿主临时目录、持久保存隐藏边界或以占位／坏簇标记边界。
+- 安全审查：当前挂载请求固定 mount_manager=1，尚无私有后端接口；只隐藏盘符不能阻止 `\?GLOBALROOT 访问。需验证设备访问控制、代理独占写入通路、挂载身份与会话撤销，禁止明文落到宿主临时目录、持久保存隐藏边界或以占位／坏簇标记边界。
 - 建议切片：先验证私有后端与直接写入绕过门禁，再做普通实验卷的代理复制和磁盘满错误传播，之后接安全分配及元数据预算；每片分别覆盖并发、未知最终大小、取消、缓存刷新和重挂内容，不能先完成整阶段再拆提交。
 - 验证：本片为源码审计和官方资料研究，未编写代理原型、未运行新增运行测试；git diff --check 通过。此前 50 个情景不算代理方案实测，不宣称已解决保护触发或卸载占用。
 - 资料：https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/completing-an-i-o-operation-in-a-preoperation-callback-routine ；https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/flt-parameters-for-irp-mj-acquire-for-section-synchronization ；https://winfsp.dev/doc/WinFsp-Design/ ；https://winfsp.dev/doc/WinFsp-API-winfsp.h/ 。
@@ -5464,7 +5464,7 @@
 - 验证：Release 原型编译通过，仅 WinFsp SDK 对齐警告；3 个全新 128 MiB 实验容器均通过 Shell 8 MiB 复制、CopyFile 8 MiB 复制、CopyFile 与直接 SetEndOfFile 超额错误 112，以及 Shell 超额 aborted=true，共 9 次拒绝。
 - 完整性与卸载：每轮拒绝后仍可写 1 MiB；三个成功负载在后端重挂及重建代理后逐字节校验通过，内层 1 MiB 标记与整个隐藏密文哈希不变；6 次只读 chkdsk 返回 0，均正常卸载、无保护锁定，最终 mounted_count=0、用户会话 Z: 链接不存在。
 - 验证边界：使用 Windows Shell IFileOperation 复制接口并抑制交互错误窗，未手工操作 Explorer 窗口或验收其提示外观；仅根目录普通文件，目录树、并发、取消、崩溃、断电、映射写入、稀疏和压缩未验。前两轮早于总容量报告修正，第三轮为最终二进制回归。
-- 安全与风险：隐藏 DOS 链接不构成访问门禁，GLOBALROOT 绕过尚未封闭，实验 ACL 宽松不能交付；NTFS 预分配本身及后台元数据仍可能先触及保护区，写后簇检查与 MFT 快照不能证明硬上界。使用合成测试数据，不暂存用户明文，不自动清理非本片容器。
+- 安全与风险：隐藏 DOS 链接不构成访问门禁，`\?GLOBALROOT 绕过尚未封闭，实验 ACL 宽松不能交付；NTFS 预分配本身及后台元数据仍可能先触及保护区，写后簇检查与 MFT 快照不能证明硬上界。使用合成测试数据，不暂存用户明文，不自动清理非本片容器。
 - 证据：out/proxy-safe-tail.cpp、out/proxy-safe-probe.cpp、out/proxy-safe-build.cmd；3 轮结果汇总见 out/evidence/proxy-safe-20261010-151147/result-summary.json，另两轮为 151028、151059，同目录保留事件、WinFsp 跟踪和 chkdsk 输出。
 - 提交：仅实验产物与开发记录，未提交、未推送；下一边界应先验证后端访问门禁及原生 NTFS 分配越界失败行为，不能据此直接切换正式高级更新。
 
@@ -6153,7 +6153,7 @@
 - 范围与审计：按明确决定，登录（日常）密码、诱饵密码与导出加密口令最少 6 个 Unicode 码点（上限 128 不变），强度反馈 6～8 低、9～11 中、12 及以上高。与需求清单 P2.12b 的 12／18 基线及导出口令 12 字符冲突，已在需求清单记录新决定并以其为准。
 - 检查与实现：OfflineCardPasswordPolicy 最小值 6、strong 阈值 12；页面初始化、诱饵（新建与导入）、导出三处提前拒绝与提示文字同步为 6，初始化提示改为“至少6字符”；强度条恢复显示，新增 weak 档（一格）。登录校验不经过该策略，KDF、卡记录与容器格式不变，既有密码与安全盘无需迁移或重新初始化卡。
 - 验证：offline_card_password_policy_tests、confirmed_password_tests、card_product_ui_session_controller_tests、card_product_webview_host_object_tests、card_entry_context_controller_tests、card_product_ui_page_contract_tests 通过；mount_open、encrypted_transfer DOM 测试通过；page_event DOM 测试在改动前后同样失败（fixture 未就绪），属既有问题。webview 集成测试期望已同步但未执行。应用运行中导致链接失败，p46 应用未重建；未实机验证。
-- 安全与风险：持卡或持导出包者可离线猜测，6 位短密码（尤其纯数字或常见词）的猜测成本显著下降；强度分档只看长度，不代表熵。属客户接受的剩余风险。
+- 安全与风险：持卡或持导出包者可离线猜测，6 位短密码（尤其纯数字或常见词）的猜测成本显著下降；强度分档只看长度，不代表熵。属已明确接受的剩余风险。
 - 提交：按明确决定以 [refactor] 单独提交，哈希 d7860f2；禁止推送。
 
 ### 2026-10-15 — volume / 移动介质分区识别（移动安全盘切片 1）
@@ -6175,4 +6175,11 @@
 - 检查与实现：恢复 disk 存储按钮并命名为“移动安全盘”，文件安全盘仍为默认。分区刷新改为 beginPartitionRefresh(1)，每个可选分区读取 getPartitionNtfs；所选分区为 exFAT 或 FAT32 时隐藏并取消“保留文件并加密”。说明改为“安全盘为 U 盘、移动硬盘或 SD 卡上的分区”，空列表提示“暂无可用的移动介质”。集成夹具与页面契约同步。
 - 验证：新增 card_product_ui_removable_dom_tests 三个场景（NTFS、exFAT、空列表）通过；card_product_ui_page_contract_tests、file_entry、mount_open DOM 测试通过。partition、partition_creation、file_creation_failure、navigation DOM 测试与 HEAD 同样失败（仍假定磁盘入口为默认或既有问题）。p46 应用已重新构建（18:42:09），部署页面与源码一致；未接入真实外接介质验证。
 - 安全与风险：页面筛选依赖原生端，内置卷不进入页面；原地加密的 NTFS 门禁在原生端独立生效。挂载中拔出外接介质尚未处理，留待切片 4。
-- 提交：按明确决定以 [P5.11] 单独提交；禁止推送。
+- 提交：按明确决定以 [P5.11] 单独提交，哈希 9cc6a3b；禁止推送。
+
+### 2026-10-15 — volume / 挂载中拔出移动介质后强制释放（移动安全盘切片 4）
+- 范围与审计：外接介质被直接拔出时，VeraCrypt 驱动仍报告该卷，挂载监视只查驱动，因而一直视为在线，残留不可用的盘符。检查 MountStateMonitor、reconcile_mounts 与设备变更触发：设备到达、移除及节点变更已请求监视刷新。
+- 检查与实现：监视结果新增 backing_lost：驱动身份一致但所承载介质已消失。分区卷以零访问打开 `\\?\GLOBALROOT\Device\HarddiskN\PartitionM`，仅文件或路径不存在、无此设备时判定消失；文件安全盘仅在其盘符已从驱动器列表与 DOS 设备中同时消失时判定消失；其他路径或错误一律视为未定。会话收到 backing_lost 时对该安全盘执行强制卸载并释放行、记录卸载；失败保留挂载状态，可手动强制卸载。读取接口默认未定，既有测试替身不受影响。
+- 验证：全量编译通过；mount_state_monitor_tests（未定／在场／消失／替换优先、路径识别、不存在盘符与分区、系统盘在场）与 card_login_mount_session_tests（成功强制释放一次、失败保留）通过；card_product_webview_host_object_tests、card_product_ui_session_controller_tests 通过。p46 应用已重新构建（18:46:53）；未用真实介质插拔验证。
+- 安全与风险：介质已离线，强制卸载不再丢失可写回的数据；误判会导致强制卸载，故只采信明确不存在的结果。拔出后若另一设备立即占用同一分区设备名或盘符，将漏判而非误判，需手动卸载。强制卸载在界面线程执行。
+- 提交：按明确决定以 [P5.11] 单独提交，同时修正当日日志与需求清单中以“客户”为动作主语的措辞；禁止推送。

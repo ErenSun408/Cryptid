@@ -4,7 +4,10 @@
 #include <condition_variable>
 #include <future>
 #include <iostream>
+#include <Windows.h>
 #include <map>
+#include <optional>
+#include <string>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -19,12 +22,47 @@ struct Reader final : IMountStateReader {
   std::vector<MountedVolume> volumes;
   std::map<wchar_t,MountIdentity> identities;
   std::vector<wchar_t> queried;
+  std::optional<bool> backing{};
+  std::optional<bool> backing_present(std::wstring_view) override { return backing; }
   std::vector<MountedVolume> inventory() override {
     if (fail_inventory) throw std::runtime_error("driver unavailable");
     return volumes;
   }
   MountIdentity identity(wchar_t drive) override { queried.push_back(drive); return identities.at(drive); }
 };
+// A pulled medium leaves the driver's volume behind; only a definite answer
+// that the backing is gone reports it.
+void test_backing_loss() {
+  Reader reader;
+  const std::vector<WatchedMount> targets{target()};
+  reader.volumes={{.drive_letter=L'M'}};
+  reader.identities[L'M']=identity(targets[0]);
+  require(inspect_mount_states(reader,targets)[0].presence==MountPresence::present,"undecided backing reported lost");
+  reader.backing=true;
+  require(inspect_mount_states(reader,targets)[0].presence==MountPresence::present,"present backing reported lost");
+  reader.backing=false;
+  require(inspect_mount_states(reader,targets)[0].presence==MountPresence::backing_lost,"lost backing missed");
+  reader.identities[L'M'].unique_id++;
+  require(inspect_mount_states(reader,targets)[0].presence==MountPresence::replaced,"replacement reported as lost backing");
+  require(!backing_device_present(L"").has_value() && !backing_device_present(L"C:\\x.hc").has_value() &&
+          !backing_device_present(L"\\??\\1:\\x.hc").has_value(),"unrecognized path decided");
+  const DWORD drives=::GetLogicalDrives();
+  wchar_t unused=0;
+  for (wchar_t letter=L'Z'; letter>=L'D' && !unused; --letter)
+    if (!(drives & (DWORD{1}<<(letter-L'A')))) {
+      const wchar_t name[]={letter,L':',L'\0'}; wchar_t buffer[256]{};
+      if (!::QueryDosDeviceW(name,buffer,256)) unused=letter;
+    }
+  if (unused) {
+    const std::wstring gone=std::wstring(L"\\??\\")+unused+L":\\vault.hc";
+    require(backing_device_present(gone)==std::optional<bool>(false),"file on a vanished drive not reported lost");
+  }
+  wchar_t windows[MAX_PATH]{};
+  require(::GetWindowsDirectoryW(windows,MAX_PATH)>2,"Windows directory");
+  const std::wstring here=std::wstring(L"\\??\\")+windows[0]+L":\\vault.hc";
+  require(backing_device_present(here)==std::optional<bool>(true),"file on a present drive reported lost");
+  require(backing_device_present(L"\\Device\\Harddisk987\\Partition1")==std::optional<bool>(false),"vanished partition not reported lost");
+}
 void test_observations() {
   Reader reader;
   const std::vector<WatchedMount> targets{target(),target(2,L'N')};
@@ -147,7 +185,7 @@ void test_shutdown_wakes_sleep() {
 }
 }
 int main() {
-  try { test_observations(); test_polling_and_errors(); test_generation_and_coalescing(); test_unchanged_not_republished(); test_shutdown_wakes_sleep(); }
+  try { test_observations(); test_backing_loss(); test_polling_and_errors(); test_generation_and_coalescing(); test_unchanged_not_republished(); test_shutdown_wakes_sleep(); }
   catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
   std::cout<<"mount state monitor: observation, worker, epoch, error and shutdown tests passed\n";
 }

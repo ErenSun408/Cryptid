@@ -1,6 +1,10 @@
 #include "usb_vault/volume/mount_state_monitor.h"
+#include <Windows.h>
+
 #include <algorithm>
+#include <array>
 #include <set>
+#include <string>
 #include <stdexcept>
 #include <utility>
 
@@ -40,6 +44,10 @@ std::vector<MountObservation> inspect_mount_states(
       result[index].presence = actual.unique_id == target.unique_id &&
           actual.volume_path == target.volume_path && actual.disk_length == target.disk_length
           ? MountPresence::present : MountPresence::replaced;
+      if (result[index].presence == MountPresence::present) {
+        const auto backing = reader.backing_present(target.volume_path);
+        if (backing.has_value() && !*backing) result[index].presence = MountPresence::backing_lost;
+      }
     } catch (...) {
       // A drive may vanish between inventory and properties. The next poll
       // will confirm absence; never reinterpret a query error as removal.
@@ -48,11 +56,43 @@ std::vector<MountObservation> inspect_mount_states(
   return result;
 }
 
+std::optional<bool> backing_device_present(const std::wstring_view path) noexcept {
+  try {
+    if (path.starts_with(L"\\Device\\Harddisk") && path.find(L"\\Partition") != std::wstring_view::npos &&
+        path.size() < 128) {
+      const std::wstring device = L"\\\\?\\GLOBALROOT" + std::wstring(path);
+      const HANDLE handle = ::CreateFileW(device.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+          nullptr, OPEN_EXISTING, 0, nullptr);
+      if (handle != INVALID_HANDLE_VALUE) { ::CloseHandle(handle); return true; }
+      const DWORD error = ::GetLastError();
+      if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND || error == ERROR_NO_SUCH_DEVICE)
+        return false;
+      return std::nullopt;
+    }
+    if (path.size() > 6 && path.starts_with(L"\\??\\") && path[5] == L':' && path[6] == L'\\') {
+      const wchar_t letter = path[4];
+      if (letter < L'A' || letter > L'Z') return std::nullopt;
+      const DWORD drives = ::GetLogicalDrives();
+      if (!drives) return std::nullopt;
+      if (drives & (DWORD{1} << (letter - L'A'))) return true;
+      // Gone from the drive list too, not merely unmounted from a folder.
+      const wchar_t name[] = {letter, L':', L'\0'};
+      std::array<wchar_t, 1024> target{};
+      if (::QueryDosDeviceW(name, target.data(), static_cast<DWORD>(target.size()))) return true;
+      return ::GetLastError() == ERROR_FILE_NOT_FOUND ? std::optional<bool>(false) : std::nullopt;
+    }
+    return std::nullopt;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 std::vector<MountObservation> read_driver_mount_states(std::span<const WatchedMount> targets) {
   class Reader final : public IMountStateReader {
    public:
     std::vector<MountedVolume> inventory() override { return provider_.mounted_volumes(); }
     MountIdentity identity(wchar_t drive) override { return provider_.mount_identity(drive); }
+    std::optional<bool> backing_present(std::wstring_view path) override { return backing_device_present(path); }
    private:
     VolumeProvider provider_;
   } reader;
@@ -118,7 +158,8 @@ void MountStateMonitor::run() {
     for (std::size_t i = 0; valid && i < observations.size(); ++i)
       valid = observations[i].container_id == targets[i].container_id &&
           (observations[i].presence == MountPresence::present || observations[i].presence == MountPresence::missing ||
-           observations[i].presence == MountPresence::replaced || observations[i].presence == MountPresence::unknown);
+           observations[i].presence == MountPresence::replaced || observations[i].presence == MountPresence::unknown ||
+           observations[i].presence == MountPresence::backing_lost);
     if (!valid) observations = unknown(targets);
     lock.lock();
     if (stopping_ || revision != revision_) continue;
