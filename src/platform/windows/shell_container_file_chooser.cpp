@@ -1,6 +1,8 @@
 #include "platform/windows/shell_container_file_chooser.h"
 
 #include <ShObjIdl_core.h>
+#include <ShlObj.h>
+#include <KnownFolders.h>
 #include <combaseapi.h>
 
 #include <iterator>
@@ -21,10 +23,11 @@ constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
 // Neither dialog may leave a trace of the chosen location. `FOS_DONTADDTORECENT`
 // keeps the selection out of the recent-documents list, and never calling
 // `SetClientGuid` keeps the dialog from persisting its own last-visited folder
-// under a private key.
+// under a private key. `FOS_FORCESHOWHIDDEN` lists hidden and protected system
+// items whatever Explorer is set to show, so a hidden container can be picked.
 constexpr FILEOPENDIALOGOPTIONS kSharedOptions =
     FOS_FORCEFILESYSTEM | FOS_DONTADDTORECENT | FOS_NOCHANGEDIR |
-    FOS_PATHMUSTEXIST;
+    FOS_PATHMUSTEXIST | FOS_FORCESHOWHIDDEN;
 
 template <typename T>
 class ComPtr final {
@@ -107,6 +110,13 @@ class CoTaskPath final {
   }
   if (FAILED(result)) {
     throw_dialog_failure(result, "container file dialog rejected its setup");
+  }
+  // Every chooser opens on the Desktop. Without one the dialog keeps its own
+  // starting folder rather than failing.
+  ComPtr<IShellItem> desktop;
+  if (SUCCEEDED(::SHGetKnownFolderItem(FOLDERID_Desktop, KF_FLAG_DEFAULT, nullptr,
+                                       IID_PPV_ARGS(desktop.put())))) {
+    static_cast<void>(dialog->SetFolder(desktop.get()));
   }
 
   result = dialog->Show(owner);

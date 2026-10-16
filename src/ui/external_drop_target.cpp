@@ -4,6 +4,8 @@
 
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <ShlObj.h>
+#include <KnownFolders.h>
 #include <wrl/client.h>
 #include <memory>
 
@@ -266,8 +268,13 @@ bool ExternalDropTarget::select_files() noexcept {
     FILEOPENDIALOGOPTIONS options{};
     if (FAILED(dialog->GetOptions(&options)) || FAILED(dialog->SetOptions(options |
         FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM |
-        FOS_DONTADDTORECENT | FOS_NOCHANGEDIR))) return false;
+        FOS_DONTADDTORECENT | FOS_NOCHANGEDIR | FOS_FORCESHOWHIDDEN))) return false;
     static_cast<void>(dialog->SetTitle(L"选择要放入的文件"));
+    // Opens on the Desktop and, like the container choosers, lists hidden and
+    // protected system files whatever Explorer is set to show.
+    Microsoft::WRL::ComPtr<IShellItem> desktop;
+    if (SUCCEEDED(::SHGetKnownFolderItem(FOLDERID_Desktop, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&desktop))))
+      static_cast<void>(dialog->SetFolder(desktop.Get()));
     if (dialog->Show(::GetActiveWindow()) != S_OK || work_.card_epoch.load() != epoch) return false;
     Microsoft::WRL::ComPtr<IShellItemArray> items;
     DWORD count=0;
