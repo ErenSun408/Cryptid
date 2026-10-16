@@ -43,6 +43,7 @@ enum Control : int {
   kCardLabel = 100, kCard, kZoneLabel, kZone, kDateLabel, kDate, kTimeLabel,
   kTime, kUtc, kGenerate, kCodeLabel, kCode, kCopy, kStatus, kKeyLabel,
   kPublicKey, kPasswordLabel, kPassword, kBackup, kRestore, kRecords,
+  kCreateKey,
 };
 
 // Offsets in use somewhere in the world, east of UTC positive.
@@ -290,9 +291,15 @@ void append_record(const std::wstring& line) {
   return text;
 }
 
+// Without a key nothing can be signed or backed up; the window offers to
+// import one or, deliberately, to create one.
 void show_public_key() {
   ::SetWindowTextW(::GetDlgItem(g_window, kPublicKey),
                    g_signer ? hex_key(g_signer->public_key()).c_str() : L"");
+  const bool loaded = g_signer.has_value();
+  ::EnableWindow(::GetDlgItem(g_window, kGenerate), loaded);
+  ::EnableWindow(::GetDlgItem(g_window, kBackup), loaded);
+  ::ShowWindow(::GetDlgItem(g_window, kCreateKey), loaded ? SW_HIDE : SW_SHOW);
 }
 
 // Accepts the card number as the application shows it: eight hexadecimal
@@ -468,7 +475,28 @@ void restore() {
   save_signer(*signer);
   g_signer = std::move(signer);
   show_public_key();
-  set_status(L"已从备份导入私钥。");
+  set_status(L"已从备份导入私钥。请核对公钥与交付说明中的一致。");
+}
+
+// A new key is never made silently: applications already distributed accept
+// only codes from the key whose public half they embed.
+void create_key() {
+  if (g_signer) return;
+  const bool existing =
+      ::GetFileAttributesW(key_path().c_str()) != INVALID_FILE_ATTRIBUTES;
+  const std::wstring warning = std::wstring(
+      L"将生成新的签名私钥。已分发的应用只接受其内置公钥对应私钥签发的激活码；"
+      L"如需沿用已有私钥，请取消并改用“从备份导入”。") +
+      (existing ? L"\n\n现有私钥文件无法打开，生成后将被覆盖。" : L"") + L"\n\n确定生成？";
+  if (::MessageBoxW(g_window, warning.c_str(), kTitle,
+                    MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+    return;
+  }
+  ActivationSigner signer = ActivationSigner::generate();
+  save_signer(signer);
+  g_signer = std::move(signer);
+  show_public_key();
+  set_status(L"已生成新的签名私钥。请立即用“备份私钥”保存备份，并将公钥提供给应用构建。");
 }
 
 void open_records() {
@@ -578,6 +606,7 @@ void layout() {
   place(kBackup, margin + label, y, s(110), s(30));
   place(kRestore, margin + label + s(120), y, s(110), s(30));
   place(kRecords, margin + label + s(240), y, s(110), s(30));
+  place(kCreateKey, margin + label + s(360), y, s(110), s(30));
 }
 
 void create_controls() {
@@ -630,6 +659,7 @@ void create_controls() {
   add(WC_BUTTONW, L"备份私钥…", WS_TABSTOP, kBackup);
   add(WC_BUTTONW, L"从备份导入…", WS_TABSTOP, kRestore);
   add(WC_BUTTONW, L"签发记录", WS_TABSTOP, kRecords);
+  add(WC_BUTTONW, L"生成新私钥", WS_TABSTOP, kCreateKey);
 }
 
 LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
@@ -672,6 +702,7 @@ LRESULT CALLBACK window_procedure(const HWND window, const UINT message,
         case kBackup: run_guarded(backup); return 0;
         case kRestore: run_guarded(restore); return 0;
         case kRecords: run_guarded(open_records); return 0;
+        case kCreateKey: run_guarded(create_key); return 0;
         default: break;
       }
       break;
@@ -718,14 +749,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, const int show) 
   INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_DATE_CLASSES | ICC_STANDARD_CLASSES};
   ::InitCommonControlsEx(&controls);
 
-  bool created = false;
   try {
     g_signer = load_signer();
-    if (!g_signer) {
-      g_signer = ActivationSigner::generate();
-      save_signer(*g_signer);
-      created = true;
-    }
   } catch (const std::exception& error) {
     ::MessageBoxW(nullptr, (L"无法加载签名私钥：" + widen(error.what())).c_str(),
                   kTitle, MB_OK | MB_ICONERROR);
@@ -746,8 +771,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, const int show) 
       ::MulDiv(560, static_cast<int>(dpi), 96), nullptr, nullptr, instance, nullptr);
   if (window == nullptr) return 1;
   show_public_key();
-  if (created) {
-    set_status(L"已生成新的签名私钥。请立即用“备份私钥”保存备份。");
+  if (!g_signer) {
+    set_status(L"尚未加载签名私钥：在“备份口令”中输入口令后点“从备份导入…”，或首次使用时点“生成新私钥”。");
   }
   ::ShowWindow(window, show);
 
