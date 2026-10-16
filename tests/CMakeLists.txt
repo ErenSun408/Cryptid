@@ -1275,3 +1275,16 @@ target_include_directories(vikey_card_backup_tests PRIVATE ${PROJECT_SOURCE_DIR}
 target_link_libraries(vikey_card_backup_tests PRIVATE usb_vault_vikey_helper_card_record_backend)
 usb_vault_configure_target(vikey_card_backup_tests)
 add_test(NAME vikey_card_backup_tests COMMAND vikey_card_backup_tests)
+
+add_executable(activation_code_v1_tests
+  activation_code_v1_tests.cpp
+)
+
+target_link_libraries(activation_code_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(activation_code_v1_tests)
+
+add_test(NAME activation_code_v1_tests
+  COMMAND activation_code_v1_tests)
