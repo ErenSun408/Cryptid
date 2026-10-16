@@ -1,5 +1,7 @@
 #include "platform/windows/shell_container_file_chooser.h"
 
+#include "usb_vault/ui/hidden_items_reveal.h"
+
 #include <ShObjIdl_core.h>
 #include <ShlObj.h>
 #include <KnownFolders.h>
@@ -23,8 +25,9 @@ constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
 // Neither dialog may leave a trace of the chosen location. `FOS_DONTADDTORECENT`
 // keeps the selection out of the recent-documents list, and never calling
 // `SetClientGuid` keeps the dialog from persisting its own last-visited folder
-// under a private key. `FOS_FORCESHOWHIDDEN` lists hidden and protected system
-// items whatever Explorer is set to show, so a hidden container can be picked.
+// under a private key. `FOS_FORCESHOWHIDDEN` lists plain hidden items whatever
+// Explorer is set to show; Hidden+System containers need the temporary reveal
+// around `Show`.
 constexpr FILEOPENDIALOGOPTIONS kSharedOptions =
     FOS_FORCEFILESYSTEM | FOS_DONTADDTORECENT | FOS_NOCHANGEDIR |
     FOS_PATHMUSTEXIST | FOS_FORCESHOWHIDDEN;
@@ -119,7 +122,12 @@ class CoTaskPath final {
     static_cast<void>(dialog->SetFolder(desktop.get()));
   }
 
-  result = dialog->Show(owner);
+  {
+    // Hidden+System containers are only listed while Explorer shows protected
+    // system files; the switches are restored as soon as the dialog closes.
+    const auto reveal = ui::shell_hidden_items_revealer().reveal();
+    result = dialog->Show(owner);
+  }
   if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return {};
   if (FAILED(result)) {
     throw_dialog_failure(result, "container file dialog failed");

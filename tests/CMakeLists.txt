@@ -1011,6 +1011,19 @@ usb_vault_configure_target(ui_close_guard_tests)
 
 add_test(NAME ui_close_guard_tests COMMAND ui_close_guard_tests)
 
+add_executable(hidden_items_reveal_tests
+  hidden_items_reveal_tests.cpp
+)
+
+target_link_libraries(hidden_items_reveal_tests
+  PRIVATE
+    usb_vault_core
+)
+
+usb_vault_configure_target(hidden_items_reveal_tests)
+
+add_test(NAME hidden_items_reveal_tests COMMAND hidden_items_reveal_tests)
+
 add_executable(window_tray_tests window_tray_tests.cpp)
 target_link_libraries(window_tray_tests PRIVATE user32 shell32)
 usb_vault_configure_target(window_tray_tests)

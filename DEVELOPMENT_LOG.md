@@ -6270,3 +6270,10 @@
 - 验证：p46 构建 USB Vault.exe 及测试目标通过；card_product_ui_session_controller_tests（新增同卡、复查、不同卡、两次读不到、凭据被拒不重试、卡忙不丢卡且口令清零）、card_product_webview_host_object_tests、card_identity_recheck_tests（新增等待式复核）、vikey_card_backup_tests、card_operation_lease_tests 通过。去掉挂载前复核后新用例失败、恢复后通过。未运行全量 CTest，未接实体卡。
 - 安全与风险：未纳入复核的有拖放导入（逐项调用）、诱饵口令检索、卷内文件管理、卸载及普通设置开关。每次复核在界面线程上增加一次助手进程与 SDK 登录，耗时受 5 秒超时及 10 秒等待上限约束。实体卡上的耗时、换卡和抖动表现待实机验证。
 - 提交：按授权验证后以 [P5.13] 自主提交；禁止推送。
+
+### 2026-10-16 — ui / 文件选择框临时显示受保护的系统文件
+- 范围与审计：资源管理器关闭“显示隐藏的项目”并勾选“隐藏受保护的操作系统文件”时，选择框看不到安全盘文件。探针实测 FOS_FORCESHOWHIDDEN 只放出普通隐藏文件，Hidden＋System 文件仍被过滤；IShellItemFilter 不被回调，对话框浏览器的 IFolderFilterSite 设置后也无效，输入完整路径可选中。按明确决定改为临时修改全局设置，与 P5.3“不修改资源管理器全局设置”冲突，已在需求清单记录新决定。
+- 检查与实现：core 新增 HiddenItemsRevealer，带引用计数，首个作用域读取并打开两项设置，最后一个结束时恢复；两项本已打开则不写入，期间被外部改动则保留不覆盖。读写系统设置经 SHGetSetSettings，可替换以便测试。三个选择框只在 Show() 期间持有作用域。
+- 验证：p46 构建 USB Vault.exe 通过；新增 hidden_items_reveal_tests（恢复原值、已打开不写入、嵌套只恢复一次、外部改动保留）及 card_product_webview_host_object_tests 通过。以产品同一源码编译的探针在真实设置下打开对话框，列出 Hidden＋System 测试文件，取消后注册表回到 Hidden=2、ShowSuperHidden=0。未运行全量 CTest，未在应用内实机点选。
+- 安全与风险：对话框打开期间设置对整个账户生效，桌面及其他资源管理器窗口可能显示隐藏安全盘。期间进程被强杀则不会恢复：一次探针超时被强杀，设置停在显示状态，已立即手动恢复原值。为不留痕迹，不落盘保存待恢复标记。
+- 提交：按决定以 [fix] 单独提交；禁止推送。

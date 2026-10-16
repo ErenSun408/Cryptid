@@ -1,5 +1,6 @@
 #include "usb_vault/ui/external_drop_target.h"
 #include "usb_vault/diagnostics/debug_log.h"
+#include "usb_vault/ui/hidden_items_reveal.h"
 #include "usb_vault/volume_creation/volume_creator.h"
 
 #include <shellapi.h>
@@ -271,11 +272,16 @@ bool ExternalDropTarget::select_files() noexcept {
         FOS_DONTADDTORECENT | FOS_NOCHANGEDIR | FOS_FORCESHOWHIDDEN))) return false;
     static_cast<void>(dialog->SetTitle(L"选择要放入的文件"));
     // Opens on the Desktop and, like the container choosers, lists hidden and
-    // protected system files whatever Explorer is set to show.
+    // protected system files while it is shown, whatever Explorer is set to.
     Microsoft::WRL::ComPtr<IShellItem> desktop;
     if (SUCCEEDED(::SHGetKnownFolderItem(FOLDERID_Desktop, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&desktop))))
       static_cast<void>(dialog->SetFolder(desktop.Get()));
-    if (dialog->Show(::GetActiveWindow()) != S_OK || work_.card_epoch.load() != epoch) return false;
+    HRESULT shown = E_FAIL;
+    {
+      const auto reveal = shell_hidden_items_revealer().reveal();
+      shown = dialog->Show(::GetActiveWindow());
+    }
+    if (shown != S_OK || work_.card_epoch.load() != epoch) return false;
     Microsoft::WRL::ComPtr<IShellItemArray> items;
     DWORD count=0;
     if (FAILED(dialog->GetResults(&items)) || FAILED(items->GetCount(&count)) || count==0 || count>kMaximumDroppedEntries) return false;
