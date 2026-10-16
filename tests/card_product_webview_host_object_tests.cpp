@@ -851,7 +851,8 @@ class FakeEntry final : public ICardEntryActions {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     reset_ticket = ++reset_serial; return reset_ticket;
   }
-  void cancel_login_reset() noexcept override { reset_ticket = 0; }
+  int cancel_calls{};
+  void cancel_login_reset() noexcept override { ++cancel_calls; reset_ticket = 0; }
   bool login_reset_pending(std::uint32_t ticket) const noexcept override {
     return ticket != 0 && ticket == reset_ticket && route == CardEntryRoute::login_required;
   }
@@ -4316,6 +4317,30 @@ class FakePartitionServices final : public usb_vault::ui::IUiPartitionServices {
   void refresh_drive_list() noexcept override { ++drive_refreshes; }
 };
 
+// Returning to login clears the session before the old page lets go of its
+// bridge; a retired bridge must not reach the controller again.
+void test_retired_host_never_reaches_its_controller() {
+  {
+    Fixture fixture;
+    fixture.authentication.establish(root_secret());
+    ComPtr<IDispatch> host = make_host(fixture.controller);
+    usb_vault::ui::retire_card_product_webview_host_object(host.Get());
+    usb_vault::ui::retire_card_product_webview_host_object(host.Get());
+    VARIANT result{};
+    require(fixture.entry.cancel_calls == 1 &&
+                invoke_no_arguments(*host.Get(), L"getSessionState", &result) == E_ACCESSDENIED,
+            "retired bridge did not settle once or still served calls");
+    host.Reset();
+    require(fixture.entry.cancel_calls == 1, "retired bridge reached the controller on release");
+  }
+  auto fixture = std::make_unique<Fixture>();
+  ComPtr<IDispatch> host = make_host(fixture->controller);
+  usb_vault::ui::retire_card_product_webview_host_object(host.Get());
+  fixture.reset();  // the session goes first, as on the way back to login
+  host.Reset();
+  usb_vault::ui::retire_card_product_webview_host_object(nullptr);
+}
+
 void test_unmount_batch_refreshes_this_pc_once() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -4812,6 +4837,7 @@ int main() {
     test_partition_selection_lifecycle();
     test_explorer_opens_only_a_mounted_session_container();
     test_unmount_batch_refreshes_this_pc_once();
+    test_retired_host_never_reaches_its_controller();
     test_partition_resume_pause_and_revocation();
     test_partition_creation_snapshot_and_epoch();
     test_partition_creation_snapshot_and_epoch(L"beginPartitionConversion");

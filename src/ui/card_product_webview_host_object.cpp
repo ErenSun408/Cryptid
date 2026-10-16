@@ -698,7 +698,17 @@ class CardProductWebViewHostObject final : public IDispatch {
 
   ~CardProductWebViewHostObject() {
     if (creation_thread_.joinable()) creation_thread_.join();
+    if (!retired_) controller_.cancel_login_reset();
+  }
+
+  // The retiring page may hold the last reference until after the session
+  // this bridge serves is destroyed, so everything that reaches the
+  // controller happens here, while it is still alive, and never again.
+  void retire() noexcept {
+    if (retired_) return;
+    if (creation_thread_.joinable()) creation_thread_.join();
     controller_.cancel_login_reset();
+    retired_ = true;
   }
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
@@ -1029,6 +1039,7 @@ class CardProductWebViewHostObject final : public IDispatch {
                                    DISPPARAMS* parameters, VARIANT* result,
                                    EXCEPINFO* exception,
                                    UINT* argument_error) noexcept override {
+    if (retired_) return E_ACCESSDENIED;
     if (member == kReportPageEventId)
       return report_page_event(iid, flags, parameters, result, argument_error);
     // The selected package name must never enter diagnostic argument traces.
@@ -4090,6 +4101,7 @@ class CardProductWebViewHostObject final : public IDispatch {
   LoginResetPreparation reset_result_;
   bool configuration_pending_{};
   bool backup_pending_{};
+  bool retired_{};
   IUiWindowSizeSink* window_size_sink_{};
   IUiExitHotkeySink* exit_hotkey_sink_{};
   IUiExternalDropTargetSink* external_drop_sink_{};
@@ -4154,6 +4166,10 @@ class CardProductWebViewHostObject final : public IDispatch {
 bool resume_card_backup_webview_host_object(IDispatch* object) noexcept {
   auto* host = dynamic_cast<CardProductWebViewHostObject*>(object);
   return host && host->resume_card_backup();
+}
+
+void retire_card_product_webview_host_object(IDispatch* object) noexcept {
+  if (auto* host = dynamic_cast<CardProductWebViewHostObject*>(object)) host->retire();
 }
 
 HRESULT create_card_product_webview_host_object(

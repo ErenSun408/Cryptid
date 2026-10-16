@@ -204,6 +204,12 @@ class IUiCloseRequestSink {
 // previous session state before enabling interaction. Never resume a replaced controller.
 bool resume_card_backup_webview_host_object(IDispatch* object) noexcept;
 
+// Native-only: call before the controller is destroyed. The retiring document
+// can release its last reference later; after this the bridge refuses every
+// call and its destruction no longer reaches the controller. Other bridges are
+// left as they are.
+void retire_card_product_webview_host_object(IDispatch* object) noexcept;
+
 HRESULT create_card_product_webview_host_object(
     CardProductUiSessionController& controller,
     IUiCloseRequestSink* close_sink,

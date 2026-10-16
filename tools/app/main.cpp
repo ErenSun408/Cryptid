@@ -946,6 +946,9 @@ void detach_host_object() noexcept {
   if (g_webview) {
     static_cast<void>(g_webview->RemoveHostObjectFromScript(kHostObjectName));
   }
+  // The old document may release the bridge after the session it serves is
+  // cleared; retire it while that session is still alive.
+  usb_vault::ui::retire_card_product_webview_host_object(g_host_object.Get());
   g_host_object.Reset();
 }
 
@@ -2081,7 +2084,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         static_cast<void>(g_drop_target->Release());
         g_drop_target = nullptr;
       }
-      if (g_webview) g_webview->RemoveHostObjectFromScript(kHostObjectName);
+      detach_host_object();
       if (g_controller) g_controller->Close();
       g_card_device_notifications.reset();
       g_webview.Reset();

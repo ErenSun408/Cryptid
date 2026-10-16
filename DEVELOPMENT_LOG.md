@@ -6133,4 +6133,11 @@
 - 检查与实现：UnmountRetryOptions 新增 batch；重试策略按 batch 选择 3 秒期限，并让 run_unmount_batch 跳过 CSIDL_DRIVES 的 SHCNE_UPDATEDIR；逐盘 SHCNE_DRIVEREMOVED 与卸载广播保留。会话运行时、会话接口和界面控制器新增批量单项卸载入口（普通与强制），默认回落到原调用；页面桥批量卸载改走该入口，并在批量结束后经 IUiPartitionServices::refresh_drive_list 刷新一次。
 - 验证：volume_provider_tests（批量与单个的刷新标志、2 秒／3 秒忙重试期限）、card_login_mount_session_tests（批量单项走批量路径，单个卸载不走）、card_product_webview_host_object_tests（批量卸载只刷新一次，批量挂载不刷新）、card_product_ui_session_controller_tests、ui_close_guard_tests 通过；其余目标编译通过。p46 应用与 usb_vault_volume_creator.exe 已重新构建（16:45:53），部署页面与源码一致；未实机验证。
 - 安全与风险：不改变强制卸载语义，不引入自动强制。延长期限只能降低而不能消除外部占用导致的失败；持续占用仍报失败并可重试。批量期间资源管理器的此电脑视图要到结束才整体刷新。
+- 提交：按明确决定以 [fix] 单独提交，哈希 5266daa；禁止推送。
+
+### 2026-10-15 — ui / 返回登录页后旧页面桥不再访问已销毁会话
+- 范围与审计：返回登录页偶发显示“正在连接安全组件”后闪退。现有运行日志 92 次返回中 16 次在“安全会话已重建”后无任何记录即终止。show_session 先摘除页面桥并 clear_application_session，旧文档持有的最后引用在新导航后才释放；析构函数随后经已销毁的控制器调用 cancel_login_reset（卡片入口虚函数及控制器内列表），属释放后使用，内存是否已被复用决定是否崩溃。打开首次配置页同样存在。
+- 检查与实现：页面桥新增退役：在会话仍存活时等待后台线程并取消登录重置，此后拒绝全部调用，析构不再访问控制器。detach_host_object 在释放本进程引用前退役当前页面桥；WM_DESTROY 改走同一函数。配置页与权限页桥不受影响。
+- 验证：card_product_webview_host_object_tests 通过，新增退役只结算一次、退役后拒绝调用、先销毁会话再释放页面桥三项。p46 应用与 usb_vault_volume_creator.exe 已重新构建（17:07:22）；未实机验证。
+- 安全与风险：退役在界面线程等待后台线程；返回登录与打开配置在有后台任务时已被拒绝，等待应为即时。崩溃根因由代码与日志推断，未取得崩溃转储。
 - 提交：按明确决定以 [fix] 单独提交；禁止推送。
