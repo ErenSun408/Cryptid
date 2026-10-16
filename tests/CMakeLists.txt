@@ -1288,3 +1288,16 @@ usb_vault_configure_target(activation_code_v1_tests)
 
 add_test(NAME activation_code_v1_tests
   COMMAND activation_code_v1_tests)
+
+add_executable(signing_key_backup_v1_tests
+  signing_key_backup_v1_tests.cpp
+)
+
+target_link_libraries(signing_key_backup_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(signing_key_backup_v1_tests)
+
+add_test(NAME signing_key_backup_v1_tests
+  COMMAND signing_key_backup_v1_tests)

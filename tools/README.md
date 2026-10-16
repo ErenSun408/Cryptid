@@ -11,6 +11,7 @@
 | `vikey_helper/` | 隔离供应商 DLL 的卡通信进程 |
 | `volume_creator/` | 独立建卷进程 |
 | `setup_helper/` | 安装依赖处理进程 |
+| `activation_issuer/` | 激活码签发工具（`usb_vault_activation_issuer.exe`），只在签发机使用，持有签名私钥，不随安装包分发；`--export-public-key <路径>` 导出供应用内嵌的公钥 |
 | `configure-preset.cmd` | 切换 UTF-8 代码页并运行 CMake 配置 |
 | `generate-p2-deployment.cmake` | 生成部署完整性信息，供应用构建使用 |
 | `package-p2-development.ps1` | 校验依赖、页面和版本信息，制作交付载荷 |

@@ -153,6 +153,7 @@ add_library(usb_vault_core STATIC
   src/application/mount_orchestrator.cpp
   src/application/product_settings_v1.cpp
   src/licensing/activation_code_v1.cpp
+  src/licensing/signing_key_backup_v1.cpp
   src/backup/export_manifest_v1.cpp
   src/backup/export_package_file.cpp
   src/backup/export_package_source.cpp
@@ -600,6 +601,19 @@ target_link_options(usb_vault_volume_creator PRIVATE
   "/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
 )
 usb_vault_configure_target(usb_vault_volume_creator)
+
+# Activation code issuer. It holds the signing key and is never packaged with
+# the product; only its public key is embedded in the application.
+add_executable(usb_vault_activation_issuer WIN32
+  tools/activation_issuer/main.cpp
+  tools/activation_issuer/activation_issuer.manifest
+)
+target_link_libraries(usb_vault_activation_issuer PRIVATE
+  usb_vault_core Comctl32 Comdlg32 Crypt32 Shell32 Ole32)
+target_compile_definitions(usb_vault_activation_issuer PRIVATE UNICODE _UNICODE)
+target_link_options(usb_vault_activation_issuer PRIVATE
+  "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
+usb_vault_configure_target(usb_vault_activation_issuer)
 
 if(USB_VAULT_BUILD_UI)
   include(FetchContent)
