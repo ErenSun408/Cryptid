@@ -1,4 +1,5 @@
 #include "usb_vault/licensing/activation_code_v1.h"
+#include "usb_vault/licensing/activation_public_key.h"
 
 #include <cstddef>
 #include <iostream>
@@ -217,6 +218,20 @@ void test_moved_signer_rejects_use() {
   require(taken.public_key().size() == 64, "the moved-to signer lost its key");
 }
 
+// A code issued by the production tool for card 0000-0000, which no card
+// reports (a zero hardware ID is rejected at insertion), so it grants nothing.
+// It proves the embedded public key is the issuer's.
+void test_embedded_key_matches_the_issuer() {
+  const auto grant = verify_activation_code(
+      "040G0-00000-00000-0DB8W-PVY40-2RTB6-3SS6Q-D5XGG-KSVMB-WF543-XYDZE-1BXCA-"
+      "1DMFN-NW4K5-43SQQ-MGZGV-SY981-PNVYT-YQ2Y7-XJ7WA-QJNZ8-JDVRY-PXN27-YWR4P-D7MEJ",
+      usb_vault::licensing::kProductActivationPublicKey);
+  require(grant.has_value() && grant->card_hardware_id == 0 &&
+              grant->expires_at_utc_seconds ==
+                  utc_seconds_from_offset_time(2026, 10, 15, 23, 59, 59, -420),
+          "the embedded public key does not verify an issued code");
+}
+
 }  // namespace
 
 int main() {
@@ -229,6 +244,7 @@ int main() {
     test_offset_time_conversion();
     test_evaluation();
     test_moved_signer_rejects_use();
+    test_embedded_key_matches_the_issuer();
   } catch (const std::exception& error) {
     std::cerr << "activation_code_v1_tests failed: " << error.what() << '\n';
     return 1;

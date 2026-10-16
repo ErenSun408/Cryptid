@@ -196,6 +196,7 @@
     loginRequired: 2,
     authenticated: 3,
     unavailable: 4,
+    activationRequired: 5,
   });
   const stateName = Object.freeze([
     "no-card",
@@ -203,7 +204,12 @@
     "login-required",
     "authenticated",
     "unavailable",
+    "activation-required",
   ]);
+  // Native activation facts, read only on the activation route.
+  const activationStatus = Object.freeze({ missing: 0, active: 1, expired: 2, clockRewound: 3 });
+  const activationResult = Object.freeze({ accepted: 0, invalid: 1, otherCard: 2, expired: 3, clockRewound: 4 });
+  let activationFacts = { status: activationStatus.missing, card: "" };
   const surface = document.getElementById("card-session-surface");
   const configurationButton = document.getElementById("open-configuration");
   const backupButtons = [document.getElementById("card-backup-settings")];
@@ -250,6 +256,10 @@
   });
   const stateTitle = document.getElementById("card-state-title");
   const passwordFields = document.getElementById("password-fields");
+  const activationFields = document.getElementById("activation-fields");
+  const activationReason = document.getElementById("activation-reason");
+  const activationCardNumber = document.getElementById("activation-card-number");
+  const activationCode = document.getElementById("activation-code");
   const passwordLabel = document.getElementById("card-password-label");
   const passwordInput = document.getElementById("card-password");
   const passwordVisibilityButton =
@@ -1042,6 +1052,7 @@
   };
 
   const acceptsLogin = () => currentState === nativeState.loginRequired;
+  const acceptsActivation = () => currentState === nativeState.activationRequired;
   const acceptsInitialization = () =>
     currentState === nativeState.initializationRequired;
 
@@ -1071,7 +1082,8 @@
 
   const updateActionAvailability = () => {
     actionButton.disabled = busy ||
-      (acceptsInitialization() && !initializationInputReady());
+      (acceptsInitialization() && !initializationInputReady()) ||
+      (acceptsActivation() && activationCode.value.trim().length === 0);
   };
 
   const setPasswordVisibility = (input, button, visible) => {
@@ -5365,9 +5377,20 @@
     const showConfirmation = acceptsInitialization();
     const showUnmount = activeVolumes &&
       currentState === nativeState.unavailable;
+    const showActivation = acceptsActivation();
     setVisible(passwordFields, showPassword);
     setVisible(confirmationField, showConfirmation);
-    setVisible(actionButton, showPassword || showUnmount);
+    setVisible(activationFields, showActivation);
+    activationCode.disabled = busy || !showActivation;
+    if (!showActivation) activationCode.value = "";
+    activationCardNumber.textContent = showActivation ? activationFacts.card : "";
+    activationReason.textContent = !showActivation ? ""
+      : activationFacts.status === activationStatus.expired
+        ? "本卡的激活已到期，请输入新的激活码。"
+        : activationFacts.status === activationStatus.clockRewound
+          ? "系统时间早于上次使用的时间。请先校正系统时间，再重新插入安全卡。"
+          : "本卡尚未激活。请将本卡编号提供给管理员，获取激活码后粘贴到下方。";
+    setVisible(actionButton, showPassword || showUnmount || showActivation);
     passwordInput.disabled = busy || !showPassword;
     confirmationInput.disabled = busy || !showConfirmation;
     passwordVisibilityButton.disabled = busy || !showPassword;
@@ -5400,6 +5423,10 @@
         stateTitle.textContent = "安全组件当前不可用";
         actionLabel.textContent = "尝试一键卸载";
         break;
+      case nativeState.activationRequired:
+        stateTitle.textContent = "需要激活";
+        actionLabel.textContent = "激活";
+        break;
       default:
         stateTitle.textContent = "正在连接安全组件";
         break;
@@ -5414,7 +5441,9 @@
         ? "正在初始化安全卡"
         : acceptsLogin()
           ? "正在验证安全卡"
-          : "正在一键卸载";
+          : acceptsActivation()
+            ? "正在验证激活码"
+            : "正在一键卸载";
     }
     statusOutput.textContent = message;
     statusOutput.dataset.tone = /^(错误码：\d{4}$|无法|安全操作未完成|需要管理员身份)/.test(message) ? "error" : "";
@@ -5694,7 +5723,7 @@
     const nextState = await bridge.getSessionState();
     const nextActiveVolumes = await bridge.hasActiveSession();
     if (!Number.isInteger(nextState) || nextState < nativeState.noCard ||
-        nextState > nativeState.unavailable ||
+        nextState > nativeState.activationRequired ||
         (nextActiveVolumes !== true && nextActiveVolumes !== false)) {
       throw Object.assign(new Error("invalid native session state"), { startupCode: 1404 });
     }
@@ -5702,6 +5731,17 @@
     const nextOperationEvents = [];
     let nextResetAvailable = false;
     let nextForgotAvailable = false;
+    let nextActivationFacts = { status: activationStatus.missing, card: "" };
+    if (nextState === nativeState.activationRequired) {
+      const status = await bridge.getActivationStatus();
+      const card = await bridge.getActivationCardNumber();
+      if (!Number.isInteger(status) || status < activationStatus.missing ||
+          status > activationStatus.clockRewound ||
+          typeof card !== "string" || !/^([0-9A-F]{4}-[0-9A-F]{4})?$/.test(card)) {
+        throw new Error("invalid activation facts");
+      }
+      nextActivationFacts = { status, card };
+    }
     if (nextState !== nativeState.authenticated) {
       nextForgotAvailable = await bridge.canLoginReset();
       if (typeof nextForgotAvailable !== "boolean") throw new Error("invalid reset availability");
@@ -5767,6 +5807,7 @@
     activeVolumes = nextActiveVolumes;
     cardResetAvailable = nextResetAvailable;
     forgotAvailable = nextForgotAvailable;
+    activationFacts = nextActivationFacts;
     containers = nextContainers;
     for (const id of decoyMounted.keys()) {
       if (!containers.some(item => item.id === id && item.mounted)) decoyMounted.delete(id);
@@ -5789,6 +5830,8 @@
         return "请输入并确认日常密码，至少6字符。";
       case nativeState.loginRequired:
         return "请输入密码。";
+      case nativeState.activationRequired:
+        return activationFacts.card === "" ? "无法读取本卡编号，请重新插入安全卡。" : "请输入激活码。";
       case nativeState.authenticated:
         return activeVolumes
           ? "安全会话已打开。"
@@ -5947,6 +5990,36 @@
     }
     void refreshAfterExternalChange();
   });
+
+  const activationRejection = Object.freeze({
+    [activationResult.invalid]: "激活码无效，请确认已完整复制。",
+    [activationResult.otherCard]: "该激活码属于其他安全卡，请核对本卡编号。",
+    [activationResult.expired]: "该激活码已到期，请向管理员获取新的激活码。",
+    [activationResult.clockRewound]: "系统时间早于上次使用的时间，请先校正系统时间。",
+  });
+  const submitActivation = async () => {
+    busy = true;
+    render("正在验证激活码");
+    let outcome = null;
+    try {
+      outcome = await bridge.submitActivationCode(activationCode.value);
+    } catch (pageError) { logCaughtPageError("submitActivation/1", pageError); }
+    try {
+      await refreshNativeState();
+    } catch (pageError) { logCaughtPageError("submitActivation/2", pageError);
+      currentState = nativeState.unavailable;
+    }
+    busy = false;
+    if (outcome === activationResult.accepted) {
+      activationCode.value = "";
+      render(currentState === nativeState.activationRequired
+        ? messageForCurrentState() : "激活成功。" + messageForCurrentState());
+      return;
+    }
+    render(messageForCurrentState(), Object.hasOwn(activationRejection, outcome)
+      ? activationRejection[outcome] : "无法保存激活信息，请稍后重试。");
+    if (acceptsActivation()) activationCode.focus();
+  };
 
   const submitLogin = async () => {
     const loginRevision = batchSessionRevision;
@@ -7888,6 +7961,26 @@
         return;
       }
       await submitInitialization();
+      return;
+    }
+    if (acceptsActivation()) {
+      if (activationCode.value.trim().length === 0) {
+        render("请输入激活码。");
+        activationCode.focus();
+        return;
+      }
+      await submitActivation();
+    }
+  });
+
+  activationCode.addEventListener("input", () => {
+    clearError();
+    updateActionAvailability();
+  });
+  activationCode.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && acceptsActivation() && !activationCode.disabled) {
+      event.preventDefault();
+      actionButton.click();
     }
   });
 

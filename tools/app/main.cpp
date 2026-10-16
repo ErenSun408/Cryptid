@@ -31,7 +31,9 @@
 #include "ui/webview_startup_state.h"
 #include "volume_creation/elevation_session.h"
 #include "platform/windows/vikey_configuration/diagnostics.h"
+#include "usb_vault/application/activation_store_v1.h"
 #include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/licensing/activation_public_key.h"
 #include "usb_vault/application/card_device_lifecycle_controller.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/application/card_login_mount_session.h"
@@ -360,6 +362,8 @@ std::unique_ptr<
     g_container_file_chooser;
 std::unique_ptr<usb_vault::ui::ProviderLoginResetMountAccess> g_reset_mount_access;
 std::unique_ptr<usb_vault::ui::IUiPartitionServices> g_partition_services;
+// Outlives the session controller that consults it.
+std::unique_ptr<usb_vault::application::ActivationStoreV1> g_activation_store;
 std::unique_ptr<usb_vault::ui::CardProductUiSessionController> g_ui_session;
 std::unique_ptr<
     usb_vault::card::vikey::development::WindowsCredentialProvider>
@@ -623,10 +627,13 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
       usb_vault::platform::windows::ShellContainerFileChooser>(window);
   g_reset_mount_access = std::make_unique<usb_vault::ui::ProviderLoginResetMountAccess>(*g_volume_provider);
   auto partition_services = usb_vault::ui::make_partition_services(child_path(directory, L"usb_vault_volume_creator.exe"));
+  g_activation_store = std::make_unique<usb_vault::application::ActivationStoreV1>(
+      usb_vault::application::ActivationStoreV1::default_path(),
+      usb_vault::licensing::kProductActivationPublicKey);
   auto ui_session = std::make_unique<
       usb_vault::ui::CardProductUiSessionController>(
           *entry, *authentication, *volume_session, *password_policy,
-          *file_chooser, g_reset_mount_access.get());
+          *file_chooser, g_reset_mount_access.get(), g_activation_store.get());
   auto presence =
       std::make_unique<usb_vault::application::CardPresenceController>(
           *volume_session);
@@ -681,6 +688,7 @@ void clear_application_session() noexcept {
   g_card_lifecycle_controller.reset();
   g_card_presence_controller.reset();
   g_ui_session.reset();
+  g_activation_store.reset();
   g_container_file_chooser.reset();
   g_password_policy.reset();
   g_card_volume_session.reset();

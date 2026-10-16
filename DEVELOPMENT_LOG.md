@@ -6203,4 +6203,11 @@
 - 检查与实现：新增 ActivationStoreV1，以 DPAPI（当前账户，附加熵）保存于 %LOCALAPPDATA%\usb-vault\activation.dat，内容为各卡激活码（最多 64 张，每卡保留最新一个，统一规范拼写）与时间高水位；加载时逐个重新验签。高水位至少每 60 秒落盘一次，落盘失败不阻断有效授权。文件存在但暂时无法读取（被占用）时不写入、下次重试，安装直接报错；损坏或属于其他账户的记录按空记录处理并可被覆盖。插卡上下文新增卡身份（ViKey 硬件 ID），经入口控制器只读暴露；绑定被登录或初始化消耗后不再提供。会话控制器新增 activation_required（线上值 5）：初始化与登录路由在当前卡无有效授权、无卡身份、授权到期或时钟回拨时一律改为该状态，submit_login 与 submit_initialization 因此在原生侧被拒。登录与初始化前先记下卡身份供会话使用，认证未建立时撤销，已登录会话到期后仍为 authenticated。激活码只在激活路由或已认证会话内提交，安装目标为当前卡。页面桥新增 getActivationStatus、getActivationCardNumber（XXXX-XXXX）、getActivationExpiry（UTC 秒）、submitActivationCode；激活码不进入调试参数记录。
 - 验证：activation_store_v1_tests（安装与重载、到期、他卡、过期、他钥、超长、回拨持久化与拒绝安装、替换与规范化、损坏记录、占用记录不被覆盖且释放后可读）、card_product_ui_session_controller_tests（无门禁视为已激活、无身份与未激活拦截登录与初始化且不触卡、激活后开放登录、会话到期继续与续期目标）、card_product_webview_host_object_tests（状态 5、卡号格式、参数校验、非 ASCII 与他卡码、无卡与不可用拒绝）、card_entry_context_controller_tests、vikey_card_insertion_context_tests、card_product_ui_page_contract_tests 通过。
 - 安全与风险：独立安全审查未发现绕过；已修正部分失败登录沿用旧卡身份、暂时不可读记录被空记录覆盖、存储缺少线程互斥。登录页“忘记密码”重置仍不受激活门禁约束：它只把卡恢复为未初始化，重新初始化仍需激活，按此决定保留。备用卡硬件 ID 不同，需要单独激活。卡硬件 ID 随激活码保存在 DPAPI 记录中，不含密码角色、模式或档位。
+- 提交：按明确授权验证与审查后以 [P5.12] 自主提交，哈希 a8537e5；禁止推送。
+
+### 2026-10-15 — ui / 激活页面接入与主程序启用（应用授权切片 3b）
+- 范围与审计：按需求清单 P5.12 复用登录界面完成激活，并在主程序启用门禁。插卡后才能取得卡身份，故未插卡时仍提示插入安全卡，插入未激活的卡后才进入激活界面。
+- 检查与实现：页面新增状态 5（activation-required），沿用登录页标题、主按钮与状态行：显示原因（未激活、已到期、系统时间早于上次使用）、可整体选取的本卡编号与激活码输入框，Enter 或“激活”提交，原文交原生校验。拒绝原因按原生结果显示（无效、他卡、已到期、时钟回拨，其他失败提示稍后重试）；接受后清空输入并刷新到登录或初始化。原生返回值按范围与 XXXX-XXXX 格式校验，原生字符串只经 textContent 显示，激活码不写入页面日志。主程序以内嵌公钥与默认路径创建 ActivationStoreV1 并注入会话控制器，析构先于存储。新增正式公钥头文件，并以签发工具为卡 0000-0000（任何卡都不会报告零 ID）签发的激活码作为测试夹具，证明内嵌公钥与签发私钥配对。
+- 验证：新增 card_product_ui_activation_dom_tests（未激活、已到期、回拨三种原因，他卡与无效码提示，接受后转入登录）通过；activation_code_v1_tests（含正式公钥夹具）、card_product_ui_page_contract_tests（受保护文本控件 20 个、集成夹具页同步）通过；removable、mount_open、file_entry、login_reset、startup、exit、hotkey DOM 测试通过；p46 应用构建通过，无头 Edge 截图确认激活界面布局。未用真实安全卡与 WebView2 实机验证。
+- 安全与风险：独立安全审查无实质问题。激活前“忘记密码”重置仍可用，按 3a 决定保留。正式私钥仅在本机签发工具目录，尚未备份。
 - 提交：按明确授权验证与审查后以 [P5.12] 自主提交；禁止推送。
