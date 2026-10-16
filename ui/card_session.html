@@ -534,6 +534,20 @@
     .xfile .s { flex: 0 0 auto; color: var(--text-3); font-family: var(--mono); font-size: .68rem; }
     .xfile > .cbx { flex: 0 0 auto; margin-left: .3rem; }
     .xnote { padding: .6rem 1.125rem .6rem 3.5rem; color: var(--text-3); font-size: .72rem; }
+    /* 文件夹逐层展开：每层缩进一格，箭头落在缩进里；已勾选文件夹下的条目只显示为已选。 */
+    .xfiles .xfile { padding-left: calc(3.9rem + var(--xdepth, 0) * 1.1rem); }
+    .xfiles .xnote { padding-left: calc(3.5rem + var(--xdepth, 0) * 1.1rem); }
+    /* 箭头宽 .7rem，左移进缩进且不占行宽（-.95 + .7 + 行间距 .55 - .3 = 0），文件夹图标与文件图标同列，箭头与图标相距 .25rem。 */
+    .xchev { flex: 0 0 auto; width: .7rem; margin-left: -.95rem; margin-right: -.3rem; color: var(--text-3); font-size: .7rem; text-align: center; }
+    .xchev::before { content: "\25B8"; }
+    .xchev.open::before { content: "\25BE"; }
+    .xfile > .cbx[data-export-check] { cursor: pointer; }
+    .xfile > .cbx.implied { opacity: .5; cursor: default; }
+    /* 空文件夹提示占一个条目的位置：文字从条目图标的起点开始，隐藏的勾选框撑出同样的行高。 */
+    .xfile.xempty { cursor: default; }
+    .xfile.xempty:hover { background: none; }
+    .xfile.xempty .n { color: var(--text-3); }
+    .xfile.xempty > .cbx { visibility: hidden; }
 
     .xfield { max-width: 35rem; margin: 0 0 1rem; }
     .xfield label { display: block; margin-bottom: .45rem; color: var(--text-2); font-size: .75rem; }

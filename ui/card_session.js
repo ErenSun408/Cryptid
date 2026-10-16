@@ -1897,10 +1897,10 @@
   // What has been ticked, and where it goes. An empty selection means there is
   // nothing to export, which is what the page opens on.
   //
-  // The key carries the directory as well as the name because the file manager
-  // can hand over an entry from anywhere inside a container, while a card only
-  // ever lists that container's root. Two entries of the same name in two
-  // folders are two selections, and neither hides the other.
+  // The key carries the directory as well as the name, '/'-joined as the file
+  // manager writes it, because an entry can be ticked from any folder of a
+  // container. Two entries of the same name in two folders are two
+  // selections, and neither hides the other.
   const exportSelection = new Map();
   const exportKey = (id, directory, name) => `${id}\u0000${directory}\u0000${name}`;
   // One card is open at a time. Opening the next closes the last, so the panel
@@ -1908,6 +1908,9 @@
   let openExportContainer = 0;
   let openExportListing = null;
   let openExportError = "";
+  // Folders opened inside the open card, by their '/'-joined path in the
+  // container. Each holds its own listing, read when the folder is opened.
+  const exportFolders = new Map();
   // Which of the two exports the pane is showing. Plain is what the section
   // opens on: it is the one the file manager hands entries to.
   let exportMode = "plain";
@@ -2393,13 +2396,47 @@
     return picked;
   };
 
-  const exportFileRow = (entry, checked, subtitle, onToggle) => {
+  // A file row ticks on a click. A folder row in the tree opens or closes on a
+  // click and ticks through its box. Inside a ticked folder every row shows
+  // as ticked and cannot be ticked on its own: it would be exported twice.
+  const exportFileRow = (entry, checked, subtitle, onToggle, folder = null) => {
     const row = document.createElement("button");
     row.className = "xfile";
     row.type = "button";
     row.disabled = busy;
     row.dataset.exportPick = entry.name;
-    row.addEventListener("click", onToggle);
+    const box = checkBox(checked);
+    if (folder !== null) {
+      row.style.setProperty("--xdepth", String(folder.depth));
+      if (folder.covered) box.classList.add("implied");
+    }
+    if (folder !== null && entry.isDirectory) {
+      row.setAttribute("aria-expanded", folder.open ? "true" : "false");
+      row.addEventListener("click", folder.onOpen);
+      const chevron = document.createElement("span");
+      chevron.className = folder.open ? "xchev open" : "xchev";
+      chevron.setAttribute("aria-hidden", "true");
+      row.appendChild(chevron);
+      if (!folder.covered) {
+        box.dataset.exportCheck = entry.name;
+        box.setAttribute("role", "checkbox");
+        box.setAttribute("aria-checked", checked ? "true" : "false");
+        box.tabIndex = busy ? -1 : 0;
+        const pick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!busy) onToggle();
+        };
+        box.addEventListener("click", pick);
+        box.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") pick(event);
+        });
+      } else {
+        box.addEventListener("click", (event) => { event.stopPropagation(); });
+      }
+    } else {
+      row.addEventListener("click", onToggle);
+    }
     row.appendChild(exportGlyph(fileTypePaths(entry),
       entry.isDirectory ? "g dir" : "g"));
     const name = document.createElement("span");
@@ -2412,24 +2449,59 @@
     size.className = "s";
     size.textContent = entry.isDirectory ? "文件夹" : formatEntrySize(entry);
     row.appendChild(size);
-    row.appendChild(checkBox(checked));
+    row.appendChild(box);
     return row;
   };
 
-  const exportNote = (parent, text) => {
+  const exportNote = (parent, text, depth = 0) => {
     const note = document.createElement("p");
     note.className = "xnote";
     note.textContent = text;
+    if (depth !== 0) note.style.setProperty("--xdepth", String(depth));
     parent.appendChild(note);
   };
 
-  // 🔴 A card lists one container's root and nothing deeper. Ticking is what
-  // this pane is for; browsing is the file manager's job, and building a
-  // second one here would mean two places that can walk a volume.
+  // An empty folder says so in the place and size of one entry below it, its
+  // text starting where an entry's icon starts.
+  const exportEmptyRow = (parent, depth) => {
+    const row = document.createElement("div");
+    row.className = "xfile xempty";
+    row.style.setProperty("--xdepth", String(depth));
+    const name = document.createElement("span");
+    name.className = "n";
+    name.textContent = "这个文件夹是空的。";
+    const box = checkBox(false);
+    box.setAttribute("aria-hidden", "true");
+    row.append(name, box);
+    parent.appendChild(row);
+  };
+
+  // Whether a ticked folder above `directory` already carries its entries.
+  const exportCoveredBy = (id, directory) => {
+    if (directory === "") return false;
+    const parts = directory.split("/");
+    for (let depth = 0; depth < parts.length; ++depth) {
+      if (exportSelection.has(exportKey(id, parts.slice(0, depth).join("/"), parts[depth]))) return true;
+    }
+    return false;
+  };
+  // Ticking a folder takes back whatever was ticked inside it.
+  const clearExportInside = (id, path) => {
+    for (const [key, entry] of exportSelection) {
+      if (entry.id === id && (entry.directory === path || entry.directory.startsWith(`${path}/`))) {
+        exportSelection.delete(key);
+      }
+    }
+  };
+
+  // A card lists its container's root, and each folder opened in it lists its
+  // own entries one level deeper. Every listing goes through the same bridge
+  // call as the file manager, which keeps every path inside the volume.
   // A vault that becomes mounted opens in the export list on its own; one
   // that is unmounted folds shut below. Vaults already mounted when the
   // page first sees them stay as they are.
   let exportMountSeen = null;
+  const resetExportFolders = () => { exportFolders.clear(); };
   let exportAutoOpenId = 0;
   const followExportMounts = () => {
     const mountedNow = new Set(containers.filter((container) => container.mounted).map((container) => container.id));
@@ -2462,6 +2534,7 @@
       openExportContainer = 0;
       openExportListing = null;
       openExportError = "";
+      resetExportFolders();
     }
     while (exportContainerList.firstChild !== null) {
       exportContainerList.removeChild(exportContainerList.firstChild);
@@ -2509,15 +2582,36 @@
           exportNote(files, "正在读取…");
         } else {
           const roots = openExportListing.entries;
-          for (const entry of roots) {
-            const key = exportKey(container.id, "", entry.name);
-            files.appendChild(exportFileRow(
-              entry, exportSelection.has(key), "",
-              () => { toggleExportPick(container.id, "", entry); }));
-          }
-          const rootNames = new Set(roots.map((entry) => entry.name));
+          const shown = new Set();
+          const addLevel = (directory, listing, depth) => {
+            const covered = exportCoveredBy(container.id, directory);
+            for (const entry of listing.entries) {
+              const key = exportKey(container.id, directory, entry.name);
+              const path = directory === "" ? entry.name : `${directory}/${entry.name}`;
+              const folder = entry.isDirectory ? exportFolders.get(path) : undefined;
+              shown.add(key);
+              files.appendChild(exportFileRow(
+                entry, covered || exportSelection.has(key), "",
+                () => { toggleExportPick(container.id, directory, entry); },
+                { depth, covered, open: folder !== undefined,
+                  onOpen: () => { void toggleExportFolder(container.id, path); } }));
+              if (folder === undefined) continue;
+              if (folder.error !== "") {
+                exportNote(files, folder.error, depth + 1);
+              } else if (folder.listing === null) {
+                if (folder.slow) exportNote(files, "正在读取…", depth + 1);
+              } else {
+                addLevel(path, folder.listing, depth + 1);
+                if (folder.listing.entries.length === 0) exportEmptyRow(files, depth + 1);
+                if (folder.listing.truncated) exportNote(files, "条目太多，只列出了其中一部分。", depth + 1);
+              }
+            }
+          };
+          addLevel("", openExportListing, 0);
+          // Entries handed over from folders not opened here stay listed with
+          // their folder, so what is ticked is always on screen.
           for (const entry of picked) {
-            if (entry.directory === "" && rootNames.has(entry.name)) continue;
+            if (shown.has(exportKey(container.id, entry.directory, entry.name))) continue;
             files.appendChild(exportFileRow(
               entry, true, entry.directory,
               () => { toggleExportPick(container.id, entry.directory, entry); }));
@@ -2622,21 +2716,24 @@
   // The page has one status line for its three ways.
   const setMigrateStatus = (message, tone = "") => { setBackupStatus(message, tone); };
 
-  // 🔴 The one place this section reads a container. It reads the root and
-  // only the root, so nothing here can become a second way to walk a volume,
-  // and both the card and its select-all go through it.
-  const readContainerRoot = async (id) => {
+  // 🔴 The one place this section reads a container: a card's root, its
+  // select-all, and each folder opened inside a card all go through it. The
+  // bridge resolves the '/'-joined folder path inside the mounted volume and
+  // refuses one that leaves it, exactly as for the file manager.
+  const readExportDirectory = async (id, directory) => {
     try {
       return parseDirectoryListing(
-        await bridge.listContainerDirectory(id, ""));
-    } catch (pageError) { logCaughtPageError("readContainerRoot/1", pageError);
+        await bridge.listContainerDirectory(id, directory));
+    } catch (pageError) { logCaughtPageError("readExportDirectory/1", pageError);
       return null;
     }
   };
+  const readContainerRoot = async (id) => readExportDirectory(id, "");
 
   // Opening a card reads that container's root.
   const toggleExportContainer = async (id) => {
     if (busy) return;
+    resetExportFolders();
     if (openExportContainer === id) {
       openExportContainer = 0;
       openExportListing = null;
@@ -2663,12 +2760,48 @@
     renderBackupCentre();
   };
 
+  // Opens a folder of the open card one level, or closes it with everything
+  // opened below it. A listing that arrives after its folder was closed, or
+  // closed and opened again, is dropped.
+  const toggleExportFolder = async (id, path) => {
+    if (busy || openExportContainer !== id) return;
+    if (exportFolders.has(path)) {
+      for (const key of [...exportFolders.keys()]) {
+        if (key === path || key.startsWith(`${path}/`)) exportFolders.delete(key);
+      }
+      renderBackupCentre();
+      return;
+    }
+    // The arrow turns at once; "reading" is only said for a listing slow
+    // enough to notice, so a quick one does not flash it.
+    const pending = { listing: null, error: "", slow: false };
+    exportFolders.set(path, pending);
+    renderBackupCentre();
+    setTimeout(() => {
+      if (exportFolders.get(path) !== pending || pending.listing !== null || pending.error !== "") return;
+      pending.slow = true;
+      renderBackupCentre();
+    }, 500);
+    const listing = await readExportDirectory(id, path);
+    // The bridge says which failure it was; this list never moves away from
+    // the folder, so the file manager's "back to the root" is dropped.
+    const failure = listing === null
+      ? (await readDirectoryFailure()).replace("已返回安全盘根目录。", "") : "";
+    if (openExportContainer !== id || exportFolders.get(path) !== pending) return;
+    if (listing === null) pending.error = failure;
+    else pending.listing = listing;
+    renderBackupCentre();
+  };
+
   const toggleExportPick = (id, directory, entry) => {
-    if (isMaintenanceContainer(id)) return;
+    if (isMaintenanceContainer(id) || exportCoveredBy(id, directory)) return;
     const key = exportKey(id, directory, entry.name);
     if (exportSelection.has(key)) {
       exportSelection.delete(key);
     } else {
+      if (entry.isDirectory === true) {
+        clearExportInside(id, directory === "" ? entry.name : `${directory}/${entry.name}`);
+      }
       exportSelection.set(key, {
         id,
         directory,
@@ -2718,6 +2851,10 @@
       }
       if (openExportContainer === id) openExportListing = listing;
     }
+    // The whole root carries everything below it.
+    for (const entry of selectionForContainer(id)) {
+      exportSelection.delete(exportKey(id, entry.directory, entry.name));
+    }
     for (const entry of listing.entries) {
       exportSelection.set(exportKey(id, "", entry.name), {
         id,
@@ -2739,14 +2876,20 @@
     if (container === null || !container.mounted || isMaintenanceContainer(container.id)) return;
     const directory = filePath.join("/");
     const entry = fileEntries.find((candidate) => candidate.name === name);
-    exportSelection.set(exportKey(container.id, directory, name), {
-      id: container.id,
-      directory,
-      name,
-      isDirectory: entry !== undefined && entry.isDirectory === true,
-      sizeBytes: entry === undefined ? 0 : entry.sizeBytes,
-      modifiedUnixMs: entry === undefined ? 0 : entry.modifiedUnixMs,
-    });
+    // Inside a ticked folder the entry is already on its way.
+    if (!exportCoveredBy(container.id, directory)) {
+      if (entry !== undefined && entry.isDirectory === true) {
+        clearExportInside(container.id, directory === "" ? name : `${directory}/${name}`);
+      }
+      exportSelection.set(exportKey(container.id, directory, name), {
+        id: container.id,
+        directory,
+        name,
+        isDirectory: entry !== undefined && entry.isDirectory === true,
+        sizeBytes: entry === undefined ? 0 : entry.sizeBytes,
+        modifiedUnixMs: entry === undefined ? 0 : entry.modifiedUnixMs,
+      });
+    }
     setBackupStatus("");
     showDashboardSection("backup");
     void toggleExportContainer(container.id);
@@ -5976,7 +6119,7 @@
       containerOrder = next.map(item => item.id);
       for (const id of removed) decoyMounted.delete(id);
       for (const [key, entry] of exportSelection) if (removed.has(entry.id)) exportSelection.delete(key);
-      if (removed.has(openExportContainer)) { openExportListing = null; openExportError = ""; }
+      if (removed.has(openExportContainer)) { openExportListing = null; openExportError = ""; resetExportFolders(); }
       if (removed.has(fileContainerId)) {
         ++fileListingRevision; fileRefreshPendingRevision = 0;
         fileEntries = []; filePath = []; setFileStatus("");
@@ -6057,6 +6200,7 @@
     ++batchSessionRevision;
     exportMountSeen = null;
     exportAutoOpenId = 0;
+    resetExportFolders();
     mergeExport = true;
     clearExportResults();
     exportSelection.clear();

@@ -1129,9 +1129,9 @@ void test_the_file_manager_browses_a_container_without_naming_a_volume() {
   // characters no name off a mounted volume can hold.
   //
   // There are two callers and no more: this one, which walks wherever the
-  // user browses, and the export panel, which reads a container root and
-  // never anything below it. The second is held to the root by its own case,
-  // so a third caller here would be a third way to walk a volume.
+  // user browses, and the export panel's one reader, which reads a card's
+  // root and each folder opened inside it. A third caller here would be a
+  // third way to walk a volume.
   require(script.find("const listingRecordSeparator = \"\\u001e\";") !=
               std::string::npos &&
               script.find("const listingFieldSeparator = \"\\u001f\";") !=
@@ -1338,12 +1338,15 @@ void test_the_backup_centre_owns_the_plaintext_export() {
               script.find("let containerOrder = [];") != std::string::npos,
           "the container order is not dragged from the handle alone");
 
-  // A card reads its container's root and only its root. Anything deeper is
-  // the file manager's job, and a second way to walk a volume from here would
-  // be a second thing to keep inside the boundary.
-  require(script.find("const readContainerRoot = async (id) => {") !=
-              std::string::npos,
-          "an opened card reads more than the container root");
+  // A card reads its root and each folder opened in it through one reader,
+  // so the export panel adds no second path into a volume beside it.
+  require(script.find("const readExportDirectory = async (id, directory) => {") !=
+              std::string::npos &&
+              script.find("const readContainerRoot = async (id) => readExportDirectory(id, \"\");") !=
+                  std::string::npos &&
+              script.find("const listing = await readExportDirectory(id, path);") !=
+                  std::string::npos,
+          "the export panel reads a container outside its one reader");
 
   // 🔴 What succeeded leaves the selection as it goes, so a partial failure
   // leaves exactly the unfinished entries ticked and says how many.

@@ -148,8 +148,8 @@ const openBackup = async (d, $, mode) => {
       await tick();
       await openBackup(d, $, 'export-mode-encrypted');
       d.querySelector('[data-export-toggle="1"] .xrow-open').click();
-      await wait(() => d.querySelector('#export-container-list [data-export-pick]'));
-      d.querySelector('#export-container-list [data-export-pick]').click(); await tick();
+      await wait(() => d.querySelector('#export-container-list [data-export-check]'));
+      d.querySelector('#export-container-list [data-export-check]').click(); await tick();
       $('backup-export-confirm').click(); await tick();
       assert.equal($('export-dialog-name').disabled, false);
       $('export-dialog-name').value = '家庭照片';
