@@ -109,7 +109,7 @@ chrome.webview.postMessage("driver-loaded");
     .querySelector(`.unit-option[data-unit="${unit}"]`);
   const capacityError = document.getElementById("create-container-error");
   const creationStatus = document.getElementById("create-volume-status");
-  const instruction = "请输入并确认日常密码，至少12字符。";
+  const instruction = "请输入并确认日常密码，至少6字符。";
 
   const waitFor = (condition) => {
     if (condition()) {
@@ -158,7 +158,7 @@ chrome.webview.postMessage("driver-loaded");
     return;
   }
 
-  password.value = "abcdefghijk";
+  password.value = "abcde";
   password.dispatchEvent(new Event("input", { bubbles: true }));
   if (!await waitFor(() => !strength.hidden &&
       strength.dataset.level === "invalid" &&
@@ -211,8 +211,8 @@ chrome.webview.postMessage("driver-loaded");
   }
   confirmationVisibility.click();
   if (!await waitFor(() => !strength.hidden &&
-      strength.dataset.level === "acceptable" &&
-      strength.dataset.score === "2" && !action.disabled)) {
+      strength.dataset.level === "strong" &&
+      strength.dataset.score === "3" && !action.disabled)) {
     request("fail-strength");
     return;
   }

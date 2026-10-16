@@ -1065,7 +1065,7 @@
 
   const initializationInputReady = () => {
     const count = normalizedPasswordLength();
-    return count !== null && count >= 12 && count <= 128 &&
+    return count !== null && count >= 6 && count <= 128 &&
       confirmationInput.value.length !== 0;
   };
 
@@ -1267,7 +1267,7 @@
     return containerBSizes() !== null &&
       (creationStorage === "disk" || containerLocationReady(containerBName, containerBDirectory)) &&
       second !== null &&
-      second >= 12 && second <= 128 &&
+      second >= 6 && second <= 128 &&
       containerBSecond.value === containerBSecondConfirmation.value;
   };
 
@@ -2903,7 +2903,7 @@
     [-1]: "已取消。",
     1: "加密口令错误。",
     2: "两次输入的加密口令不一致。",
-    3: "加密口令太短，至少需要 12 个字符。",
+    3: "加密口令太短，至少需要 6 个字符。",
     4: "目标位置已有同名的文件或文件夹。",
     5: "目标位置空间不足。",
     6: "源文件在导出时发生了变化，或包含不支持的链接。",
@@ -3039,7 +3039,7 @@
       ready = importNewName.value.trim() !== "" && importLocation !== "" && Number.isInteger(size) &&
         (importNewHidden.checked
           ? Number.isInteger(hiddenSize) && hiddenSize >= importMinimumMib && hiddenSize * 4 <= size * 3 &&
-            codePoints(second) >= 12 && codePoints(second) <= 128 &&
+            codePoints(second) >= 6 && codePoints(second) <= 128 &&
             second === importNewSecondConfirmation.value && importNewAcknowledge.checked
           : size >= importMinimumMib);
     }
@@ -3244,7 +3244,7 @@
       const second = exportDialogPassphraseConfirmation.value;
       if (first === "" || second === "") { setExportDialogError("请输入两次加密口令。"); return; }
       if (first !== second) { setExportDialogError("两次输入的加密口令不一致。"); return; }
-      if ([...first].length < 12) { setExportDialogError("加密口令太短，至少需要 12 个字符。"); return; }
+      if ([...first].length < 6) { setExportDialogError("加密口令太短，至少需要 6 个字符。"); return; }
       password = new TextEncoder().encode(first);
       confirmation = new TextEncoder().encode(second);
     }
@@ -5432,18 +5432,23 @@
       return;
     }
 
-    if (count < 12) {
+    // Length bands only: 6-8 low, 9-11 medium, 12 and more high.
+    if (count < 6) {
       strengthOutput.dataset.level = "invalid";
       strengthOutput.dataset.score = "1";
       strengthDescription.textContent = "密码强度：未达到最低要求";
-    } else if (count <= 17) {
+    } else if (count <= 8) {
+      strengthOutput.dataset.level = "weak";
+      strengthOutput.dataset.score = "1";
+      strengthDescription.textContent = "密码强度：低";
+    } else if (count <= 11) {
       strengthOutput.dataset.level = "acceptable";
       strengthOutput.dataset.score = "2";
-      strengthDescription.textContent = "密码强度：可接受";
+      strengthDescription.textContent = "密码强度：中";
     } else if (count <= 128) {
       strengthOutput.dataset.level = "strong";
       strengthOutput.dataset.score = "3";
-      strengthDescription.textContent = "密码强度：较强";
+      strengthDescription.textContent = "密码强度：高";
     } else {
       strengthOutput.dataset.level = "invalid";
       strengthOutput.dataset.score = "3";
@@ -5766,7 +5771,7 @@
       case nativeState.noCard:
         return "等待安全卡。";
       case nativeState.initializationRequired:
-        return "请输入并确认日常密码，至少12字符。";
+        return "请输入并确认日常密码，至少6字符。";
       case nativeState.loginRequired:
         return "请输入密码。";
       case nativeState.authenticated:
@@ -7862,7 +7867,7 @@
     }
     if (acceptsInitialization()) {
       if (!initializationInputReady()) {
-        render("请输入并确认日常密码，至少12字符。");
+        render("请输入并确认日常密码，至少6字符。");
         updateStrength();
         passwordInput.focus();
         return;

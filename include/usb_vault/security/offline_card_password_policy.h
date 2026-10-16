@@ -12,8 +12,8 @@ namespace usb_vault::security {
 // class composition rules or change the exact bytes supplied to the KDF.
 class OfflineCardPasswordPolicy final : public IPasswordStrengthPolicy {
  public:
-  static constexpr std::size_t minimum_code_points = 12;
-  static constexpr std::size_t strong_code_points = 18;
+  static constexpr std::size_t minimum_code_points = 6;
+  static constexpr std::size_t strong_code_points = 12;
   static constexpr std::size_t maximum_code_points = 128;
 
   [[nodiscard]] PasswordStrength assess(

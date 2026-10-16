@@ -106,6 +106,7 @@
     }
     #password-strength[data-level="invalid"] .password-strength-segment:first-child { background: var(--danger); }
     #password-strength[data-level="invalid"][data-score="3"] .password-strength-segment { background: var(--danger); }
+    #password-strength[data-level="weak"] .password-strength-segment:first-child { background: var(--warn); }
     #password-strength[data-level="acceptable"] .password-strength-segment:nth-child(-n+2) { background: var(--warn); }
     #password-strength[data-level="strong"] .password-strength-segment { background: var(--ok); }
     #card-session-action {
@@ -1920,7 +1921,7 @@
             <label for="export-dialog-passphrase-confirmation">再次输入加密口令</label>
             <div class="line"><input id="export-dialog-passphrase-confirmation" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
           </div>
-          <p class="creation-hint">加密口令至少 12 个字符。拿到导出包的人可以离线反复猜测口令，导出包的安全性完全取决于它，遗忘后无法恢复。</p>
+          <p class="creation-hint">加密口令至少 6 个字符。拿到导出包的人可以离线反复猜测口令，导出包的安全性完全取决于它，遗忘后无法恢复。</p>
         </div>
         <p id="export-dialog-error" class="creation-error" hidden></p>
       </div>
@@ -2008,7 +2009,7 @@
               <label for="import-new-second-confirmation">再次输入诱饵密码</label>
               <div class="line"><input id="import-new-second-confirmation" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
             </div>
-            <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
+            <p class="creation-hint">诱饵密码需要 6 至 128 个字符。</p>
             <div class="creation-note">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
               <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。若您曾用本卡创建过含隐藏卷的安全盘，诱饵密码不一致可能使本卡原有密码失效，导致此前安全盘中的数据永久无法访问。</span>
@@ -2261,7 +2262,7 @@
           <label for="create-container-b-second-confirmation">再次输入诱饵密码</label>
           <input id="create-container-b-second-confirmation" class="creation-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
           </div></div>
-          <p class="creation-hint">诱饵密码需要 12 至 128 个字符。</p>
+          <p class="creation-hint">诱饵密码需要 6 至 128 个字符。</p>
           <div class="creation-note" style="margin-top:.9rem">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5l8.5 15h-17l8.5-15z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
             <span>注意：若您曾设置过诱饵密码，此处需与曾经的诱饵密码保持一致。</span>

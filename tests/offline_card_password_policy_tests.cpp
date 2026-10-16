@@ -38,14 +38,14 @@ void require(const bool condition, const char* const message) {
 
 void test_ascii_boundaries_and_feedback() {
   const OfflineCardPasswordPolicy policy;
-  require(policy.assess(repeated_ascii(11)) == PasswordStrength::rejected,
-          "11 code points met the minimum");
-  require(policy.assess(repeated_ascii(12)) == PasswordStrength::acceptable,
-          "12 code points did not meet the minimum");
-  require(policy.assess(repeated_ascii(17)) == PasswordStrength::acceptable,
-          "17 code points received the wrong feedback");
-  require(policy.assess(repeated_ascii(18)) == PasswordStrength::strong,
-          "18 code points did not receive strong feedback");
+  require(policy.assess(repeated_ascii(5)) == PasswordStrength::rejected,
+          "5 code points met the minimum");
+  require(policy.assess(repeated_ascii(6)) == PasswordStrength::acceptable,
+          "6 code points did not meet the minimum");
+  require(policy.assess(repeated_ascii(11)) == PasswordStrength::acceptable,
+          "11 code points received the wrong feedback");
+  require(policy.assess(repeated_ascii(12)) == PasswordStrength::strong,
+          "12 code points did not receive strong feedback");
   require(policy.assess(repeated_ascii(128)) == PasswordStrength::strong,
           "128 code points exceeded the maximum");
   require(policy.assess(repeated_ascii(129)) == PasswordStrength::rejected,
@@ -54,27 +54,21 @@ void test_ascii_boundaries_and_feedback() {
 
 void test_unicode_is_counted_by_scalar_value() {
   const OfflineCardPasswordPolicy policy;
-  const std::string chinese_12 = "甲乙丙丁戊己庚辛壬癸子丑";
-  require(policy.assess(secure_text(chinese_12)) ==
+  const std::string chinese_6 = "甲乙丙丁戊己";
+  require(policy.assess(secure_text(chinese_6)) ==
               PasswordStrength::acceptable,
-          "12 Chinese code points were counted as UTF-8 bytes");
+          "6 Chinese code points were counted as UTF-8 bytes");
 
-  constexpr std::array<std::byte, 48> emoji_12 = {
-      std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
-      std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
-      std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
-      std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
-      std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
-      std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
+  constexpr std::array<std::byte, 24> emoji_6 = {
       std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
       std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
       std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
       std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
       std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90},
       std::byte{0xF0}, std::byte{0x9F}, std::byte{0x94}, std::byte{0x90}};
-  require(policy.assess(secure_bytes(emoji_12)) ==
+  require(policy.assess(secure_bytes(emoji_6)) ==
               PasswordStrength::acceptable,
-          "12 supplementary code points were counted as UTF-8 bytes");
+          "6 supplementary code points were counted as UTF-8 bytes");
 }
 
 void test_composition_is_not_required() {
@@ -82,7 +76,7 @@ void test_composition_is_not_required() {
   require(policy.assess(secure_text("correct horse battery staple")) ==
               PasswordStrength::strong,
           "spaces or lower-case-only passphrase was rejected");
-  require(policy.assess(secure_text("mossrivercedar")) ==
+  require(policy.assess(secure_text("mossriver")) ==
               PasswordStrength::acceptable,
           "single character class was rejected despite sufficient length");
 }

@@ -965,8 +965,9 @@ void test_strength_feedback_matches_the_native_length_baseline() {
   require(script.find("passwordInput.value.normalize(\"NFC\")") !=
               std::string::npos,
           "strength feedback does not count the native NFC form");
-  require(script.find("count < 12") != std::string::npos &&
-              script.find("count <= 17") != std::string::npos &&
+  require(script.find("count < 6") != std::string::npos &&
+              script.find("count <= 8") != std::string::npos &&
+              script.find("count <= 11") != std::string::npos &&
               script.find("count <= 128") != std::string::npos &&
               script.find("strengthOutput.dataset.score = \"1\"") !=
                   std::string::npos &&
@@ -979,11 +980,11 @@ void test_strength_feedback_matches_the_native_length_baseline() {
               script.find("strengthOutput.hidden = true") !=
                   std::string::npos &&
               script.find("还需") == std::string::npos,
-          "strength feedback diverges from the 12/18/128 policy boundary");
+          "strength feedback diverges from the 6/12/128 policy boundary");
   require(script.find("initializationInputReady") != std::string::npos &&
-              script.find("count >= 12 && count <= 128") !=
+              script.find("count >= 6 && count <= 128") !=
                   std::string::npos &&
-              script.find("至少12字符") != std::string::npos,
+              script.find("至少6字符") != std::string::npos,
           "initialization button does not enforce the visible minimum length");
 }
 
