@@ -547,7 +547,7 @@
     check(!$('#create-type-step').hidden && !$('#create-disk-step').hidden,
       "Disk creation always offers both container shapes");
     check($('#create-volume-description').parentElement === $('#create-storage-switch') &&
-      $('#create-volume-description').textContent === "安全盘为物理硬盘上已有的独立数据分区",
+      $('#create-volume-description').textContent === "安全盘为 U 盘、移动硬盘或 SD 卡上的分区",
       "Storage description shares the selector row");
     $('[data-create-kind="hidden"]').click();
     check(!$('#create-container-b-form').hidden && $('#partition-preserve-data').closest('label').hidden,

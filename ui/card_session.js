@@ -1325,8 +1325,12 @@
     const standardQuiet = choosing || !encrypted || creationCompleted;
     const hiddenQuiet = choosing || !hiddenVolume || creationCompleted;
     const hiddenLocationQuiet = hiddenQuiet || creationStorage === "disk";
-    partitionPreserve.closest("label").hidden = hiddenVolume;
-    if (hiddenVolume) partitionPreserve.checked = false;
+    // exFAT and FAT32 media can only be erased, so the in-place option is not
+    // offered for them at all.
+    const preserveOffered = !hiddenVolume &&
+      partitionRows.find(row => row.id === partitionSelected)?.ntfs !== false;
+    partitionPreserve.closest("label").hidden = !preserveOffered;
+    if (!preserveOffered) partitionPreserve.checked = false;
     updatePartitionMode();
     showFieldProblem(
       containerNameError,
@@ -1368,7 +1372,7 @@
   const applyCreationStepCopy = () => {
     creationTitle.textContent = "新建安全盘";
     setCreationDescription(creationStorage === "disk"
-      ? "安全盘为物理硬盘上已有的独立数据分区"
+      ? "安全盘为 U 盘、移动硬盘或 SD 卡上的分区"
       : "安全盘为一个加密文件，挂载后显示为普通磁盘");
   };
 
@@ -4503,7 +4507,7 @@
       const available = partitionRows.filter(row => row.state === 0);
       if (!available.length) {
         const note = document.createElement("p"); note.className = "partition-empty";
-        note.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无可用分区";
+        note.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无可用的移动介质";
         partitionBody.append(note);
       }
       for (const item of available) {
@@ -4527,7 +4531,7 @@
       }
     }
     const empty = partitionBody.querySelector(".partition-empty");
-    if (empty) empty.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无可用分区";
+    if (empty) empty.textContent = busy && partitionPickerVisible() ? "正在读取分区…" : "暂无可用的移动介质";
     for (const button of partitionBody.querySelectorAll("button[data-partition-id]")) {
       button.disabled = disabled;
       button.setAttribute("aria-pressed", String(Number(button.dataset.partitionId) === partitionSelected));
@@ -4567,7 +4571,9 @@
     const revision = partitionRevision;
     busy = true; renderPartitions(); creationContinueButton.disabled = true; partitionStatus.textContent = "正在读取分区…"; partitionStatus.dataset.tone = "";
     try {
-      if (await bridge.beginPartitionRefresh() !== true) throw new Error("scan rejected");
+      // The disk picker serves removable media only; the host filters out
+      // internal volumes before the page sees them.
+      if (await bridge.beginPartitionRefresh(1) !== true) throw new Error("scan rejected");
       let status;
       do {
         status = await bridge.getPartitionRefreshStatus();
@@ -4579,6 +4585,11 @@
         const display = await bridge.getPartitionDisplay(row.id);
         if (typeof display !== "string" || display.length > 512) throw new Error("invalid partition display");
         row.display = display;
+        if (row.state === 0) {
+          const ntfs = await bridge.getPartitionNtfs(row.id);
+          if (typeof ntfs !== "boolean") throw new Error("invalid partition filesystem");
+          row.ntfs = ntfs;
+        }
       }
       if (revision !== partitionRevision || !partitionPickerVisible()) { logPageEvent(4, "refreshPartitions", "会话或页面状态变化，已放弃等待结果。"); return; }
       partitionRows = rows;
@@ -4602,6 +4613,10 @@
       if (await bridge.selectPartition(id) !== true) throw new Error("selection rejected");
       if (revision === partitionRevision) {
         partitionSelected = id;
+        // Only NTFS keeps its files; anything else can only be erased.
+        if (partitionPreserve.checked && !partitionRows.find(row => row.id === id)?.ntfs) {
+          partitionPreserve.checked = false; updatePartitionMode();
+        }
         partitionStatus.textContent = ""; partitionStatus.dataset.tone = "";
       }
     } catch (pageError) { logCaughtPageError("selectPartitionRow/1", pageError);

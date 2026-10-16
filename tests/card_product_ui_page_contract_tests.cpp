@@ -730,7 +730,7 @@ void test_hidden_container_form_is_symmetric_and_never_validated() {
   // Storage describes its backing medium on the shared selector row;
   // shape selection remains visible for both file and partition forms.
   require(script.find("接着会让你选择保存位置") == std::string::npos &&
-              script.find("安全盘为物理硬盘上已有的独立数据分区") != std::string::npos &&
+              script.find("安全盘为 U 盘、移动硬盘或 SD 卡上的分区") != std::string::npos &&
               script.find("安全盘为一个加密文件，挂载后显示为普通磁盘") != std::string::npos &&
               script.find("creationTypeStep.hidden = reviewing || creationRunning || creationResult") != std::string::npos &&
               script.find("bridge.beginPartitionPair(") != std::string::npos,
@@ -881,10 +881,15 @@ void test_card_reset_is_gated_and_states_its_cost() {
 void test_container_creation_form_is_bounded() {
   const std::string page = read_source(USB_VAULT_CARD_PRODUCT_UI_PAGE);
   const std::string script = read_source(USB_VAULT_CARD_PRODUCT_UI_SCRIPT);
-  require(page.find("data-create-storage=\"disk\"") == std::string::npos &&
+  // File storage stays the default; the partition picker returns as the
+  // removable entry beside it and scans external media only.
+  require(page.find("data-create-storage=\"disk\" aria-pressed=\"false\">移动安全盘") != std::string::npos &&
               page.find("data-create-storage=\"file\" aria-pressed=\"true\"") != std::string::npos &&
-              script.find("let creationStorage = \"file\";") != std::string::npos,
-          "new container creation still exposes disk storage or defaults to it");
+              page.find("data-create-storage=\"file\"") < page.find("data-create-storage=\"disk\"") &&
+              script.find("let creationStorage = \"file\";") != std::string::npos &&
+              script.find("bridge.beginPartitionRefresh(1)") != std::string::npos &&
+              script.find("bridge.beginPartitionRefresh()") == std::string::npos,
+          "creation does not default to files beside an external-only removable entry");
   require(page.find("id=\"create-container-capacity\"") !=
               std::string::npos &&
               page.find("min=\"20\" max=\"1048576\" step=\"1\" value=\"64\"") !=

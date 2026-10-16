@@ -60,7 +60,8 @@ window.navigationFixture = {
       fixture.pageEvents.push({ category, source, content });
       return true;
     },
-    beginPartitionRefresh: () => { fixture.partitionScans = (fixture.partitionScans || 0) + 1; return true; },
+    beginPartitionRefresh: scope => { fixture.partitionScans = (fixture.partitionScans || 0) + 1; fixture.partitionScope = scope; return true; },
+    getPartitionNtfs: id => !(fixture.partitionNotNtfs || []).includes(id),
     getPartitionRefreshStatus: () => fixture.partitionPending ? 1 : 2,
     getPartitionDisplay: id => id === 1 ? "T: · 测试数据 <img src=x>" : "C: · 系统",
     getPartitionList: () => fixture.partitionList ?? "1,0,3,1073741824,0\n2,0,1,536870912,1",

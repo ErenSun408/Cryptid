@@ -6168,4 +6168,11 @@
 - 检查与实现：beginPartitionRefresh 新增可选参数，1 只保留外接卷，无参数时仍列出全部卷，其他值拒绝；筛选在原生端完成，内置卷不进入页面。新增只读成员 getPartitionNtfs(id) 返回所列分区是否为 NTFS。原地加密请求遇到非 NTFS 目标在启动工作线程前拒绝；清空创建不受影响。分区行格式不变。
 - 验证：card_product_webview_host_object_tests（新增外接范围、未知参数、NTFS 查询、非 NTFS 拒绝原地加密及允许清空创建）与 card_product_ui_page_contract_tests 通过。未接入真实外接介质。
 - 安全与风险：筛选只影响列表展示，原生创建门禁沿用切片 1 的候选与快照校验；页面仍可调用无参数刷新，属既有磁盘流程能力。
+- 提交：按明确决定以 [P5.11] 单独提交，哈希 d52e0dc；禁止推送。
+
+### 2026-10-15 — ui / 新建安全盘新增移动安全盘入口（移动安全盘切片 3）
+- 范围与审计：按明确要求在“文件安全盘”右侧新增“移动安全盘”，复用分区选择、检查、清空创建与隐藏卷界面。与 2026-10-09 隐藏磁盘新建入口的需求条目存在交叉，已在需求清单新增 P5.11 条目说明：内置磁盘入口继续隐藏，本入口只列外接介质。
+- 检查与实现：恢复 disk 存储按钮并命名为“移动安全盘”，文件安全盘仍为默认。分区刷新改为 beginPartitionRefresh(1)，每个可选分区读取 getPartitionNtfs；所选分区为 exFAT 或 FAT32 时隐藏并取消“保留文件并加密”。说明改为“安全盘为 U 盘、移动硬盘或 SD 卡上的分区”，空列表提示“暂无可用的移动介质”。集成夹具与页面契约同步。
+- 验证：新增 card_product_ui_removable_dom_tests 三个场景（NTFS、exFAT、空列表）通过；card_product_ui_page_contract_tests、file_entry、mount_open DOM 测试通过。partition、partition_creation、file_creation_failure、navigation DOM 测试与 HEAD 同样失败（仍假定磁盘入口为默认或既有问题）。p46 应用已重新构建（18:42:09），部署页面与源码一致；未接入真实外接介质验证。
+- 安全与风险：页面筛选依赖原生端，内置卷不进入页面；原地加密的 NTFS 门禁在原生端独立生效。挂载中拔出外接介质尚未处理，留待切片 4。
 - 提交：按明确决定以 [P5.11] 单独提交；禁止推送。

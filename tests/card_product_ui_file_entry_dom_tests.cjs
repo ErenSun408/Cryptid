@@ -29,8 +29,8 @@ const wait=async f=>{for(let i=0;i<150;i++){if(f())return;await tick();}throw Er
    assert.equal(f.containers[0].name,'资料'+suffix);assert.equal(writes,0);
    d.querySelector('[data-create-container]').click();await tick();
    assert.equal($('create-volume-dialog').dataset.storage,'file');
-   assert.equal(d.querySelector('[data-create-storage="disk"]'),null);
-   assert.equal(d.querySelectorAll('[data-create-storage]').length,1);
+   assert.equal(d.querySelector('[data-create-storage="disk"]').textContent,'移动安全盘');
+   assert.equal(d.querySelectorAll('[data-create-storage]').length,2);
    assert.equal($('create-disk-step').hidden,true);assert.equal(f.partitionScans,undefined);
    assert.equal($('create-container-form').hidden,false);
    d.querySelector('[data-create-kind="hidden"]').click();await tick();
