@@ -244,9 +244,10 @@ void test_page_has_route_specific_password_surfaces() {
   // least as good a reason. P5.9 adds seven: its five password fields, the
   // name of a container created by an import and the export package name.
   // The editable import package name adds one more protected text control,
-  // and P5.12 the activation code, which names the card it unlocks.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 20 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 20,
+  // and P5.12 the activation code twice (login surface and settings), which
+  // names the card it unlocks.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 21 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 21,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");

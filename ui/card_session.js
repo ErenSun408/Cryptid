@@ -210,6 +210,8 @@
   const activationStatus = Object.freeze({ missing: 0, active: 1, expired: 2, clockRewound: 3 });
   const activationResult = Object.freeze({ accepted: 0, invalid: 1, otherCard: 2, expired: 3, clockRewound: 4 });
   let activationFacts = { status: activationStatus.missing, card: "" };
+  // Set once the settings licence group exists; render() keeps it in step.
+  let renderLicenseGroup = null;
   const surface = document.getElementById("card-session-surface");
   const configurationButton = document.getElementById("open-configuration");
   const backupButtons = [document.getElementById("card-backup-settings")];
@@ -5450,6 +5452,7 @@
     errorOutput.textContent = error;
     errorOutput.hidden = error.length === 0;
     updateProductSurface();
+    if (renderLicenseGroup !== null) renderLicenseGroup();
     capturePageErrors();
   };
 
@@ -5551,6 +5554,7 @@
 
   const refreshStoredSwitches = async () => {
     await refreshExitHotkey();
+    await refreshLicense();
     const force = await bridge.getForceUnmountEnabled();
     if (typeof force !== "boolean") throw new Error("invalid force preference");
     savedForceUnmount = force;
@@ -5580,6 +5584,106 @@
       }
     }
   };
+
+  // ================= 授权 =================
+  // The settings page shows the logged-in card's grant in local time and can
+  // replace it. A session that outlives its grant keeps running, so an expired
+  // grant is shown here rather than ending the session.
+  const licenseCard = document.getElementById("license-card");
+  const licenseExpiry = document.getElementById("license-expiry");
+  const licenseCode = document.getElementById("license-code");
+  const licenseSave = document.getElementById("license-save");
+  const licenseStatus = document.getElementById("license-status");
+  let licenseSaving = false;
+  // Last facts read for the session's card; painted only while authenticated.
+  let licenseFacts = null;
+  const localTimeText = (seconds) => {
+    const date = new Date(seconds * 1000);
+    const pad = (value) => String(value).padStart(2, "0");
+    const offset = -date.getTimezoneOffset();
+    const zone = `UTC${offset < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}（${zone}）`;
+  };
+  const renderLicenseControls = () => {
+    const authenticated = currentState === nativeState.authenticated;
+    if (!authenticated) {
+      // Nothing of a closed session's card or a half-pasted code stays behind.
+      licenseCode.value = "";
+      licenseStatus.textContent = "";
+    }
+    const facts = authenticated ? licenseFacts : null;
+    licenseCard.textContent = facts === null ? "—" : facts.card;
+    licenseExpiry.textContent = facts === null ? "—" : facts.expiry;
+    licenseExpiry.dataset.expired = facts !== null && facts.expired ? "true" : "false";
+    const ready = authenticated && !busy && !licenseSaving;
+    licenseCode.disabled = !ready;
+    licenseSave.disabled = !ready || licenseCode.value.trim().length === 0;
+  };
+  renderLicenseGroup = renderLicenseControls;
+  const refreshLicense = async () => {
+    try {
+      const status = await bridge.getActivationStatus();
+      const card = await bridge.getActivationCardNumber();
+      const expiry = await bridge.getActivationExpiry();
+      if (!Number.isInteger(status) || status < activationStatus.missing ||
+          status > activationStatus.clockRewound || typeof card !== "string" ||
+          !/^([0-9A-F]{4}-[0-9A-F]{4})?$/.test(card) ||
+          !Number.isSafeInteger(expiry) || expiry < 0 || expiry > 253402300799) {
+        throw new Error("invalid licence facts");
+      }
+      licenseFacts = {
+        card: card === "" ? "—" : card,
+        expired: status !== activationStatus.active,
+        expiry: expiry === 0
+          ? (status === activationStatus.missing ? "未找到本卡的激活记录，退出后需重新激活" : "—")
+          : localTimeText(expiry) + (status === activationStatus.expired
+            ? "，已到期，退出后需更新激活码"
+            : status === activationStatus.clockRewound ? "，系统时间异常" : ""),
+      };
+    } catch (pageError) { logCaughtPageError("refreshLicense/1", pageError);
+      licenseFacts = { card: "—", expiry: "无法读取", expired: false };
+    }
+    renderLicenseControls();
+  };
+  const licenseRejection = Object.freeze({
+    [activationResult.invalid]: "激活码无效，请确认已完整复制。",
+    [activationResult.otherCard]: "该激活码属于其他安全卡。",
+    [activationResult.expired]: "该激活码已到期。",
+    [activationResult.clockRewound]: "系统时间早于上次使用的时间，请先校正系统时间。",
+  });
+  licenseCode.addEventListener("input", () => {
+    licenseStatus.textContent = "";
+    licenseStatus.dataset.tone = "";
+    renderLicenseControls();
+  });
+  licenseSave.addEventListener("click", async () => {
+    if (licenseSave.disabled) return;
+    licenseSaving = true;
+    renderLicenseControls();
+    licenseStatus.dataset.tone = "";
+    licenseStatus.textContent = "正在验证激活码";
+    let outcome = null;
+    try {
+      outcome = await bridge.submitActivationCode(licenseCode.value);
+    } catch (pageError) { logCaughtPageError("licenseSave/1", pageError); }
+    licenseSaving = false;
+    // A session that ended meanwhile has nothing left to report to.
+    if (currentState !== nativeState.authenticated) {
+      renderLicenseControls();
+      return;
+    }
+    if (outcome === activationResult.accepted) {
+      licenseCode.value = "";
+      licenseStatus.textContent = "激活码已更新。";
+      licenseStatus.dataset.tone = "success";
+    } else {
+      licenseStatus.textContent = Object.hasOwn(licenseRejection, outcome)
+        ? licenseRejection[outcome] : "无法保存激活信息，请稍后重试。";
+      licenseStatus.dataset.tone = "error";
+    }
+    await refreshLicense();
+  });
 
   const exitHotkeyEnabled = document.getElementById("exit-hotkey-enabled");
   const exitHotkeyOptions = document.getElementById("exit-hotkey-options");

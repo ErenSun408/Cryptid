@@ -104,14 +104,17 @@
       border-radius: .6rem; font-size: .78rem; color: var(--text-3);
     }
     #activation-card-number { font-family: var(--mono); font-size: .95rem; letter-spacing: .08em; color: var(--text); user-select: all; }
-    #activation-code {
+    #activation-code, #license-code {
       display: block; width: 100%; min-height: 5.4rem; padding: .6rem .85rem; resize: none;
       border: 1px solid var(--line-2); border-radius: .6rem; background: var(--ink-850);
       color: var(--text); font-family: var(--mono); font-size: .8rem; line-height: 1.5;
       letter-spacing: .03em; word-break: break-all;
     }
-    #activation-code:focus { outline: none; border-color: rgba(200, 169, 106, .55); box-shadow: 0 0 0 3px rgba(200, 169, 106, .1); }
-    #activation-code:disabled { opacity: .5; }
+    #license-code { min-height: 4.6rem; flex: 1; }
+    .license-update { align-items: flex-end; }
+    #license-expiry[data-expired="true"] { color: var(--danger); }
+    #activation-code:focus, #license-code:focus { outline: none; border-color: rgba(200, 169, 106, .55); box-shadow: 0 0 0 3px rgba(200, 169, 106, .1); }
+    #activation-code:disabled, #license-code:disabled { opacity: .5; }
     .session-surface:not([data-session-state="initialization-required"]) .strength-slot { display: none; }
     #password-strength {
       display: flex; align-items: center; gap: .7rem;
@@ -1817,6 +1820,22 @@
                 <button id="reset-card-open" class="shell-button danger" type="button">重新初始化安全卡</button>
               </div>
             </div>
+          </div>
+          <div id="settings-license" class="settings-group">
+            <h3>授权</h3>
+            <div class="settings-card">
+              <div class="settings-kv"><span class="settings-kv-label">本卡编号</span><span class="settings-kv-value" id="license-card">—</span></div>
+              <div class="settings-kv"><span class="settings-kv-label">到期时间</span><span class="settings-kv-value" id="license-expiry">—</span></div>
+              <div class="settings-row">
+                <span class="settings-copy"><b>更新激活码</b><small>（新的激活码须为本卡签发，验证通过后立即替换）</small></span>
+              </div>
+              <div class="settings-row license-update">
+                <textarea id="license-code" rows="3" autocomplete="off" autocapitalize="off"
+                          spellcheck="false" placeholder="粘贴新的激活码" aria-label="新的激活码"></textarea>
+                <button id="license-save" class="shell-button" type="button" disabled>更新</button>
+              </div>
+            </div>
+            <output id="license-status" class="creation-status" aria-live="polite"></output>
           </div>
           <div class="settings-group">
             <h3>关于</h3>
