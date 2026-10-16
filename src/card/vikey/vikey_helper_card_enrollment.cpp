@@ -194,7 +194,7 @@ VikeyHelperCardEnrollment::make_update_target(
 
 std::unique_ptr<application::ICardOperationLease>
 VikeyHelperCardEnrollment::acquire_operation() {
-  return std::make_unique<CardOperationLease>();
+  return std::make_unique<ForegroundCardOperationLease>();
 }
 
 std::unique_ptr<ICardResetTarget> VikeyHelperCardEnrollment::make_reset_target(

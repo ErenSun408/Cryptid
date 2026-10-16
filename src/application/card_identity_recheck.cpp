@@ -26,4 +26,58 @@ CardIdentityVerdict CardIdentityRecheckPolicy::observe(
 
 void CardIdentityRecheckPolicy::reset() noexcept { unreadable_pending_ = false; }
 
+CardIdentityRecheckSchedule::CardIdentityRecheckSchedule(
+    const Clock::duration interval, const Clock::duration retry) noexcept
+    : interval_(interval), retry_(retry) {}
+
+bool CardIdentityRecheckSchedule::start_due(const Clock::time_point now,
+                                            const bool eligible,
+                                            const std::uint64_t card_epoch) noexcept {
+  if (in_flight_) return false;
+  if (!eligible) {
+    policy_.reset();
+    next_.reset();
+    return false;
+  }
+  if (!next_) {
+    next_ = now + interval_;
+    return false;
+  }
+  if (now < *next_) return false;
+  in_flight_ = true;
+  started_epoch_ = card_epoch;
+  return true;
+}
+
+CardIdentityVerdict CardIdentityRecheckSchedule::finish(
+    const CardIdentityRecheck result, const Clock::time_point now,
+    const bool eligible, const std::uint64_t card_epoch) noexcept {
+  in_flight_ = false;
+  if (!eligible || card_epoch != started_epoch_) {
+    policy_.reset();
+    next_.reset();
+    return CardIdentityVerdict::skipped;
+  }
+  const CardIdentityVerdict verdict = policy_.observe(result);
+  switch (verdict) {
+    case CardIdentityVerdict::lost:
+      policy_.reset();
+      next_.reset();
+      break;
+    case CardIdentityVerdict::retry:
+      next_ = now + retry_;
+      break;
+    case CardIdentityVerdict::present:
+    case CardIdentityVerdict::skipped:
+      next_ = now + interval_;
+      break;
+  }
+  return verdict;
+}
+
+void CardIdentityRecheckSchedule::abandon(const Clock::time_point now) noexcept {
+  in_flight_ = false;
+  next_ = now + interval_;
+}
+
 }  // namespace usb_vault::application

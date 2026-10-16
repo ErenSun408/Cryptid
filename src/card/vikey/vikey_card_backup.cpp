@@ -1,5 +1,5 @@
 #include "card/vikey/vikey_card_backup.h"
-#include "card/vikey/card_operation_lease.h"
+#include "card/vikey/card_recheck_coordinator.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include <algorithm>
@@ -54,7 +54,7 @@ unsigned int VikeyCardBackup::remaining_seconds(Clock::time_point now) noexcept 
 void VikeyCardBackup::prepare(Clock::time_point now) {
   cancel();
   try {
-    CardOperationLease lease;
+    ForegroundCardOperationLease lease;
     const auto source = backend_.probe();
     if (!initialized(source)) reject();
     auto first = backend_.snapshot(source.hardware_id);
@@ -77,7 +77,7 @@ bool VikeyCardBackup::target_eligible(const VikeyCardMediaProbe& target, Clock::
 void VikeyCardBackup::complete(Clock::time_point now, std::uint32_t expected_target) {
   try {
     if (!pending(now)) reject();
-    CardOperationLease lease;
+    ForegroundCardOperationLease lease;
     const auto target = backend_.probe();
     if (!target_eligible(target, now) ||
         (expected_target != 0 && target.hardware_id != expected_target)) reject();

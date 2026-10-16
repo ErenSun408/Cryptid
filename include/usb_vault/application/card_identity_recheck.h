@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <optional>
 
 namespace usb_vault::application {
 
@@ -58,6 +60,37 @@ class CardIdentityRecheckPolicy final {
 
  private:
   bool unreadable_pending_{};
+};
+
+// Paces the background recheck of one process: a full interval after a
+// session becomes eligible, a short retry after one unreadable result, at most
+// one recheck in flight, and no conclusion from a result that started before a
+// card event or finished outside an eligible session.
+class CardIdentityRecheckSchedule final {
+ public:
+  using Clock = std::chrono::steady_clock;
+
+  CardIdentityRecheckSchedule(Clock::duration interval,
+                              Clock::duration retry) noexcept;
+
+  // True when a recheck should start now; it is then counted as in flight
+  // under `card_epoch` until finish() or abandon().
+  [[nodiscard]] bool start_due(Clock::time_point now, bool eligible,
+                               std::uint64_t card_epoch) noexcept;
+  // Only `lost` asks the caller to act.
+  [[nodiscard]] CardIdentityVerdict finish(CardIdentityRecheck result,
+                                           Clock::time_point now, bool eligible,
+                                           std::uint64_t card_epoch) noexcept;
+  // The recheck could not be started.
+  void abandon(Clock::time_point now) noexcept;
+
+ private:
+  Clock::duration interval_;
+  Clock::duration retry_;
+  CardIdentityRecheckPolicy policy_;
+  std::optional<Clock::time_point> next_;
+  std::uint64_t started_epoch_{};
+  bool in_flight_{};
 };
 
 }  // namespace usb_vault::application

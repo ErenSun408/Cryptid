@@ -15,6 +15,7 @@ namespace {
 
 using usb_vault::application::CardIdentityRecheck;
 using usb_vault::application::CardIdentityRecheckPolicy;
+using usb_vault::application::CardIdentityRecheckSchedule;
 using usb_vault::application::CardIdentityVerdict;
 using usb_vault::card::CardError;
 using usb_vault::card::vikey::CardForegroundOperation;
@@ -54,6 +55,48 @@ void policy_loses_at_once_on_other_card_or_refused_credentials() {
           "refused credentials are never retried");
   require(policy.observe(static_cast<CardIdentityRecheck>(200)) == CardIdentityVerdict::lost,
           "an unknown result fails closed");
+}
+
+void schedule_paces_retries_and_discards_stale_results() {
+  using Clock = CardIdentityRecheckSchedule::Clock;
+  using std::chrono::seconds;
+  CardIdentityRecheckSchedule schedule(seconds(30), seconds(3));
+  const Clock::time_point t0{};
+  require(!schedule.start_due(t0, true, 1), "first eligible tick only arms the interval");
+  require(!schedule.start_due(t0 + seconds(29), true, 1), "not due before the interval");
+  require(schedule.start_due(t0 + seconds(30), true, 1), "due after the interval");
+  require(!schedule.start_due(t0 + seconds(60), true, 1), "one recheck in flight at a time");
+  require(schedule.finish(CardIdentityRecheck::unreadable, t0 + seconds(31), true, 1) ==
+              CardIdentityVerdict::retry, "first unreadable retries");
+  require(!schedule.start_due(t0 + seconds(33), true, 1), "retry waits its short delay");
+  require(schedule.start_due(t0 + seconds(34), true, 1), "retry starts after the short delay");
+  require(schedule.finish(CardIdentityRecheck::unreadable, t0 + seconds(35), true, 1) ==
+              CardIdentityVerdict::lost, "second unreadable is lost");
+
+  // A card event between start and finish voids the result and the count.
+  require(!schedule.start_due(t0 + seconds(40), true, 2), "lost re-arms a full interval");
+  require(schedule.start_due(t0 + seconds(70), true, 2), "due again");
+  require(schedule.finish(CardIdentityRecheck::different_card, t0 + seconds(71), true, 3) ==
+              CardIdentityVerdict::skipped, "result from an older card epoch decides nothing");
+  require(!schedule.start_due(t0 + seconds(72), true, 3), "stale result re-arms the interval");
+  require(schedule.start_due(t0 + seconds(102), true, 3), "due under the new epoch");
+  require(schedule.finish(CardIdentityRecheck::different_card, t0 + seconds(103), false, 3) ==
+              CardIdentityVerdict::skipped, "result after the session ended decides nothing");
+
+  // Leaving eligibility clears a pending unreadable.
+  require(!schedule.start_due(t0 + seconds(104), true, 3), "arms");
+  require(schedule.start_due(t0 + seconds(134), true, 3), "due");
+  require(schedule.finish(CardIdentityRecheck::unreadable, t0 + seconds(135), true, 3) ==
+              CardIdentityVerdict::retry, "pending unreadable");
+  require(!schedule.start_due(t0 + seconds(136), false, 3), "ineligible tick");
+  require(!schedule.start_due(t0 + seconds(137), true, 3), "eligible again re-arms");
+  require(schedule.start_due(t0 + seconds(167), true, 3), "due after a full interval");
+  require(schedule.finish(CardIdentityRecheck::unreadable, t0 + seconds(168), true, 3) ==
+              CardIdentityVerdict::retry, "pending unreadable was cleared");
+
+  schedule.abandon(t0 + seconds(169));
+  require(!schedule.start_due(t0 + seconds(170), true, 3), "abandon waits a full interval");
+  require(schedule.start_due(t0 + seconds(199), true, 3), "due after an abandoned start");
 }
 
 void failures_keep_credentials_apart() {
@@ -145,6 +188,7 @@ int main() {
   try {
     policy_retries_one_unreadable_then_counts_removal();
     policy_loses_at_once_on_other_card_or_refused_credentials();
+    schedule_paces_retries_and_discards_stale_results();
     failures_keep_credentials_apart();
     recheck_refused_while_foreground_in_flight();
     foreground_waits_for_recheck_and_recheck_thread_passes();

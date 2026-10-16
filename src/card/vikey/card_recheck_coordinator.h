@@ -1,4 +1,6 @@
 #pragma once
+#include "card/vikey/card_operation_lease.h"
+
 #include <Windows.h>
 
 #include <chrono>
@@ -84,6 +86,19 @@ class CardForegroundOperation final {
  private:
   CardRecheckCoordinator& coordinator_;
   bool counted_;
+};
+
+// The instance lease for a foreground transaction that takes it directly
+// rather than through a helper call: it first lets an in-flight recheck close.
+class ForegroundCardOperationLease final : public application::ICardOperationLease {
+ public:
+  ForegroundCardOperationLease() = default;
+  ForegroundCardOperationLease(const ForegroundCardOperationLease&) = delete;
+  ForegroundCardOperationLease& operator=(const ForegroundCardOperationLease&) = delete;
+
+ private:
+  CardForegroundOperation foreground_;
+  CardOperationLease lease_;
 };
 
 }  // namespace usb_vault::card::vikey

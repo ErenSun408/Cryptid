@@ -13,6 +13,7 @@
 #include <future>
 #include "card/vikey/vikey_card_backup.h"
 #include "card/vikey/card_operation_lease.h"
+#include "card/vikey/card_recheck_coordinator.h"
 #include "usb_vault/ui/card_backup_exchange.h"
 
 #include "card/vikey/vikey_development_app_config.h"
@@ -377,6 +378,12 @@ std::unique_ptr<
     g_card_device_notifications;
 
 std::unique_ptr<usb_vault::card::vikey::VikeyHelperCardBackupBackend> g_backup_backend;
+// Background identity recheck of an authenticated session. The worker only
+// borrows the verifier, so teardown waits for it before releasing either.
+std::unique_ptr<usb_vault::card::vikey::VikeyHelperCardIdentityVerifier> g_identity_verifier;
+std::future<usb_vault::application::CardIdentityRecheck> g_identity_recheck;
+usb_vault::application::CardIdentityRecheckSchedule g_identity_recheck_schedule{
+    std::chrono::seconds(30), std::chrono::seconds(3)};
 struct BackupDialogState final {
   usb_vault::card::vikey::VikeyCardBackup flow;
   usb_vault::ui::CardBackupExchange exchange;
@@ -609,6 +616,8 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   auto credential_provider = std::make_unique<
       usb_vault::card::vikey::development::WindowsCredentialProvider>();
   auto backup_backend = std::make_unique<usb_vault::card::vikey::VikeyHelperCardBackupBackend>(config, *credential_provider);
+  auto identity_verifier = std::make_unique<usb_vault::card::vikey::VikeyHelperCardIdentityVerifier>(
+      config, *credential_provider);
   auto enrollment = std::make_unique<
       usb_vault::card::vikey::VikeyHelperCardEnrollment>(
           std::move(config),
@@ -649,6 +658,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   g_vikey_credential_provider = std::move(credential_provider);
   g_card_enrollment = std::move(enrollment);
   g_backup_backend = std::move(backup_backend);
+  g_identity_verifier = std::move(identity_verifier);
   g_card_entry = std::move(entry);
   g_authentication = std::move(authentication);
   g_card_volume_session = std::move(volume_session);
@@ -681,6 +691,10 @@ void disarm_external_drops() noexcept {
 
 void clear_application_session() noexcept {
   disarm_external_drops();
+  // Bounded by the helper timeout; the worker must not outlive its verifier.
+  if (g_identity_recheck.valid()) g_identity_recheck.wait();
+  g_identity_recheck = {};
+  g_identity_verifier.reset();
   g_mount_monitor.reset(); g_mount_targets.clear(); ++g_mount_epoch;
   g_mount_notice = g_mount_notice_delivered = 0; g_mount_notice_inflight = false;
   g_mount_notice_attempt = 0;
@@ -1495,7 +1509,7 @@ HRESULT CALLBACK backup_dialog_callback(HWND window, UINT message, WPARAM wparam
           // The worker only reads card media; it never touches the snapshot or UI.
           auto* backend = g_backup_backend.get();
           state.target_probe = std::async(std::launch::async, [backend] {
-            usb_vault::card::vikey::CardOperationLease lease;
+            usb_vault::card::vikey::ForegroundCardOperationLease lease;
             return backend->probe();
           });
         } catch (...) {
@@ -1737,6 +1751,64 @@ void show_card_backup(HWND window) noexcept {
   return true;
 }
 
+// A recheck that concluded the authenticated card is gone is a removal, taken
+// through the same deferral and exit paths as a physical one.
+void handle_identity_recheck_loss(
+    const usb_vault::application::CardIdentityRecheck result) noexcept {
+  USB_VAULT_TRACE("安全卡", "读卡复核按拔卡处理",
+                  "结果 " + std::to_string(static_cast<int>(result)) + "；后台任务 " +
+                      usb_vault::diagnostics::flag_text(g_creation_work.running.load()));
+  g_creation_work.card_epoch.fetch_add(1);
+  disarm_external_drops();
+  if (g_creation_work.running.load()) {
+    g_deferred_removal = true;
+    g_creation_work.interrupted.store(true);
+    return;
+  }
+  if (!g_card_lifecycle_controller) return;
+  const auto transition = g_card_lifecycle_controller->handle_removal();
+  if (exit_after_card_removal(transition.presence)) return;
+  notify_webview_session_changed();
+}
+
+// Driven by the 100 ms window timer. Only an authenticated session outside the
+// backup exchange and view switches is rechecked, and at most one worker runs.
+void service_identity_recheck() noexcept {
+  using usb_vault::application::CardIdentityRecheck;
+  using usb_vault::application::CardIdentityVerdict;
+  const auto now = std::chrono::steady_clock::now();
+  const auto expected = g_ui_session ? g_ui_session->activation_card() : std::nullopt;
+  const bool eligible = g_identity_verifier && g_card_lifecycle_controller && g_authentication &&
+                        g_authentication->authenticated() && expected && !g_backup_dialog &&
+                        !g_backup_requested && !g_backup_return_waiting && !g_view_switch_pending &&
+                        !g_deferred_removal && !g_creation_work.hotkey_exit_pending.load();
+  const std::uint64_t epoch = g_creation_work.card_epoch.load();
+  if (g_identity_recheck.valid()) {
+    if (g_identity_recheck.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    CardIdentityRecheck result = CardIdentityRecheck::busy;
+    try {
+      result = g_identity_recheck.get();
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+    }
+    g_identity_recheck = {};
+    if (g_identity_recheck_schedule.finish(result, now, eligible, epoch) == CardIdentityVerdict::lost)
+      handle_identity_recheck_loss(result);
+    return;
+  }
+  if (!g_identity_recheck_schedule.start_due(now, eligible, epoch)) return;
+  try {
+    auto* const verifier = g_identity_verifier.get();
+    const std::uint32_t identity = *expected;
+    g_identity_recheck = std::async(std::launch::async,
+                                    [verifier, identity] { return verifier->recheck(identity); });
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("app/main", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+    g_identity_recheck = {};
+    g_identity_recheck_schedule.abandon(now);
+  }
+}
+
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) try {
   if (kTaskbarCreatedMessage && message == kTaskbarCreatedMessage) {
@@ -1970,6 +2042,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       if (wparam == 1 && g_drop_target != nullptr) {
         notify_webview_external_drop(g_drop_target->status().state);
       }
+      if (wparam == 1) service_identity_recheck();
       if (wparam == 1 && !g_creation_work.running.load() && g_card_lifecycle_controller) {
         const bool changed = g_deferred_removal || g_deferred_arrival;
         if (g_deferred_removal) {
