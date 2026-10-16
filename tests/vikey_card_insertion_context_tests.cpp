@@ -62,6 +62,8 @@ void test_new_media_routes_to_initialization_from_cached_probe() {
                 context.probe().media_state == state &&
                 !context.probe().logical_state.has_value(),
             "insertion context did not retain the atomic probe snapshot");
+    require(context.card_identity() == 0x12345678u,
+            "insertion context did not expose the card identity");
   }
 }
 

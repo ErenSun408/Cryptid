@@ -3,6 +3,9 @@
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/card/failure_diagnostic.h"
 
+#include <cstdint>
+#include <optional>
+
 namespace usb_vault::application {
 
 // Vendor-neutral evidence from a strictly read-only inspection of one
@@ -48,6 +51,14 @@ class IReadOnlyCardEntryInspection {
   // normalizing, or otherwise writing the card.
   [[nodiscard]] virtual card::CardRecordState
   inspect_product_record_read_only() = 0;
+
+  // The non-secret hardware identity of this insertion, used only to select
+  // the card's activation grant. Adapters without one report nothing, which
+  // the activation gate treats as not activated.
+  [[nodiscard]] virtual std::optional<std::uint32_t> card_identity()
+      const noexcept {
+    return std::nullopt;
+  }
 
  protected:
   IReadOnlyCardEntryInspection() noexcept = default;

@@ -1,5 +1,6 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 
+#include "usb_vault/application/activation_store_v1.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/diagnostics/debug_log.h"
@@ -871,8 +872,15 @@ class FakeEntry final : public ICardEntryActions {
   current_route() const noexcept override {
     return route;
   }
+  [[nodiscard]] std::optional<std::uint32_t>
+  current_card_identity() const noexcept override {
+    if (route != CardEntryRoute::initialization_required &&
+        route != CardEntryRoute::login_required) return std::nullopt;
+    return identity;
+  }
 
   std::optional<CardEntryRoute> route;
+  std::optional<std::uint32_t> identity;
   std::vector<std::byte> initialization_bytes;
   bool reject_credential{};
   int initialization_calls{};
@@ -2984,6 +2992,87 @@ void clear_arguments(VARIANTARG* const values, const UINT count) {
   }
 }
 
+// The activation route reuses the login surface: state 5, the card number to
+// send to the issuer, and a code that is checked natively against the card.
+void test_activation_bridge_gates_and_renews() {
+  const auto directory = std::filesystem::temp_directory_path() /
+                         (L"uv-host-activation-" + std::to_wstring(::GetCurrentProcessId()));
+  std::filesystem::remove_all(directory);
+  const usb_vault::licensing::ActivationSigner signer =
+      usb_vault::licensing::ActivationSigner::generate();
+  usb_vault::application::ActivationStoreV1 store(
+      (directory / L"activation.dat").wstring(), signer.public_key());
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  CardProductUiSessionController controller(entry, authentication, volume, policy,
+                                            chooser, nullptr, &store);
+  ComPtr<IDispatch> host = make_host(controller);
+  const auto call = [&](const wchar_t* const name, VARIANTARG* const values,
+                        const UINT count, VARIANT& result) {
+    ::VariantInit(&result);
+    return invoke_named(*host.Get(), name, values, count, &result, nullptr);
+  };
+  const auto submit = [&](const std::wstring& code, VARIANT& result) {
+    VARIANTARG value;
+    ::VariantInit(&value);
+    value.vt = VT_BSTR;
+    value.bstrVal = ::SysAllocString(code.c_str());
+    const HRESULT hr = call(L"submitActivationCode", &value, 1, result);
+    ::VariantClear(&value);
+    return hr;
+  };
+
+  VARIANT result;
+  require(call(L"submitActivationCode", nullptr, 0, result) == DISP_E_BADPARAMCOUNT,
+          "activation accepted a missing code");
+  require(submit(L"X", result) == E_ACCESSDENIED, "activation accepted without a card");
+  require(call(L"getActivationCardNumber", nullptr, 0, result) == S_OK &&
+              result.vt == VT_BSTR && ::SysStringLen(result.bstrVal) == 0,
+          "a card number was reported without a card");
+  ::VariantClear(&result);
+
+  entry.route = CardEntryRoute::login_required;
+  entry.identity = 0x1A2B3C4D;
+  require(invoke_state(*host.Get()) == 5L, "an unactivated card did not map to state 5");
+  require(call(L"getActivationStatus", nullptr, 0, result) == S_OK && result.vt == VT_I4 &&
+              result.lVal == 0, "a missing grant was not reported");
+  require(call(L"getActivationCardNumber", nullptr, 0, result) == S_OK &&
+              result.vt == VT_BSTR && std::wstring_view(result.bstrVal) == L"1A2B-3C4D",
+          "the card number was not shown as grouped hexadecimal");
+  ::VariantClear(&result);
+
+  VARIANTARG number;
+  ::VariantInit(&number);
+  number.vt = VT_I4;
+  require(call(L"submitActivationCode", &number, 1, result) == DISP_E_TYPEMISMATCH,
+          "a non-string code was accepted");
+  require(submit(L"激活", result) == S_OK && result.lVal == 1,
+          "a non-ASCII code was not invalid");
+  require(submit(L"  x", result) == S_OK && result.lVal == 1,
+          "garbage was not invalid");
+  const std::string other = signer.sign({0x1A2B3C4E, 4102444800});
+  require(submit(std::wstring(other.begin(), other.end()), result) == S_OK &&
+              result.lVal == 2, "another card's code was not reported as such");
+  require(invoke_state(*host.Get()) == 5L, "a rejected code opened the login route");
+
+  const std::string code = signer.sign({0x1A2B3C4D, 4102444800});
+  require(submit(std::wstring(code.begin(), code.end()), result) == S_OK &&
+              result.vt == VT_I4 && result.lVal == 0, "a valid code was not accepted");
+  require(invoke_state(*host.Get()) == 2L, "an accepted code did not open login");
+  require(call(L"getActivationStatus", nullptr, 0, result) == S_OK && result.lVal == 1,
+          "an accepted grant was not active");
+  require(call(L"getActivationExpiry", nullptr, 0, result) == S_OK && result.vt == VT_R8 &&
+              result.dblVal == 4102444800.0, "the expiry was not reported in UTC seconds");
+
+  entry.route = CardEntryRoute::unavailable;
+  require(submit(std::wstring(code.begin(), code.end()), result) == E_ACCESSDENIED,
+          "activation was accepted on an unavailable card");
+  std::filesystem::remove_all(directory);
+}
+
 void test_a_decoy_survey_walks_on_a_worker_and_reports_identifiers() {
   Fixture fixture;
   fixture.authentication.establish(root_secret());
@@ -4880,6 +4969,7 @@ void test_container_alias_bridge_is_authenticated_bounded_and_exclusive() {
 
 int main() {
   try {
+    test_activation_bridge_gates_and_renews();
     test_container_alias_bridge_is_authenticated_bounded_and_exclusive();
     test_exit_hotkey_settings_bridge();
     test_partition_pair_bridge();

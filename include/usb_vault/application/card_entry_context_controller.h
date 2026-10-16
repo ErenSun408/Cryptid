@@ -113,6 +113,12 @@ class ICardEntryActions {
   virtual void confirm_login_reset(std::uint32_t) { throw std::logic_error("login reset unsupported"); }
   [[nodiscard]] virtual std::optional<CardEntryRoute>
   current_route() const noexcept = 0;
+  // Hardware identity of the present insertion while one is bound; nothing
+  // after login or initialization has consumed it.
+  [[nodiscard]] virtual std::optional<std::uint32_t>
+  current_card_identity() const noexcept {
+    return std::nullopt;
+  }
 
  protected:
   ICardEntryActions() noexcept = default;
@@ -162,6 +168,8 @@ class CardEntryContextController final : public ICardEntryActions {
   // No value means no accepted physical insertion is currently present.
   [[nodiscard]] std::optional<CardEntryRoute>
   current_route() const noexcept override;
+  [[nodiscard]] std::optional<std::uint32_t>
+  current_card_identity() const noexcept override;
   [[nodiscard]] bool has_context() const noexcept;
   // Last insertion's read-only failure, cleared on removal or next arrival.
   [[nodiscard]] card::FailureDiagnostic startup_failure() const noexcept {

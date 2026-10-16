@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <concepts>
 #include <cstddef>
 #include <filesystem>
@@ -30,7 +31,9 @@
 
 namespace {
 
+using usb_vault::application::ActivationInstallResult;
 using usb_vault::application::CardAuthenticationSession;
+using usb_vault::licensing::ActivationState;
 using usb_vault::application::DecoyMaintenanceSurvey;
 using usb_vault::application::CardEntryContextController;
 using usb_vault::application::CardEntryRoute;
@@ -768,8 +771,17 @@ class FakeEntry final : public ICardEntryActions {
   current_route() const noexcept override {
     return route;
   }
+  // Like the real controller, the identity lives only while an insertion
+  // that can still initialize or log in is bound.
+  [[nodiscard]] std::optional<std::uint32_t>
+  current_card_identity() const noexcept override {
+    if (route != CardEntryRoute::initialization_required &&
+        route != CardEntryRoute::login_required) return std::nullopt;
+    return identity;
+  }
 
   std::optional<CardEntryRoute> route;
+  std::optional<std::uint32_t> identity;
   std::vector<std::byte> initialization_bytes;
   bool reject_credential{};
   bool reject_second_password{};
@@ -856,6 +868,26 @@ class FakeResetMounts final : public usb_vault::ui::ILoginResetMountAccess {
     std::erase_if(values, [&](const auto& value) { return value == expected; });
   }
 };
+class FakeActivationGate final : public usb_vault::application::IActivationGate {
+ public:
+  [[nodiscard]] ActivationState state(const std::uint32_t card) noexcept override {
+    const auto found = states.find(card);
+    return found == states.end() ? ActivationState::missing : found->second;
+  }
+  [[nodiscard]] std::optional<std::int64_t> expiry(const std::uint32_t card) noexcept override {
+    return states.contains(card) ? std::optional<std::int64_t>(1793375999) : std::nullopt;
+  }
+  [[nodiscard]] ActivationInstallResult install(const std::uint32_t card,
+                                                const std::string_view code) override {
+    installs.emplace_back(card, std::string(code));
+    if (code != "GOOD") return ActivationInstallResult::invalid;
+    states[card] = ActivationState::active;
+    return ActivationInstallResult::accepted;
+  }
+  std::map<std::uint32_t, ActivationState> states;
+  std::vector<std::pair<std::uint32_t, std::string>> installs;
+};
+
 struct Fixture final {
   Fixture()
       : directory(std::to_wstring(++g_fixture_serial).c_str()),
@@ -908,6 +940,71 @@ void test_state_projection_is_complete_and_authentication_wins() {
   fixture.volume.mounted_state = true;
   require(fixture.controller.state() == CardProductUiState::unavailable,
           "residual mount exposed a new-card action route");
+}
+
+void test_activation_gates_card_actions_and_survives_expiry_in_session() {
+  Fixture plain;
+  plain.entry.route = CardEntryRoute::login_required;
+  require(plain.controller.state() == CardProductUiState::login_required &&
+              plain.controller.activation_state() == ActivationState::active,
+          "a controller without a gate was not treated as activated");
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(plain.controller.submit_activation_code("GOOD")); },
+      "activation was accepted without a gate");
+
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  FakeActivationGate gate;
+  CardProductUiSessionController controller(entry, authentication, volume, policy,
+                                            chooser, nullptr, &gate);
+  require(controller.state() == CardProductUiState::no_card,
+          "no card did not stay no-card under a gate");
+  entry.route = CardEntryRoute::unavailable;
+  require(controller.state() == CardProductUiState::unavailable,
+          "an unavailable card was offered activation");
+
+  entry.route = CardEntryRoute::login_required;
+  require(controller.state() == CardProductUiState::activation_required,
+          "a card without an identity was not gated");
+  entry.identity = 0x1A2B3C4D;
+  for (const auto route : {CardEntryRoute::login_required,
+                           CardEntryRoute::initialization_required}) {
+    entry.route = route;
+    require(controller.state() == CardProductUiState::activation_required,
+            "an unactivated card reached login or initialization");
+  }
+  entry.route = CardEntryRoute::login_required;
+  auto blocked = bytes("password-1");
+  require_throws<std::system_error>([&] { controller.submit_login(blocked); },
+                                    "login bypassed the activation gate");
+  require_wiped(blocked, "a gated login input was not wiped");
+  require(entry.login_calls == 0, "a gated login reached the card");
+
+  require(controller.submit_activation_code("BAD") == ActivationInstallResult::invalid &&
+              controller.state() == CardProductUiState::activation_required,
+          "an invalid code changed the route");
+  require(controller.submit_activation_code("GOOD") == ActivationInstallResult::accepted &&
+              gate.installs.back().first == 0x1A2B3C4D &&
+              controller.state() == CardProductUiState::login_required,
+          "a valid code did not open the login route for this card");
+
+  auto input = bytes("password-1");
+  controller.submit_login(input);
+  require(controller.state() == CardProductUiState::authenticated &&
+              !entry.current_card_identity() &&
+              controller.activation_card() == 0x1A2B3C4DU,
+          "the session did not keep its card identity after login");
+  gate.states[0x1A2B3C4D] = ActivationState::expired;
+  require(controller.state() == CardProductUiState::authenticated &&
+              controller.activation_state() == ActivationState::expired &&
+              controller.activation_expiry() == 1793375999,
+          "expiry ended a running session or was not reported");
+  require(controller.submit_activation_code("GOOD") == ActivationInstallResult::accepted &&
+              gate.installs.back().first == 0x1A2B3C4D,
+          "renewal inside the session targeted the wrong card");
 }
 
 void test_login_normalizes_wipes_and_preserves_retry_semantics() {
@@ -2576,6 +2673,7 @@ int main() {
   try {
     test_login_reset_mount_choices();
     test_state_projection_is_complete_and_authentication_wins();
+    test_activation_gates_card_actions_and_survives_expiry_in_session();
     test_login_normalizes_wipes_and_preserves_retry_semantics();
     test_post_authentication_failure_projects_authenticated_state();
     test_initialization_normalizes_both_inputs_and_creates_proof();

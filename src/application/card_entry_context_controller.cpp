@@ -348,6 +348,12 @@ CardEntryContextController::current_route() const noexcept {
   return route_;
 }
 
+std::optional<std::uint32_t>
+CardEntryContextController::current_card_identity() const noexcept {
+  if (context_ == nullptr) return std::nullopt;
+  return context_->card_identity();
+}
+
 bool CardEntryContextController::has_context() const noexcept {
   return context_ != nullptr;
 }

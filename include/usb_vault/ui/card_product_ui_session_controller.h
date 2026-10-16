@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usb_vault/application/activation_store_v1.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/application/card_login_mount_session.h"
@@ -13,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <span>
 #include <string>
@@ -34,6 +36,8 @@ enum class CardProductUiState : std::uint8_t {
   login_required = 2,
   authenticated = 3,
   unavailable = 4,
+  // The card could initialize or log in, but has no usable activation grant.
+  activation_required = 5,
 };
 
 // One standard container adopted by the current session, projected for the
@@ -125,7 +129,18 @@ class CardProductUiSessionController final {
       application::IAuthenticatedCardVolumeSession& volume_session,
       const security::IPasswordStrengthPolicy& password_policy,
       IContainerFileChooser& file_chooser,
-      ILoginResetMountAccess* reset_mount_access = nullptr) noexcept;
+      ILoginResetMountAccess* reset_mount_access = nullptr,
+      application::IActivationGate* activation = nullptr) noexcept;
+
+  // Activation. Without a gate every card counts as activated. The current
+  // card is the present insertion before login and the card the session
+  // logged in with afterwards; a session that outlives its grant continues.
+  [[nodiscard]] std::optional<std::uint32_t> activation_card() const noexcept;
+  [[nodiscard]] licensing::ActivationState activation_state() const noexcept;
+  [[nodiscard]] std::optional<std::int64_t> activation_expiry() const noexcept;
+  // Accepted only on the activation route or inside an authenticated session.
+  [[nodiscard]] application::ActivationInstallResult submit_activation_code(
+      std::string_view code);
 
   void submit_login(std::span<std::byte> mutable_utf8);
   void submit_initialization(
@@ -465,6 +480,8 @@ class CardProductUiSessionController final {
 
  private:
   ILoginResetMountAccess* reset_mount_access_;
+  application::IActivationGate* activation_;
+  std::optional<std::uint32_t> authenticated_card_;
   std::vector<volume::MountIdentity> reset_mounts_;
   bool reset_mounts_known_{};
   bool login_reset_completed_{};

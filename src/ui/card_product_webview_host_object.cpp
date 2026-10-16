@@ -2,9 +2,11 @@
 #include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/card/card_error.h"
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/page_event_report.h"
 
+#include <cstdio>
 #include <chrono>
 
 #include "usb_vault/ui/webview_password_array.h"
@@ -88,6 +90,11 @@ constexpr DISPID kOpenContainerDriveId = 155;
 constexpr DISPID kOpenThisPcId = 156;
 // Whether a listed partition holds NTFS, the only filesystem encrypted in place.
 constexpr DISPID kPartitionNtfsId = 157;
+// Activation (P5.12): the present or logged-in card's grant, read and renewed.
+constexpr DISPID kActivationStatusId = 240;
+constexpr DISPID kActivationCardId = 241;
+constexpr DISPID kActivationExpiryId = 242;
+constexpr DISPID kSubmitActivationCodeId = 243;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -435,6 +442,8 @@ class PasswordArgumentsWiper final {
       return 2;
     case CardProductUiState::authenticated:
       return 3;
+    case CardProductUiState::activation_required:
+      return 5;
     case CardProductUiState::unavailable:
     default:
       return 4;
@@ -579,6 +588,10 @@ class PasswordArgumentsWiper final {
     case kBitLockerHelpId: return "openBitLockerHelp";
     case kOpenConfigurationId: return "openConfiguration";
     case kOpenCardBackupId: return "openCardBackup";
+    case kActivationStatusId: return "getActivationStatus";
+    case kActivationCardId: return "getActivationCardNumber";
+    case kActivationExpiryId: return "getActivationExpiry";
+    case kSubmitActivationCodeId: return "submitActivationCode";
     case kBeginEncryptedExportId: return "beginEncryptedExport";
     case kEncryptedTransferStatusId: return "encryptedTransferStatus";
     case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
@@ -877,6 +890,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"openContainerDrive")) { ids[0] = kOpenContainerDriveId; return S_OK; }
     if (matches(names[0], L"openThisPc")) { ids[0] = kOpenThisPcId; return S_OK; }
     if (matches(names[0], L"getPartitionNtfs")) { ids[0] = kPartitionNtfsId; return S_OK; }
+    if (matches(names[0], L"getActivationStatus")) { ids[0] = kActivationStatusId; return S_OK; }
+    if (matches(names[0], L"getActivationCardNumber")) { ids[0] = kActivationCardId; return S_OK; }
+    if (matches(names[0], L"getActivationExpiry")) { ids[0] = kActivationExpiryId; return S_OK; }
+    if (matches(names[0], L"submitActivationCode")) { ids[0] = kSubmitActivationCodeId; return S_OK; }
     if (matches(names[0], kForgetContainerName)) {
       ids[0] = kForgetContainerId;
       return S_OK;
@@ -1046,8 +1063,10 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (retired_) return E_ACCESSDENIED;
     if (member == kReportPageEventId)
       return report_page_event(iid, flags, parameters, result, argument_error);
-    // The selected package name must never enter diagnostic argument traces.
-    if (member == kRenameImportPackageId || member == kBeginExportSelectionId)
+    // The selected package name must never enter diagnostic argument traces,
+    // and neither may an activation code, which carries the card identity.
+    if (member == kRenameImportPackageId || member == kBeginExportSelectionId ||
+        member == kSubmitActivationCodeId)
       return invoke_unlogged(member, iid, locale, flags, parameters, result, exception, argument_error);
     if constexpr (!USB_VAULT_DEBUG_LOG) {
       return invoke_unlogged(member, iid, locale, flags, parameters, result, exception,
@@ -1140,6 +1159,8 @@ class CardProductWebViewHostObject final : public IDispatch {
 
     if (member >= kCanLoginResetId && member <= kBeginConfirmLoginResetId)
       return invoke_login_reset(member, parameters, result);
+    if (member >= kActivationStatusId && member <= kSubmitActivationCodeId)
+      return invoke_activation(member, parameters, result);
 
     // Observations may refresh the failure dialog. Any unrelated mutation
     // revokes the last cleanup target, so a stale page cannot force a new mount.
@@ -3849,6 +3870,60 @@ class CardProductWebViewHostObject final : public IDispatch {
               drive, event.drive_letter == wchar_t{} ? 0U : 2U, result);
         }
       }
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+      return E_FAIL;
+    }
+  }
+
+  // Reads answer for the current card in any state; a page without a card
+  // gets empty values. Renewal is refused outside the activation route and
+  // an authenticated session by the controller itself.
+  HRESULT invoke_activation(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    const bool submitting = member == kSubmitActivationCodeId;
+    if (!parameters || parameters->cNamedArgs != 0 ||
+        parameters->cArgs != (submitting ? 1U : 0U) || (submitting && !parameters->rgvarg))
+      return DISP_E_BADPARAMCOUNT;
+    if (!result) return E_POINTER;
+    try {
+      ::VariantInit(result);
+      if (member == kActivationStatusId) {
+        result->vt = VT_I4;
+        result->lVal = static_cast<LONG>(controller_.activation_state());
+        return S_OK;
+      }
+      if (member == kActivationCardId) {
+        const auto card = controller_.activation_card();
+        if (!card) return complete_string(L"", 0, result);
+        wchar_t text[10]{};
+        std::swprintf(text, std::size(text), L"%04X-%04X", *card >> 16, *card & 0xFFFFU);
+        return complete_string(text, 9, result);
+      }
+      if (member == kActivationExpiryId) {
+        result->vt = VT_R8;
+        result->dblVal = static_cast<double>(controller_.activation_expiry().value_or(0));
+        return S_OK;
+      }
+      const VARIANT& input = parameters->rgvarg[0];
+      if (input.vt != VT_BSTR || !input.bstrVal) return DISP_E_TYPEMISMATCH;
+      const UINT length = ::SysStringLen(input.bstrVal);
+      // Codes are ASCII; anything else cannot be one and is reported as invalid.
+      std::string code;
+      code.reserve(length);
+      for (UINT i = 0; i < length; ++i) {
+        const wchar_t ch = input.bstrVal[i];
+        code += ch < 0x80 ? static_cast<char>(ch) : '?';
+      }
+      const auto outcome = controller_.submit_activation_code(code);
+      result->vt = VT_I4;
+      result->lVal = static_cast<LONG>(outcome);
+      return S_OK;
+    } catch (const std::system_error& error) {
+      // A wrong route is refused; a record that could not be written is not.
+      if (error.code() == card::make_error_code(card::CardError::invalid_operation))
+        return E_ACCESSDENIED;
+      USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+      return E_FAIL;
     } catch (...) {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;

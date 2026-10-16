@@ -178,8 +178,9 @@ CardProductUiSessionController::CardProductUiSessionController(
     application::IAuthenticatedCardVolumeSession& volume_session,
     const security::IPasswordStrengthPolicy& password_policy,
     IContainerFileChooser& file_chooser,
-    ILoginResetMountAccess* reset_mount_access) noexcept
-    : reset_mount_access_(reset_mount_access), entry_(entry),
+    ILoginResetMountAccess* reset_mount_access,
+    application::IActivationGate* activation) noexcept
+    : reset_mount_access_(reset_mount_access), activation_(activation), entry_(entry),
       authentication_(authentication),
       volume_session_(volume_session),
       password_policy_(password_policy),
@@ -210,10 +211,16 @@ void CardProductUiSessionController::submit_login(
     throw_wrong_route("card login is not available in the current UI state");
   }
   USB_VAULT_TRACE("登录", "开始登录", "输入长度 " + std::to_string(mutable_utf8.size()) + " 字节");
+  // The insertion is consumed by a successful login, so its identity is
+  // taken first and kept for the session's activation display and renewal.
+  // Set before the call: authentication can be established and the
+  // container hand-off still throw, and that session belongs to this card.
+  authenticated_card_ = entry_.current_card_identity();
   try {
     entry_.authenticate_login(
         volume_session_, consume_password_utf8(mutable_utf8));
   } catch (...) {
+    if (!authentication_.authenticated()) authenticated_card_.reset();
     USB_VAULT_TRACE_FAILURE("登录", "登录失败", card_failure_codes());
     throw;
   }
@@ -322,9 +329,11 @@ void CardProductUiSessionController::submit_initialization(
       throw;
     }
   }();
+  authenticated_card_ = entry_.current_card_identity();
   try {
     entry_.initialize_and_authenticate(authentication_, std::move(confirmed));
   } catch (...) {
+    if (!authentication_.authenticated()) authenticated_card_.reset();
     USB_VAULT_TRACE_FAILURE("初始化", "安全卡初始化失败", card_failure_codes());
     throw;
   }
@@ -1101,13 +1110,54 @@ CardProductUiState CardProductUiSessionController::state() const noexcept {
   if (!route.has_value()) return CardProductUiState::no_card;
   switch (*route) {
     case application::CardEntryRoute::initialization_required:
-      return CardProductUiState::initialization_required;
+      return activation_state() == licensing::ActivationState::active
+                 ? CardProductUiState::initialization_required
+                 : CardProductUiState::activation_required;
     case application::CardEntryRoute::login_required:
-      return CardProductUiState::login_required;
+      return activation_state() == licensing::ActivationState::active
+                 ? CardProductUiState::login_required
+                 : CardProductUiState::activation_required;
     case application::CardEntryRoute::unavailable:
     default:
       return CardProductUiState::unavailable;
   }
+}
+
+std::optional<std::uint32_t> CardProductUiSessionController::activation_card()
+    const noexcept {
+  return authentication_.authenticated() ? authenticated_card_
+                                         : entry_.current_card_identity();
+}
+
+licensing::ActivationState CardProductUiSessionController::activation_state()
+    const noexcept {
+  if (activation_ == nullptr) return licensing::ActivationState::active;
+  const std::optional<std::uint32_t> card = activation_card();
+  // A card without an identity cannot hold a grant.
+  if (!card) return licensing::ActivationState::missing;
+  return activation_->state(*card);
+}
+
+std::optional<std::int64_t> CardProductUiSessionController::activation_expiry()
+    const noexcept {
+  const std::optional<std::uint32_t> card = activation_card();
+  if (activation_ == nullptr || !card) return std::nullopt;
+  return activation_->expiry(*card);
+}
+
+application::ActivationInstallResult
+CardProductUiSessionController::submit_activation_code(const std::string_view code) {
+  const CardProductUiState current = state();
+  if (activation_ == nullptr ||
+      (current != CardProductUiState::activation_required &&
+       current != CardProductUiState::authenticated)) {
+    throw_wrong_route("activation is not available in the current UI state");
+  }
+  const std::optional<std::uint32_t> card = activation_card();
+  if (!card) throw_wrong_route("the current card has no identity");
+  const auto result = activation_->install(*card, code);
+  USB_VAULT_TRACE("激活", "提交激活码", "结果 " + std::to_string(static_cast<int>(result)));
+  return result;
 }
 
 bool CardProductUiSessionController::mounted() const noexcept {

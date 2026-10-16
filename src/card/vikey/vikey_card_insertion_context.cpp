@@ -84,6 +84,13 @@ VikeyCardInsertionContext::inspect_product_record_read_only() {
   return *probe_.logical_state;
 }
 
+std::optional<std::uint32_t> VikeyCardInsertionContext::card_identity()
+    const noexcept {
+  // Zero is what an unauthenticated probe leaves behind, never a card.
+  if (probe_.hardware_id == 0) return std::nullopt;
+  return probe_.hardware_id;
+}
+
 const VikeyCardMediaProbe& VikeyCardInsertionContext::probe() const noexcept {
   return probe_;
 }

@@ -19,6 +19,9 @@ class VikeyCardInsertionContext final
   [[nodiscard]] CardRecordState
   inspect_product_record_read_only() override;
 
+  [[nodiscard]] std::optional<std::uint32_t> card_identity()
+      const noexcept override;
+
   // The same snapshot is passed to the initialization target only after the
   // vendor-neutral router selects initialization_required.
   [[nodiscard]] const VikeyCardMediaProbe& probe() const noexcept;
