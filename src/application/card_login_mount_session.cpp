@@ -3479,45 +3479,40 @@ void CardLoginMountSessionCore::export_container_selection(
     throw std::logic_error("selection export requires an idle authenticated session");
   if (entries.empty() || entries.size() > 4096 || (encrypted && password.empty()))
     throw std::invalid_argument("invalid export selection");
-  const auto destination = volume::resolve_exported_entry_path(destination_directory, folder_name);
+  // An empty folder name publishes the one selected entry itself.
+  if (folder_name.empty() && entries.size() != 1)
+    throw std::invalid_argument("an unwrapped export takes exactly one entry");
+  const auto destination = volume::resolve_exported_entry_path(destination_directory,
+      folder_name.empty() ? std::wstring_view(entries.front().name) : folder_name);
   for (const auto& container : state_.containers) {
     if (container.mounted && upper_drive_letter(container.drive_letter) == upper_drive_letter(destination[0]))
       throw std::invalid_argument("the export location is inside a mounted container");
   }
   std::vector<backup::ExportSelectionSourceV1> sources;
-  std::vector<std::pair<std::uint32_t, std::wstring>> aliases;
+  std::vector<std::pair<std::uint32_t, std::wstring>> selected;
   for (const auto& entry : entries) {
     const auto drive = mounted_drive_letter(entry.id);
     if (find_by_id(state_, entry.id)->maintenance)
       throw std::logic_error("selection export requires a normally mounted container");
     const auto source = volume::resolve_volume_child_path(drive, entry.directory, entry.name);
-    auto alias = std::find_if(aliases.begin(), aliases.end(), [&](const auto& item) { return item.first == entry.id; });
-    if (alias == aliases.end()) {
-      const auto* container = find_by_id(state_, entry.id);
-      if (container == nullptr) throw std::invalid_argument("missing export container");
-      std::wstring base = display_name(*container);
-      for (auto& unit : base) {
-        if (unit < 0x20 || unit == 0x7F || std::wstring_view(L"<>:\"/\\|?*").find(unit) != std::wstring_view::npos)
-          unit = L'_';
-      }
-      while (!base.empty() && (base.back() == L'.' || base.back() == L' ')) base.pop_back();
-      if (base.empty()) base = L"安全盘";
-      if (base.front() == L' ') base.front() = L'_';
-      try { static_cast<void>(volume::resolve_volume_child_path(L'C', L"", base)); }
-      catch (const std::invalid_argument&) { base = L"_" + base; }
-      std::wstring candidate = base;
-      unsigned int ordinal = 2;
-      const auto taken = [&](const auto& item) {
-        return ::CompareStringOrdinal(item.second.c_str(), -1, candidate.c_str(), -1, TRUE) == CSTR_EQUAL;
-      };
-      while (std::any_of(aliases.begin(), aliases.end(), taken))
-        candidate = base + L" (" + std::to_wstring(ordinal++) + L")";
-      static_cast<void>(volume::resolve_volume_child_path(L'C', L"", candidate));
-      aliases.emplace_back(entry.id, std::move(candidate));
-      alias = std::prev(aliases.end());
+    // Entries are flattened side by side, so one inside another would be
+    // published twice; the same entry twice is refused alike. The file
+    // manager hands directories over with '/', the export list with none, so
+    // both separators are compared as one.
+    auto relative = entry.directory.empty() ? entry.name : entry.directory + L"\\" + entry.name;
+    std::ranges::replace(relative, L'/', L'\\');
+    const auto contains = [](const std::wstring& outer, const std::wstring& inner) {
+      return inner.size() >= outer.size() &&
+          ::CompareStringOrdinal(outer.c_str(), static_cast<int>(outer.size()), inner.c_str(),
+              static_cast<int>(outer.size()), TRUE) == CSTR_EQUAL &&
+          (inner.size() == outer.size() || inner[outer.size()] == L'\\');
+    };
+    for (const auto& [id, other] : selected) {
+      if (id == entry.id && (contains(other, relative) || contains(relative, other)))
+        throw std::invalid_argument("the export selection overlaps itself");
     }
-    const auto relative = entry.directory.empty() ? entry.name : entry.directory + L"\\" + entry.name;
-    sources.push_back({source, alias->second + L"\\" + relative});
+    selected.emplace_back(entry.id, std::move(relative));
+    sources.push_back({source, entry.name});
   }
   runtime_.export_selection(sources, destination, folder_name, encrypted, password, cancelled, progress);
 }

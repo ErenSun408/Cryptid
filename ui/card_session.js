@@ -2817,8 +2817,9 @@
     }
   });
 
-  // A merged selection publishes one complete folder or encrypted package.
-  // Separate exports retain per-entry results and can retry failed selections.
+  // A merged selection publishes one folder or encrypted package holding every
+  // selected entry side by side. Separate exports publish each entry on its
+  // own, keep per-entry results and can retry failed selections.
   const runExport = async ({ location, packageName = "", password = null, confirmation = null }) => {
     if (busy || currentState !== nativeState.authenticated || exportSelection.size === 0 || location === "" || !exportResultDialog.hidden) {
       wipe(password); wipe(confirmation);
@@ -2870,7 +2871,7 @@
           const first = encrypted ? Array.from(exportPassword) : [];
           const second = encrypted ? Array.from(exportConfirmation) : [];
           const packed = group.map(request => [request.id, request.directory, request.name].join("\u001f")).join("\u001e");
-          const folder = merged ? (packageName || "导出项目") : group[0].name;
+          const folder = merged ? (packageName || "导出项目") : "";
           try {
             await bridge.beginExportSelection(encrypted, packed, location, folder, first, second);
           } finally { wipe(first); wipe(second); }
@@ -3223,13 +3224,13 @@
       exportDialogNameHint.hidden = true;
     } else {
       exportDialogNameField.hidden = false;
-      exportDialogNameHint.hidden = false;
+      exportDialogNameHint.hidden = mergeExport;
       exportDialogNameLabel.textContent = encrypted ? "导出包名称" : "导出文件夹名称";
-      exportDialogName.value = "";
+      exportDialogName.value = mergeExport ? "导出项目" : "";
       exportDialogName.disabled = !mergeExport;
       exportDialogNameHint.textContent = mergeExport
-        ? "留空则命名为“导出项目”；内容按安全盘名称分目录。"
-        : "已关闭合并导出，每个项目分别导出到以项目名称命名的文件夹或密文包。";
+        ? ""
+        : "已关闭合并导出，所选项目分别导出到目标位置。";
     }
     exportDialogSecretFields.hidden = !encrypted;
     clearExportDialogSecrets();

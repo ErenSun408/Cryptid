@@ -80,6 +80,8 @@ const openBackup = async (d, $, mode) => {
       assert.equal($('export-dialog-title').textContent, '密文导出');
       assert.equal($('export-dialog-secret-fields').hidden, false);
       assert.equal($('export-dialog-name').disabled, false, 'merged selections may be named');
+      assert.equal($('export-dialog-name').value, '导出项目', 'a merged name starts as the default');
+      assert.equal($('export-dialog-name-hint').hidden, true, 'a merged export shows no naming hint');
       assert.equal($('export-dialog-start').disabled, true, 'a location comes first');
       $('export-dialog-location').click(); await tick();
       $('export-dialog-start').click(); await tick();
@@ -117,6 +119,7 @@ const openBackup = async (d, $, mode) => {
       $('backup-export-confirm').click(); await tick();
       assert.equal($('export-dialog-name-field').hidden, false);
       assert.equal($('export-dialog-name').disabled, true);
+      assert.equal($('export-dialog-name-hint').textContent, '已关闭合并导出，所选项目分别导出到目标位置。');
       $('export-dialog-name').value = 'ignored';
       $('export-dialog-location').click(); await tick();
       if (mode === 'encrypted') {
@@ -130,8 +133,7 @@ const openBackup = async (d, $, mode) => {
       for (const {args} of exports) {
         assert.equal(args[0], mode === 'encrypted');
         assert.equal(args[1].split('\u001e').length, 1);
-        assert.equal(args[3], args[1].split('\u001f')[2]);
-        assert.notEqual(args[3], 'ignored');
+        assert.equal(args[3], '', 'a separate export publishes the entry itself');
         if (mode === 'plain') assert.equal(args[4].length, 0);
       }
       w.dispatchEvent(new w.Event('usb-vault-session-changed')); await tick();

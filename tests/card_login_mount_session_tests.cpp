@@ -4209,7 +4209,7 @@ void test_a_shell_drop_needs_an_authenticated_session() {
 // P5.9: the encrypted export reaches the storage layer with the resolved
 // entry and package path, refuses what the plaintext export refuses, and
 // leaves nothing behind whether it succeeds, fails or is refused.
-void test_selection_export_resolves_vault_groups_and_guards_routes() {
+void test_selection_export_flattens_entries_and_guards_routes() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
   runtime.remember_paths = true;
@@ -4225,10 +4225,33 @@ void test_selection_export_resolves_vault_groups_and_guards_routes() {
       {first, L"", L"same.txt"}, {second, L"sub", L"same.txt"}};
   session.export_container_selection(selection, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
   require(runtime.selected_sources.size() == 2 &&
-      runtime.selected_sources[0].output_name == L"Documents\\same.txt" &&
-      runtime.selected_sources[1].output_name == L"Documents (2)\\sub\\same.txt" &&
+      runtime.selected_sources[0].output_name == L"same.txt" &&
+      runtime.selected_sources[1].output_name == L"same.txt" &&
       runtime.selected_destination == L"D:\\Out\\Combined" && !runtime.selected_encrypted,
-      "selection exports must group by display name and disambiguate equal vault names");
+      "selection exports must carry only the entry names, not vault names or directories");
+  const std::vector<usb_vault::application::ExportSelectionEntry> single{{second, L"sub", L"same.txt"}};
+  session.export_container_selection(single, L"D:\\Out", L"", false, SecureBuffer{}, {}, {});
+  require(runtime.selected_sources.size() == 1 && runtime.selected_sources[0].output_name == L"same.txt" &&
+      runtime.selected_destination == L"D:\\Out\\same.txt",
+      "a separate export must publish the entry itself under its own name");
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection(selection, L"D:\\Out", L"", false, SecureBuffer{}, {}, {});
+  }, "a separate export must take exactly one entry");
+  const std::vector<usb_vault::application::ExportSelectionEntry> overlapping{
+      {second, L"", L"Sub"}, {second, L"sub", L"same.txt"}};
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection(overlapping, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
+  }, "an entry inside another selected entry must be refused");
+  const std::vector<usb_vault::application::ExportSelectionEntry> handed_over{
+      {second, L"", L"Sub"}, {second, L"sub/deeper", L"same.txt"}};
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection(handed_over, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
+  }, "an entry handed over with '/' separators inside a selected folder must be refused");
+  const std::vector<usb_vault::application::ExportSelectionEntry> neighbours{
+      {second, L"", L"su"}, {second, L"sub", L"same.txt"}, {first, L"", L"sub"}};
+  session.export_container_selection(neighbours, L"D:\\Out", L"Combined", false, SecureBuffer{}, {}, {});
+  require(runtime.selected_sources.size() == 3,
+      "a name prefix or the same path in another vault is not an overlap");
   require(session.operation_history().size() == history && runtime.index_writes == writes,
       "selection exports must not record history or indexes");
   const SecureBuffer password = bytes("export password 123");
@@ -5471,7 +5494,7 @@ int main() {
     test_renaming_stays_inside_one_directory();
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
-    test_selection_export_resolves_vault_groups_and_guards_routes();
+    test_selection_export_flattens_entries_and_guards_routes();
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();
     test_a_container_created_for_an_import_is_recorded_only_on_success();

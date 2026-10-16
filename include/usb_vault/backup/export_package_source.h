@@ -26,12 +26,24 @@ struct ExportSelectionPlanV1 final {
   std::vector<ExportSelectionFileV1> files;
 };
 
+// With a folder name the sources sit side by side under that one folder, each
+// under its single-component `output_name`; a name already taken there gets
+// " (2)", " (3)" and so on, before a file's extension. With an empty folder
+// name exactly one source is taken and is itself the top-level entry.
 [[nodiscard]] ExportSelectionPlanV1 collect_export_selection_v1(
     std::span<const ExportSelectionSourceV1> sources, std::wstring_view folder_name,
     const std::function<bool()>& cancelled = {});
 
+// Writes everything below a directory top-level entry into the existing
+// `staging_directory`, which stands for that entry.
 void write_export_selection_directory_v1(const ExportSelectionPlanV1& plan,
     std::wstring_view staging_directory, const std::function<bool()>& cancelled = {},
+    const ExportProgress& progress = {});
+
+// Streams the bytes of a plan whose only entry is one file into `sink`,
+// refusing a source that changed since it was collected.
+void write_export_selection_file_v1(const ExportSelectionPlanV1& plan,
+    const ExportPackageWriterV1::Sink& sink, const std::function<bool()>& cancelled = {},
     const ExportProgress& progress = {});
 
 void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,

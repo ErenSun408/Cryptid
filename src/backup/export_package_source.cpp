@@ -228,36 +228,44 @@ ExportSelectionPlanV1 collect_export_selection_v1(
     const std::function<bool()>& cancelled) {
   if (sources.empty() || sources.size() > kExportManifestV1MaximumEntries)
     throw std::invalid_argument("an export selection must contain entries");
-  static_cast<void>(volume::resolve_volume_child_path(L'C', L"", folder_name));
+  // Without a folder name the single source is itself the top-level entry.
+  const bool wrapped = !folder_name.empty();
+  if (!wrapped && sources.size() != 1)
+    throw std::invalid_argument("an unwrapped export takes exactly one entry");
   ExportSelectionPlanV1 plan;
-  add_entry(plan.manifest, {.kind = ExportEntryKind::directory, .relative_path = std::wstring(folder_name)});
-  plan.files.push_back({});
+  if (wrapped) {
+    static_cast<void>(volume::resolve_volume_child_path(L'C', L"", folder_name));
+    add_entry(plan.manifest, {.kind = ExportEntryKind::directory, .relative_path = std::wstring(folder_name)});
+    plan.files.push_back({});
+  }
+  std::vector<std::wstring> names;
   for (const auto& source : sources) {
     check_cancelled(cancelled);
-    static_cast<void>(volume::resolve_volume_entry_path(L'C', source.output_name));
     if (source.output_name.empty()) throw std::invalid_argument("empty export entry name");
-    for (auto separator = source.output_name.find(L'\\'); separator != std::wstring::npos;
-         separator = source.output_name.find(L'\\', separator + 1)) {
-      const auto path = std::wstring(folder_name) + L"\\" + source.output_name.substr(0, separator);
-      const auto existing = std::find_if(plan.manifest.entries.begin(), plan.manifest.entries.end(),
-          [&](const auto& entry) { return same_path(entry.relative_path, path); });
-      if (existing == plan.manifest.entries.end()) {
-        add_entry(plan.manifest, {.kind = ExportEntryKind::directory, .relative_path = path});
-        plan.files.push_back({});
-      } else if (existing->kind != ExportEntryKind::directory) {
-        throw std::invalid_argument("an export directory name is occupied");
-      }
-    }
+    static_cast<void>(volume::resolve_volume_child_path(L'C', L"", source.output_name));
     const auto parent = source_parent(source.absolute_source);
     const auto canonical = canonical_parent(parent);
     if (!same_path(parent, canonical))
       throw std::runtime_error("an export source parent contains a link or redirected path");
     const auto part = collect_export_manifest_v1(source.absolute_source, cancelled);
     const auto original_top = part.top_level_name();
+    // Selected entries sit side by side in the folder, so a name already
+    // taken there gets " (2)", " (3)" and so on, before a file's extension.
+    std::wstring name = source.output_name;
+    const auto dot = part.entries.front().kind == ExportEntryKind::file
+        ? name.find_last_of(L'.') : std::wstring::npos;
+    const auto stem = dot == std::wstring::npos || dot == 0 ? name : name.substr(0, dot);
+    const auto extension = stem.size() == name.size() ? std::wstring() : name.substr(stem.size());
+    for (unsigned int ordinal = 2; std::ranges::any_of(names,
+             [&](const auto& taken) { return same_path(taken, name); }); ++ordinal) {
+      name = stem + L" (" + std::to_wstring(ordinal) + L")" + extension;
+    }
+    static_cast<void>(volume::resolve_volume_child_path(L'C', L"", name));
+    names.push_back(name);
+    const auto top = wrapped ? std::wstring(folder_name) + L"\\" + name : name;
     for (const auto& entry : part.entries) {
       auto projected = entry;
-      projected.relative_path = std::wstring(folder_name) + L"\\" + source.output_name +
-          entry.relative_path.substr(original_top.size());
+      projected.relative_path = top + entry.relative_path.substr(original_top.size());
       add_entry(plan.manifest, std::move(projected));
       plan.files.push_back(entry.kind == ExportEntryKind::file
         ? ExportSelectionFileV1{parent + entry.relative_path, canonical + entry.relative_path}
@@ -347,6 +355,43 @@ void write_export_selection_directory_v1(const ExportSelectionPlanV1& plan,
     if (::SetFileTime(output.get(), nullptr, nullptr, &modified) == FALSE ||
         ::FlushFileBuffers(output.get()) == FALSE) throw_last_error("finish an export file");
   }
+}
+
+void write_export_selection_file_v1(const ExportSelectionPlanV1& plan,
+    const ExportPackageWriterV1::Sink& sink, const std::function<bool()>& cancelled,
+    const ExportProgress& progress) {
+  validate_export_manifest_v1(plan.manifest);
+  if (plan.files.size() != 1 || plan.manifest.entries.size() != 1 ||
+      plan.manifest.entries.front().kind != ExportEntryKind::file)
+    throw std::invalid_argument("the export selection plan is not a single file");
+  const auto& entry = plan.manifest.entries.front();
+  const auto& physical = plan.files.front();
+  const FileHandle input(open_expected(physical.absolute_path, physical.expected_path,
+      GENERIC_READ, FILE_FLAG_SEQUENTIAL_SCAN));
+  BY_HANDLE_FILE_INFORMATION information{};
+  if (::GetFileInformationByHandle(input.get(), &information) == FALSE)
+    throw_last_error("inspect an export source file");
+  if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+      join(information.nFileSizeHigh, information.nFileSizeLow) != entry.size)
+    throw std::runtime_error("an export source changed");
+  WipedBytes block(kReadBlock);
+  std::uint64_t done = 0;
+  if (progress) progress(done, entry.size);
+  while (done != entry.size) {
+    check_cancelled(cancelled);
+    DWORD read = 0;
+    if (::ReadFile(input.get(), block.bytes().data(),
+        static_cast<DWORD>(std::min<std::uint64_t>(entry.size - done, kReadBlock)), &read, nullptr) == FALSE)
+      throw_last_error("read an export source");
+    if (read == 0) throw std::runtime_error("an export source changed");
+    sink(block.bytes().first(read));
+    done += read;
+    if (progress) progress(done, entry.size);
+  }
+  std::byte extra{}; DWORD extra_read = 0;
+  if (::ReadFile(input.get(), &extra, 1, &extra_read, nullptr) == FALSE)
+    throw_last_error("finish reading an export source");
+  if (extra_read != 0) throw std::runtime_error("an export source changed");
 }
 
 void write_export_package_v1(const std::wstring_view absolute_source,

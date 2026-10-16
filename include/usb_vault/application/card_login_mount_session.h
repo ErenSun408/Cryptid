@@ -525,6 +525,13 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // the container, its kind, or the password the session was opened with.
   // Nothing about the call is written down, for the same reason as the two
   // exports above, and a failure leaves no partial package behind.
+  //
+  // A selection export publishes, as plaintext or one encrypted package,
+  // either a folder named `folder_name` holding every selected entry side by
+  // side under its own name, or, with an empty `folder_name`, the single
+  // selected entry itself under its own name. Neither the container's name
+  // nor the entry's directory inside it is part of the result. An entry that
+  // overlaps another selected entry is refused.
   virtual void export_container_selection(
       std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
       std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,

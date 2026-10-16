@@ -29,8 +29,10 @@ void export_package_to_file_v1(std::wstring_view absolute_source,
                                const std::function<bool()>& cancelled = {},
                                const ExportProgress& progress = {});
 
-// Publishes a virtual folder, either as a plaintext directory or one encrypted
-// package. Physical source paths remain in memory; output names form the manifest.
+// Publishes a selection planned by collect_export_selection_v1, either as
+// plaintext (a directory, or a single file) or one encrypted package, at
+// `absolute_destination` without replacing anything there. Physical source
+// paths remain in memory; output names form the manifest.
 void export_selection_to_file_v1(std::span<const ExportSelectionSourceV1> sources,
     std::wstring_view absolute_destination, std::wstring_view folder_name,
     bool encrypted, const security::SecureBuffer& password_utf8,

@@ -88,6 +88,13 @@ class TemporaryPackage final {
     }
   }
 
+  // A plaintext file keeps the modification time it had in the volume.
+  void set_last_write_time(const std::uint64_t time) {
+    const FILETIME modified{static_cast<DWORD>(time), static_cast<DWORD>(time >> 32)};
+    if (::SetFileTime(handle_, nullptr, nullptr, &modified) == FALSE)
+      throw_last_error("set the export file time");
+  }
+
   // Flushes, drops the hidden attribute the file was created with, and
   // renames it to `destination` through the still-open, unshared handle, so
   // nothing else can open it between the last write and the rename. An
@@ -184,6 +191,15 @@ void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> 
     write_export_selection_package_v1(plan, std::move(key),
         [&](const std::span<const std::byte> bytes) { temporary.write(bytes); }, cancelled, progress);
     if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+    temporary.publish(destination);
+    return;
+  }
+  if (plan.manifest.entries.front().kind == ExportEntryKind::file) {
+    TemporaryPackage temporary(temporary_name(directory));
+    write_export_selection_file_v1(plan,
+        [&](const std::span<const std::byte> bytes) { temporary.write(bytes); }, cancelled, progress);
+    if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+    temporary.set_last_write_time(plan.manifest.entries.front().last_write_time);
     temporary.publish(destination);
     return;
   }
