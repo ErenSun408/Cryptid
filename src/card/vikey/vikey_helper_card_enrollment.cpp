@@ -1,6 +1,7 @@
 #include "card/diagnostic_error.h"
 #include "usb_vault/diagnostics/debug_log.h"
 #include "card/vikey/card_operation_lease.h"
+#include "card/vikey/card_recheck_coordinator.h"
 #include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
 
@@ -224,6 +225,67 @@ void VikeyHelperCardEnrollment::bootstrap(
   } catch (...) {
     USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
     rethrow_enrollment_failure();
+  }
+}
+
+application::CardIdentityRecheck classify_identity_recheck_failure(
+    const std::error_code& error) noexcept {
+  if (error.category() == card_error_category()) {
+    switch (static_cast<CardError>(error.value())) {
+      case CardError::authentication_failed:
+      case CardError::authentication_locked:
+      case CardError::api_key_invalid:
+      case CardError::api_key_missing:
+      case CardError::api_key_calculation_failed:
+      case CardError::api_key_verification_failed:
+      case CardError::user_sn_invalid:
+        return application::CardIdentityRecheck::credentials_rejected;
+      default:
+        break;
+    }
+  }
+  return application::CardIdentityRecheck::unreadable;
+}
+
+VikeyHelperCardIdentityVerifier::VikeyHelperCardIdentityVerifier(
+    VikeyHelperBackendConfig config,
+    IVikeyCredentialProvider& credential_provider)
+    : config_(std::move(config)), credential_provider_(credential_provider) {}
+
+application::CardIdentityRecheck VikeyHelperCardIdentityVerifier::recheck(
+    const std::uint32_t expected_identity) noexcept {
+  using application::CardIdentityRecheck;
+  // Zero is never a card, so nothing present can match it.
+  if (expected_identity == 0) return CardIdentityRecheck::different_card;
+  auto& coordinator = CardRecheckCoordinator::process();
+  if (!coordinator.try_begin_recheck()) return CardIdentityRecheck::busy;
+  struct EndRecheck final {
+    CardRecheckCoordinator& coordinator;
+    ~EndRecheck() { coordinator.end_recheck(); }
+  } const end{coordinator};
+  std::optional<CardOperationLease> lease;
+  try {
+    lease.emplace();
+  } catch (...) {
+    return CardIdentityRecheck::busy;
+  }
+  try {
+    VikeyCredentialSet credentials = credential_provider_.load_credentials();
+    const VikeyCardIdentityProbe probe =
+        probe_vikey_development_card_identity_with_network_access(
+            config_.helper_path, config_.helper_digest,
+            config_.vendor_directory, config_.vendor_digest,
+            credentials.user_sn, credentials.api_key, credentials.user_pin,
+            config_.timeout);
+    return probe.hardware_id == expected_identity
+               ? CardIdentityRecheck::same_card
+               : CardIdentityRecheck::different_card;
+  } catch (const std::system_error& error) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+    return classify_identity_recheck_failure(error.code());
+  } catch (...) {
+    USB_VAULT_TRACE_FAILURE("card/vikey/vikey_helper_card_enrollment", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+    return CardIdentityRecheck::unreadable;
   }
 }
 

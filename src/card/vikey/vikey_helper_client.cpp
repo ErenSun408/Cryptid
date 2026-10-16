@@ -1,5 +1,6 @@
 #include "card/diagnostic_error.h"
 #include "card/vikey/card_operation_lease.h"
+#include "card/vikey/card_recheck_coordinator.h"
 #include "card/process_security_failure.h"
 #include "card/capture_failure.h"
 #include "card/vikey/vikey_helper_client.h"
@@ -1095,6 +1096,7 @@ namespace {
     security::SecureBuffer* const blob_response,
     std::uint32_t* const success_result,
     std::uint32_t* const success_logical_state) {
+  const CardForegroundOperation foreground;
   CardOperationLease operation_lease;
   if (timeout <= std::chrono::milliseconds::zero()) {
     throw_card(CardError::invalid_configuration,

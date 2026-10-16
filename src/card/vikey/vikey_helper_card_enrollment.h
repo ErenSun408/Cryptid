@@ -5,10 +5,13 @@
 #include "card/vikey/vikey_helper_card_record_backend.h"
 #include "card/vikey/vikey_helper_client.h"
 #include "usb_vault/application/card_entry_context_controller.h"
+#include "usb_vault/application/card_identity_recheck.h"
 #include "usb_vault/card/card_initialization_service.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <system_error>
 
 namespace usb_vault::card::vikey {
 
@@ -47,6 +50,30 @@ class VikeyHelperCardEnrollment final
   VikeyHelperBackendConfig config_;
   IVikeyCredentialProvider& credential_provider_;
   std::optional<VikeyCardMediaProbe> primed_login_probe_;
+};
+
+// Maps a failed identity read onto the recheck outcome. Refused vendor
+// credentials are kept apart because retrying them spends a PIN attempt.
+[[nodiscard]] application::CardIdentityRecheck classify_identity_recheck_failure(
+    const std::error_code& error) noexcept;
+
+// Background and pre-operation identity recheck for an authenticated session.
+// Each call takes the card only if nothing else of this process or another
+// instance is using it, then runs one identity-only helper session that reads
+// the hardware ID and never the card record.
+class VikeyHelperCardIdentityVerifier final
+    : public application::ICardIdentityVerifier {
+ public:
+  VikeyHelperCardIdentityVerifier(
+      VikeyHelperBackendConfig config,
+      IVikeyCredentialProvider& credential_provider);
+
+  [[nodiscard]] application::CardIdentityRecheck recheck(
+      std::uint32_t expected_identity) noexcept override;
+
+ private:
+  VikeyHelperBackendConfig config_;
+  IVikeyCredentialProvider& credential_provider_;
 };
 
 // Binds one adapter-approved initializable insertion context to the formal

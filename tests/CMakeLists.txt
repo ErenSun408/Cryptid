@@ -520,6 +520,14 @@ usb_vault_configure_target(vikey_card_insertion_context_tests)
 add_test(NAME vikey_card_insertion_context_tests
   COMMAND vikey_card_insertion_context_tests)
 
+add_executable(card_identity_recheck_tests card_identity_recheck_tests.cpp)
+target_include_directories(card_identity_recheck_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(card_identity_recheck_tests PRIVATE
+  usb_vault_vikey_helper_card_record_backend
+)
+usb_vault_configure_target(card_identity_recheck_tests)
+add_test(NAME card_identity_recheck_tests COMMAND card_identity_recheck_tests)
+
 add_executable(vikey_card_initialization_target_tests
   vikey_card_initialization_target_tests.cpp
 )
