@@ -128,6 +128,83 @@ void unit_tests() {
   check(value, A::device_identity_unavailable, "page83 masked conflict flag");
   std::cout << "PASS: " << cases << " partition assessment cases\n";
 }
+// USB and SD media: exFAT and FAT32 join NTFS, and a missing hardware ID
+// falls back to the partition table. Internal disks keep every old rule.
+void external_media_tests() {
+  unsigned cases{};
+  const auto check = [&](const PartitionObservation& value, A expected, const char* message) {
+    ++cases; require(detail::assess_partition(value) == expected, message);
+  };
+  require(detail::external_bus(BusTypeUsb) && detail::external_bus(BusTypeSd) &&
+          detail::external_bus(BusTypeMmc) && !detail::external_bus(BusTypeSata) &&
+          !detail::external_bus(BusTypeNvme) && !detail::external_bus(BusTypeUnknown),
+          "bus classification is wrong");
+  for (const auto fs : {L"exFAT", L"FAT32"}) {
+    auto value = valid(); value.external = true; value.filesystem = fs;
+    check(value, A::candidate, "external exFAT or FAT32 rejected");
+  }
+  for (const auto fs : {L"FAT", L"ReFS", L"RAW", L""}) {
+    auto value = valid(); value.external = true; value.filesystem = fs;
+    check(value, A::unsupported_filesystem, "external unvalidated filesystem accepted");
+  }
+  auto mbr = valid(); mbr.external = true; mbr.filesystem = L"FAT32";
+  mbr.partition.PartitionStyle = PARTITION_STYLE_MBR; mbr.partition.Mbr = {};
+  mbr.partition.Mbr.RecognizedPartition = TRUE;
+  for (BYTE type : {BYTE{PARTITION_FAT32}, BYTE{PARTITION_FAT32_XINT13}, BYTE{PARTITION_IFS}}) {
+    mbr.partition.Mbr.PartitionType = type;
+    check(mbr, A::candidate, "external MBR FAT32 or IFS type rejected");
+  }
+  auto internal_mbr = mbr; internal_mbr.external = false; internal_mbr.filesystem = L"NTFS";
+  internal_mbr.partition.Mbr.PartitionType = PARTITION_FAT32;
+  check(internal_mbr, A::unsupported_layout, "internal FAT32 type accepted");
+  mbr.partition.Mbr.PartitionType = PARTITION_FAT_16;
+  check(mbr, A::unsupported_layout, "external FAT16 type accepted");
+
+  // No hardware ID: the GPT disk GUID or MBR signature names the medium.
+  auto gpt = valid(); gpt.external = true; gpt.device.Flags = STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_NOHWID;
+  check(gpt, A::device_identity_unavailable, "unread table accepted");
+  gpt.table_known = true; gpt.table_style = PARTITION_STYLE_GPT;
+  check(gpt, A::device_identity_unavailable, "blank disk GUID accepted");
+  gpt.disk_guid.Data1 = 77;
+  check(gpt, A::candidate, "external GPT without hardware ID rejected");
+  const auto gpt_identity = detail::device_identity(gpt);
+  require(gpt_identity && gpt_identity->flags == kPartitionTableIdentity && gpt_identity->id[0] == 77,
+          "GPT table identity is wrong");
+  auto mbr_id = mbr; mbr_id.partition.Mbr.PartitionType = PARTITION_FAT32;
+  mbr_id.device.Flags = STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_NOHWID;
+  mbr_id.table_known = true; mbr_id.table_style = PARTITION_STYLE_MBR;
+  check(mbr_id, A::device_identity_unavailable, "zero MBR signature accepted");
+  mbr_id.mbr_signature = 0x12345678;
+  check(mbr_id, A::candidate, "external MBR without hardware ID rejected");
+  const auto mbr_identity = detail::device_identity(mbr_id);
+  require(mbr_identity && mbr_identity->flags == kPartitionTableIdentity && mbr_identity->id[0] == 0x78 &&
+          mbr_identity->id[4] == 0, "MBR table identity is wrong");
+  for (int bad = 0; bad < 4; ++bad) {
+    auto value = gpt;
+    if (bad == 0) value.external = false;
+    if (bad == 1) value.device.Flags = STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_CONFLICT;
+    if (bad == 2) value.device.Flags |= STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_CONFLICT;
+    if (bad == 3) value.table_style = PARTITION_STYLE_MBR;
+    check(value, A::device_identity_unavailable, "unsafe table identity accepted");
+  }
+  // A hardware ID, when present, is still the identity.
+  auto hardware = valid(); hardware.external = true;
+  const auto hardware_identity = detail::device_identity(hardware);
+  require(hardware_identity && hardware_identity->flags == 0 && hardware_identity->id[0] == 123,
+          "hardware identity was replaced");
+
+  // Ciphertext keeps its FAT32 type and table identity, so it can be found again.
+  auto located = mbr_id; located.filesystem_known = false; located.filesystem = L"";
+  require(detail::assess_partition_location(located) == A::candidate, "encrypted external medium not located");
+
+  PartitionIdentity identity;
+  identity.device_id = mbr_identity->id; identity.device_id_flags = kPartitionTableIdentity;
+  identity.offset_bytes = 1048576; identity.length_bytes = 64ULL * 1024 * 1024;
+  require(valid_partition_identity(identity), "table identity is not a valid saved identity");
+  identity.device_id_flags = kPartitionTableIdentity | 4;
+  require(!valid_partition_identity(identity), "mixed identity flags accepted");
+  std::cout << "PASS: " << cases << " external media cases\n";
+}
 void location_tests() {
   auto raw = valid();
   raw.partition.PartitionStyle = PARTITION_STYLE_MBR;
@@ -403,7 +480,7 @@ int main(int argc, char** argv) {
       std::cout << "SKIP: no supported MBR candidate for read-only helper integration\n";
       return 77;
     }
-    if (argc == 1) { unit_tests(); location_tests(); snapshot_tests(); rejected_handles(); write_policy_tests(); }
+    if (argc == 1) { unit_tests(); external_media_tests(); location_tests(); snapshot_tests(); rejected_handles(); write_policy_tests(); }
     else if (argc == 2 && std::string_view(argv[1]) == "--scan") scan();
     else if (argc == 2 && std::string_view(argv[1]) == "--scan-handles") scan(true);
     else throw std::runtime_error("expected no arguments, --scan or --scan-handles");

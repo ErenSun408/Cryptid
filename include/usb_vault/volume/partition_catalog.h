@@ -30,7 +30,20 @@ struct PartitionCandidate final {
   std::uint32_t filesystem_serial{}; // Detects ordinary reformatting, not cloning.
   std::array<std::uint8_t, 16> device_id{}; // Driver-derived hardware GUID, native only.
   std::uint32_t device_id_flags{};
-  bool operator==(const PartitionCandidate&) const = default;
+  // Descriptive media facts, read again wherever a candidate is enumerated, so
+  // they take no part in identity: a USB or SD bus, and an NTFS filesystem
+  // (only NTFS can be encrypted in place).
+  bool external{};
+  bool ntfs{};
+  bool operator==(const PartitionCandidate& other) const noexcept {
+    return volume_path == other.volume_path && disk_number == other.disk_number &&
+        partition_number == other.partition_number && offset_bytes == other.offset_bytes &&
+        length_bytes == other.length_bytes && logical_sector_bytes == other.logical_sector_bytes &&
+        availability == other.availability && query_error == other.query_error &&
+        layout == other.layout && partition_id == other.partition_id &&
+        filesystem_serial == other.filesystem_serial && device_id == other.device_id &&
+        device_id_flags == other.device_id_flags;
+  }
 };
 // Enumerates volume-backed partitions only, including those without drive letters.
 // Missing/protected partitions may not have Windows volume objects. No writes,

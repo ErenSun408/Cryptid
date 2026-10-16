@@ -6154,4 +6154,11 @@
 - 检查与实现：OfflineCardPasswordPolicy 最小值 6、strong 阈值 12；页面初始化、诱饵（新建与导入）、导出三处提前拒绝与提示文字同步为 6，初始化提示改为“至少6字符”；强度条恢复显示，新增 weak 档（一格）。登录校验不经过该策略，KDF、卡记录与容器格式不变，既有密码与安全盘无需迁移或重新初始化卡。
 - 验证：offline_card_password_policy_tests、confirmed_password_tests、card_product_ui_session_controller_tests、card_product_webview_host_object_tests、card_entry_context_controller_tests、card_product_ui_page_contract_tests 通过；mount_open、encrypted_transfer DOM 测试通过；page_event DOM 测试在改动前后同样失败（fixture 未就绪），属既有问题。webview 集成测试期望已同步但未执行。应用运行中导致链接失败，p46 应用未重建；未实机验证。
 - 安全与风险：持卡或持导出包者可离线猜测，6 位短密码（尤其纯数字或常见词）的猜测成本显著下降；强度分档只看长度，不代表熵。属客户接受的剩余风险。
-- 提交：按明确决定以 [security] 单独提交；禁止推送。
+- 提交：按明确决定以 [refactor] 单独提交，哈希 d7860f2；禁止推送。
+
+### 2026-10-15 — volume / 移动介质分区识别（移动安全盘切片 1）
+- 范围与审计：按明确要求复用已隐藏的磁盘分区创建流程，为移动介质新增“移动安全盘”。已决定：USB 与 SD 总线（U 盘、移动硬盘及硬盘盒、SD 卡）均列入，内置 SATA/NVMe 不列；非 NTFS 只允许清空创建；无硬件序列号时以分区表身份识别。2026-10-09 隐藏磁盘新建入口的需求条目保持，本功能为新增的移动介质入口，待 UI 切片同步需求清单。计划分四个切片：原生识别、创建路径、页面入口、挂载中拔出处理。
+- 检查与实现：分区枚举对每个卷以零访问句柄查询存储总线（USB/SD/MMC 为外接，查询失败按内置处理）。外接介质额外接受 exFAT、FAT32 及 MBR 0x0B/0x0C 类型（清空后不改分区类型，再次定位同样接受）；内置磁盘规则不变。驱动 GUID 仅因无硬件 ID 而随机时，外接介质读取整盘分区表，以 GPT 磁盘 GUID 或 MBR 磁盘签名作为身份并标记 kPartitionTableIdentity；GUID 冲突、未知标志、空签名或分区表与分区样式不符仍拒绝。候选新增外接与 NTFS 两项描述字段，不参与身份比较，助手协议不变；原地加密仍由 NTFS 卷数据查询拒绝非 NTFS。
+- 验证：全量编译通过；partition_catalog_tests（新增 20 项外接介质用例）、container_index_v1_tests、card_login_mount_session_tests、creator_protocol_tests、card_product_webview_host_object_tests 通过；只读扫描本机 21 卷、2 个候选。未接入真实 U 盘／SD 卡验证。
+- 安全与风险：分区表身份可被克隆或巧合重复，同时在场时定位因重复拒绝；单独在场时由后续认证挂载验证内容。签名改写（如重新分区）后无法再定位。
+- 提交：按明确决定以 [P5.11] 单独提交；禁止推送。

@@ -3,6 +3,7 @@
 #include "usb_vault/diagnostics/debug_log.h"
 
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -62,6 +63,45 @@ bool query(HANDLE handle, DWORD code, T& value, DWORD& first_error) noexcept {
   }
   return true;
 }
+// A failed query leaves the volume internal: exFAT and FAT32 stay rejected and
+// no partition-table identity is offered. Not a query error of the candidate.
+bool query_external(const HANDLE handle) noexcept {
+  STORAGE_PROPERTY_QUERY property{};
+  property.PropertyId = StorageDeviceProperty;
+  property.QueryType = PropertyStandardQuery;
+  alignas(STORAGE_DEVICE_DESCRIPTOR) std::array<std::byte, 1024> buffer{};
+  DWORD returned{};
+  if (!::DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &property, sizeof(property),
+                         buffer.data(), static_cast<DWORD>(buffer.size()), &returned, nullptr) ||
+      returned < sizeof(STORAGE_DEVICE_DESCRIPTOR)) return false;
+  STORAGE_DEVICE_DESCRIPTOR descriptor{};
+  std::memcpy(&descriptor, buffer.data(), sizeof(descriptor));
+  return detail::external_bus(descriptor.BusType);
+}
+// Reads the partition table of the disk behind one external volume. Zero
+// access: metadata only. Any failure leaves the table unknown.
+void read_partition_table(detail::PartitionObservation& observed) noexcept {
+  try {
+    const std::wstring path = L"\\\\.\\PhysicalDrive" + std::to_wstring(observed.extents.Extents[0].DiskNumber);
+    const Handle disk(::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, 0, nullptr));
+    if (disk.get() == INVALID_HANDLE_VALUE) return;
+    constexpr std::size_t kHeader = offsetof(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry);
+    std::vector<std::byte> buffer(kHeader + 128 * sizeof(PARTITION_INFORMATION_EX));
+    DWORD returned{};
+    if (!::DeviceIoControl(disk.get(), IOCTL_DISK_GET_DRIVE_LAYOUT_EX, nullptr, 0, buffer.data(),
+                           static_cast<DWORD>(buffer.size()), &returned, nullptr) ||
+        returned < kHeader) return;
+    DRIVE_LAYOUT_INFORMATION_EX layout{};
+    std::memcpy(&layout, buffer.data(), kHeader);
+    observed.table_style = static_cast<PARTITION_STYLE>(layout.PartitionStyle);
+    if (observed.table_style == PARTITION_STYLE_GPT) observed.disk_guid = layout.Gpt.DiskId;
+    else if (observed.table_style == PARTITION_STYLE_MBR) observed.mbr_signature = layout.Mbr.Signature;
+    observed.table_known = true;
+  } catch (...) {
+    observed.table_known = false;
+  }
+}
 PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_path = nullptr,
     const bool location_only = false) {
   PartitionCandidate result{};
@@ -71,6 +111,11 @@ PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_
   observed.extent_known = query(handle, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, observed.extents, error);
   observed.geometry_known = query(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY, observed.geometry, error);
   observed.device_known = query(handle, IOCTL_STORAGE_GET_DEVICE_NUMBER_EX, observed.device, error);
+  observed.external = query_external(handle);
+  if (observed.external && observed.device_known && observed.extent_known &&
+      observed.extents.NumberOfDiskExtents == 1 &&
+      observed.device.Flags == STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_NOHWID)
+    read_partition_table(observed);
   std::array<wchar_t, 32> filesystem{};
   DWORD filesystem_serial{};
   // Unprivileged discovery retains the path query. The helper prerequisite
@@ -94,11 +139,16 @@ PartitionCandidate inspect_handle(const HANDLE handle, const wchar_t* discovery_
       result.layout = PartitionLayout::mbr;
     }
   }
-  if (observed.device_known) {
+  if (const auto identity = detail::device_identity(observed)) {
+    result.device_id = identity->id;
+    result.device_id_flags = identity->flags;
+  } else if (observed.device_known) {
     static_assert(sizeof(observed.device.DeviceGuid) == 16);
     std::memcpy(result.device_id.data(), &observed.device.DeviceGuid, 16);
     result.device_id_flags = observed.device.Flags;
   }
+  result.external = observed.external;
+  result.ntfs = observed.filesystem_known && observed.filesystem == L"NTFS";
   result.availability = location_only ? detail::assess_partition_location(observed)
                                       : detail::assess_partition(observed);
   result.query_error = error;
@@ -176,6 +226,43 @@ std::wstring partition_display_name(const PartitionCandidate& candidate) {
   return letters + L" · " + name;
 }
 
+bool detail::external_bus(const STORAGE_BUS_TYPE bus) noexcept {
+  return bus == BusTypeUsb || bus == BusTypeSd || bus == BusTypeMmc;
+}
+
+std::optional<detail::DeviceIdentity> detail::device_identity(
+    const PartitionObservation& value) noexcept {
+  if (!value.device_known) return std::nullopt;
+  const DWORD flags = value.device.Flags;
+  DeviceIdentity result;
+  if ((flags & ~STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID) == 0) {
+    if (::IsEqualGUID(value.device.DeviceGuid, GUID{})) return std::nullopt;
+    std::memcpy(result.id.data(), &value.device.DeviceGuid, 16);
+    result.flags = flags;
+    return result;
+  }
+  // Only a missing hardware ID on external media falls back to the partition
+  // table. A GUID conflict or an unknown flag never does.
+  if (flags != STORAGE_DEVICE_FLAGS_RANDOM_DEVICEGUID_REASON_NOHWID || !value.external ||
+      !value.table_known || !value.partition_known ||
+      value.table_style != value.partition.PartitionStyle) return std::nullopt;
+  result.flags = kPartitionTableIdentity;
+  if (value.table_style == PARTITION_STYLE_GPT) {
+    if (::IsEqualGUID(value.disk_guid, GUID{})) return std::nullopt;
+    std::memcpy(result.id.data(), &value.disk_guid, 16);
+  } else if (value.table_style == PARTITION_STYLE_MBR) {
+    if (value.mbr_signature == 0) return std::nullopt;
+    std::memcpy(result.id.data(), &value.mbr_signature, sizeof(value.mbr_signature));
+  } else {
+    return std::nullopt;
+  }
+  return result;
+}
+
+static bool external_mbr_type(const BYTE type) noexcept {
+  return type == PARTITION_FAT32 || type == PARTITION_FAT32_XINT13;
+}
+
 static PartitionAvailability assess_observation(const detail::PartitionObservation& value,
     const bool require_filesystem) noexcept {
   using A = PartitionAvailability;
@@ -191,7 +278,10 @@ static PartitionAvailability assess_observation(const detail::PartitionObservati
     if (::IsEqualGUID(part.Gpt.PartitionId, GUID{})) return A::metadata_unavailable;
   } else if (part.PartitionStyle == PARTITION_STYLE_MBR) {
     if (part.Mbr.BootIndicator) return A::protected_partition;
-    if (!part.Mbr.RecognizedPartition || part.Mbr.PartitionType != PARTITION_IFS)
+    // External FAT32 media keep their FAT32 type after being encrypted, since
+    // erasing never rewrites the partition table.
+    if (!part.Mbr.RecognizedPartition || (part.Mbr.PartitionType != PARTITION_IFS &&
+        !(value.external && external_mbr_type(part.Mbr.PartitionType))))
       return A::unsupported_layout;
   } else return A::unsupported_layout;
   if (value.extents.NumberOfDiskExtents != 1 || part.PartitionNumber == 0 ||
@@ -208,15 +298,18 @@ static PartitionAvailability assess_observation(const detail::PartitionObservati
     return A::inconsistent_extent;
   if (require_filesystem) {
     if (!value.filesystem_known) return A::metadata_unavailable;
-    if (value.filesystem != L"NTFS") return A::unsupported_filesystem;
+    // External media may be erased whatever they hold among these; only NTFS
+    // can also be encrypted in place, which its own plan checks.
+    const bool external_filesystem = value.external &&
+        (value.filesystem == L"exFAT" || value.filesystem == L"FAT32");
+    if (value.filesystem != L"NTFS" && !external_filesystem) return A::unsupported_filesystem;
   }
   // Random GUIDs (missing hardware identity or collisions) are not stable.
   // Reject future/unknown flags and versions instead of guessing their meaning.
   const auto& device = value.device;
   if (!value.device_known || device.Version != sizeof(STORAGE_DEVICE_NUMBER_EX) ||
       device.Size != sizeof(STORAGE_DEVICE_NUMBER_EX) || device.DeviceType != FILE_DEVICE_DISK ||
-      (device.Flags & ~STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID) != 0 ||
-      ::IsEqualGUID(device.DeviceGuid, GUID{}) || device.DeviceNumber == MAXDWORD ||
+      !detail::device_identity(value) || device.DeviceNumber == MAXDWORD ||
       device.DeviceNumber != extent.DiskNumber || device.PartitionNumber != part.PartitionNumber)
     return A::device_identity_unavailable;
   return A::candidate;
@@ -259,7 +352,8 @@ bool matches_partition_snapshot(const PartitionCandidate& selected,
       !selected.length_bytes || selected.logical_sector_bytes != 512 ||
       (selected.layout != PartitionLayout::mbr && selected.layout != PartitionLayout::gpt) ||
       current.size() > 4096 || selected.device_id == std::array<std::uint8_t, 16>{} ||
-      (selected.device_id_flags & ~STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID) != 0) return false;
+      ((selected.device_id_flags & ~STORAGE_DEVICE_FLAGS_PAGE_83_DEVICEGUID) != 0 &&
+       selected.device_id_flags != kPartitionTableIdentity)) return false;
   if (selected.layout == PartitionLayout::gpt && selected.partition_id == std::array<std::uint8_t, 16>{}) return false;
   std::size_t matching_paths{};
   bool unchanged{};

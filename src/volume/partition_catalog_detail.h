@@ -2,6 +2,9 @@
 #include "usb_vault/volume/partition_catalog.h"
 #include <Windows.h>
 #include <winioctl.h>
+#include <array>
+#include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace usb_vault::volume::detail {
@@ -17,7 +20,25 @@ struct PartitionObservation final {
   DISK_GEOMETRY geometry{};
   STORAGE_DEVICE_NUMBER_EX device{};
   std::wstring_view filesystem;
+  // USB and SD media may hold exFAT or FAT32 and may lack a hardware ID.
+  bool external{};
+  // The whole disk's partition table, read only for external media whose
+  // driver GUID is random; zero when unread or blank.
+  bool table_known{};
+  PARTITION_STYLE table_style{PARTITION_STYLE_RAW};
+  GUID disk_guid{};
+  DWORD mbr_signature{};
 };
+[[nodiscard]] bool external_bus(STORAGE_BUS_TYPE bus) noexcept;
+// The identity a candidate is stored under: the driver GUID, or for external
+// media without a hardware ID the partition-table identity. Empty when neither
+// is reliable.
+struct DeviceIdentity final {
+  std::array<std::uint8_t, 16> id{};
+  std::uint32_t flags{};
+};
+[[nodiscard]] std::optional<DeviceIdentity> device_identity(
+    const PartitionObservation& observation) noexcept;
 [[nodiscard]] PartitionAvailability assess_partition(
     const PartitionObservation& observation) noexcept;
 // Structural discovery only; missing/RAW filesystems are expected for ciphertext.
