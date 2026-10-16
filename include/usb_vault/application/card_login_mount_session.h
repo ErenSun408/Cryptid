@@ -509,7 +509,8 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // `folder_name` (the container's display name when empty) at the location,
   // holding the container file under its own name. Neither carries the
   // Hidden or System attribute the container may have had where it lived.
-  // The folder must not exist yet; a failure removes what this created.
+  // An occupied folder name is kept and the folder takes the next "keep both"
+  // name, "name (2)" and so on; a failure removes what this created.
   virtual void export_container_folder(std::uint32_t, std::wstring_view,
                                        std::wstring_view) {
     throw std::logic_error("container migration is unavailable");
@@ -531,7 +532,8 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
   // side under its own name, or, with an empty `folder_name`, the single
   // selected entry itself under its own name. Neither the container's name
   // nor the entry's directory inside it is part of the result. An entry that
-  // overlaps another selected entry is refused.
+  // overlaps another selected entry is refused. A name already taken at the
+  // destination is kept, and the result takes the next "(2)"-style name.
   virtual void export_container_selection(
       std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
       std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,

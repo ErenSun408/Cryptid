@@ -182,8 +182,14 @@ void test_grouped_exports_preserve_names_and_cleanup() {
       (temp.root() / L"restored").wstring().substr(3), {}, {}));
   expect(std::filesystem::file_size(temp.root() / L"restored" / L"Combined" / L"SAME (2).txt") == 27,
       "a grouped package must restore its virtual directory tree");
-  expect_win32([&] { export_selection_to_file_v1(sources, (out / L"Plain").wstring(),
-      L"Combined", false, SecureBuffer{}); }, ERROR_FILE_EXISTS, "grouped export must never replace a destination");
+  export_selection_to_file_v1(sources, (out / L"Plain").wstring(), L"Combined", false, SecureBuffer{});
+  expect(std::filesystem::file_size(out / L"Plain" / L"same.txt") == 13 &&
+      std::filesystem::is_directory(out / L"Plain (2)") &&
+      std::filesystem::file_size(out / L"Plain (2)" / L"SAME (2).txt") == 27,
+      "an occupied folder name must keep both, numbering the new folder");
+  export_selection_to_file_v1(sources, package.wstring(), L"Combined", true, password());
+  expect(std::filesystem::is_regular_file(out / L"Cipher (2)"),
+      "an occupied package name must keep both, numbering the new package");
   const auto before = entries_in(out);
   bool copying = false;
   expect_win32([&] { export_selection_to_file_v1(sources, (out / L"Cancelled").wstring(),
@@ -255,8 +261,16 @@ void test_unwrapped_exports_publish_the_entry_itself() {
       ::CompareFileTime(&copied.ftLastWriteTime, &original.ftLastWriteTime) == 0 &&
       (copied.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) == 0,
       "an unwrapped plaintext file must keep its time and lose the staging attribute");
-  expect_win32([&] { export_selection_to_file_v1(file, (out / L"note.txt").wstring(), L"", false,
-      SecureBuffer{}); }, ERROR_FILE_EXISTS, "an unwrapped file must never replace a destination");
+  std::filesystem::create_directory(out / L"note (2).txt");
+  export_selection_to_file_v1(file, (out / L"note.txt").wstring(), L"", false, SecureBuffer{});
+  export_selection_to_file_v1(file, (out / L"note.txt").wstring(), L"", false, SecureBuffer{});
+  expect(std::filesystem::file_size(out / L"note.txt") == 21 &&
+      std::filesystem::is_directory(out / L"note (2).txt") &&
+      std::filesystem::file_size(out / L"note (3).txt") == 21 &&
+      std::filesystem::file_size(out / L"note (4).txt") == 21 && entries_in(out) == 4,
+      "an occupied file name must keep both, skipping every taken number before the extension");
+  for (const auto* const name : {L"note (2).txt", L"note (3).txt", L"note (4).txt"})
+    std::filesystem::remove(out / name);
   bool copying = false;
   expect_win32([&] { export_selection_to_file_v1(file, (out / L"stopped.txt").wstring(), L"", false,
       SecureBuffer{}, [&] { return copying; }, [&](auto, auto) { copying = true; }); },
@@ -276,9 +290,15 @@ void test_unwrapped_exports_publish_the_entry_itself() {
   expect(std::filesystem::is_directory(out / L"Folder" / L"empty") &&
       std::filesystem::file_size(out / L"Folder" / L"inside.bin") == 5,
       "an unwrapped folder must be published as that folder");
+  std::filesystem::rename(temp.root() / L"Folder", temp.root() / L"My.Folder");
+  const std::vector<ExportSelectionSourceV1> dotted{{(temp.root() / L"My.Folder").wstring(), L"My.Folder"}};
+  export_selection_to_file_v1(dotted, (out / L"My.Folder").wstring(), L"", false, SecureBuffer{});
+  export_selection_to_file_v1(dotted, (out / L"My.Folder").wstring(), L"", false, SecureBuffer{});
+  expect(std::filesystem::is_directory(out / L"My.Folder (2)"),
+      "a folder keeps its dots and takes the number at the end");
 
   const std::vector<ExportSelectionSourceV1> two{{source, L"note.txt"},
-      {(temp.root() / L"Folder").wstring(), L"Folder"}};
+      {(temp.root() / L"My.Folder").wstring(), L"My.Folder"}};
   try { static_cast<void>(collect_export_selection_v1(two, L""));
     fail("an unwrapped export must take exactly one entry");
   } catch (const std::invalid_argument&) {}

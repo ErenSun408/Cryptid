@@ -3726,16 +3726,28 @@ void CardLoginMountSessionCore::export_container_folder(
   }
   const std::wstring name =
       folder_name.empty() ? display_name(*entry) : std::wstring(folder_name);
-  const std::wstring folder =
+  std::wstring folder =
       volume::resolve_exported_entry_path(absolute_destination_directory, name);
-  const std::wstring destination = folder + L"\\" + file_name_of(entry->path);
   // 🔴 Only the container number is traced: the location and the folder
   // name are what an export must not leave behind.
   SESSION_TRACE("迁移安全盘到文件夹", "安全盘 #" + std::to_string(id));
   // The folder is new and ordinary. The container file keeps its own name and
   // bytes but not the Hidden and System attributes it may have had in place,
   // so what arrives is a folder anyone can see and carry to another machine.
-  runtime_.create_directory(folder);
+  // An occupied folder name is kept and the next "keep both" name, "name (2)",
+  // is tried instead; creating a directory never replaces one, so a name taken
+  // meanwhile is skipped too.
+  for (unsigned int ordinal = 2;; ++ordinal) {
+    try {
+      runtime_.create_directory(folder);
+      break;
+    } catch (const std::system_error& error) {
+      if (error.code().value() != ERROR_ALREADY_EXISTS || ordinal > 9999) throw;
+    }
+    folder = volume::resolve_exported_entry_path(absolute_destination_directory,
+        name + L" (" + std::to_wstring(ordinal) + L")");
+  }
+  const std::wstring destination = folder + L"\\" + file_name_of(entry->path);
   try {
     runtime_.copy_entry(entry->path, destination, {});
     runtime_.set_container_file_hidden(destination, false);

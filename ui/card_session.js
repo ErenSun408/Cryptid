@@ -3317,7 +3317,7 @@
     render(messageForCurrentState());
     if (failed) {
       setMigrateStatus(
-        "迁移没有完成。安全盘可能仍挂载着，位置不可写、空间不足、名称不可用，或那里已经有同名文件夹了。",
+        "迁移没有完成。安全盘可能仍挂载着，位置不可写、空间不足或名称不可用。",
         "error");
       renderBackupCentre();
       return;

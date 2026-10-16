@@ -724,8 +724,11 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   }
 
   void create_directory(const std::wstring_view absolute_path) override {
+    if (std::ranges::find(existing_directories, absolute_path) != existing_directories.end())
+      throw std::system_error(ERROR_ALREADY_EXISTS, std::system_category(), "create the directory");
     created_directories.emplace_back(absolute_path);
   }
+  std::vector<std::wstring> existing_directories;
 
   void move_entry(const std::wstring_view absolute_source,
                   const std::wstring_view absolute_destination) override {
@@ -3388,6 +3391,15 @@ void test_a_migration_comes_out_as_a_visible_folder() {
   require(runtime.created_directories.size() == 2 &&
               runtime.created_directories[1] == L"E:\\one.hc",
           "an empty folder name did not fall back to the vault's name");
+
+  // An occupied name keeps both: the next free "(n)" folder is created.
+  runtime.existing_directories = {L"D:\\Migration\\工作资料", L"D:\\Migration\\工作资料 (2)"};
+  session.export_container_folder(id, L"D:\\Migration", L"工作资料");
+  require(runtime.created_directories.size() == 3 &&
+              runtime.created_directories[2] == L"D:\\Migration\\工作资料 (3)" &&
+              runtime.copied.back().second == L"D:\\Migration\\工作资料 (3)\\one.hc",
+          "an occupied migration folder name did not keep both");
+  runtime.existing_directories.clear();
 
   // A failed copy takes the new folder away again.
   runtime.fail_copy = true;

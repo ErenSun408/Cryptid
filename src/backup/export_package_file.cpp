@@ -60,6 +60,48 @@ void require_absent(const std::wstring& path) {
   if (error != ERROR_FILE_NOT_FOUND) throw_win32(error, "inspect the export destination");
 }
 
+// Renames an open file or directory without replacing anything. Returns the
+// Win32 error, ERROR_SUCCESS when renamed.
+[[nodiscard]] DWORD rename_by_handle(const HANDLE handle, const std::wstring& destination) {
+  const std::size_t name_bytes = destination.size() * sizeof(wchar_t);
+  std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + name_bytes);
+  auto* const rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
+  rename->ReplaceIfExists = FALSE;
+  rename->RootDirectory = nullptr;
+  rename->FileNameLength = static_cast<DWORD>(name_bytes);
+  std::copy(destination.begin(), destination.end(), rename->FileName);
+  return ::SetFileInformationByHandle(handle, FileRenameInfo, rename,
+                                      static_cast<DWORD>(buffer.size())) == FALSE
+      ? ::GetLastError() : ERROR_SUCCESS;
+}
+
+constexpr unsigned int kMaximumKeptBothOrdinal = 9999;
+
+// Explorer's "keep both" name: "name (2).ext" for a file, "name (2)" for a
+// folder or a file without an extension.
+[[nodiscard]] std::wstring kept_both_name(const std::wstring& destination,
+                                          const unsigned int ordinal, const bool file) {
+  const std::size_t name = destination.find_last_of(L'\\') + 1;
+  std::size_t dot = file ? destination.find_last_of(L'.') : std::wstring::npos;
+  if (dot == std::wstring::npos || dot <= name) dot = destination.size();
+  return destination.substr(0, dot) + L" (" + std::to_wstring(ordinal) + L")" +
+         destination.substr(dot);
+}
+
+// Publishes under `destination`, or, while that name is taken, under the next
+// free "keep both" name. Each attempt is the same no-replace rename, so a
+// name taken in between is skipped rather than overwritten.
+void rename_keeping_both(const HANDLE handle, const std::wstring& destination,
+                         const bool file, const char* const operation) {
+  for (unsigned int ordinal = 1; ordinal <= kMaximumKeptBothOrdinal; ++ordinal) {
+    const DWORD error = rename_by_handle(
+        handle, ordinal == 1 ? destination : kept_both_name(destination, ordinal, file));
+    if (error == ERROR_SUCCESS) return;
+    if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) throw_win32(error, operation);
+  }
+  throw_win32(ERROR_FILE_EXISTS, operation);
+}
+
 // The temporary file, deleted on every path except a successful publish.
 class TemporaryPackage final {
  public:
@@ -100,22 +142,9 @@ class TemporaryPackage final {
   // nothing else can open it between the last write and the rename. An
   // occupied destination is never replaced.
   void publish(const std::wstring& destination) {
-    if (::FlushFileBuffers(handle_) == FALSE) throw_last_error("flush the export package");
-    FILE_BASIC_INFO basic{};
-    basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-    if (::SetFileInformationByHandle(handle_, FileBasicInfo, &basic, sizeof(basic)) == FALSE) {
-      throw_last_error("reset the export package attributes");
-    }
-    const std::size_t name_bytes = destination.size() * sizeof(wchar_t);
-    std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + name_bytes);
-    auto* const rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
-    rename->ReplaceIfExists = FALSE;
-    rename->RootDirectory = nullptr;
-    rename->FileNameLength = static_cast<DWORD>(name_bytes);
-    std::copy(destination.begin(), destination.end(), rename->FileName);
-    if (::SetFileInformationByHandle(handle_, FileRenameInfo, rename,
-                                     static_cast<DWORD>(buffer.size())) == FALSE) {
-      const DWORD error = ::GetLastError();
+    prepare_publish();
+    const DWORD error = rename_by_handle(handle_, destination);
+    if (error != ERROR_SUCCESS) {
       throw_win32(error == ERROR_ALREADY_EXISTS ? ERROR_FILE_EXISTS : error,
                   "publish the export package");
     }
@@ -123,7 +152,24 @@ class TemporaryPackage final {
     close();
   }
 
+  // As publish, but an occupied destination yields the next "keep both" name.
+  void publish_keeping_both(const std::wstring& destination) {
+    prepare_publish();
+    rename_keeping_both(handle_, destination, true, "publish the export package");
+    published_ = true;
+    close();
+  }
+
  private:
+  void prepare_publish() {
+    if (::FlushFileBuffers(handle_) == FALSE) throw_last_error("flush the export package");
+    FILE_BASIC_INFO basic{};
+    basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+    if (::SetFileInformationByHandle(handle_, FileBasicInfo, &basic, sizeof(basic)) == FALSE) {
+      throw_last_error("reset the export package attributes");
+    }
+  }
+
   void close() noexcept {
     if (handle_ != INVALID_HANDLE_VALUE) {
       ::CloseHandle(handle_);
@@ -176,7 +222,6 @@ void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> 
   const std::wstring destination(absolute_destination);
   volume::require_parent_stays_on_volume(destination, volume::require_drive_absolute(destination));
   const auto directory = parent_of(destination);
-  require_absent(destination);
   const auto plan = collect_export_selection_v1(sources, folder_name, cancelled);
   const auto required = encrypted ? export_package_v1_size(export_package_v1_header(
       plan.manifest, encode_export_manifest_v1(plan.manifest).bytes().size())) : plan.manifest.data_bytes;
@@ -191,7 +236,7 @@ void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> 
     write_export_selection_package_v1(plan, std::move(key),
         [&](const std::span<const std::byte> bytes) { temporary.write(bytes); }, cancelled, progress);
     if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
-    temporary.publish(destination);
+    temporary.publish_keeping_both(destination);
     return;
   }
   if (plan.manifest.entries.front().kind == ExportEntryKind::file) {
@@ -200,7 +245,7 @@ void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> 
         [&](const std::span<const std::byte> bytes) { temporary.write(bytes); }, cancelled, progress);
     if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
     temporary.set_last_write_time(plan.manifest.entries.front().last_write_time);
-    temporary.publish(destination);
+    temporary.publish_keeping_both(destination);
     return;
   }
   const auto staging = temporary_name(directory);
@@ -215,14 +260,7 @@ void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> 
     if (pin == INVALID_HANDLE_VALUE) throw_last_error("pin the export staging directory");
     write_export_selection_directory_v1(plan, staging, cancelled, progress);
     if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
-    const auto name_bytes = destination.size() * sizeof(wchar_t);
-    std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + name_bytes);
-    auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
-    rename->ReplaceIfExists = FALSE; rename->RootDirectory = nullptr;
-    rename->FileNameLength = static_cast<DWORD>(name_bytes);
-    std::copy(destination.begin(), destination.end(), rename->FileName);
-    if (::SetFileInformationByHandle(pin, FileRenameInfo, rename,
-        static_cast<DWORD>(buffer.size())) == FALSE) throw_last_error("publish the export directory");
+    rename_keeping_both(pin, destination, false, "publish the export directory");
     published = true;
     ::CloseHandle(pin); pin = INVALID_HANDLE_VALUE;
   } catch (...) {
