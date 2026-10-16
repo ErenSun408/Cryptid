@@ -179,12 +179,55 @@ CardProductUiSessionController::CardProductUiSessionController(
     const security::IPasswordStrengthPolicy& password_policy,
     IContainerFileChooser& file_chooser,
     ILoginResetMountAccess* reset_mount_access,
-    application::IActivationGate* activation) noexcept
-    : reset_mount_access_(reset_mount_access), activation_(activation), entry_(entry),
+    application::IActivationGate* activation,
+    application::ICardIdentityVerifier* identity_verifier) noexcept
+    : reset_mount_access_(reset_mount_access), activation_(activation),
+      identity_verifier_(identity_verifier), entry_(entry),
       authentication_(authentication),
       volume_session_(volume_session),
       password_policy_(password_policy),
       file_chooser_(file_chooser) {}
+
+void CardProductUiSessionController::set_identity_lost_handler(
+    std::function<void()> handler) {
+  identity_lost_ = std::move(handler);
+}
+
+void CardProductUiSessionController::require_same_card() {
+  // Outside an authenticated session the operation's own route check refuses.
+  if (identity_verifier_ == nullptr || !authentication_.authenticated() ||
+      !authenticated_card_) {
+    return;
+  }
+  application::CardIdentityRecheckPolicy policy;
+  for (;;) {
+    const application::CardIdentityRecheck result =
+        identity_verifier_->recheck_before_operation(*authenticated_card_);
+    switch (policy.observe(result)) {
+      case application::CardIdentityVerdict::present:
+        return;
+      case application::CardIdentityVerdict::retry:
+        continue;
+      case application::CardIdentityVerdict::skipped:
+        USB_VAULT_TRACE("安全卡", "操作前读卡复核未完成", "结果 " + std::to_string(static_cast<int>(result)));
+        throw std::system_error(
+            card::make_error_code(card::CardError::communication_failed),
+            "the card could not be read again before the operation");
+      case application::CardIdentityVerdict::lost:
+        USB_VAULT_TRACE("安全卡", "操作前读卡复核按拔卡处理", "结果 " + std::to_string(static_cast<int>(result)));
+        if (identity_lost_) {
+          try {
+            identity_lost_();
+          } catch (...) {
+            USB_VAULT_TRACE_FAILURE("ui/card_product_ui_session_controller", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+          }
+        }
+        throw std::system_error(
+            card::make_error_code(card::CardError::device_not_found),
+            "the authenticated card is no longer present");
+    }
+  }
+}
 
 // Card errors carry a stage, a native code and a security step beyond the
 // error number; the runtime log keeps all of them. Call inside a catch block.
@@ -263,6 +306,7 @@ wchar_t CardProductUiSessionController::open_decoy_maintenance(
     throw_wrong_route(
         "decoy maintenance is not available in the current UI state");
   }
+  require_same_card();
   return volume_session_.open_surveyed_maintenance(id);
 }
 
@@ -359,10 +403,12 @@ std::wstring CardProductUiSessionController::browse_for_container_directory() {
 bool CardProductUiSessionController::begin_partition_conversion(const volume::PartitionCandidate& target,
     const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
   if (state()!=CardProductUiState::authenticated) throw std::logic_error("authentication required");
+  require_same_card();
   return volume_session_.begin_partition_conversion(target,confirm);
 }
 bool CardProductUiSessionController::resume_partition_conversion(std::uint32_t id) {
   if (state()!=CardProductUiState::authenticated) throw std::logic_error("authentication required");
+  require_same_card();
   return volume_session_.resume_partition_conversion(id);
 }
 void CardProductUiSessionController::set_creation_revocation(application::CreationCancellation revoked) {
@@ -372,6 +418,7 @@ void CardProductUiSessionController::set_creation_revocation(application::Creati
 void CardProductUiSessionController::create_partition(
     const volume::PartitionCandidate& target, const std::function<bool(const volume::PartitionCandidate&)>& confirm) {
   if (state() != CardProductUiState::authenticated) throw_wrong_route("partition creation requires authentication");
+  require_same_card();
   static_cast<void>(volume_session_.create_partition(target, confirm));
 }
 
@@ -386,6 +433,7 @@ std::uint32_t CardProductUiSessionController::create_container(
       size_mib > kContainerCreationMaximumMib) {
     throw std::invalid_argument("container size is outside the UI range");
   }
+  require_same_card();
 
   const auto size_bytes = static_cast<std::uint64_t>(size_mib) * kBytesPerMib;
   const std::wstring path = resolve_target_path(directory, name, size_bytes);
@@ -415,6 +463,7 @@ std::uint32_t CardProductUiSessionController::create_container_b(
       !hidden_fits_outer(outer_size_mib, hidden_size_mib)) {
     throw std::invalid_argument("container B sizes are outside the UI range");
   }
+  require_same_card();
 
   // The location is settled before anything is derived or committed, so a
   // rejected name leaves the card and the second password untouched.
@@ -470,6 +519,7 @@ void CardProductUiSessionController::create_partition_pair(
       target.availability != volume::PartitionAvailability::candidate ||
       !volume::matches_partition_snapshot(target, {&target, 1}))
     throw std::invalid_argument("invalid partition pair target or size");
+  require_same_card();
 
   // The page no longer asks for the password the session was opened under:
   // the session still holds it, and which of the two it is stays unknown here
@@ -508,6 +558,8 @@ bool CardProductUiSessionController::mount_container() {
 }
 
 void CardProductUiSessionController::adopt_or_mount_container_file(const std::wstring& path) {
+  // After the pick rather than before it: the picker can stay open for long.
+  require_same_card();
   std::vector<application::ContainerStatus> before = volume_session_.container_statuses();
   // Picking a file says where a container is, not that it should be opened.
   // Unless the user asked for the mount, the import stops at the list, which
@@ -652,6 +704,7 @@ void CardProductUiSessionController::mount_container(
     throw_wrong_route(
         "mounting a container is not available in the current UI state");
   }
+  require_same_card();
   volume_session_.mount_adopted_container(id);
 }
 
@@ -742,6 +795,7 @@ void CardProductUiSessionController::export_container_entry(
     throw_wrong_route(
         "exporting an entry is not available in the current UI state");
   }
+  require_same_card();
   volume_session_.export_container_entry(id, relative_directory, name,
                                          absolute_destination_directory);
 }
@@ -753,6 +807,7 @@ void CardProductUiSessionController::export_container_folder(
     throw_wrong_route(
         "migrating a container is not available in the current UI state");
   }
+  require_same_card();
   volume_session_.export_container_folder(id, absolute_destination_directory, folder_name);
 }
 
@@ -763,6 +818,7 @@ void CardProductUiSessionController::export_container_file(
     throw_wrong_route(
         "migrating a container is not available in the current UI state");
   }
+  require_same_card();
   volume_session_.export_container_file(id, absolute_destination_directory);
 }
 
@@ -776,6 +832,7 @@ void CardProductUiSessionController::export_container_selection(std::span<const 
     throw std::invalid_argument("export password inputs must be independent buffers");
   if (state() != CardProductUiState::authenticated)
     throw_wrong_route("selection export requires authentication");
+  require_same_card();
   security::SecureBuffer password;
   if (encrypted) {
     password = std::move(security::confirm_password(password_policy_,
@@ -806,6 +863,7 @@ void CardProductUiSessionController::export_container_entry_encrypted(
     throw_wrong_route(
         "exporting an entry is not available in the current UI state");
   }
+  require_same_card();
   security::SecureBuffer password =
       std::move(security::confirm_password(
                     password_policy_, consume_password_utf8(mutable_password_utf8),
@@ -871,6 +929,7 @@ void CardProductUiSessionController::verify_import(
     throw_wrong_route("importing a package is not available in the current UI state");
   }
   if (package.empty()) throw std::logic_error("no import package has been picked");
+  require_same_card();
   auto verified = std::make_unique<VerifiedImport>(package);
   {
     const std::scoped_lock lock(import_mutex_);
@@ -993,6 +1052,7 @@ std::wstring CardProductUiSessionController::import_package_into_container(
     throw_wrong_route("importing a package is not available in the current UI state");
   }
   if (package.empty()) throw std::logic_error("no import package has been picked");
+  require_same_card();
   security::SecureBuffer password = consume_password_utf8(mutable_password_utf8);
   SecureBufferGuard password_guard(password);
   std::wstring restored_name;
@@ -1155,6 +1215,9 @@ CardProductUiSessionController::submit_activation_code(const std::string_view co
   }
   const std::optional<std::uint32_t> card = activation_card();
   if (!card) throw_wrong_route("the current card has no identity");
+  // Only a renewal inside a session is rechecked; before login the card was
+  // just read and no session exists to compare it with.
+  if (current == CardProductUiState::authenticated) require_same_card();
   const auto result = activation_->install(*card, code);
   USB_VAULT_TRACE("激活", "提交激活码", "结果 " + std::to_string(static_cast<int>(result)));
   return result;
@@ -1291,6 +1354,7 @@ void CardProductUiSessionController::reset_card_record() {
         "resetting the security card is not available in the current UI "
         "state");
   }
+  require_same_card();
   // A mount that outlives its key material would hold a drive letter nothing
   // can release, so an attached volume stops the operation before the card is
   // written at all.

@@ -254,11 +254,24 @@ VikeyHelperCardIdentityVerifier::VikeyHelperCardIdentityVerifier(
 
 application::CardIdentityRecheck VikeyHelperCardIdentityVerifier::recheck(
     const std::uint32_t expected_identity) noexcept {
+  return run(expected_identity, false);
+}
+
+application::CardIdentityRecheck
+VikeyHelperCardIdentityVerifier::recheck_before_operation(
+    const std::uint32_t expected_identity) noexcept {
+  return run(expected_identity, true);
+}
+
+application::CardIdentityRecheck VikeyHelperCardIdentityVerifier::run(
+    const std::uint32_t expected_identity, const bool wait) noexcept {
   using application::CardIdentityRecheck;
   // Zero is never a card, so nothing present can match it.
   if (expected_identity == 0) return CardIdentityRecheck::different_card;
   auto& coordinator = CardRecheckCoordinator::process();
-  if (!coordinator.try_begin_recheck()) return CardIdentityRecheck::busy;
+  const bool begun = wait ? coordinator.begin_recheck_waiting(std::chrono::seconds(10))
+                          : coordinator.try_begin_recheck();
+  if (!begun) return CardIdentityRecheck::busy;
   struct EndRecheck final {
     CardRecheckCoordinator& coordinator;
     ~EndRecheck() { coordinator.end_recheck(); }

@@ -100,6 +100,7 @@ constexpr UINT kExitHotkeyMessage = WM_APP + 3;
 constexpr UINT kExplicitExitMessage = WM_APP + 4;
 constexpr UINT kTrayMessage = WM_APP + 5;
 constexpr UINT kShowCardBackupMessage = WM_APP + 6;
+constexpr UINT kIdentityRecheckLostMessage = WM_APP + 7;
 bool g_backup_requested{};
 const UINT kTaskbarCreatedMessage = ::RegisterWindowMessageW(L"TaskbarCreated");
 WindowTray g_tray(kTrayMessage);
@@ -642,7 +643,13 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   auto ui_session = std::make_unique<
       usb_vault::ui::CardProductUiSessionController>(
           *entry, *authentication, *volume_session, *password_policy,
-          *file_chooser, g_reset_mount_access.get(), g_activation_store.get());
+          *file_chooser, g_reset_mount_access.get(), g_activation_store.get(),
+          identity_verifier.get());
+  // Operations may run on a worker; the removal itself belongs to the window.
+  ui_session->set_identity_lost_handler([window, session = authentication.get()] {
+    ::PostMessageW(window, kIdentityRecheckLostMessage,
+                   static_cast<WPARAM>(session->generation()), 0);
+  });
   auto presence =
       std::make_unique<usb_vault::application::CardPresenceController>(
           *volume_session);
@@ -1865,6 +1872,12 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
       return TRUE;
     case kShowCardBackupMessage:
       show_card_backup(window);
+      return 0;
+    case kIdentityRecheckLostMessage:
+      // A post from a login that has since ended or been replaced is moot.
+      if (!g_view_switch_pending && g_authentication && g_authentication->authenticated() &&
+          static_cast<WPARAM>(g_authentication->generation()) == wparam)
+        handle_identity_recheck_loss(usb_vault::application::CardIdentityRecheck::different_card);
       return 0;
     case kShowConfigurationMessage:
       show_configuration(window);

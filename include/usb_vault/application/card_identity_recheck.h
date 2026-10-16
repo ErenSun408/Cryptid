@@ -35,6 +35,14 @@ class ICardIdentityVerifier {
   [[nodiscard]] virtual CardIdentityRecheck recheck(
       std::uint32_t expected_identity) noexcept = 0;
 
+  // The same read for an operation that was just requested: it first waits,
+  // within a bound, for this process's other card work instead of reporting
+  // busy at once.
+  [[nodiscard]] virtual CardIdentityRecheck recheck_before_operation(
+      const std::uint32_t expected_identity) noexcept {
+    return recheck(expected_identity);
+  }
+
  protected:
   ICardIdentityVerifier() noexcept = default;
 };

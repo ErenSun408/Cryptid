@@ -70,8 +70,13 @@ class VikeyHelperCardIdentityVerifier final
 
   [[nodiscard]] application::CardIdentityRecheck recheck(
       std::uint32_t expected_identity) noexcept override;
+  [[nodiscard]] application::CardIdentityRecheck recheck_before_operation(
+      std::uint32_t expected_identity) noexcept override;
 
  private:
+  [[nodiscard]] application::CardIdentityRecheck run(
+      std::uint32_t expected_identity, bool wait) noexcept;
+
   VikeyHelperBackendConfig config_;
   IVikeyCredentialProvider& credential_provider_;
 };

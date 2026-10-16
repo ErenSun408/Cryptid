@@ -3,6 +3,7 @@
 #include "usb_vault/application/activation_store_v1.h"
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/application/card_entry_context_controller.h"
+#include "usb_vault/application/card_identity_recheck.h"
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/backup/import_package_v1.h"
 #include "usb_vault/security/confirmed_password.h"
@@ -130,7 +131,13 @@ class CardProductUiSessionController final {
       const security::IPasswordStrengthPolicy& password_policy,
       IContainerFileChooser& file_chooser,
       ILoginResetMountAccess* reset_mount_access = nullptr,
-      application::IActivationGate* activation = nullptr) noexcept;
+      application::IActivationGate* activation = nullptr,
+      application::ICardIdentityVerifier* identity_verifier = nullptr) noexcept;
+
+  // Called, from whichever thread ran the operation, when the card read before
+  // an operation shows the authenticated card is gone. The host handles it as
+  // a physical removal; the operation itself has already been refused.
+  void set_identity_lost_handler(std::function<void()> handler);
 
   // Activation. Without a gate every card counts as activated. The current
   // card is the present insertion before login and the card the session
@@ -479,8 +486,15 @@ class CardProductUiSessionController final {
   void confirm_login_reset(std::uint32_t ticket);
 
  private:
+  // Reads the card again before an operation that mounts, creates, moves data
+  // across the vault boundary, or changes a security setting. Throws, and
+  // reports a lost card to the host, unless the authenticated card is present.
+  void require_same_card();
+
   ILoginResetMountAccess* reset_mount_access_;
   application::IActivationGate* activation_;
+  application::ICardIdentityVerifier* identity_verifier_;
+  std::function<void()> identity_lost_;
   std::optional<std::uint32_t> authenticated_card_;
   std::vector<volume::MountIdentity> reset_mounts_;
   bool reset_mounts_known_{};

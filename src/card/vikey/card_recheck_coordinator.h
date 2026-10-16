@@ -35,6 +35,24 @@ class CardRecheckCoordinator final {
     return true;
   }
 
+  // For a recheck an operation asked for: waits, within the bound, until no
+  // other recheck or foreground operation of this process is in flight.
+  [[nodiscard]] bool begin_recheck_waiting(
+      const std::chrono::milliseconds bound) noexcept {
+    std::unique_lock lock(mutex_);
+    try {
+      if (!changed_.wait_for(lock, bound, [&] {
+            return recheck_thread_ == 0 && foreground_ == 0;
+          })) {
+        return false;
+      }
+    } catch (...) {
+      return false;
+    }
+    recheck_thread_ = ::GetCurrentThreadId();
+    return true;
+  }
+
   void end_recheck() noexcept {
     {
       std::lock_guard lock(mutex_);
@@ -60,8 +78,11 @@ class CardRecheckCoordinator final {
   }
 
   void end_foreground() noexcept {
-    std::lock_guard lock(mutex_);
-    if (foreground_ != 0) --foreground_;
+    {
+      std::lock_guard lock(mutex_);
+      if (foreground_ != 0) --foreground_;
+    }
+    changed_.notify_all();
   }
 
  private:

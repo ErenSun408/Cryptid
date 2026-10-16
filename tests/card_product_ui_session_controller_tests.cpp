@@ -2636,6 +2636,93 @@ void test_exports_reach_the_session_unchanged() {
           "the controller turned one export into more than one call");
 }
 
+class FakeIdentityVerifier final : public usb_vault::application::ICardIdentityVerifier {
+ public:
+  using Recheck = usb_vault::application::CardIdentityRecheck;
+  [[nodiscard]] Recheck recheck(std::uint32_t) noexcept override { return Recheck::busy; }
+  [[nodiscard]] Recheck recheck_before_operation(const std::uint32_t expected) noexcept override {
+    expected_identities.push_back(expected);
+    if (results.empty()) return Recheck::same_card;
+    const Recheck next = results.front();
+    results.erase(results.begin());
+    return next;
+  }
+  std::vector<Recheck> results;
+  std::vector<std::uint32_t> expected_identities;
+};
+
+void test_card_operations_recheck_the_authenticated_card_first() {
+  using Recheck = usb_vault::application::CardIdentityRecheck;
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  FakeIdentityVerifier verifier;
+  ScopedDirectory directory(L"identity-recheck");
+  CardProductUiSessionController controller(entry, authentication, volume, policy, chooser,
+                                            nullptr, nullptr, &verifier);
+  int lost = 0;
+  controller.set_identity_lost_handler([&] { ++lost; });
+  entry.route = CardEntryRoute::login_required;
+  entry.identity = 0x1A2B3C4D;
+  auto input = bytes("password-1");
+  controller.submit_login(input);
+  require(controller.state() == CardProductUiState::authenticated &&
+              verifier.expected_identities.empty(),
+          "logging in was itself rechecked");
+
+  const std::uint32_t id = controller.create_container(L"work", directory.wide(), 64);
+  require(verifier.expected_identities.size() == 1 &&
+              verifier.expected_identities[0] == 0x1A2B3C4DU &&
+              controller.container_statuses().size() == 1,
+          "creation did not recheck the card the session logged in with");
+
+  controller.unmount_container(id);
+  require(verifier.expected_identities.size() == 1, "unmounting was rechecked");
+  verifier.results = {Recheck::unreadable, Recheck::same_card};
+  controller.mount_container(id);
+  require(verifier.expected_identities.size() == 3 && volume.mount_adopted_calls == 1 &&
+              lost == 0,
+          "one unreadable read was not retried before mounting");
+
+  verifier.results = {Recheck::different_card};
+  require_throws<std::system_error>(
+      [&] { controller.export_container_entry(id, L"", L"a.txt", L"D:\\Out"); },
+      "an export ran against a different card");
+  require(lost == 1 && volume.exported_entries.empty(),
+          "a different card was not reported or the export still ran");
+
+  verifier.results = {Recheck::unreadable, Recheck::unreadable};
+  require_throws<std::system_error>(
+      [&] { controller.export_container_file(id, L"D:\\Out"); },
+      "a migration ran without a readable card");
+  require(lost == 2 && volume.exported_files.empty(),
+          "two unreadable reads were not handled as removal");
+
+  const std::size_t before_reset = verifier.expected_identities.size();
+  verifier.results = {Recheck::credentials_rejected};
+  require_throws<std::system_error>([&] { controller.reset_card_record(); },
+                                    "a reset ran after refused credentials");
+  require(lost == 3 && entry.reset_calls == 0 &&
+              verifier.expected_identities.size() == before_reset + 1,
+          "refused credentials were retried or the reset reached the card");
+
+  verifier.results = {Recheck::busy};
+  auto second = bytes("second-password-value");
+  auto second_confirmation = bytes("second-password-value");
+  require_throws<std::system_error>(
+      [&] {
+        static_cast<void>(controller.create_container_b(L"pair", directory.wide(), 64, 16,
+                                                        second, second_confirmation));
+      },
+      "hidden creation ran without a completed recheck");
+  require(lost == 3 && entry.second_password_calls == 0 && volume.create_b_calls == 0,
+          "a busy card was handled as removal or the card record was written");
+  require_wiped(second, "second input survived a refused recheck");
+  require_wiped(second_confirmation, "second confirmation survived a refused recheck");
+}
+
 void test_login_reset_mount_choices() {
   for (int scenario = 0; scenario < 6; ++scenario) {
     Fixture fixture;
@@ -2720,6 +2807,7 @@ int main() {
     test_a_renamed_package_is_verified_again_before_any_import_write();
     test_an_import_into_a_new_container_is_all_or_nothing();
     test_the_generic_import_sorts_containers_from_packages();
+    test_card_operations_recheck_the_authenticated_card_first();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

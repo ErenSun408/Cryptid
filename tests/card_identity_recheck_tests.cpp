@@ -182,6 +182,26 @@ void foreground_proceeds_when_bound_expires() {
   coordinator.end_recheck();
 }
 
+void operation_recheck_waits_for_other_card_work() {
+  CardRecheckCoordinator coordinator;
+  std::atomic<bool> holding{false};
+  std::atomic<bool> released{false};
+  std::thread foreground([&] {
+    const CardForegroundOperation operation(coordinator, std::chrono::milliseconds(0));
+    holding = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    released = true;
+  });
+  while (!holding) std::this_thread::yield();
+  require(!coordinator.begin_recheck_waiting(std::chrono::milliseconds(20)),
+          "a waiting recheck must give up when its bound expires");
+  require(coordinator.begin_recheck_waiting(std::chrono::seconds(5)) && released.load(),
+          "a waiting recheck starts once the foreground operation ends");
+  foreground.join();
+  require(!coordinator.try_begin_recheck(), "the waiting recheck is in flight");
+  coordinator.end_recheck();
+}
+
 }  // namespace
 
 int main() {
@@ -193,6 +213,7 @@ int main() {
     recheck_refused_while_foreground_in_flight();
     foreground_waits_for_recheck_and_recheck_thread_passes();
     foreground_proceeds_when_bound_expires();
+    operation_recheck_waits_for_other_card_work();
   } catch (const std::exception& error) {
     std::cerr << "card_identity_recheck_tests failed: " << error.what() << '\n';
     return 1;
