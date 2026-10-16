@@ -355,8 +355,7 @@ struct Expiry final {
 void refresh_utc() {
   const auto expiry = selected_expiry();
   const std::wstring text = expiry
-      ? L"对应 UTC 时间：" + format_time(utc_time(expiry->utc_seconds)) +
-            L"（到达该时刻即失效）"
+      ? L"对应 UTC 时间：" + format_time(utc_time(expiry->utc_seconds))
       : L"日期或时间无效";
   ::SetWindowTextW(::GetDlgItem(g_window, kUtc), text.c_str());
 }
@@ -612,8 +611,6 @@ void layout() {
 void create_controls() {
   add(WC_STATICW, L"卡编号", 0, kCardLabel);
   const HWND card = add(WC_EDITW, L"", WS_BORDER | WS_TABSTOP | ES_UPPERCASE, kCard);
-  ::SendMessageW(card, EM_SETCUEBANNER, TRUE,
-                 reinterpret_cast<LPARAM>(L"激活界面显示的本卡编号"));
   ::SendMessageW(card, EM_LIMITTEXT, 12, 0);
 
   add(WC_STATICW, L"时区", 0, kZoneLabel);
