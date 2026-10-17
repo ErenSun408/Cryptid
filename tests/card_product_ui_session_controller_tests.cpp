@@ -190,8 +190,15 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
 
   void mount_adopted_container(const std::uint32_t id) override {
     ++mount_adopted_calls;
+    if (reject_mount) throw std::runtime_error("mount failed");
     for (Adopted& entry : containers) {
       if (entry.id != id) continue;
+      mounted_names.push_back(entry.name);
+      // An adopted row learns its letter and size from the mount, as the
+      // session's own rows do.
+      if (entry.size_bytes == 0) entry.size_bytes = kFakeContainerBytes;
+      if (entry.drive_letter == wchar_t{})
+        entry.drive_letter = static_cast<wchar_t>(L'D' + static_cast<wchar_t>(&entry - containers.data()));
       entry.mounted = true;
       mounted_state = true;
       return;
@@ -250,6 +257,7 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     ++mount_imported_writes;
   }
 
+  std::vector<std::wstring> mounted_names;
   bool remember_paths{true};
   int remember_paths_writes{};
   bool mount_imported{};
@@ -1493,15 +1501,29 @@ void test_importing_only_mounts_when_the_switch_asks_for_it() {
   fixture.controller.set_mounting_imported_containers(true);
   fixture.chooser.existing_path = L"D:\\vault\\second.hc";
   require(fixture.controller.mount_container(), "the second import failed");
-  require(fixture.volume.mount_calls == 1 && fixture.volume.adopt_calls == 1 &&
-              fixture.volume.mounted_path == L"D:\\vault\\second.hc",
+  // The mounting import joins the list and takes its name before the mount,
+  // so the driver is handed the name the list shows.
+  require(fixture.volume.adopt_calls == 2 && fixture.volume.mount_adopted_calls == 1 &&
+              fixture.volume.mount_calls == 0 && fixture.volume.adopted_path == L"D:\\vault\\second.hc",
           "the switch did not send the import through the mount");
+  require(fixture.volume.mounted_names == std::vector<std::wstring>{L"本地磁盘 2"},
+          "the mount did not carry the imported container's list name");
+
+  // A failed mount leaves the list as the import found it.
+  const auto listed = fixture.volume.containers.size();
+  fixture.volume.reject_mount = true;
+  fixture.chooser.existing_path = L"D:\\vault\\third.hc";
+  require_throws<std::runtime_error>([&] { static_cast<void>(fixture.controller.mount_container()); },
+                                     "a failed mounting import did not report the failure");
+  fixture.volume.reject_mount = false;
+  require(fixture.volume.containers.size() == listed && fixture.volume.forget_container_calls == 1,
+          "a failed mounting import left the container in the list");
 
   // A cancelled picker reaches neither call.
   fixture.chooser.existing_path.clear();
   require(!fixture.controller.mount_container(),
           "a cancelled picker reported an import");
-  require(fixture.volume.mount_calls == 1 && fixture.volume.adopt_calls == 1,
+  require(fixture.volume.mount_adopted_calls == 2 && fixture.volume.adopt_calls == 3,
           "a cancelled picker still reached the session");
 }
 
@@ -2574,8 +2596,8 @@ void test_the_generic_import_sorts_containers_from_packages() {
   choice = fixture.controller.choose_import_file();
   require(choice.kind == Kind::container && fixture.volume.adopted_path == fixture.chooser.existing_path,
           "a container named the product's way was not adopted directly");
-  require(shown(fixture.chooser.existing_path) == L"本地磁盘 (2)",
-          "a second imported container was not numbered like other clashing names");
+  require(shown(fixture.chooser.existing_path) == L"本地磁盘 2",
+          "a second imported container was not numbered 本地磁盘 2");
   // Importing a listed container again keeps its name.
   fixture.chooser.existing_path = first_import;
   static_cast<void>(fixture.controller.choose_import_file());

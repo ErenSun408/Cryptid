@@ -81,6 +81,8 @@ struct MountResult final {
   bool read_only_after_device_write_protected{false};
   bool is_ntfs{false};
   bool master_key_vulnerable{false};
+  // What the driver reports back about the label it was handed; only traced.
+  bool driver_set_label{false};
   std::chrono::milliseconds elapsed{};
   // On successful mount_file/mount_partition return, always A..Z: the drive
   // number validated before the successful VeraCrypt mount transaction.

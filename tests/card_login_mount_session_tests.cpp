@@ -1,5 +1,6 @@
 #include "application/card_login_mount_session_internal.h"
 #include "volume/mount_completion.h"
+#include "volume/mount_label.h"
 
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/container_index_v1.h"
@@ -4586,7 +4587,9 @@ void test_display_alias_persistence_and_export_identity() {
   require(restored.size()==1 && restored[0].name==rows[0].name, "alias did not survive another valid login");
   require(next.container_operation_targets()[0].name==rows[0].name, "batch target lost alias");
   next.mount_adopted_container(restored[0].id);
-  require(runtime.last_mount_label == L"工作_资料 \U0001F512", "remount did not use sanitized saved alias");
+  require(runtime.last_mount_label == usb_vault::volume::detail::mount_display_label(L"工作:资料 \U0001F512") &&
+              runtime.last_mount_label != L"工作:资料 \U0001F512",
+          "remount did not use sanitized saved alias");
   next.unmount_container(restored[0].id);
   next.rename_container(restored[0].id, {});
   require(next.container_statuses()[0].name==L"original.hc", "empty alias did not restore default");
@@ -4865,7 +4868,8 @@ void test_partition_creation_persistence_and_mounting() {
             "partition identity was lost or recorded without consent");
     if (scenario != 0) continue;
     require(session.container_statuses().back().mounted, "new partition was not mounted");
-    require(runtime.last_mount_label == session.container_statuses().back().name,
+    require(runtime.last_mount_label ==
+                usb_vault::volume::detail::mount_display_label(session.container_statuses().back().name),
             "new partition mount omitted its label");
     require(final_stage == 5 && final_drive == session.container_statuses().back().drive_letter, "partition completion omitted mounted drive");
     require_throws<std::logic_error>([&] { session.export_container_file(id, L"D:\\exports"); },

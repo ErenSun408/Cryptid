@@ -38,6 +38,7 @@ template <typename TransactMount>
       .read_only_after_device_write_protected = request.read_only_after_device_write_protected != 0,
       .is_ntfs = request.is_ntfs != 0,
       .master_key_vulnerable = request.master_key_vulnerable != 0,
+      .driver_set_label = request.driver_set_label != 0,
       .elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - start),
       .drive_letter = static_cast<wchar_t>(L'A' + drive),

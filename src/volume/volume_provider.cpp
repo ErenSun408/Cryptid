@@ -265,7 +265,8 @@ template <std::size_t Size>
          diagnostics::flag_text(result.read_only_after_access_denied) + "；因写保护改只读 " +
          diagnostics::flag_text(result.read_only_after_device_write_protected) + "；NTFS " +
          diagnostics::flag_text(result.is_ntfs) + "；主密钥存在弱点 " +
-         diagnostics::flag_text(result.master_key_vulnerable) + "；耗时 " +
+         diagnostics::flag_text(result.master_key_vulnerable) + "；驱动回报已设卷标 " +
+         diagnostics::flag_text(result.driver_set_label) + "；耗时 " +
          std::to_string(result.elapsed.count()) + " 毫秒";
 }
 

@@ -99,9 +99,29 @@ void test_mount_labels() {
   for (const auto name : {L"work.sys", L"work.DAT", L"work.bin"})
     require(mount_display_label(name) == L"work", "new file suffix leaked into label");
   require(mount_display_label(L"资料:归档.HC") == L"资料_归档", "label sanitization failed");
-  require(mount_display_label(L"1234567890\U0001F512") == L"1234567890", "label split a surrogate pair");
-  require(mount_display_label(L"123456789\U0001F512") == L"123456789\U0001F512", "valid surrogate pair was lost");
+  // A FAT label holds 11 OEM bytes and only what the OEM code page holds.
+  require(mount_display_label(L"abcdefghijklm") == L"abcdefghijk", "an ASCII label was not cut at 11 bytes");
+  require(mount_display_label(L"1234567890\U0001F512") == L"1234567890_",
+          "a character outside the BMP was not replaced as one unit");
+  require(mount_display_label(L"123456789\U0001F512x") == L"123456789_x",
+          "a character outside the BMP was not replaced as one unit");
   require(mount_display_label(L"   ") == L"SecureDrive", "blank label has no bounded fallback");
+  if (::GetOEMCP() == 936) {
+    // Under code page 936 a Chinese character takes two of the 11 bytes.
+    require(mount_display_label(L"本地磁盘") == L"本地磁盘", "an 8-byte label was changed");
+    require(mount_display_label(L"本地磁盘 2") == L"本地磁盘 2" &&
+                mount_display_label(L"本地磁盘 99") == L"本地磁盘 99",
+            "a default import name up to 99 does not fit the label");
+    require(mount_display_label(L"本地磁盘 (2)") == L"本地磁盘 (2",
+            "a 12-byte label was not cut to 11 bytes");
+    require(mount_display_label(L"一二三四五六") == L"一二三四五",
+            "a Chinese label was not cut at a whole character within 11 bytes");
+    require(mount_display_label(L"abcdefghij本") == L"abcdefghij",
+            "a two-byte character was split at the 11-byte limit");
+  } else {
+    std::cout << "volume_provider_tests: OEM code page " << ::GetOEMCP()
+              << " is not 936; Chinese label byte cases skipped\n";
+  }
   const auto password = fixture_password(64);
   for (const auto& label : {std::wstring{}, std::wstring(L"工作资料"), std::wstring(32, L'x')}) {
     LockedDriverBuffer<MountRequest> request;
@@ -391,11 +411,13 @@ void test_mount_completion_retains_ownership_and_clears_secrets() {
       request.read_only_after_device_write_protected = 1;
       request.is_ntfs = 1;
       request.master_key_vulnerable = 1;
+      request.driver_set_label = 1;
     });
     require(calls == 1 && result.drive_letter == drive,
             "successful mount lost ownership or repeated the mount transaction");
     require(result.filesystem_dirty && result.read_only_after_access_denied &&
-                result.read_only_after_device_write_protected && result.is_ntfs && result.master_key_vulnerable,
+                result.read_only_after_device_write_protected && result.is_ntfs && result.master_key_vulnerable &&
+                result.driver_set_label,
             "mount completion lost driver result flags");
     require(cleared(buffer.get()), "successful mount retained credentials");
   }

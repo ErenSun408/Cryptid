@@ -563,28 +563,45 @@ void CardProductUiSessionController::adopt_or_mount_container_file(const std::ws
   std::vector<application::ContainerStatus> before = volume_session_.container_statuses();
   // Picking a file says where a container is, not that it should be opened.
   // Unless the user asked for the mount, the import stops at the list, which
-  // is also what a remembered path does at login.
-  const std::uint32_t id = volume_session_.mounting_imported_containers()
-                               ? volume_session_.mount_container(path)
-                               : volume_session_.adopt_container(path);
-  if (std::ranges::any_of(before, [id](const auto& status) { return status.id == id; })) return;
-  // A container new to the list is shown as "本地磁盘", numbered the way the
-  // product numbers other clashing names -- "本地磁盘 (2)", "本地磁盘 (3)" --
-  // ignoring case, against every name already in the list. The name is only
-  // the display alias; the file keeps its own name. Failing to store it
-  // leaves the file name showing and does not undo the import.
-  constexpr std::wstring_view base = L"本地磁盘";
-  std::wstring candidate(base);
-  const auto taken = [&](const application::ContainerStatus& status) {
-    return status.id != id &&
-           ::CompareStringOrdinal(status.name.c_str(), -1, candidate.c_str(), -1, TRUE) == CSTR_EQUAL;
-  };
-  for (unsigned int ordinal = 2; std::ranges::any_of(before, taken); ++ordinal) {
-    candidate = std::wstring(base) + L" (" + std::to_wstring(ordinal) + L")";
+  // is also what a remembered path does at login. A mounting import still
+  // joins the list and takes its name first, so the mount hands the driver
+  // the name the list shows rather than the file's.
+  const bool mounting = volume_session_.mounting_imported_containers();
+  const std::uint32_t id = volume_session_.adopt_container(path);
+  const bool fresh = std::ranges::none_of(before, [id](const auto& status) { return status.id == id; });
+  if (fresh) {
+    // A container new to the list is shown as "本地磁盘", then "本地磁盘 2",
+    // "本地磁盘 3" and so on, ignoring case, against every name already in
+    // the list. Up to "本地磁盘 99" the name fits the 11 bytes a FAT label
+    // holds under code page 936, so Explorer shows the same name. It is only
+    // the display alias; the file keeps its own name. Failing to store it
+    // leaves the file name showing and does not undo the import.
+    constexpr std::wstring_view base = L"本地磁盘";
+    std::wstring candidate(base);
+    const auto taken = [&](const application::ContainerStatus& status) {
+      return status.id != id &&
+             ::CompareStringOrdinal(status.name.c_str(), -1, candidate.c_str(), -1, TRUE) == CSTR_EQUAL;
+    };
+    for (unsigned int ordinal = 2; std::ranges::any_of(before, taken); ++ordinal) {
+      candidate = std::wstring(base) + L" " + std::to_wstring(ordinal);
+    }
+    try {
+      volume_session_.rename_container(id, candidate);
+    } catch (...) {
+    }
   }
+  if (!mounting) return;
   try {
-    volume_session_.rename_container(id, candidate);
+    volume_session_.mount_adopted_container(id);
   } catch (...) {
+    // A mounting import that fails leaves the list as it found it.
+    if (fresh) {
+      try {
+        volume_session_.forget_container(id);
+      } catch (...) {
+      }
+    }
+    throw;
   }
 }
 
