@@ -179,6 +179,7 @@ add_library(usb_vault_core STATIC
   src/application/product_settings_v1.cpp
   src/application/activation_store_v1.cpp
   src/contacts/contact_identity_v1.cpp
+  src/contacts/contact_store_v1.cpp
   src/licensing/activation_code_v1.cpp
   src/licensing/signing_key_backup_v1.cpp
   src/backup/export_manifest_v1.cpp

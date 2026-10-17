@@ -1310,6 +1310,20 @@ usb_vault_configure_target(contact_identity_v1_tests)
 add_test(NAME contact_identity_v1_tests
   COMMAND contact_identity_v1_tests)
 
+add_executable(contact_store_v1_tests
+  contact_store_v1_tests.cpp
+)
+
+target_include_directories(contact_store_v1_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(contact_store_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(contact_store_v1_tests)
+
+add_test(NAME contact_store_v1_tests
+  COMMAND contact_store_v1_tests)
+
 add_executable(activation_code_v1_tests
   activation_code_v1_tests.cpp
 )
