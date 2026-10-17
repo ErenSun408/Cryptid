@@ -80,7 +80,7 @@ void write_verified_zeros(ICardRecordJournalStorage& storage,
   if (!range_is_blank(storage, offset, offset + length)) {
     throw std::system_error(
         make_error_code(CardError::device_failure),
-        "ViKey development reset write did not verify");
+        "ViKey zero write did not verify");
   }
 }
 
@@ -212,7 +212,37 @@ security::SecureBuffer snapshot_vikey_card_record(VikeySession& session) {
   return snapshot_card_record_journal_v1(storage);
 }
 void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected) {
+  // Refuse every record reset_card_record_journal_v1 would refuse before
+  // touching any byte, so a refused reset never clears the contact list.
+  const CardRecordState expected_state = inspect_card_record(expected.bytes());
+  if (expected_state != CardRecordState::initialized_v1 &&
+      expected_state != CardRecordState::unsupported_version) {
+    throw std::system_error(make_error_code(CardError::invalid_operation),
+                            "reset requires an initialized or unsupported record");
+  }
   VikeyCardRecordStorage storage(session);
+  // The contact list (P5.14) is cleared before the journal, and only once the
+  // confirmed snapshot still matches. An interrupted clear leaves the card
+  // initialized, so the reset can be retried; clearing afterwards could leave
+  // an uninitialized card, which reset no longer accepts, still holding
+  // contact ciphertext under the old root secret. Zeros, not random bytes, so
+  // the range matches what blank-media checks expect. Smaller cards never
+  // held a contact list and their bytes beyond 1808 stay untouched.
+  if (storage.capacity() >= contacts::kContactStoreV1RegionEnd) {
+    const security::SecureBuffer current =
+        snapshot_card_record_journal_v1(storage);
+    if (!std::ranges::equal(current.bytes(), expected.bytes())) {
+      throw std::system_error(make_error_code(CardError::invalid_operation),
+                              "confirmed card record changed");
+    }
+    for (std::size_t offset = contacts::kContactStoreV1RegionOffset;
+         offset < contacts::kContactStoreV1RegionEnd;) {
+      const std::size_t length = std::min(
+          kMediaScanChunkSize, contacts::kContactStoreV1RegionEnd - offset);
+      write_verified_zeros(storage, offset, length);
+      offset += length;
+    }
+  }
   reset_card_record_journal_v1(storage, expected.bytes());
 }
 

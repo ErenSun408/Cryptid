@@ -169,7 +169,7 @@ void CardEntryContextController::reset_card_record(
   route_ = CardEntryRoute::unavailable;
   context_.reset();
   std::unique_ptr<IReadOnlyCardEntryInspection> context;
-  std::unique_ptr<card::ICardUpdateTarget> target;
+  std::unique_ptr<card::ICardResetTarget> target;
   try {
     context = source_.inspect_inserted_card();
     if (!context || CardEntryRouter::route(*context) !=
@@ -178,14 +178,22 @@ void CardEntryContextController::reset_card_record(
           card::make_error_code(card::CardError::invalid_operation),
           "card reset requires a fresh initialized insertion");
     }
-    target = source_.make_update_target(*context);
+    // The same snapshot-bound reset as the login page, so the adapter also
+    // clears data kept beside the record, such as the contact list (P5.14).
+    target = source_.make_reset_target(*context);
     if (!target) {
       throw std::system_error(
           card::make_error_code(card::CardError::backend_unavailable),
-          "card adapter cannot update this insertion");
+          "card adapter cannot reset this insertion");
     }
-    card::CardRecordService service(target->card_store());
-    service.reset_to_provisioning();
+    security::SecureBuffer snapshot = target->snapshot();
+    if (card::inspect_card_record(snapshot.bytes()) !=
+        card::CardRecordState::initialized_v1) {
+      throw std::system_error(
+          card::make_error_code(card::CardError::invalid_operation),
+          "card reset requires an initialized record");
+    }
+    target->reset(snapshot);
   } catch (...) {
     target.reset();
     // The card may hold either record after a failed write, so the insertion

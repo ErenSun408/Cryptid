@@ -701,6 +701,111 @@ void test_contact_region_access() {
   active_fake = nullptr;
 }
 
+void test_reset_clears_contact_region() {
+  using usb_vault::card::vikey::reset_vikey_card_record;
+  using usb_vault::card::vikey::snapshot_vikey_card_record;
+  using usb_vault::contacts::kContactStoreV1RegionEnd;
+  using usb_vault::contacts::kContactStoreV1RegionOffset;
+
+  FakeSdk state;
+  active_fake = &state;
+  SecureBuffer sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(sn.bytes(), std::byte{'A'});
+  std::ranges::fill(key.bytes(), std::byte{'B'});
+  std::ranges::fill(pin.bytes(), std::byte{'P'});
+  VikeySession session = VikeySession::open(functions(), sn, key, pin);
+  DirectStorage direct(state);
+  const auto initialize = [&] {
+    state.data.fill(std::byte{});
+    SecureBuffer marker = provision_uninitialized_card_record_v1();
+    provision_card_record_journal_v1(direct, marker.bytes());
+    write_vikey_card_record(session, framed_record());
+    for (std::size_t i = kContactStoreV1RegionOffset; i < state.data.size(); ++i) {
+      state.data[i] = std::byte{0xC7};
+    }
+  };
+  const auto region_is = [&](const std::byte value) {
+    return std::ranges::all_of(
+        std::span(state.data).subspan(kContactStoreV1RegionOffset),
+        [value](const std::byte b) { return b == value; });
+  };
+
+  // A stale confirmation touches nothing, the contact list included.
+  initialize();
+  SecureBuffer stale = snapshot_vikey_card_record(session);
+  stale.bytes()[100] ^= std::byte{1};
+  const std::size_t writes_before = state.writes;
+  require_card_error([&] { reset_vikey_card_record(session, stale); },
+                     CardError::invalid_operation,
+                     "a stale reset confirmation was accepted");
+  require(state.writes == writes_before && region_is(std::byte{0xC7}),
+          "a refused reset changed the card");
+
+  // A matching snapshot of a record reset refuses (here the uninitialized
+  // marker) must also leave the contact list alone.
+  {
+    state.data.fill(std::byte{});
+    SecureBuffer marker = provision_uninitialized_card_record_v1();
+    provision_card_record_journal_v1(direct, marker.bytes());
+    for (std::size_t i = kContactStoreV1RegionOffset; i < state.data.size(); ++i) {
+      state.data[i] = std::byte{0xC7};
+    }
+    const SecureBuffer unready = snapshot_vikey_card_record(session);
+    const std::size_t writes = state.writes;
+    require_card_error([&] { reset_vikey_card_record(session, unready); },
+                       CardError::invalid_operation,
+                       "an uninitialized record was reset");
+    require(state.writes == writes && region_is(std::byte{0xC7}),
+            "a refused reset of an uninitialized record changed the card");
+    initialize();
+  }
+
+  // Normal reset: contact list zeroed, journal back to the marker.
+  SecureBuffer expected = snapshot_vikey_card_record(session);
+  reset_vikey_card_record(session, expected);
+  require(region_is(std::byte{}), "reset left contact ciphertext on the card");
+  require(inspect_vikey_card_record_state_read_only(session) ==
+              CardRecordState::provisioned_uninitialized,
+          "reset did not leave an uninitialized card");
+  require(inspect_vikey_card_media(session) ==
+              VikeyCardMediaState::product_evidence,
+          "a reset card was not product evidence");
+
+  // Interrupted clear: card stays initialized and the reset can be retried.
+  initialize();
+  expected = snapshot_vikey_card_record(session);
+  state.fail_write_call = state.writes;
+  state.bytes_before_failure = 10;
+  bool failed = false;
+  try {
+    reset_vikey_card_record(session, expected);
+  } catch (const std::system_error&) {
+    failed = true;
+  }
+  state.fail_write_call = std::numeric_limits<std::size_t>::max();
+  require(failed, "an interrupted contact clear reported success");
+  require(inspect_vikey_card_record_state_read_only(session) ==
+              CardRecordState::initialized_v1,
+          "an interrupted contact clear already reset the journal");
+  reset_vikey_card_record(session, expected);
+  require(region_is(std::byte{}) &&
+              inspect_vikey_card_record_state_read_only(session) ==
+                  CardRecordState::provisioned_uninitialized,
+          "a retried reset did not complete");
+
+  // A user area too small for the contact list keeps its bytes past 1808.
+  initialize();
+  state.reported_capacity = static_cast<sdk::Length>(kContactStoreV1RegionEnd - 1);
+  expected = snapshot_vikey_card_record(session);
+  reset_vikey_card_record(session, expected);
+  require(region_is(std::byte{0xC7}),
+          "reset changed bytes beyond 1808 on a small card");
+  require(!session.close(), "reset session did not close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
@@ -711,6 +816,7 @@ int main() {
     test_media_bootstrap_revalidates_before_writing();
     test_development_legacy_reset_is_explicit_and_recoverable();
     test_contact_region_access();
+    test_reset_clears_contact_region();
     std::cout << "vikey card record IO tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

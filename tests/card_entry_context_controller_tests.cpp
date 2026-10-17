@@ -164,6 +164,7 @@ class FakeSource final : public ICardEntryInspectionSource {
 
   std::unique_ptr<usb_vault::card::ICardResetTarget> make_reset_target(
       const IReadOnlyCardEntryInspection&) override {
+    ++reset_target_calls;
     if (!support_updates) return nullptr;
     return std::make_unique<FakeResetTarget>(record);
   }
@@ -176,6 +177,7 @@ class FakeSource final : public ICardEntryInspectionSource {
   bool support_updates{false};
   bool support_initialization{false};
   int update_target_calls{};
+  int reset_target_calls{};
   FakeRecordStore record;
 };
 
@@ -344,12 +346,13 @@ void test_reset_requires_authentication_and_reinspects() {
   authentication.establish(std::move(root));
   controller.reset_card_record(authentication);
   require(source.lifetime.source_calls == 1 &&
-              source.update_target_calls == 1 &&
+              source.update_target_calls == 0 &&
+              source.reset_target_calls == 1 &&
               source.record.put_calls == 1 &&
               usb_vault::card::inspect_card_record(source.record.blob) ==
                   CardRecordState::provisioned_uninitialized &&
               source.lifetime.destroyed == 1 && !controller.has_context(),
-          "an authenticated reset did not use and retire a fresh insertion");
+          "an authenticated reset did not use the reset target on a fresh insertion");
 }
 
 void test_starts_without_card_or_context() {

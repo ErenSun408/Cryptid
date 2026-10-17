@@ -52,6 +52,9 @@ void write_vikey_card_record(VikeySession& session,
                              const security::SecureBuffer& record);
 
 [[nodiscard]] security::SecureBuffer snapshot_vikey_card_record(VikeySession& session);
+// Destructive reset after native confirmation. On cards large enough for the
+// contact list it first verifies the confirmed snapshot, then zeroes and
+// verifies [1808, 8192), then resets the journal.
 void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer& expected);
 
 [[nodiscard]] security::SecureBuffer snapshot_stable_vikey_card_record(VikeySession& session);

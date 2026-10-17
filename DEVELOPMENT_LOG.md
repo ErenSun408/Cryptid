@@ -6348,3 +6348,10 @@
 - 验证：p46 构建 helper、适配器库及 USB Vault.exe 无警告；vikey_card_record_io_tests（空白、未初始化拒绝，精确读写不越界，写后仍为产品证据与已初始化，容量不足）、vikey_helper_protocol_tests（新操作长度、往返及与记录操作互斥）、vikey_helper_contact_store_tests（非法范围不启动 helper）、contact_store_v1_tests（容量错误即不可用）、vikey_card_backup_tests、contact_identity_v1_tests 通过；vikey_helper_process_tests 经 ctest 通过但不含通讯录用例。去掉已初始化前置条件后测试失败。未运行全量 CTest，未接实体卡。
 - 安全与风险：独立安全审查无中危以上问题。剩余：重置后旧 S 下的通讯录密文仍留卡上（4b）；进程级端到端用例缺失；管道大小按文档仅为建议值，实际配额若更小会超时失败关闭，须实卡与多版本 Windows 核验；写入时的容量错误不是 system_error，会话层（P5.14.6）须单独处理。
 - 提交：按决定以 [P5.14] 提交；禁止推送。
+
+### 2026-10-17 — P5.14.4b / 重置清除通讯录区
+- 范围与审计：重置有两个入口：登录页“忘记密码”经快照绑定的重置目标与 helper 重置操作；设置页重置原经更新目标调用 CardRecordService::reset_to_provisioning，以普通写卡操作写入初始化标记，不经过 helper 重置，也就不会清除通讯录区（独立安全审查发现）。契约“随机覆盖”改为写零，需求清单已订正并注明两个入口。
+- 检查与实现：helper 重置先拒绝快照非已初始化／旧版格式的记录，再核对确认快照，随后按 4096 字节块写零并读回核对 [1808,8192)，最后重置卡记录日志；清零中断时卡仍为已初始化，须重新确认后重试。用户区小于 8192 时不动 1808 之后。设置页重置改用与登录页相同的重置目标：重新探测插卡，取快照、要求已初始化后按快照重置。
+- 验证：p46 构建 USB Vault.exe 及测试目标无警告；vikey_card_record_io_tests（过期确认与未初始化快照均零写入、正常清零、中断后重试、小容量卡不动）、card_entry_context_controller_tests（设置页重置改走重置目标、不再调用更新目标）、card_product_ui_session_controller_tests、vikey_card_backup_tests、vikey_card_login_target_tests、vikey_helper_protocol_tests 通过，helper 进程测试经 ctest 通过。去掉清零前的快照核对后测试失败。未运行全量 CTest，未接实体卡。
+- 安全与风险：审查的高危（设置页不清除）与中危（拒绝重置前已清零）均已修正。剩余：同一会话内快照核对与清零之间若有其他进程改写卡，可能清零后重置被拒，需对同一张卡并发操作，按已知边界接受；第一块写完后中断，卡仍可登录但通讯录已清除，界面尚未提示（P5.14.7 处理）；重置在 30 秒写入超时内多一次快照与 6384 字节读写，实卡耗时待测；旧版格式卡的清零无专门用例。
+- 提交：按决定以 [P5.14] 提交；禁止推送。
