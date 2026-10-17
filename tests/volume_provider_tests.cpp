@@ -4,6 +4,7 @@
 #include "volume/locked_driver_buffer.h"
 #include "volume/mount_request.h"
 #include "volume/mount_label.h"
+#include "volume/explorer_drive_name.h"
 #include "volume/mount_identity.h"
 #include "volume/mount_completion.h"
 #include "volume/unmount_notifications.h"
@@ -91,6 +92,20 @@ void test_valid_mount_request() {
           "logical sector size was not locked to the validated value");
   require(request.bytes_per_physical_sector == 512,
           "physical sector size was not locked to the validated value");
+}
+
+void test_explorer_drive_names() {
+  using usb_vault::volume::explorer_drive_name_key;
+  using usb_vault::volume::detail::mount_explorer_name;
+  require(explorer_drive_name_key(L'Y') == std::wstring(L"Y") &&
+              explorer_drive_name_key(L'y') == std::wstring(L"Y"),
+          "a drive letter did not name its Explorer key");
+  for (const wchar_t bad : {L'\0', L'1', L'\\', L'.', L'\u00c4'})
+    require(!explorer_drive_name_key(bad), "a character that is not a drive letter named a registry key");
+  require(mount_explorer_name(L"一个比十一字节长得多的安全盘名称.HC") == L"一个比十一字节长得多的安全盘名称",
+          "the Explorer name was cut or kept its suffix");
+  require(mount_explorer_name(L"a\tb ") == L"a_b" && mount_explorer_name(L" ") == L"SecureDrive",
+          "the Explorer name kept a control character or blank");
 }
 
 void test_mount_labels() {
@@ -688,6 +703,7 @@ int main() {
     test_mount_completion_retains_ownership_and_clears_secrets();
     test_valid_mount_request();
     test_mount_labels();
+    test_explorer_drive_names();
     test_protected_mount_request();
     test_invalid_mount_requests();
     test_driver_error_codes();

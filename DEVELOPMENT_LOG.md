@@ -6311,3 +6311,11 @@
 - 验证：volume_provider_tests（ASCII 11 字节、BMP 外字符、936 下“本地磁盘 2／99”不变、“本地磁盘 (2)”截为 11 字节、汉字整字截断、卷标标志读回）、card_product_ui_session_controller_tests（“本地磁盘 2”、直接挂载用列表名、挂载失败移出）、card_login_mount_session_tests、mount_orchestrator_tests、card_product_webview_host_object_tests 通过；p46 USB Vault.exe 构建通过（16:13）。按字节截断的根因由 FAT 规则与字节数推断，未能在本环境挂载实测；驱动卷标标志的语义按字段名理解，未核对驱动源码。
 - 安全与风险：不记录名称，不新增注册表名称。非 936 代码页的系统上中文名称会显示为“_”。已命名为“本地磁盘 (2)”的旧盘挂载时显示截断后的“本地磁盘 (2”，需手动改名。
 - 提交：按决定以 [fix] 单独提交，注册表显示名另起切片；禁止推送。
+
+### 2026-10-16 — refactor / 资源管理器完整显示名（注册表）
+- 范围与审计：FAT 卷标上限 11 字节，按决定改用资源管理器的按用户注册表显示名，推翻 P5.1“不新增注册表备用名称”，已在需求清单记录；崩溃残留按决定由同一盘符再次挂载时覆盖。实测 HKCU `Applications\Explorer.exe\Drives` 与 HKCU `DriveIcons` 均无效。
+- 定位过程：前两版写在 `MountPoints2\{卷GUID}\_LabelFromReg`，日志确认写入、新进程的 Shell.Application 读到完整名称，但实机资源管理器仍显示卷标；第二版改为挂载前按 `MountedDevices` 中“VeraCryptVolume＋盘符”取固定卷 GUID 预写，仍无效。打开“此电脑”窗口读取其显示名对照：普通分区 E: 写 GUID 项即生效，本产品的卷则存在按盘符命名的 `MountPoints2\<盘符>` 项，写入该项后新开窗口立即显示完整名称。此前以 Shell.Application 新进程验证与资源管理器窗口读取路径不同，导致误判。
+- 检查与实现：volume/explorer_drive_name 改为按盘符项写入或删除 `_LabelFromReg`，去掉卷 GUID 与 MountedDevices 逻辑。MountOptions 新增 explorer_name，卷提供器在驱动挂载前预写、失败删除；会话在 6 处挂载成功点再写一次（维护试挂写空以清除旧值），项名仅存内存，7 处卸载收尾统一经 release_mount 先删除再标记卸载。显示名去掉扩展名并替换控制字符，不受 11 字节限制。
+- 验证：volume_provider_tests（盘符项名与非盘符拒绝、显示名不截断）、card_login_mount_session_tests（新建按名去后缀写入、改名不重写、卸载删除、重挂写完整名、挂载请求携带完整显示名、全部卸载删除；去掉删除时该用例失败）、card_product_ui_session_controller、card_product_webview_host_object、mount_orchestrator 通过。以产品同一源码编译的探针在已挂载的 Y: 上写入后，运行中资源管理器新开窗口显示完整 18 字名称，收回后恢复卷标、无残留。关闭应用后重新构建 USB Vault.exe 通过（18:19），构建前确认 MountPoints2 下无残留名称；未经应用完整挂载流程实机确认。
+- 安全与风险：挂载期间名称位于本机注册表，异常退出时残留至同一盘符再次挂载；不同盘符挂载不会覆盖旧值。日志不记录名称。前两版测试构建写入的 GUID 项值随其卸载删除，异常退出时可能残留，需手动清理。
+- 提交：按决定以 [refactor] 提交；禁止推送。

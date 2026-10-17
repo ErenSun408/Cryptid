@@ -188,6 +188,7 @@ add_library(usb_vault_core STATIC
   src/volume/partition_inplace_plan.cpp
   src/volume/partition_inplace_runner.cpp
   src/volume/drive_letter_pool.cpp
+  src/volume/explorer_drive_name.cpp
   src/volume/mount_request.cpp
   src/volume/unmount_retry.cpp
   src/volume/volume_containment.cpp

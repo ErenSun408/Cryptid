@@ -7,13 +7,8 @@
 
 namespace usb_vault::volume::detail {
 
-// A FAT volume label holds 11 bytes in the system's OEM code page, so a Chinese
-// character takes two of them under code page 936; NTFS allows more. A label
-// past those 11 bytes, or with a character the code page cannot hold, is
-// refused by the file system and Explorer then shows its default name, so the
-// label is cut to fit by whole characters and an unrepresentable one becomes
-// '_'. The label never includes a path or an inferred volume role.
-inline std::wstring mount_display_label(std::wstring_view name) {
+// The container name without the file suffix the product's containers carry.
+inline std::wstring_view without_container_extension(std::wstring_view name) {
   for (const auto extension : {std::wstring_view(L".hc"), std::wstring_view(L".sys"),
                                std::wstring_view(L".dat"), std::wstring_view(L".bin")}) {
     if (name.size() <= extension.size()) continue;
@@ -25,6 +20,29 @@ inline std::wstring mount_display_label(std::wstring_view name) {
     }
     if (matches) { name.remove_suffix(extension.size()); break; }
   }
+  return name;
+}
+
+// The full name Explorer shows beside the drive, which no file system limit
+// cuts: the suffix goes and control characters become '_'.
+inline std::wstring mount_explorer_name(std::wstring_view name) {
+  std::wstring result(without_container_extension(name));
+  for (auto& c : result) {
+    if (c < 0x20 || c == 0x7f) c = L'_';
+  }
+  while (!result.empty() && result.back() == L' ') result.pop_back();
+  if (result.empty()) result = L"SecureDrive";
+  return result;
+}
+
+// A FAT volume label holds 11 bytes in the system's OEM code page, so a Chinese
+// character takes two of them under code page 936; NTFS allows more. A label
+// past those 11 bytes, or with a character the code page cannot hold, is
+// refused by the file system and Explorer then shows its default name, so the
+// label is cut to fit by whole characters and an unrepresentable one becomes
+// '_'. The label never includes a path or an inferred volume role.
+inline std::wstring mount_display_label(std::wstring_view name) {
+  name = without_container_extension(name);
   constexpr std::size_t kLabelBytes = 11;
   // The OEM bytes one character takes, or 0 when the code page cannot hold it.
   const auto oem_bytes = [](const wchar_t c) -> std::size_t {

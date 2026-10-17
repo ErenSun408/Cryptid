@@ -198,6 +198,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "partition mount received other fixed options than a file mount");
     events.emplace_back("mount:partition");
     last_mount_label = options.label;
+    last_mount_explorer_name = options.explorer_name;
     if (partition_mount_fail) throw std::runtime_error("partition unavailable");
     const wchar_t landed =
         partition_lands_on ? partition_lands_on : options.drive_letter;
@@ -303,6 +304,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::vector<std::byte> hidden_inner_password;
   std::vector<std::byte> last_mount_password;
   std::wstring last_mount_label;
+  std::wstring last_mount_explorer_name;
   std::vector<std::wstring> other_existing;
   std::vector<std::wstring> other_staging;
   std::vector<std::string> events;
@@ -601,6 +603,7 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     last_mount_password.assign(volume_password.bytes().begin(),
                                volume_password.bytes().end());
     last_mount_label = options.label;
+    last_mount_explorer_name = options.explorer_name;
     attached_volume_sizes[options.drive_letter] = volume_size_of(path);
     if (options.hidden_volume_protection.has_value()) {
       events.emplace_back("protect");
@@ -656,6 +659,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
             "the shell was told about a drive the volume is not on");
     if (fail_notify) throw std::runtime_error("notify failed");
   }
+
+  // Explorer names: each publish answers with a key naming its drive, so a
+  // withdrawal can be matched to the mount that wrote it.
+  [[nodiscard]] std::wstring publish_drive_name(const wchar_t drive_letter,
+                                                const std::wstring_view name) noexcept override {
+    drive_names_published.emplace_back(drive_letter, std::wstring(name));
+    return std::wstring(L"volume-") + drive_letter;
+  }
+  void withdraw_drive_name(const std::wstring_view volume) noexcept override {
+    drive_names_withdrawn.emplace_back(volume);
+  }
+  std::vector<std::pair<wchar_t, std::wstring>> drive_names_published;
+  std::vector<std::wstring> drive_names_withdrawn;
 
   [[nodiscard]] wchar_t allocate_drive_letter() override {
     events.emplace_back("allocate");
@@ -4282,6 +4298,35 @@ void test_selection_export_flattens_entries_and_guards_routes() {
   }, "an empty selection must be refused");
 }
 
+// The drive a container mounts on carries its full name in Explorer, past the
+// 11 bytes of its FAT label, and a release takes that name back.
+void test_mounts_name_their_drive_in_explorer_and_releases_take_it_back() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto id = session.create_container(L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  require(runtime.drive_names_published.size() == 1 && runtime.drive_names_published[0].second == L"one",
+          "a created container's drive was not named without its suffix");
+  const wchar_t first = runtime.drive_names_published[0].first;
+  session.rename_container(id, L"一个比十一字节长得多的安全盘名称");
+  require(runtime.drive_names_published.size() == 1, "a rename republished a mounted drive's name");
+  session.unmount_container(id);
+  require(runtime.drive_names_withdrawn == std::vector<std::wstring>{std::wstring(L"volume-") + first},
+          "an unmount did not take back the name its mount wrote");
+  session.mount_adopted_container(id);
+  require(runtime.drive_names_published.size() == 2 &&
+              runtime.drive_names_published[1].second == L"一个比十一字节长得多的安全盘名称",
+          "a remount did not name its drive in full, overwriting what was there");
+  require(runtime.last_mount_label != runtime.drive_names_published[1].second,
+          "the FAT label was not still cut to its own limit");
+  require(runtime.last_mount_explorer_name == L"一个比十一字节长得多的安全盘名称",
+          "the mount did not carry the full Explorer name to write before the drive arrives");
+  session.unmount_active();
+  require(runtime.drive_names_withdrawn.size() == 2 && runtime.drive_names_withdrawn[1] == std::wstring(L"volume-") + runtime.drive_names_published[1].first,
+          "unmounting everything did not take the name back");
+}
+
 void test_an_encrypted_export_leaves_no_trace_and_refuses_containers() {
   CardAuthenticationSession authentication;
   FakeRuntime runtime;
@@ -5511,6 +5556,7 @@ int main() {
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
     test_selection_export_flattens_entries_and_guards_routes();
+    test_mounts_name_their_drive_in_explorer_and_releases_take_it_back();
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();
     test_a_container_created_for_an_import_is_recorded_only_on_success();

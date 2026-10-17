@@ -121,6 +121,14 @@ class CardLoginMountSessionRuntime {
       const security::SecureBuffer& volume_password,
       const volume::MountOptions& options) = 0;
   virtual void notify_mounted(wchar_t drive_letter) = 0;
+  // Explorer's display name for the mounted drive, past the 11 bytes a FAT
+  // label holds (volume/explorer_drive_name.h): written for the letter, or
+  // removed when `name` is empty. Returns the registry key it used, empty
+  // when none. Best effort; a runtime without a shell names nothing.
+  [[nodiscard]] virtual std::wstring publish_drive_name(wchar_t, std::wstring_view) noexcept {
+    return {};
+  }
+  virtual void withdraw_drive_name(std::wstring_view) noexcept {}
   // Returns a drive letter that the operating system currently reports as
   // free. Letters already recorded by this session are rejected by the caller.
   [[nodiscard]] virtual wchar_t allocate_drive_letter() = 0;
@@ -226,6 +234,9 @@ struct SessionContainer final {
   wchar_t drive_letter{};
   bool mounted{};
   std::optional<volume::WatchedMount> watched_mount;
+  // The registry key Explorer's display name was written under while
+  // mounted; memory only, so the release can remove exactly that value.
+  std::wstring drive_name_key;
   // Containers with a hidden volume are released before the standard ones,
   // which is the only reason the session distinguishes them. Nothing about
   // this flag crosses the application boundary.
@@ -515,6 +526,13 @@ class CardLoginMountSessionCore final {
       SessionContainer& entry,
       const security::SecureBuffer& outer_password,
       MaintenanceMount mode);
+  // Gives a freshly mounted drive its Explorer name, overwriting whatever an
+  // earlier mount of the same volume left behind, or clears it for an
+  // unnamed mount. Best effort.
+  void name_mounted_drive(SessionContainer& entry, wchar_t drive_letter,
+                          std::wstring_view name) noexcept;
+  // Takes the Explorer name back, then forgets the mount.
+  void release_mount(SessionContainer& entry) noexcept;
   // The checks both maintenance entry points share, and the container named.
   [[nodiscard]] SessionContainer& maintenance_target(
       std::uint32_t id, const security::SecureBuffer& decoy_password_utf8);

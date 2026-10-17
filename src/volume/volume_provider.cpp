@@ -1,5 +1,6 @@
 #include "usb_vault/volume/volume_provider.h"
 
+#include "volume/explorer_drive_name.h"
 #include "volume/locked_driver_buffer.h"
 #include "volume/partition_catalog_detail.h"
 #include "volume/mount_request.h"
@@ -173,6 +174,26 @@ void transact(const HANDLE handle, const DWORD ioctl, T& buffer,
   }
 }
 
+// Names the drive in Explorer before it arrives, and takes the name back when
+// the mount does not come up.
+class PreparedExplorerName final {
+ public:
+  explicit PreparedExplorerName(const MountOptions& options) noexcept
+      : volume_(publish_explorer_drive_name(options.drive_letter, options.explorer_name)),
+        named_(!options.explorer_name.empty()) {}
+  ~PreparedExplorerName() noexcept {
+    if (!kept_ && named_ && !volume_.empty()) withdraw_explorer_drive_name(volume_);
+  }
+  PreparedExplorerName(const PreparedExplorerName&) = delete;
+  PreparedExplorerName& operator=(const PreparedExplorerName&) = delete;
+  void keep() noexcept { kept_ = true; }
+
+ private:
+  std::wstring volume_;
+  bool named_{};
+  bool kept_{};
+};
+
 void notify_shell(const LONG event, const std::int32_t drive_number) noexcept {
   const wchar_t root[] = {
       static_cast<wchar_t>(L'A' + drive_number), L':', L'\\', L'\0'};
@@ -322,11 +343,13 @@ MountResult VolumeProvider::mount_file(
     detail::abi::MountRequest& request = locked_request.get();
     detail::populate_mount_request(request, volume_path, volume_password, options);
 
+    PreparedExplorerName explorer_name(options);
     const MountResult result = detail::complete_mount(locked_request, [&](auto& mount) {
       const DriverHandle driver = open_driver();
       require_supported_version(driver.get());
       transact(driver.get(), kMountVolume, mount, "mount VeraCrypt volume");
     });
+    explorer_name.keep();
     if (options.notify_shell) {
       notify_shell(SHCNE_DRIVEADD, static_cast<std::int32_t>(result.drive_letter - L'A'));
     }
@@ -376,11 +399,13 @@ MountResult VolumeProvider::mount_partition(
   request.preserve_timestamp = 0;
 
   USB_VAULT_TRACE("驱动", "分区设备路径", diagnostics::utf8(native));
+  PreparedExplorerName explorer_name(options);
   const MountResult result = detail::complete_mount(locked_request, [&](auto& mount) {
     const DriverHandle driver = open_driver();
     require_supported_version(driver.get());
     transact(driver.get(), kMountVolume, mount, "mount VeraCrypt volume");
   });
+  explorer_name.keep();
   if (options.notify_shell) {
     notify_shell(SHCNE_DRIVEADD, static_cast<std::int32_t>(result.drive_letter - L'A'));
   }

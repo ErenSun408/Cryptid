@@ -66,8 +66,12 @@ struct MountOptions final {
   // one mount and is never written down anywhere.
   std::optional<HiddenVolumeProtection> hidden_volume_protection{};
   // Passed to the driver; it may persist this value as the filesystem label.
-  // Empty preserves the existing label. No registry fallback is requested.
+  // Empty preserves the existing label.
   std::wstring label{};
+  // The full name Explorer shows for the drive, written for the letter before
+  // the driver mounts it; empty clears a name left there. Taken back when the
+  // mount fails (volume/explorer_drive_name.h).
+  std::wstring explorer_name{};
 };
 
 struct UnmountOptions final {
