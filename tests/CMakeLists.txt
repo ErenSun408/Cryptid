@@ -1297,6 +1297,19 @@ target_link_libraries(vikey_card_backup_tests PRIVATE usb_vault_vikey_helper_car
 usb_vault_configure_target(vikey_card_backup_tests)
 add_test(NAME vikey_card_backup_tests COMMAND vikey_card_backup_tests)
 
+add_executable(contact_identity_v1_tests
+  contact_identity_v1_tests.cpp
+)
+
+target_link_libraries(contact_identity_v1_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(contact_identity_v1_tests)
+
+add_test(NAME contact_identity_v1_tests
+  COMMAND contact_identity_v1_tests)
+
 add_executable(activation_code_v1_tests
   activation_code_v1_tests.cpp
 )

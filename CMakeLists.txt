@@ -139,6 +139,30 @@ if(MSVC)
   endif()
 endif()
 
+add_library(monocypher STATIC
+  third_party/monocypher/src/monocypher.c
+  third_party/monocypher/src/optional/monocypher-ed25519.c
+)
+
+target_include_directories(monocypher
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher/src/optional
+)
+
+set_target_properties(monocypher PROPERTIES
+  C_STANDARD 99
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF
+)
+
+if(MSVC)
+  target_compile_options(monocypher PRIVATE /utf-8)
+  if(USB_VAULT_ENABLE_ASAN)
+    target_compile_options(monocypher PRIVATE /fsanitize=address)
+  endif()
+endif()
+
 add_library(usb_vault_core STATIC
   src/application/card_authentication_session.cpp
   src/application/card_login_mount_session.cpp
@@ -154,6 +178,7 @@ add_library(usb_vault_core STATIC
   src/application/mount_orchestrator.cpp
   src/application/product_settings_v1.cpp
   src/application/activation_store_v1.cpp
+  src/contacts/contact_identity_v1.cpp
   src/licensing/activation_code_v1.cpp
   src/licensing/signing_key_backup_v1.cpp
   src/backup/export_manifest_v1.cpp
@@ -218,6 +243,7 @@ target_include_directories(usb_vault_core
 
 target_link_libraries(usb_vault_core PRIVATE
   argon2_ref
+  monocypher
   Advapi32
   Bcrypt
   Crypt32
