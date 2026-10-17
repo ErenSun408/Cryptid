@@ -3,6 +3,7 @@
 #include "card/verified_local_artifact.h"
 #include "card/vikey/vikey_session.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <Windows.h>
@@ -14,7 +15,7 @@
 namespace usb_vault::card::vikey::helper {
 
 constexpr std::uint32_t kMagic = 0x50484b56U;  // "VKHP" little-endian.
-constexpr std::uint16_t kVersion = 18;
+constexpr std::uint16_t kVersion = 19;
 constexpr std::size_t kNonceSize = 16;
 constexpr std::uint32_t kHardwareIdentityBytes = sizeof(std::uint32_t);
 constexpr std::uint32_t kCardMediaStateBytes = sizeof(std::uint32_t);
@@ -66,18 +67,37 @@ enum class Operation : std::uint32_t {
   card_record_reset = 15,
   card_backup_write = 16,
   card_backup_snapshot = 17,
+  // P5.14 contact list: the whole fixed region, or one whole fixed copy.
+  // The helper never accepts an address; each operation names its range.
+  contact_store_read = 18,
+  contact_store_write_first = 19,
+  contact_store_write_second = 20,
 };
 
-[[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
-  return op == Operation::card_record_read || op == Operation::card_record_snapshot || op == Operation::card_backup_snapshot;
+[[nodiscard]] constexpr bool is_contact_store_write(Operation op) noexcept {
+  return op == Operation::contact_store_write_first ||
+         op == Operation::contact_store_write_second;
 }
-// Logical records are exchanged at their own length, two or three envelopes.
-[[nodiscard]] constexpr bool valid_record_payload(Operation,
+
+[[nodiscard]] constexpr bool is_record_read(Operation op) noexcept {
+  return op == Operation::card_record_read || op == Operation::card_record_snapshot || op == Operation::card_backup_snapshot ||
+         op == Operation::contact_store_read;
+}
+// Logical records are exchanged at their own length, two or three envelopes;
+// contact operations carry exactly their fixed region or copy.
+[[nodiscard]] constexpr bool valid_record_payload(Operation op,
                                                   std::size_t bytes) noexcept {
+  if (op == Operation::contact_store_read) {
+    return bytes == contacts::kContactStoreV1RegionSize;
+  }
+  if (is_contact_store_write(op)) {
+    return bytes == contacts::kContactStoreV1CopySize;
+  }
   return bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
 }
 [[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
-  return op == Operation::card_record_write || op == Operation::card_record_reset || op == Operation::card_backup_write;
+  return op == Operation::card_record_write || op == Operation::card_record_reset || op == Operation::card_backup_write ||
+         is_contact_store_write(op);
 }
 
 enum class CardMediaState : std::uint32_t {
@@ -464,7 +484,10 @@ void write_response(HANDLE pipe, const Response& response,
 void write_development_blob_response(
     HANDLE pipe, const Response& response,
     const security::SecureBuffer& blob);
-void write_card_record_response(HANDLE pipe, const Response& response,
+// operation names the read that produced the record; the payload length must
+// be valid for it.
+void write_card_record_response(HANDLE pipe, Operation operation,
+                                const Response& response,
                                 const security::SecureBuffer& record);
 [[nodiscard]] Response read_response(
     HANDLE pipe, const std::array<std::byte, kNonceSize>& expected_nonce,
@@ -472,6 +495,6 @@ void write_card_record_response(HANDLE pipe, const Response& response,
 [[nodiscard]] security::SecureBuffer read_development_blob_response_payload(
     HANDLE pipe, const Response& response);
 [[nodiscard]] security::SecureBuffer read_card_record_response_payload(
-    HANDLE pipe, const Response& response);
+    HANDLE pipe, Operation operation, const Response& response);
 
 }  // namespace usb_vault::card::vikey::helper

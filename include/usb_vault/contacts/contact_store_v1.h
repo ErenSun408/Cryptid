@@ -52,6 +52,14 @@ class IContactStoreStorage {
   IContactStoreStorage() noexcept = default;
 };
 
+// Thrown by an IContactStoreStorage read when the card user area is too small
+// for the region; load() reports it as unavailable.
+class ContactStoreCapacityError final : public std::runtime_error {
+ public:
+  ContactStoreCapacityError()
+      : std::runtime_error("card user area is too small for the contact list") {}
+};
+
 struct ContactEntry final {
   ContactPublicKey public_key{};
   std::string remark;  // Validated UTF-8, 1..31 bytes.

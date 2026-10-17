@@ -6,6 +6,7 @@
 #include "card/diagnostic_error.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -250,6 +251,45 @@ void write_vikey_spare_card(VikeySession& session,
   if (!std::ranges::equal(observed.bytes(), record.bytes()))
     throw std::system_error(make_error_code(CardError::device_failure),
                             "spare card readback mismatch");
+}
+
+namespace {
+
+void require_contact_region_access(VikeyCardRecordStorage& storage) {
+  if (storage.capacity() < contacts::kContactStoreV1RegionEnd) {
+    throw DiagnosticError(
+        make_error_code(CardError::invalid_configuration),
+        DiagnosticStage::sdk_capacity,
+        "ViKey user data area is too small for the contact list");
+  }
+  if (inspect_card_record_journal_logical_state_v1_read_only(storage) !=
+      CardRecordState::initialized_v1) {
+    throw std::system_error(
+        make_error_code(CardError::invalid_operation),
+        "contact list requires an initialized card record");
+  }
+}
+
+}  // namespace
+
+security::SecureBuffer read_vikey_contact_region(VikeySession& session) {
+  VikeyCardRecordStorage storage(session);
+  require_contact_region_access(storage);
+  return storage.read(contacts::kContactStoreV1RegionOffset,
+                      contacts::kContactStoreV1RegionSize);
+}
+
+void write_vikey_contact_copy(VikeySession& session,
+                              const std::size_t copy_index,
+                              const security::SecureBuffer& copy) {
+  if (copy_index > 1 || copy.size() != contacts::kContactStoreV1CopySize) {
+    throw std::system_error(make_error_code(CardError::invalid_configuration),
+                            "invalid contact list copy");
+  }
+  VikeyCardRecordStorage storage(session);
+  require_contact_region_access(storage);
+  storage.write(contacts::kContactStoreV1CopyOffsets[copy_index],
+                copy.bytes());
 }
 
 }  // namespace usb_vault::card::vikey

@@ -242,4 +242,34 @@ void write_vikey_development_card_record_with_network_access(
     const bool reset = false,
     const bool backup = false);
 
+// P5.14 contact list region, ciphertext only, on an initialized card bound to
+// expected_hardware_id. The read returns the whole fixed region; the write
+// replaces one whole fixed copy (index 0 or 1) and never retries. A user area
+// too small for the region fails with invalid_configuration at stage
+// sdk_capacity. Same development-boundary restrictions as card records.
+[[nodiscard]] security::SecureBuffer
+read_vikey_development_contact_region_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+void write_vikey_development_contact_copy_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    std::size_t copy_index,
+    const security::SecureBuffer& copy,
+    std::chrono::milliseconds timeout = std::chrono::seconds(30));
+
 }  // namespace usb_vault::card::vikey

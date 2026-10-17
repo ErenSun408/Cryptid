@@ -423,6 +423,7 @@ add_library(usb_vault_vikey_helper_card_record_backend STATIC
   src/card/vikey/vikey_card_insertion_context.cpp
   src/card/vikey/vikey_helper_card_enrollment.cpp
   src/card/vikey/vikey_helper_card_record_backend.cpp
+  src/card/vikey/vikey_helper_contact_store.cpp
 )
 
 target_include_directories(usb_vault_vikey_helper_card_record_backend

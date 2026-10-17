@@ -209,6 +209,11 @@ class AttributeList final {
   throw DiagnosticError(make_error_code(error), stage, context);
 }
 
+// Large enough for the biggest single message (the 6384-byte contact region
+// plus its header): the parent reads a secret payload only once all of it is
+// buffered, so a smaller pipe would leave the helper blocked in its write.
+constexpr DWORD kPipeBufferBytes = 64 * 1024;
+
 [[nodiscard]] Pipe create_pipe(const bool child_reads) {
   SECURITY_ATTRIBUTES security{};
   security.nLength = sizeof(security);
@@ -216,7 +221,7 @@ class AttributeList final {
 
   HANDLE read = INVALID_HANDLE_VALUE;
   HANDLE write = INVALID_HANDLE_VALUE;
-  if (::CreatePipe(&read, &write, &security, 0) == FALSE) {
+  if (::CreatePipe(&read, &write, &security, kPipeBufferBytes) == FALSE) {
     throw_card(CardError::backend_unavailable, "create ViKey helper IPC pipe", DiagnosticStage::ipc_setup);
   }
   Handle read_handle(read);
@@ -946,7 +951,8 @@ void cleanup_development_directory(
     }
     if (available >= expected_bytes) {
       return helper::is_record_read(operation)
-                 ? helper::read_card_record_response_payload(pipe, response)
+                 ? helper::read_card_record_response_payload(pipe, operation,
+                                                             response)
                  : helper::read_development_blob_response_payload(pipe,
                                                                     response);
     }
@@ -967,7 +973,7 @@ void cleanup_development_directory(
               FALSE &&
           available >= expected_bytes) {
         return helper::is_record_read(operation)
-                   ? helper::read_card_record_response_payload(pipe,
+                   ? helper::read_card_record_response_payload(pipe, operation,
                                                                 response)
                    : helper::read_development_blob_response_payload(
                          pipe, response);
@@ -1170,12 +1176,10 @@ namespace {
                       session_inputs->expected_media_state)) ||
        blob_input_required != (session_inputs->blob != nullptr) ||
        (session_inputs->blob != nullptr &&
-        session_inputs->blob->size() !=
-            (helper::is_record_write(operation)
-                 ? (session_inputs->blob->size() == kCardRecordV1ThreeSlotSize
-                        ? kCardRecordV1ThreeSlotSize
-                        : kCardRecordV1Size)
-                 : kVikeyBlobBytes)))) {
+        !(helper::is_record_write(operation)
+              ? helper::valid_record_payload(operation,
+                                             session_inputs->blob->size())
+              : session_inputs->blob->size() == kVikeyBlobBytes)))) {
     throw_card(CardError::invalid_configuration, "ViKey development session credential size is invalid", DiagnosticStage::input_shape);
   }
   VerifiedLocalArtifact executable_artifact = verify_local_artifact(
@@ -1938,6 +1942,63 @@ void write_vikey_development_card_record_with_network_access(
       helper_path, expected_helper_digest,
       (backup ? helper::Operation::card_backup_write : (reset ? helper::Operation::card_record_reset : helper::Operation::card_record_write)), &vendor_path,
       &expected_vendor_digest, &inputs, nullptr,
+      HelperBoundary::network_enabled_development, timeout));
+}
+
+security::SecureBuffer
+read_vikey_development_contact_region_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::chrono::milliseconds timeout) {
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = nullptr,
+      .expected_hardware_id = expected_hardware_id};
+  security::SecureBuffer region;
+  static_cast<void>(probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      helper::Operation::contact_store_read, &vendor_path,
+      &expected_vendor_digest, &inputs, nullptr,
+      HelperBoundary::network_enabled_development, timeout, &region));
+  return region;
+}
+
+void write_vikey_development_contact_copy_with_network_access(
+    const std::filesystem::path& helper_path,
+    const Sha256Digest& expected_helper_digest,
+    const std::filesystem::path& vendor_directory,
+    const Sha256Digest& expected_vendor_digest,
+    const std::uint32_t expected_hardware_id,
+    const security::SecureBuffer& user_sn,
+    const security::SecureBuffer& api_key,
+    const security::SecureBuffer& user_pin,
+    const std::size_t copy_index,
+    const security::SecureBuffer& copy,
+    const std::chrono::milliseconds timeout) {
+  if (copy_index > 1) throw std::invalid_argument("invalid contact copy index");
+  const std::filesystem::path vendor_path =
+      vendor_directory / kVendorDllName;
+  const DevelopmentSessionInputs inputs{
+      .user_sn = user_sn,
+      .api_key = api_key,
+      .user_pin = user_pin,
+      .blob = &copy,
+      .expected_hardware_id = expected_hardware_id};
+  static_cast<void>(probe_vikey_helper_operation(
+      helper_path, expected_helper_digest,
+      copy_index == 0 ? helper::Operation::contact_store_write_first
+                      : helper::Operation::contact_store_write_second,
+      &vendor_path, &expected_vendor_digest, &inputs, nullptr,
       HelperBoundary::network_enabled_development, timeout));
 }
 

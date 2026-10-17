@@ -1,6 +1,8 @@
 #include "card/card_record_journal_v1.h"
 #include "card/vikey/vikey_card_record_io.h"
 #include "card/vikey/vikey_session.h"
+#include "card/diagnostic_error.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 
 #include "usb_vault/card/card_error.h"
 #include "card/capture_failure.h"
@@ -585,6 +587,120 @@ void test_development_legacy_reset_is_explicit_and_recoverable() {
   active_fake = nullptr;
 }
 
+void test_contact_region_access() {
+  using usb_vault::card::DiagnosticError;
+  using usb_vault::card::DiagnosticStage;
+  using usb_vault::card::vikey::read_vikey_contact_region;
+  using usb_vault::card::vikey::write_vikey_contact_copy;
+  using usb_vault::contacts::kContactStoreV1CopyOffsets;
+  using usb_vault::contacts::kContactStoreV1CopySize;
+  using usb_vault::contacts::kContactStoreV1RegionOffset;
+  using usb_vault::contacts::kContactStoreV1RegionSize;
+
+  FakeSdk state;
+  active_fake = &state;
+  SecureBuffer sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(sn.bytes(), std::byte{'A'});
+  std::ranges::fill(key.bytes(), std::byte{'B'});
+  std::ranges::fill(pin.bytes(), std::byte{'P'});
+  VikeySession session = VikeySession::open(functions(), sn, key, pin);
+  SecureBuffer copy(kContactStoreV1CopySize);
+  std::ranges::fill(copy.bytes(), std::byte{0x5c});
+
+  // Blank media: no product record, so nothing may be read or written.
+  bool refused = false;
+  try {
+    static_cast<void>(read_vikey_contact_region(session));
+  } catch (const std::system_error&) {
+    refused = true;
+  }
+  require(refused, "blank media exposed the contact region");
+  refused = false;
+  try {
+    write_vikey_contact_copy(session, 0, copy);
+  } catch (const std::system_error&) {
+    refused = true;
+  }
+  require(refused && state.writes == 0, "blank media accepted a contact copy");
+
+  // Provisioned but uninitialized: still refused.
+  DirectStorage direct(state);
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(direct, marker.bytes());
+  require_card_error([&] { static_cast<void>(read_vikey_contact_region(session)); },
+                     CardError::invalid_operation,
+                     "an uninitialized card exposed the contact region");
+  const std::size_t writes_before = state.writes;
+  require_card_error([&] { write_vikey_contact_copy(session, 0, copy); },
+                     CardError::invalid_operation,
+                     "an uninitialized card accepted a contact copy");
+  require(state.writes == writes_before, "an uninitialized card was written");
+
+  // Initialized card: exact region read, exact copy write, nothing else moves.
+  write_vikey_card_record(session, framed_record());
+  for (std::size_t i = kContactStoreV1RegionOffset; i < state.data.size(); ++i) {
+    state.data[i] = static_cast<std::byte>(i & 0xFF);
+  }
+  const auto before = state.data;
+  const SecureBuffer region = read_vikey_contact_region(session);
+  require(region.size() == kContactStoreV1RegionSize &&
+              std::ranges::equal(region.bytes(),
+                                 std::span(before).subspan(
+                                     kContactStoreV1RegionOffset)),
+          "the contact region read was not exact");
+  require(state.data == before, "reading the contact region wrote the card");
+
+  write_vikey_contact_copy(session, 1, copy);
+  require(copy.bytes().front() == std::byte{0x5c},
+          "vendor mutation escaped the contact copy");
+  require(std::equal(before.begin(),
+                     before.begin() + kContactStoreV1CopyOffsets[1],
+                     state.data.begin()),
+          "a second-copy write changed bytes before it");
+  require(std::ranges::all_of(
+              std::span(state.data).subspan(kContactStoreV1CopyOffsets[1]),
+              [](const std::byte b) { return b == std::byte{0x5c}; }),
+          "the second copy was not written");
+  write_vikey_contact_copy(session, 0, copy);
+  require(std::ranges::all_of(
+              std::span(state.data).subspan(kContactStoreV1RegionOffset),
+              [](const std::byte b) { return b == std::byte{0x5c}; }),
+          "the first copy was not written");
+  require(std::equal(before.begin(), before.begin() + kContactStoreV1RegionOffset,
+                     state.data.begin()),
+          "a contact write changed the card record journal");
+  require(inspect_vikey_card_media(session) == VikeyCardMediaState::product_evidence,
+          "a card holding contact copies was not product evidence");
+  require(inspect_vikey_card_record_state_read_only(session) ==
+              CardRecordState::initialized_v1,
+          "contact copies changed the logical card record state");
+
+  const std::size_t writes_after = state.writes;
+  require_card_error([&] { write_vikey_contact_copy(session, 2, copy); },
+                     CardError::invalid_configuration,
+                     "a third contact copy index was accepted");
+  SecureBuffer short_copy(kContactStoreV1CopySize - 1);
+  require_card_error([&] { write_vikey_contact_copy(session, 0, short_copy); },
+                     CardError::invalid_configuration,
+                     "a short contact copy was accepted");
+  require(state.writes == writes_after, "an invalid contact copy was written");
+
+  state.reported_capacity = static_cast<sdk::Length>(kVikeyTestUserDataSize - 1);
+  bool capacity = false;
+  try {
+    static_cast<void>(read_vikey_contact_region(session));
+  } catch (const DiagnosticError& error) {
+    capacity = error.code() == make_error_code(CardError::invalid_configuration) &&
+               error.stage() == DiagnosticStage::sdk_capacity;
+  }
+  require(capacity, "a small user area was not reported as a capacity failure");
+  require(state.writes == writes_after, "a small user area was written");
+  require(!session.close(), "contact region session did not close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
@@ -594,6 +710,7 @@ int main() {
     test_read_only_media_classification();
     test_media_bootstrap_revalidates_before_writing();
     test_development_legacy_reset_is_explicit_and_recoverable();
+    test_contact_region_access();
     std::cout << "vikey card record IO tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

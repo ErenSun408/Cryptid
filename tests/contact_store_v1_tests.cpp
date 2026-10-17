@@ -17,6 +17,7 @@ using usb_vault::contacts::ContactEntry;
 using usb_vault::contacts::ContactIdentity;
 using usb_vault::contacts::ContactRemarkError;
 using usb_vault::contacts::ContactStoreState;
+using usb_vault::contacts::ContactStoreCapacityError;
 using usb_vault::contacts::ContactStoreChangedError;
 using usb_vault::contacts::ContactStoreV1;
 using usb_vault::contacts::IContactStoreStorage;
@@ -45,6 +46,7 @@ class MemoryStorage final : public IContactStoreStorage {
                     const std::size_t length) override {
     if (offset + length > bytes_.size()) throw std::out_of_range("read");
     ++reads;
+    if (report_small_card) throw ContactStoreCapacityError();
     if (fail_reads) throw std::runtime_error("card not readable");
     if (garble_next_read) {
       garble_next_read = false;
@@ -79,6 +81,7 @@ class MemoryStorage final : public IContactStoreStorage {
   std::optional<std::size_t> tear_after;
   bool drop_writes{false};
   bool fail_reads{false};
+  bool report_small_card{false};
   bool fail_reads_after_tear{false};
   bool garble_next_read{false};
   int reads{0};
@@ -116,6 +119,16 @@ template <typename F>
     return true;
   }
   return false;
+}
+
+void test_storage_capacity_error_is_unavailable() {
+  MemoryStorage storage(kContactStoreV1RegionEnd, 0);
+  storage.report_small_card = true;
+  ContactStoreV1 store(storage, secret_of(1));
+  require(store.load() == ContactStoreState::unavailable,
+          "a capacity error from storage was not unavailable");
+  require(throws([&] { store.save(sample(1)); }) && storage.writes.empty(),
+          "an unavailable store accepted a save");
 }
 
 void test_unavailable_on_small_card() {
@@ -623,6 +636,7 @@ void test_invisible_remarks_are_rejected() {
 int main() {
   try {
     test_unavailable_on_small_card();
+    test_storage_capacity_error_is_unavailable();
     test_blank_and_foreign_regions_are_empty();
     test_round_trip_and_boundaries();
     test_saves_alternate_copies();

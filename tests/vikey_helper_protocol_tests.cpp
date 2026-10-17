@@ -51,7 +51,9 @@ struct Pipe final {
 [[nodiscard]] Pipe make_pipe() {
   HANDLE read = INVALID_HANDLE_VALUE;
   HANDLE write = INVALID_HANDLE_VALUE;
-  if (::CreatePipe(&read, &write, nullptr, 0) == FALSE) {
+  // Each test writes a whole message before reading it on one thread; the
+  // buffer must hold the largest one (the contact region), as in the client.
+  if (::CreatePipe(&read, &write, nullptr, 64 * 1024) == FALSE) {
     throw std::runtime_error("CreatePipe failed");
   }
   return {.read = Handle(read), .write = Handle(write)};
@@ -603,11 +605,11 @@ void test_card_record_response_round_trip() {
   sent.nonce[8] = std::byte{0x42};
   const auto record = fixed_secret(kCardRecordV1Size, std::byte{0x7e});
 
-  write_card_record_response(pipe.write.get(), sent, record);
+  write_card_record_response(pipe.write.get(), Operation::card_record_read, sent, record);
   const Response received = read_response(
       pipe.read.get(), sent.nonce, Operation::card_record_read);
   auto received_record =
-      read_card_record_response_payload(pipe.read.get(), received);
+      read_card_record_response_payload(pipe.read.get(), Operation::card_record_read, received);
   expect_fixed_secret(received_record, std::byte{0x7e},
                       "card record response did not round-trip");
   expect_fixed_secret(record, std::byte{0x7e},
@@ -624,7 +626,7 @@ void test_three_slot_record_protocol() {
   expect(valid_request(request), "three-envelope record reset was rejected");
   request.operation = Operation::card_backup_write;
   expect(valid_request(request), "three-envelope spare write rejected");
-  request.version = 17; expect(!valid_request(request), "old spare protocol accepted"); request.version = kVersion;
+  request.version = 18; expect(!valid_request(request), "old spare protocol accepted"); request.version = kVersion;
   for (const auto record_bytes : {215u, 217u, 291u, 293u, 384u}) {
     request.payload_bytes = kCardRecordReadPayloadBytes + record_bytes;
     expect(!valid_request(request), "odd record write length was accepted");
@@ -660,12 +662,12 @@ void test_three_slot_record_protocol() {
   response.security_properties = kDevelopmentCompatibilitySecurityProperties;
   response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1ThreeSlotSize);
   response.nonce[9] = std::byte{0x43};
-  write_card_record_response(response_pipe.write.get(), response, record);
+  write_card_record_response(response_pipe.write.get(), Operation::card_record_read, response, record);
   const Response received = read_response(response_pipe.read.get(),
                                           response.nonce,
                                           Operation::card_record_read);
   const auto read_back =
-      read_card_record_response_payload(response_pipe.read.get(), received);
+      read_card_record_response_payload(response_pipe.read.get(), Operation::card_record_read, received);
   expect(read_back.size() == kCardRecordV1ThreeSlotSize,
          "three-envelope record response changed length");
   expect_fixed_secret(read_back, std::byte{0x5c},
@@ -677,8 +679,101 @@ void test_three_slot_record_protocol() {
   }
   response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1Size);
   expect_protocol_error(
-      [&] { write_card_record_response(response_pipe.write.get(), response, record); },
+      [&] { write_card_record_response(response_pipe.write.get(), Operation::card_record_read, response, record); },
       "record response header disagreed with its record length");
+}
+
+// Contact list operations carry exactly their fixed region or copy, and no
+// other operation admits those lengths.
+void test_contact_store_protocol() {
+  using usb_vault::contacts::kContactStoreV1CopySize;
+  using usb_vault::contacts::kContactStoreV1RegionSize;
+  Request request{};
+  request.operation = Operation::contact_store_read;
+  request.payload_bytes = kCardRecordReadPayloadBytes;
+  expect(valid_request(request), "contact region read was rejected");
+  request.payload_bytes = kCardRecordReadPayloadBytes + 1;
+  expect(!valid_request(request), "contact region read with data accepted");
+  for (const Operation op : {Operation::contact_store_write_first,
+                             Operation::contact_store_write_second}) {
+    request.operation = op;
+    request.payload_bytes = static_cast<std::uint32_t>(
+        kCardRecordReadPayloadBytes + kContactStoreV1CopySize);
+    expect(valid_request(request), "contact copy write was rejected");
+    for (const auto bytes :
+         {std::size_t{0}, kCardRecordV1Size, kCardRecordV1ThreeSlotSize,
+          kContactStoreV1CopySize - 1, kContactStoreV1CopySize + 1,
+          kContactStoreV1RegionSize}) {
+      request.payload_bytes =
+          static_cast<std::uint32_t>(kCardRecordReadPayloadBytes + bytes);
+      expect(!valid_request(request), "odd contact copy length was accepted");
+    }
+  }
+  request.operation = Operation::card_record_write;
+  request.payload_bytes = static_cast<std::uint32_t>(
+      kCardRecordReadPayloadBytes + kContactStoreV1CopySize);
+  expect(!valid_request(request), "a record write admitted a contact copy");
+  request.operation = Operation::contact_store_write_first;
+  request.payload_bytes = kCardRecordWritePayloadBytes;
+  expect(!valid_request(request), "a contact write admitted a record");
+
+  const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
+  const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
+  const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});
+  const auto copy = fixed_secret(kContactStoreV1CopySize, std::byte{0x2e});
+  const Pipe write_pipe = make_pipe();
+  Request header{};
+  header.operation = Operation::contact_store_write_second;
+  header.payload_bytes = static_cast<std::uint32_t>(
+      kCardRecordReadPayloadBytes + kContactStoreV1CopySize);
+  write_card_record_write_request(write_pipe.write.get(), header, {}, 7,
+                                  user_sn, api_key, user_pin, copy);
+  const Request received_header = read_request(write_pipe.read.get());
+  expect(received_header.operation == Operation::contact_store_write_second,
+         "contact copy write header did not round-trip");
+  const CardRecordWriteRequest body =
+      read_card_record_write_request(write_pipe.read.get(), received_header);
+  expect(body.record.size() == kContactStoreV1CopySize,
+         "contact copy write changed length");
+  expect_fixed_secret(body.record, std::byte{0x2e},
+                      "contact copy write did not round-trip");
+
+  const Pipe response_pipe = make_pipe();
+  Response response{};
+  response.security_properties = kDevelopmentCompatibilitySecurityProperties;
+  response.payload_bytes = static_cast<std::uint32_t>(kContactStoreV1RegionSize);
+  response.nonce[3] = std::byte{0x19};
+  const auto region = fixed_secret(kContactStoreV1RegionSize, std::byte{0x4b});
+  write_card_record_response(response_pipe.write.get(),
+                             Operation::contact_store_read, response, region);
+  const Response received = read_response(
+      response_pipe.read.get(), response.nonce, Operation::contact_store_read);
+  const auto read_back = read_card_record_response_payload(
+      response_pipe.read.get(), Operation::contact_store_read, received);
+  expect(read_back.size() == kContactStoreV1RegionSize,
+         "contact region response changed length");
+  expect_fixed_secret(read_back, std::byte{0x4b},
+                      "contact region response did not round-trip");
+  expect(!valid_response(response, Operation::card_record_read),
+         "a record read admitted a contact region");
+  expect_protocol_error(
+      [&] {
+        write_card_record_response(response_pipe.write.get(),
+                                   Operation::card_record_read, response,
+                                   region);
+      },
+      "a contact region was sent as a record response");
+  response.payload_bytes = static_cast<std::uint32_t>(kCardRecordV1Size);
+  expect(!valid_response(response, Operation::contact_store_read),
+         "a contact read admitted a record length");
+  expect_protocol_error(
+      [&] {
+        write_card_record_response(response_pipe.write.get(),
+                                   Operation::card_record_write, response,
+                                   fixed_secret(kCardRecordV1Size,
+                                                std::byte{1}));
+      },
+      "a write operation produced a record response");
 }
 
 void test_response_validation() {
@@ -953,6 +1048,7 @@ int main() {
     test_development_blob_response_round_trip();
     test_card_record_response_round_trip();
     test_three_slot_record_protocol();
+    test_contact_store_protocol();
     test_response_validation();
     test_nonce_mismatch_is_rejected();
     test_diagnostic_round_trip();

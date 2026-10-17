@@ -621,8 +621,14 @@ ContactStoreState ContactStoreV1::load() {
     state_ = ContactStoreState::unavailable;
     return state_;
   }
-  const security::SecureBuffer region =
-      storage_.read(kContactStoreV1RegionOffset, kContactStoreV1RegionSize);
+  security::SecureBuffer region;
+  try {
+    region =
+        storage_.read(kContactStoreV1RegionOffset, kContactStoreV1RegionSize);
+  } catch (const ContactStoreCapacityError&) {
+    state_ = ContactStoreState::unavailable;
+    return state_;
+  }
   if (region.size() != kContactStoreV1RegionSize) {
     throw std::runtime_error("contact store read returned the wrong length");
   }

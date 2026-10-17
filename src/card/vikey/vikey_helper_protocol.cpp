@@ -91,10 +91,16 @@ bool valid_request(const Request& request) noexcept {
   } else if (is_record_read(request.operation)) {
     required_payload = kCardRecordReadPayloadBytes;
   } else if (is_record_write(request.operation)) {
+    // The record length must be one this operation admits; anything else
+    // leaves a requirement the payload cannot meet.
     required_payload =
-        request.payload_bytes == kCardRecordThreeSlotWritePayloadBytes
-            ? kCardRecordThreeSlotWritePayloadBytes
-            : kCardRecordWritePayloadBytes;
+        request.payload_bytes > kCardRecordReadPayloadBytes &&
+                valid_record_payload(request.operation,
+                                     request.payload_bytes -
+                                         kCardRecordReadPayloadBytes)
+            ? request.payload_bytes
+            : 0;
+    if (required_payload == 0) return false;
   } else if (request.operation == Operation::card_media_bootstrap) {
     required_payload = kCardMediaBootstrapPayloadBytes;
   } else if (request.operation == Operation::development_media_reset) {
@@ -629,9 +635,9 @@ void write_development_blob_response(
 }
 
 void write_card_record_response(
-    const HANDLE pipe, const Response& response,
+    const HANDLE pipe, const Operation operation, const Response& response,
     const security::SecureBuffer& record) {
-  if (!valid_response(response, Operation::card_record_read) ||
+  if (!is_record_read(operation) || !valid_response(response, operation) ||
       response.status != 0 || record.size() != response.payload_bytes) {
     throw_protocol("refuse invalid ViKey card record response");
   }
@@ -664,8 +670,8 @@ security::SecureBuffer read_development_blob_response_payload(
 }
 
 security::SecureBuffer read_card_record_response_payload(
-    const HANDLE pipe, const Response& response) {
-  if (!valid_response(response, Operation::card_record_read) ||
+    const HANDLE pipe, const Operation operation, const Response& response) {
+  if (!is_record_read(operation) || !valid_response(response, operation) ||
       response.status != 0) {
     throw_protocol("reject invalid ViKey card record response");
   }

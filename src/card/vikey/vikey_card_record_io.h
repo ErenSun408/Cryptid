@@ -59,4 +59,17 @@ void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer
 // Restricted import: initialized v1 logical record to blank/provisioned media only.
 void write_vikey_spare_card(VikeySession& session, const security::SecureBuffer& record);
 
+// P5.14 contact list region [1808, 8192). Both operations require a card whose
+// journal selects an initialized product record, so the helper never touches
+// this range on blank, foreign or uninitialized media. A user area smaller
+// than the region end fails with invalid_configuration at stage sdk_capacity.
+// Ciphertext only: the helper neither holds the store key nor parses copies.
+[[nodiscard]] security::SecureBuffer read_vikey_contact_region(
+    VikeySession& session);
+
+// Writes one whole copy (index 0 or 1) without readback; the application
+// reads the region back through a separate session and decides success.
+void write_vikey_contact_copy(VikeySession& session, std::size_t copy_index,
+                              const security::SecureBuffer& copy);
+
 }  // namespace usb_vault::card::vikey
