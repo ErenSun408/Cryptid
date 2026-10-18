@@ -354,6 +354,17 @@ class CardProductUiSessionController final {
       std::span<std::byte> mutable_password_utf8, std::span<std::byte> mutable_confirmation_utf8,
       const std::function<bool()>& cancelled,
       const std::function<void(std::uint64_t, std::uint64_t)>& progress);
+  // P5.14 selection export to recipients instead of a password. Every
+  // recipient must be a contact listed for this login, named once, and at
+  // most 15 of them: the sender takes the sixteenth slot. The sender's
+  // identity and the recipients are copied for the export, so it never
+  // borrows from a list a session change may drop meanwhile.
+  void export_container_selection_for_recipients(
+      std::span<const application::ExportSelectionEntry> entries,
+      std::wstring_view destination_directory, std::wstring_view folder_name,
+      std::span<const contacts::ContactPublicKey> recipients,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress);
   void export_container_entry_encrypted(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view name, std::wstring_view absolute_destination_directory,

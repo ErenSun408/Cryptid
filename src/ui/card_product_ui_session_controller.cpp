@@ -2,6 +2,7 @@
 #include "card/diagnostic_error.h"
 #include "usb_vault/diagnostics/debug_log.h"
 
+#include "usb_vault/backup/transfer_package_v1.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/container_target_path.h"
@@ -1124,6 +1125,40 @@ bool CardProductUiSessionController::export_own_contact_key() {
   file.close();
   if (!file) throw std::system_error(std::make_error_code(std::errc::io_error), "write the own key file");
   return true;
+}
+
+void CardProductUiSessionController::export_container_selection_for_recipients(
+    const std::span<const application::ExportSelectionEntry> entries,
+    const std::wstring_view destination_directory, const std::wstring_view folder_name,
+    const std::span<const contacts::ContactPublicKey> recipients,
+    const std::function<bool()>& cancelled,
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  std::vector<contacts::ContactPublicKey> chosen;
+  // Taken from the list here and then let go of: the export holds only its
+  // copies, so a session change can drop the list while the export runs.
+  const contacts::ContactIdentity sender = [&] {
+    const auto book = open_contact_book();
+    if (recipients.empty() || recipients.size() >= backup::kTransferPackageV1Slots) {
+      throw std::invalid_argument("a recipient export names 1 to 15 contacts");
+    }
+    require_same_card();
+    if (book->state() == contacts::ContactStoreState::unread) static_cast<void>(book->load());
+    // Chosen from the list only: a key the page made up is refused, so what a
+    // package is sealed to is always someone the user listed and named.
+    chosen.reserve(recipients.size());
+    for (const contacts::ContactPublicKey& key : recipients) {
+      if (std::ranges::find(chosen, key) != chosen.end() ||
+          std::ranges::none_of(book->entries(), [&](const contacts::ContactEntry& entry) {
+            return entry.public_key == key;
+          })) {
+        throw std::invalid_argument("a recipient is not a listed contact or is named twice");
+      }
+      chosen.push_back(key);
+    }
+    return book->transfer_identity();
+  }();
+  volume_session_.export_container_selection_for_recipients(
+      entries, destination_directory, folder_name, sender, chosen, cancelled, progress);
 }
 
 void CardProductUiSessionController::release_stale_contact_book() noexcept {

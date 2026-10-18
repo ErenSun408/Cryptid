@@ -464,6 +464,29 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   std::vector<ExportCall> encrypted_exports;
   std::vector<std::byte> encrypted_password;
 
+  struct RecipientExportCall final {
+    std::size_t entries{};
+    std::wstring destination;
+    usb_vault::contacts::ContactPublicKey sender{};
+    std::vector<usb_vault::contacts::ContactPublicKey> recipients;
+  };
+  void export_container_selection_for_recipients(
+      const std::span<const usb_vault::application::ExportSelectionEntry> entries,
+      const std::wstring_view destination_directory, const std::wstring_view folder_name,
+      const usb_vault::contacts::ContactIdentity& sender,
+      const std::span<const usb_vault::contacts::ContactPublicKey> recipients,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) override {
+    if (during_recipient_export) during_recipient_export(sender);
+    recipient_exports.push_back(
+        {.entries = entries.size(),
+         .destination = std::wstring(destination_directory) + L"|" + std::wstring(folder_name),
+         .sender = sender.public_key(),
+         .recipients = {recipients.begin(), recipients.end()}});
+  }
+  std::function<void(const usb_vault::contacts::ContactIdentity&)> during_recipient_export;
+  std::vector<RecipientExportCall> recipient_exports;
+
   std::wstring import_package_into_container(
       const std::uint32_t id, const std::wstring_view relative_directory,
       const std::wstring_view package,
@@ -2775,6 +2798,7 @@ struct ContactCard final {
       std::vector<std::byte>(usb_vault::contacts::kContactStoreV1RegionEnd);
   bool too_small{};
   int leases_alive{};
+  int reads{};
   int writes{};
   int storages_made{};
   int storages_alive{};
@@ -2791,6 +2815,7 @@ class ContactStorage final : public usb_vault::contacts::IContactStoreStorage {
   SecureBuffer read(const std::size_t offset, const std::size_t length) override {
     require(card_.leases_alive == 1, "the contact list was read without a lease");
     if (card_.too_small) throw usb_vault::contacts::ContactStoreCapacityError();
+    ++card_.reads;
     SecureBuffer out(length);
     std::copy_n(card_.bytes.begin() + static_cast<std::ptrdiff_t>(offset), length, out.data());
     return out;
@@ -3213,6 +3238,152 @@ void test_contact_writes_need_a_card_recheck_and_a_writable_list() {
   require(fixture.card.writes == 0, "clearing an intact list wrote the card");
 }
 
+void add_listed_contact(ContactFixture& fixture, const unsigned char fill, const std::string_view remark) {
+  fixture.chooser.key_file_path = fixture.key_file(fill).wstring();
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  require(fixture.controller.add_chosen_contact(remark).change ==
+              usb_vault::application::ContactBookChange::done,
+          "a test contact was not added");
+}
+
+void test_a_recipient_export_seals_to_listed_contacts_with_copies() {
+  ContactFixture fixture;
+  fixture.log_in();
+  add_listed_contact(fixture, 40, "Alice");
+  add_listed_contact(fixture, 41, "Bob");
+  const std::array<usb_vault::contacts::ContactPublicKey, 2> recipients{contact_key(41), contact_key(40)};
+  const std::array<usb_vault::application::ExportSelectionEntry, 1> entries{
+      {{.id = 3, .directory = L"reports", .name = L"q1.txt"}}};
+
+  // The list is dropped while the export runs; the export's own copies of
+  // the sender and the recipients still sign and seal.
+  bool signed_after_release = false;
+  fixture.volume.during_recipient_export = [&](const usb_vault::contacts::ContactIdentity& sender) {
+    fixture.authentication.clear_authentication();
+    fixture.controller.release_stale_contact_book();
+    require(fixture.card.storages_alive == 0, "the list was kept alive by the export");
+    const std::array<std::byte, 3> message{std::byte{1}, std::byte{2}, std::byte{3}};
+    signed_after_release = usb_vault::contacts::verify_contact_signature(
+        sender.public_key(), message, sender.sign(message));
+  };
+  const std::size_t rechecks = fixture.verifier.expected_identities.size();
+  fixture.controller.export_container_selection_for_recipients(entries, L"D:\\Out", L"pack",
+                                                               recipients, {}, {});
+  require(signed_after_release, "the sender copy did not outlive the list");
+  require(fixture.verifier.expected_identities.size() == rechecks + 1,
+          "a recipient export did not recheck the card");
+  const auto& call = fixture.volume.recipient_exports;
+  require(call.size() == 1 && call[0].entries == 1 && call[0].destination == L"D:\\Out|pack" &&
+              call[0].sender ==
+                  usb_vault::contacts::ContactIdentity::derive(root_secret()).public_key() &&
+              call[0].recipients ==
+                  std::vector<usb_vault::contacts::ContactPublicKey>(recipients.begin(),
+                                                                     recipients.end()),
+          "the export was not sealed by this card to exactly the chosen contacts");
+}
+
+void test_a_recipient_export_refuses_anyone_not_chosen_from_the_list() {
+  ContactFixture fixture;
+  fixture.log_in();
+  add_listed_contact(fixture, 40, "Alice");
+  const std::array<usb_vault::application::ExportSelectionEntry, 1> entries{
+      {{.id = 3, .directory = L"", .name = L"q1.txt"}}};
+  const auto refused = [&](const std::vector<usb_vault::contacts::ContactPublicKey>& recipients,
+                           const char* const message) {
+    require_throws<std::invalid_argument>(
+        [&] {
+          fixture.controller.export_container_selection_for_recipients(entries, L"D:\\Out", L"p",
+                                                                       recipients, {}, {});
+        },
+        message);
+  };
+  refused({}, "a recipient export without recipients ran");
+  refused({contact_key(41)}, "an unlisted key received an export");
+  refused({contact_key(40), contact_key(40)}, "a recipient named twice was accepted");
+  refused({usb_vault::contacts::ContactIdentity::derive(root_secret()).public_key()},
+          "the own key was taken for a listed contact");
+  refused(std::vector<usb_vault::contacts::ContactPublicKey>(16, contact_key(40)),
+          "sixteen recipients left no slot for the sender");
+  require(fixture.volume.recipient_exports.empty(), "a refused recipient export still ran");
+
+  fixture.verifier.results = {usb_vault::application::CardIdentityRecheck::different_card};
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.export_container_selection_for_recipients(
+            entries, L"D:\\Out", L"p", std::vector{contact_key(40)}, {}, {});
+      },
+      "a recipient export ran against a different card");
+  fixture.authentication.clear_authentication();
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.export_container_selection_for_recipients(
+            entries, L"D:\\Out", L"p", std::vector{contact_key(40)}, {}, {});
+      },
+      "a recipient export ran after logout");
+  require(fixture.volume.recipient_exports.empty(), "a refused recipient export still ran");
+}
+
+void test_a_recipient_export_takes_fifteen_listed_contacts_at_most() {
+  ContactFixture fixture;
+  fixture.log_in();
+  std::vector<usb_vault::contacts::ContactPublicKey> sixteen;
+  for (unsigned char fill = 40; fill < 56; ++fill) {
+    add_listed_contact(fixture, fill, "c" + std::to_string(fill));
+    sixteen.push_back(contact_key(fill));
+  }
+  const std::array<usb_vault::application::ExportSelectionEntry, 1> entries{
+      {{.id = 3, .directory = L"", .name = L"q1.txt"}}};
+  require_throws<std::invalid_argument>(
+      [&] {
+        fixture.controller.export_container_selection_for_recipients(entries, L"D:\\Out", L"p",
+                                                                     sixteen, {}, {});
+      },
+      "sixteen distinct recipients left no slot for the sender");
+  // A key differing from a listed one only in the Ed25519 sign bit is the
+  // same X25519 recipient, but not a key chosen from the list.
+  auto twin = contact_key(40);
+  twin[31] ^= std::byte{0x80};
+  require_throws<std::invalid_argument>(
+      [&] {
+        fixture.controller.export_container_selection_for_recipients(
+            entries, L"D:\\Out", L"p", std::vector{twin}, {}, {});
+      },
+      "a sign-bit twin of a listed contact was taken for that contact");
+  require(fixture.volume.recipient_exports.empty(), "a refused recipient export still ran");
+
+  sixteen.pop_back();
+  fixture.controller.export_container_selection_for_recipients(entries, L"D:\\Out", L"p",
+                                                               sixteen, {}, {});
+  require(fixture.volume.recipient_exports.size() == 1 &&
+              fixture.volume.recipient_exports[0].recipients.size() == 15,
+          "fifteen listed recipients were refused");
+}
+
+void test_a_recipient_export_reads_the_list_only_after_the_recheck() {
+  ContactFixture fixture;
+  fixture.log_in();
+  add_listed_contact(fixture, 40, "Alice");
+  // A new login opens the list unread.
+  fixture.authentication.clear_authentication();
+  fixture.controller.release_stale_contact_book();
+  fixture.log_in();
+  const std::array<usb_vault::application::ExportSelectionEntry, 1> entries{
+      {{.id = 3, .directory = L"", .name = L"q1.txt"}}};
+  const int reads = fixture.card.reads;
+  fixture.verifier.results = {usb_vault::application::CardIdentityRecheck::different_card};
+  require_throws<std::system_error>(
+      [&] {
+        fixture.controller.export_container_selection_for_recipients(
+            entries, L"D:\\Out", L"p", std::vector{contact_key(40)}, {}, {});
+      },
+      "a recipient export ran against a different card");
+  require(fixture.card.reads == reads, "the card was read before the recheck");
+  fixture.controller.export_container_selection_for_recipients(
+      entries, L"D:\\Out", L"p", std::vector{contact_key(40)}, {}, {});
+  require(fixture.card.reads > reads && fixture.volume.recipient_exports.size() == 1,
+          "an unread list was not read before choosing recipients from it");
+}
+
 void test_login_reset_mount_choices() {
   for (int scenario = 0; scenario < 6; ++scenario) {
     Fixture fixture;
@@ -3309,6 +3480,10 @@ int main() {
     test_nothing_of_a_list_works_after_its_login();
     test_a_login_that_ends_during_a_dialog_gets_nothing();
     test_contact_writes_need_a_card_recheck_and_a_writable_list();
+    test_a_recipient_export_seals_to_listed_contacts_with_copies();
+    test_a_recipient_export_refuses_anyone_not_chosen_from_the_list();
+    test_a_recipient_export_takes_fifteen_listed_contacts_at_most();
+    test_a_recipient_export_reads_the_list_only_after_the_recheck();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {
