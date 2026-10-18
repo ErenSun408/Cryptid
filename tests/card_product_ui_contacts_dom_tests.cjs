@@ -56,14 +56,21 @@ async function listAndManage() {
   const {w, el, calls} = t;
   try {
     assert.equal(el('dashboard-section-contacts').classList.contains('active'), true);
-    assert.equal(el('contacts-own-fingerprint').textContent, 'OWNF INGE RPRI NT00');
+    // No fingerprint is shown anywhere: contacts are named by remark only.
+    assert.equal(el('contacts-own-fingerprint'), null);
+    assert.equal(el('dashboard-section-contacts').textContent.includes('指纹'), false);
+    assert.equal(el('dashboard-section-contacts').textContent.includes('OWNF'), false);
+    assert.equal(el('contacts-add').textContent, '导入他人公钥');
+    assert.equal(el('contacts-export-own').textContent, '导出我的公钥');
     const rows = () => Array.from(el('contacts-body').querySelectorAll('tr[data-contact-key]'));
     assert.deepEqual(rows().map(row => row.cells[0].textContent), ['爱丽丝']);
-    assert.equal(rows()[0].cells[1].textContent, 'AAAA BBBB CCCC DDDD');
+    assert.equal(rows()[0].cells.length, 2);
+    assert.equal(rows()[0].textContent.includes('AAAA'), false);
 
     el('contacts-add').click(); await settle();
     assert.equal(el('contact-add-dialog').hidden, false);
-    assert.equal(el('contact-add-fingerprint').textContent, 'EEEE FFFF 0000 1111');
+    assert.equal(el('contact-add-dialog').textContent.includes('EEEE'), false);
+    assert.equal(el('contact-add-dialog').textContent.includes('指纹'), false);
     el('contact-add-remark').value = '  ';
     el('contact-add-confirm').click(); await settle();
     assert.equal(el('contact-add-status').textContent, '请填写备注。');
@@ -92,7 +99,7 @@ async function listAndManage() {
     assert.deepEqual(rows().map(row => row.cells[0].textContent), ['鲍勃']);
 
     el('contacts-export-own').click(); await settle();
-    assert.equal(el('contacts-status').textContent, '已保存本人公钥文件，可发送给联系人导入。');
+    assert.equal(el('contacts-status').textContent, '已导出');
 
     // Nothing of the list reaches a page event.
     const events = JSON.stringify(w.navigationFixture.pageEvents);

@@ -1946,7 +1946,7 @@
   let importPicked = "";
   let importTarget = "existing";
   // P5.14: the sender of a transfer package addressed to this card, once its
-  // signature verified ({own, remark, fingerprint}); null for a password
+  // signature verified ({own, remark}); null for a password
   // package. A refused package (forged or damaged) cannot be imported.
   let importTransfer = null;
   let importRefused = false;
@@ -3210,8 +3210,7 @@
     importSender.hidden = importTransfer === null;
     if (importTransfer !== null) {
       importSenderText.textContent = importTransfer.own ? "来自本人"
-        : importTransfer.remark !== "" ? `来自 ${importTransfer.remark}`
-        : `未知发件人 · 指纹 ${importTransfer.fingerprint}`;
+        : importTransfer.remark !== "" ? `来自 ${importTransfer.remark}` : "未知发件人";
       importSenderAddFields.hidden = importTransfer.own || importTransfer.remark !== "";
       importSenderAdd.disabled = busy;
     }
@@ -3281,8 +3280,8 @@
       const answer = String(await bridge.transferImportSender()).split("\u001e");
       if (!current()) return;
       if (answer[0] === "2") {
-        const [own, remark, fingerprint] = (answer[1] || "").split("\u001f");
-        importTransfer = {own: own === "1", remark: remark || "", fingerprint: fingerprint || ""};
+        const [own, remark] = (answer[1] || "").split("\u001f");
+        importTransfer = {own: own === "1", remark: remark || ""};
         importMinimumMib = Number(await bridge.getVerifiedImportMinimumMib());
         if (!current()) return;
         if (!(Number(importNewSize.value) >= importMinimumMib)) importNewSize.value = String(importMinimumMib);
@@ -3470,10 +3469,7 @@
       box.disabled = !box.checked && exportRecipients.size >= kMaxExportRecipients;
       const remark = document.createElement("span");
       remark.textContent = choice.remark;
-      const fingerprint = document.createElement("span");
-      fingerprint.className = "contacts-fingerprint";
-      fingerprint.textContent = choice.fingerprint;
-      label.append(box, remark, fingerprint);
+      label.append(box, remark);
       exportRecipientList.append(label);
     }
     if (!exportRecipientsLoading && exportRecipientHint.dataset.tone !== "error") {
@@ -3505,7 +3501,7 @@
         exportRecipientHint.dataset.tone = "error";
       } else {
         exportRecipientChoices = answer.records.slice(1)
-          .map(([key, remark, fingerprint]) => ({key, remark, fingerprint}));
+          .map(([key, remark]) => ({key, remark}));
       }
     } catch (pageError) { logCaughtPageError("loadExportRecipients/1", pageError);
       exportRecipientChoices = [];
@@ -7751,14 +7747,12 @@
   const contactField = "\u001f";
   const contactsBody = document.getElementById("contacts-body");
   const contactsStatus = document.getElementById("contacts-status");
-  const contactsOwnFingerprint = document.getElementById("contacts-own-fingerprint");
   const contactsNotice = document.getElementById("contacts-notice");
   const contactsNoticeText = document.getElementById("contacts-notice-text");
   const contactsClear = document.getElementById("contacts-clear");
   const contactsAdd = document.getElementById("contacts-add");
   const contactsExportOwn = document.getElementById("contacts-export-own");
   const contactAddDialog = document.getElementById("contact-add-dialog");
-  const contactAddFingerprint = document.getElementById("contact-add-fingerprint");
   const contactAddRemark = document.getElementById("contact-add-remark");
   const contactAddStatus = document.getElementById("contact-add-status");
   const contactAddConfirm = document.getElementById("contact-add-confirm");
@@ -7824,7 +7818,6 @@
     contactsState = contactState.unread;
     contactTarget = null;
     contactsBody.replaceChildren();
-    contactsOwnFingerprint.textContent = "";
     contactsNotice.hidden = true;
     setContactsStatus("");
     contactAddDialog.hidden = true;
@@ -7837,7 +7830,7 @@
   const updateContactsControls = () => {
     const writable = contactsState === contactState.empty || contactsState === contactState.loaded;
     contactsAdd.disabled = contactsBusy || !writable;
-    contactsExportOwn.disabled = contactsBusy || contactsOwnFingerprint.textContent === "";
+    contactsExportOwn.disabled = contactsBusy;
     contactsClear.disabled = contactsBusy;
     contactAddConfirm.disabled = contactsBusy;
     contactRenameConfirm.disabled = contactsBusy;
@@ -7861,7 +7854,7 @@
     if (contactEntries.length === 0) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
-      cell.colSpan = 3;
+      cell.colSpan = 2;
       cell.className = "operation-empty";
       cell.textContent = contactsState === contactState.empty || contactsState === contactState.loaded
         ? "尚无联系人。导入对方的公钥文件后即可指定其为接收人。" : "";
@@ -7873,9 +7866,6 @@
       row.dataset.contactKey = entry.key;
       const remark = document.createElement("td");
       remark.textContent = entry.remark;
-      const fingerprint = document.createElement("td");
-      fingerprint.className = "contacts-key";
-      fingerprint.textContent = entry.fingerprint;
       const actions = document.createElement("td");
       actions.className = "contacts-row-actions";
       const rename = document.createElement("button");
@@ -7885,7 +7875,7 @@
       remove.type = "button"; remove.className = "shell-button danger"; remove.textContent = "删除";
       remove.dataset.contactAction = "remove";
       actions.append(rename, remove);
-      row.append(remark, fingerprint, actions);
+      row.append(remark, actions);
       contactsBody.append(row);
     }
     updateContactsControls();
@@ -7906,8 +7896,7 @@
       }
       const [header, ...rows] = answer.records;
       contactsState = Number(header[0]);
-      contactsOwnFingerprint.textContent = header[1] || "";
-      contactEntries = rows.map(([key, remark, fingerprint]) => ({key, remark, fingerprint}));
+      contactEntries = rows.map(([key, remark]) => ({key, remark}));
       return true;
     } catch (pageError) { logCaughtPageError("refreshContacts/1", pageError);
       setContactsStatus("无法读取通讯录，请稍后重试。", "error");
@@ -7947,13 +7936,12 @@
     setContactsStatus("");
     const records = await runContactCall(() => bridge.chooseContactKeyFile(), contactsStatus);
     if (records === null) return;
-    const [outcome, fingerprint] = records[0];
+    const [outcome] = records[0];
     if (outcome === "0") return;
     if (outcome !== "1") {
       setContactsStatus(contactChangeMessage(Number(outcome) - 1), "error");
       return;
     }
-    contactAddFingerprint.textContent = fingerprint;
     contactAddRemark.value = "";
     contactAddStatus.textContent = "";
     contactAddStatus.dataset.tone = "";
@@ -8063,7 +8051,7 @@
     setContactsStatus("");
     const records = await runContactCall(() => bridge.exportOwnContactKey(), contactsStatus);
     if (records !== null && records[0][0] === "1") {
-      setContactsStatus("已保存本人公钥文件，可发送给联系人导入。", "success");
+      setContactsStatus("已导出", "success");
     }
   });
 

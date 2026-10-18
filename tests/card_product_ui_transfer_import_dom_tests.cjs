@@ -1,5 +1,5 @@
 // P5.14 import of transfer packages: the check before any password, the
-// sender line shown only after verification, adding an unknown sender,
+// sender line shown only after verification (never a fingerprint), adding an unknown sender,
 // refusal of forged and damaged packages, and the password fallback.
 // Usage: node <this> <jsdom path>
 const fs = require('fs'), assert = require('node:assert/strict');
@@ -62,12 +62,13 @@ const openImport = async (d, $, calls) => {
     } finally { w.close(); }
   }
 
-  // An unknown sender: named by fingerprint and can be added.
+  // An unknown sender: no fingerprint is shown, and it can be added.
   {
     const {w, d, $, calls} = load({check: '2,0,0,0,1', sender: `2${RS}0${FS}${FS}ABCD EFGH JKMN PQRS`});
     try {
       await openImport(d, $, calls);
-      assert.equal($('import-sender-text').textContent, '未知发件人 · 指纹 ABCD EFGH JKMN PQRS');
+      assert.equal($('import-sender-text').textContent, '未知发件人');
+      assert.equal($('import-dialog').textContent.includes('ABCD'), false);
       assert.equal($('import-sender-add-fields').hidden, false);
       $('import-sender-remark').value = 'Bob';
       $('import-sender-add').click(); await tick();

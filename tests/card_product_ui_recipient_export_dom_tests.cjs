@@ -52,7 +52,7 @@ const openDialog = async (d, $) => {
       assert.equal($('export-dialog-passphrase').value, '', 'a typed password survived the switch');
       assert.equal($('export-dialog-recipient-fields').hidden, false);
       const boxes = () => Array.from($('export-recipient-list').querySelectorAll('input[type=checkbox]'));
-      assert.deepEqual(boxes().map(b => b.parentElement.textContent), ['联系人1FP1', '联系人2FP2', '联系人3FP3']);
+      assert.deepEqual(boxes().map(b => b.parentElement.textContent), ['联系人1', '联系人2', '联系人3']);
       $('export-dialog-location').click(); await tick();
       assert.equal($('export-dialog-start').disabled, true, 'no recipient, no export');
       boxes()[2].click(); boxes()[0].click(); await tick();
