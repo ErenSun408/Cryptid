@@ -456,12 +456,44 @@ class CardProductUiSessionController final {
   // P5.9 import into a new container. A package verified for this login,
   // held open together with a page-locked copy of its password until it is
   // taken or the login ends.
+  // A transfer package (P5.14) holds no password: its write pass opens it
+  // again with this card's identity, taken from the contact list then. The
+  // package itself says which kind it was verified as.
   struct VerifiedImport final {
     explicit VerifiedImport(std::wstring_view package) : package_file(package) {}
     backup::ImportPackageV1 package_file;
     security::SecureBuffer password;
     std::uint64_t generation{};
   };
+
+  // P5.14 first pass of a package import, tried before any password. When the
+  // package is not addressed to this card nothing is kept and nothing is
+  // returned: the page asks for the password and goes on as before. Otherwise
+  // every chunk, the manifest and the sender's signature are checked; a
+  // forged signature throws backup::TransferPackageForged, damage throws
+  // backup::ExportPackageRejected, and neither keeps anything. On success the
+  // package stays verified for this login exactly as verify_import leaves
+  // it, and only now is the sender named.
+  struct TransferSenderUi final {
+    // Exactly one applies: this card itself, a listed contact by its remark,
+    // or an unlisted sender by its fingerprint.
+    bool own{};
+    std::optional<std::string> remark;
+    std::string fingerprint;
+  };
+  [[nodiscard]] std::optional<TransferSenderUi> verify_transfer_import(
+      std::wstring_view package, const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+
+  // Lists the sender of the transfer package last verified in this login.
+  application::ContactBookOutcome add_transfer_sender(std::string_view remark);
+
+  // Imports a verified package of either kind into a directory of a mounted
+  // container. Returns the restored name.
+  std::wstring import_verified_into_container(
+      std::unique_ptr<VerifiedImport> verified, std::uint32_t id,
+      std::wstring_view relative_directory, const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
 
   // The read-only pass for an import into a new container; runs on the
   // session worker. On success the package stays open and verified here.
@@ -590,6 +622,13 @@ class CardProductUiSessionController final {
   std::uint64_t undecided_import_generation_{};
   void adopt_or_mount_container_file(const std::wstring& path);
   std::unique_ptr<VerifiedImport> verified_import_;
+  std::optional<contacts::ContactPublicKey> verified_sender_;
+  std::uint64_t verified_sender_generation_{};
+  // Writes a verified package into a directory of a mounted container.
+  std::wstring write_verified(VerifiedImport& verified, std::uint32_t id,
+                              std::wstring_view relative_directory,
+                              const std::function<bool()>& cancelled,
+                              const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
   // Guards the pick and the verified package, which the session worker sets
   // and the window thread may release.
   mutable std::mutex import_mutex_;

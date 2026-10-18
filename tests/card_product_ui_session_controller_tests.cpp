@@ -509,6 +509,22 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
     if (fail_import_write) throw std::runtime_error("the import write failed");
     return L"Docs";
   }
+  struct TransferImportCall final {
+    std::uint32_t id{};
+    std::wstring directory;
+    usb_vault::contacts::ContactPublicKey recipient{};
+  };
+  std::wstring write_verified_transfer_import(
+      const std::uint32_t id, const std::wstring_view relative_directory,
+      usb_vault::backup::ImportPackageV1&, const usb_vault::contacts::ContactIdentity& recipient,
+      const std::function<bool()>&, const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) override {
+    import_events.push_back(L"transfer:" + std::to_wstring(id) + L":" + std::wstring(relative_directory));
+    if (fail_import_write) throw std::runtime_error("the import write failed");
+    transfer_imports.push_back(
+        {.id = id, .directory = std::wstring(relative_directory), .recipient = recipient.public_key()});
+    return L"Docs";
+  }
+  std::vector<TransferImportCall> transfer_imports;
   void defer_operation_records() override { import_events.push_back(L"defer"); }
   void settle_operation_records(const bool keep) override {
     import_events.push_back(keep ? L"settle:keep" : L"settle:drop");
@@ -3384,6 +3400,273 @@ void test_a_recipient_export_reads_the_list_only_after_the_recheck() {
           "an unread list was not read before choosing recipients from it");
 }
 
+// A real transfer package of one small file, from `sender` to `recipients`
+// (the sender is added by the format), in a directory of its own.
+[[nodiscard]] std::filesystem::path make_transfer_package(
+    const ScopedDirectory& directory, const std::wstring& leaf,
+    const usb_vault::contacts::ContactIdentity& sender,
+    const std::vector<usb_vault::contacts::ContactPublicKey>& recipients) {
+  const std::filesystem::path folder = std::filesystem::path(directory.wide()) / leaf;
+  std::filesystem::create_directories(folder);
+  const std::filesystem::path source = folder / L"note.txt";
+  write_text(source, "transferred content");
+  const std::array<usb_vault::backup::ExportSelectionSourceV1, 1> sources{
+      {{.absolute_source = source.wstring(), .output_name = L"note.txt"}}};
+  usb_vault::backup::export_selection_to_file_v1(
+      sources, (folder / L"package").wstring(), L"pack",
+      usb_vault::backup::ExportRecipientsV1{.sender = sender, .recipients = recipients});
+  require(std::filesystem::is_regular_file(folder / L"package"), "no transfer package was written");
+  return folder / L"package";
+}
+
+[[nodiscard]] usb_vault::contacts::ContactIdentity own_identity() {
+  return usb_vault::contacts::ContactIdentity::derive(root_secret());
+}
+
+void test_a_transfer_package_names_its_sender_only_after_verifying() {
+  ContactFixture fixture;
+  fixture.log_in();
+  add_listed_contact(fixture, 40, "Alice");
+  const auto alice = usb_vault::contacts::ContactIdentity::derive(other_root(40));
+  const auto bob = usb_vault::contacts::ContactIdentity::derive(other_root(41));
+  const auto own = own_identity().public_key();
+
+  const auto from_alice = make_transfer_package(fixture.directory, L"alice", alice, {own});
+  const std::size_t rechecks = fixture.verifier.expected_identities.size();
+  const auto listed = fixture.controller.verify_transfer_import(from_alice.wstring(), {}, {});
+  require(listed && !listed->own && listed->remark == "Alice" && listed->fingerprint.empty(),
+          "a listed sender was not named by its remark alone");
+  require(fixture.verifier.expected_identities.size() == rechecks + 1,
+          "a transfer import was verified without a card recheck");
+  require(fixture.controller.verified_import_minimum_mib() > 0,
+          "a verified transfer package was not kept for this login");
+  auto verified = fixture.controller.take_verified_import();
+  require(verified && verified->package_file.verified_as_transfer() && verified->password.empty(),
+          "a transfer package was kept with a password");
+  require(fixture.controller.import_verified_into_container(std::move(verified), 3, L"docs", {},
+                                                            {}) == L"Docs",
+          "a verified transfer package was not imported");
+  require(fixture.volume.transfer_imports.size() == 1 &&
+              fixture.volume.transfer_imports[0].recipient == own &&
+              fixture.volume.import_events.back() == L"transfer:3:docs",
+          "the transfer write did not open the package as this card");
+
+  const auto from_bob = make_transfer_package(fixture.directory, L"bob", bob, {own});
+  const auto unlisted = fixture.controller.verify_transfer_import(from_bob.wstring(), {}, {});
+  require(unlisted && !unlisted->own && !unlisted->remark &&
+              unlisted->fingerprint ==
+                  usb_vault::contacts::format_contact_fingerprint(bob.public_key()),
+          "an unlisted sender was not named by its fingerprint");
+  require(fixture.controller.add_transfer_sender("Bob").change ==
+              usb_vault::application::ContactBookChange::done,
+          "an unlisted sender could not be added");
+  require(fixture.controller.contact_book().entries.size() == 2,
+          "the added sender is not listed");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_transfer_sender("Bob")); },
+      "an added sender was held for a second add");
+
+  const auto from_self = make_transfer_package(fixture.directory, L"self", own_identity(),
+                                               {alice.public_key()});
+  const auto self = fixture.controller.verify_transfer_import(from_self.wstring(), {}, {});
+  require(self && self->own && !self->remark && self->fingerprint.empty(),
+          "a package from this card was not named as its own");
+}
+
+void test_a_package_not_for_this_card_falls_back_to_the_password() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const auto alice = usb_vault::contacts::ContactIdentity::derive(other_root(40));
+  const auto bob = usb_vault::contacts::ContactIdentity::derive(other_root(41));
+  const auto elsewhere =
+      make_transfer_package(fixture.directory, L"elsewhere", alice, {bob.public_key()});
+  require(!fixture.controller.verify_transfer_import(elsewhere.wstring(), {}, {}) &&
+              fixture.controller.verified_import_minimum_mib() == 0,
+          "a package for another card was verified or kept");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_transfer_sender("Alice")); },
+      "a sender was held for a package not addressed here");
+
+  const std::filesystem::path source = std::filesystem::path(fixture.directory.wide()) / L"p.txt";
+  write_text(source, "password content");
+  const std::filesystem::path password_package =
+      std::filesystem::path(fixture.directory.wide()) / L"password package";
+  {
+    const std::string_view text = "long enough export pass";
+    SecureBuffer password(text.size());
+    std::ranges::copy(std::as_bytes(std::span(text.data(), text.size())), password.bytes().begin());
+    usb_vault::backup::export_package_to_file_v1(source.wstring(), password_package.wstring(), password);
+  }
+  require(!fixture.controller.verify_transfer_import(password_package.wstring(), {}, {}),
+          "a password package was taken for a transfer package");
+  std::vector<std::byte> password = bytes("long enough export pass");
+  fixture.controller.verify_import(password_package.wstring(), password, {}, {});
+  auto verified = fixture.controller.take_verified_import();
+  require(verified && !verified->package_file.verified_as_transfer(),
+          "the password path no longer verifies");
+  static_cast<void>(fixture.controller.import_verified_into_container(std::move(verified), 3, L"",
+                                                                     {}, {}));
+  require(fixture.volume.transfer_imports.empty() &&
+              fixture.volume.import_events.back() == L"write:3:",
+          "a password package was written as a transfer package");
+}
+
+void test_a_transfer_import_into_a_new_container_is_all_or_nothing() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const auto alice = usb_vault::contacts::ContactIdentity::derive(other_root(40));
+  const auto package =
+      make_transfer_package(fixture.directory, L"new", alice, {own_identity().public_key()});
+  static_cast<void>(fixture.controller.verify_transfer_import(package.wstring(), {}, {}));
+  const std::uint32_t minimum = fixture.controller.verified_import_minimum_mib();
+  const std::uint32_t id = fixture.controller.import_into_new_container(
+      fixture.controller.take_verified_import(), L"restored", fixture.directory.wide(),
+      std::max<std::uint32_t>(minimum, 64), {}, {});
+  require(fixture.volume.import_events ==
+              std::vector<std::wstring>{L"defer", L"transfer:" + std::to_wstring(id) + L":",
+                                        L"settle:keep"},
+          "a transfer import into a new container did not write as this card");
+
+  fixture.volume.import_events.clear();
+  static_cast<void>(fixture.controller.verify_transfer_import(package.wstring(), {}, {}));
+  fixture.volume.fail_import_write = true;
+  require_throws<std::runtime_error>(
+      [&] {
+        static_cast<void>(fixture.controller.import_into_new_container(
+            fixture.controller.take_verified_import(), L"failed", fixture.directory.wide(),
+            std::max<std::uint32_t>(minimum, 64), {}, {}));
+      },
+      "a failed transfer import into a new container was reported as done");
+  require(fixture.volume.import_events.size() == 4 &&
+              fixture.volume.import_events[2].starts_with(L"discard:") &&
+              fixture.volume.import_events[3] == L"settle:drop",
+          "a failed transfer import kept its new container");
+}
+
+void test_a_verified_transfer_belongs_to_its_login() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const auto bob = usb_vault::contacts::ContactIdentity::derive(other_root(41));
+  const auto package =
+      make_transfer_package(fixture.directory, L"login", bob, {own_identity().public_key()});
+
+  // A login that changes while the package is verified keeps nothing of it.
+  bool changed = false;
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(fixture.controller.verify_transfer_import(
+            package.wstring(), {}, [&](unsigned int, std::uint64_t, std::uint64_t) {
+              if (changed) return;
+              changed = true;
+              fixture.authentication.clear_authentication();
+              fixture.authentication.establish(root_secret());
+            }));
+      },
+      "a package verified across a login change was kept");
+  require(changed && !fixture.controller.take_verified_import(),
+          "a package verified across a login change was handed out");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_transfer_sender("Bob")); },
+      "a sender verified across a login change was held");
+  static_cast<void>(fixture.controller.verify_transfer_import(package.wstring(), {}, {}));
+  auto verified = fixture.controller.take_verified_import();
+  static_cast<void>(fixture.controller.verify_transfer_import(package.wstring(), {}, {}));
+  fixture.authentication.clear_authentication();
+  fixture.log_in();
+  require(!fixture.controller.take_verified_import(), "a verified transfer outlived its login");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_transfer_sender("Bob")); },
+      "a sender verified in another login was added");
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(fixture.controller.import_verified_into_container(std::move(verified), 3,
+                                                                           L"", {}, {}));
+      },
+      "a package verified in another login was imported");
+  require(fixture.volume.transfer_imports.empty() && fixture.card.writes == 0,
+          "an earlier login's transfer reached the vault or the card");
+
+  // A damaged package is refused and nothing of it is kept.
+  const auto damaged =
+      make_transfer_package(fixture.directory, L"damaged", bob, {own_identity().public_key()});
+  {
+    std::fstream file(damaged, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekp(-20, std::ios::end);
+    file.put('\x5A');
+  }
+  require_throws<usb_vault::backup::ExportPackageRejected>(
+      [&] { static_cast<void>(fixture.controller.verify_transfer_import(damaged.wstring(), {}, {})); },
+      "a damaged transfer package was accepted");
+  require(fixture.controller.verified_import_minimum_mib() == 0, "a damaged package was kept");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_transfer_sender("Bob")); },
+      "the sender of a damaged package was held");
+}
+
+void test_a_transfer_import_keeps_nothing_it_did_not_finish() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const auto bob = usb_vault::contacts::ContactIdentity::derive(other_root(41));
+  const auto own = own_identity().public_key();
+  const auto package = make_transfer_package(fixture.directory, L"keep", bob, {own});
+
+  // A contact listed under the sign-bit twin of the sender's key is the same
+  // recipient, and names the sender whose signature verified.
+  auto twin = bob.public_key();
+  twin[31] ^= std::byte{0x80};
+  const std::filesystem::path twin_file =
+      std::filesystem::path(fixture.directory.wide()) / L"twin.uvkey";
+  write_text(twin_file, usb_vault::contacts::encode_contact_key_file(twin));
+  fixture.chooser.key_file_path = twin_file.wstring();
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  require(fixture.controller.add_chosen_contact("Bob").change ==
+              usb_vault::application::ContactBookChange::done,
+          "a sign-bit twin key could not be listed");
+  const auto named = fixture.controller.verify_transfer_import(package.wstring(), {}, {});
+  require(named && named->remark == "Bob", "a twin-listed sender was not named by its remark");
+
+  // A password verification drops the sender a transfer verification held.
+  const std::filesystem::path source = std::filesystem::path(fixture.directory.wide()) / L"p.txt";
+  write_text(source, "password content");
+  const std::filesystem::path password_package =
+      std::filesystem::path(fixture.directory.wide()) / L"password package";
+  {
+    const std::string_view text = "long enough export pass";
+    SecureBuffer password(text.size());
+    std::ranges::copy(std::as_bytes(std::span(text.data(), text.size())), password.bytes().begin());
+    usb_vault::backup::export_package_to_file_v1(source.wstring(), password_package.wstring(), password);
+  }
+  std::vector<std::byte> password = bytes("long enough export pass");
+  fixture.controller.verify_import(password_package.wstring(), password, {}, {});
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_transfer_sender("Bob")); },
+      "a password verification left an earlier sender held");
+
+  // Cancelled verification keeps nothing.
+  require_throws<std::system_error>(
+      [&] {
+        static_cast<void>(
+            fixture.controller.verify_transfer_import(package.wstring(), [] { return true; }, {}));
+      },
+      "a cancelled transfer verification completed");
+  require(fixture.controller.verified_import_minimum_mib() == 0,
+          "a cancelled transfer verification was kept");
+
+  // Without a contact list nothing is created for a transfer package.
+  static_cast<void>(fixture.controller.verify_transfer_import(package.wstring(), {}, {}));
+  auto verified = fixture.controller.take_verified_import();
+  fixture.controller.set_contact_book_access({});
+  fixture.volume.import_events.clear();
+  require_throws<std::logic_error>(
+      [&] {
+        static_cast<void>(fixture.controller.import_into_new_container(
+            std::move(verified), L"restored", fixture.directory.wide(), 64, {}, {}));
+      },
+      "a transfer import ran without a contact list");
+  require(fixture.volume.import_events.empty(),
+          "a container was created for a transfer that could not be written");
+}
+
 void test_login_reset_mount_choices() {
   for (int scenario = 0; scenario < 6; ++scenario) {
     Fixture fixture;
@@ -3484,6 +3767,11 @@ int main() {
     test_a_recipient_export_refuses_anyone_not_chosen_from_the_list();
     test_a_recipient_export_takes_fifteen_listed_contacts_at_most();
     test_a_recipient_export_reads_the_list_only_after_the_recheck();
+    test_a_transfer_package_names_its_sender_only_after_verifying();
+    test_a_package_not_for_this_card_falls_back_to_the_password();
+    test_a_transfer_import_into_a_new_container_is_all_or_nothing();
+    test_a_verified_transfer_belongs_to_its_login();
+    test_a_transfer_import_keeps_nothing_it_did_not_finish();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

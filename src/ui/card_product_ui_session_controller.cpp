@@ -653,6 +653,7 @@ CardProductUiSessionController::choose_import_file() {
     pending_import_package_.clear();
     pending_import_restored_name_.clear();
     verified_import_.reset();
+    verified_sender_.reset();
   }
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("importing is not available in the current UI state");
@@ -907,6 +908,9 @@ void CardProductUiSessionController::release_stale_import_state() noexcept {
   }
   if (verified_import_ && (!current || verified_import_->generation != authentication_.generation())) {
     verified_import_.reset();
+  }
+  if (!current || verified_sender_generation_ != authentication_.generation()) {
+    verified_sender_.reset();
   }
 }
 
@@ -1208,6 +1212,7 @@ void CardProductUiSessionController::verify_import(
   {
     const std::scoped_lock lock(import_mutex_);
     verified_import_.reset();
+    verified_sender_.reset();
   }
   if (state() != CardProductUiState::authenticated) {
     throw_wrong_route("importing a package is not available in the current UI state");
@@ -1276,12 +1281,14 @@ std::uint32_t CardProductUiSessionController::import_into_created(
   if (mounted_mib < minimum_mib_for(verified->package_file.required_bytes())) {
     throw std::invalid_argument("the new container is too small for the package");
   }
+  // A transfer package needs this login's contact list for its write pass;
+  // asked before anything is created.
+  if (verified->package_file.verified_as_transfer()) static_cast<void>(open_contact_book());
   volume_session_.defer_operation_records();
   std::uint32_t id = 0;
   try {
     id = create();
-    static_cast<void>(volume_session_.write_verified_import(
-        id, L"", verified->package_file, verified->password, cancelled, progress));
+    static_cast<void>(write_verified(*verified, id, L"", cancelled, progress));
   } catch (...) {
     bool undone = true;
     if (id != 0) {
@@ -1297,6 +1304,114 @@ std::uint32_t CardProductUiSessionController::import_into_created(
   }
   volume_session_.settle_operation_records(true);
   return id;
+}
+
+std::wstring CardProductUiSessionController::write_verified(
+    VerifiedImport& verified, const std::uint32_t id, const std::wstring_view relative_directory,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  if (!verified.package_file.verified_as_transfer()) {
+    return volume_session_.write_verified_import(id, relative_directory, verified.package_file,
+                                                 verified.password, cancelled, progress);
+  }
+  // A copy of the identity, owned by this write: the list it came from may
+  // be dropped by a session change while the write runs.
+  const contacts::ContactIdentity recipient = open_contact_book()->transfer_identity();
+  // Taken from the login that verified the package, or not at all.
+  if (!login_still_current(verified.generation)) {
+    throw std::logic_error("the login changed before the transfer was written");
+  }
+  return volume_session_.write_verified_transfer_import(id, relative_directory,
+                                                        verified.package_file, recipient,
+                                                        cancelled, progress);
+}
+
+std::optional<CardProductUiSessionController::TransferSenderUi>
+CardProductUiSessionController::verify_transfer_import(
+    const std::wstring_view package, const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  {
+    const std::scoped_lock lock(import_mutex_);
+    verified_import_.reset();
+    verified_sender_.reset();
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("importing a package is not available in the current UI state");
+  }
+  if (package.empty()) throw std::logic_error("no import package has been picked");
+  require_same_card();
+  const std::uint64_t generation = authentication_.generation();
+  const contacts::ContactIdentity recipient = open_contact_book()->transfer_identity();
+  auto verified = std::make_unique<VerifiedImport>(package);
+  {
+    const std::scoped_lock lock(import_mutex_);
+    if (package == pending_import_package_ && pending_import_generation_ == generation)
+      verified->package_file.set_restored_name(pending_import_restored_name_);
+  }
+  verified->generation = generation;
+  if (!verified->package_file.verify_transfer(recipient, cancelled, progress)) return std::nullopt;
+
+  // 🔴 The sender is read only now, after its signature verified.
+  const contacts::ContactPublicKey sender = verified->package_file.transfer_sender();
+  TransferSenderUi result;
+  if (contacts::contact_x25519_public_key(sender) == recipient.x25519_public_key()) {
+    result.own = true;
+  } else {
+    const auto book = open_contact_book();
+    if (book->state() == contacts::ContactStoreState::unread) static_cast<void>(book->load());
+    result.remark = book->remark_for(sender);
+    if (!result.remark) result.fingerprint = contacts::format_contact_fingerprint(sender);
+  }
+  const std::scoped_lock lock(import_mutex_);
+  // A login that ended while this ran keeps nothing of it.
+  if (!login_still_current(generation)) {
+    throw std::logic_error("the login changed while the package was verified");
+  }
+  verified_import_ = std::move(verified);
+  verified_sender_ = sender;
+  verified_sender_generation_ = generation;
+  return result;
+}
+
+application::ContactBookOutcome CardProductUiSessionController::add_transfer_sender(
+    const std::string_view remark) {
+  contacts::ContactPublicKey sender{};
+  std::uint64_t generation{};
+  {
+    const std::scoped_lock lock(import_mutex_);
+    if (!verified_sender_ || verified_sender_generation_ != authentication_.generation()) {
+      verified_sender_.reset();
+      throw std::logic_error("no verified sender belongs to this login");
+    }
+    sender = *verified_sender_;
+    generation = verified_sender_generation_;
+  }
+  const std::string key_file = contacts::encode_contact_key_file(sender);
+  const application::ContactBookOutcome outcome =
+      write_contact_book([&](application::CardContactBook& book) {
+        // Only into the list of the login that verified the sender.
+        if (!login_still_current(generation)) {
+          throw_wrong_route("the login changed before the sender was added");
+        }
+        return book.add(key_file, remark);
+      });
+  if (outcome.change == application::ContactBookChange::done) {
+    const std::scoped_lock lock(import_mutex_);
+    if (verified_sender_ == sender) verified_sender_.reset();
+  }
+  return outcome;
+}
+
+std::wstring CardProductUiSessionController::import_verified_into_container(
+    std::unique_ptr<VerifiedImport> verified, const std::uint32_t id,
+    const std::wstring_view relative_directory, const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  if (!verified || state() != CardProductUiState::authenticated ||
+      verified->generation != authentication_.generation()) {
+    throw std::logic_error("no verified import belongs to this login");
+  }
+  require_same_card();
+  return write_verified(*verified, id, relative_directory, cancelled, progress);
 }
 
 std::uint32_t CardProductUiSessionController::import_into_new_container(
