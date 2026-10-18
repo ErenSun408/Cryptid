@@ -9,6 +9,7 @@ namespace usb_vault::application {
 namespace detail {
 class CardLoginMountSessionCore;
 }
+class CardContactBook;
 
 // Minimal lifecycle boundary used by physical-card event coordination. It
 // reveals no root bytes, password role, mounted shape, mode, or vendor data.
@@ -57,6 +58,9 @@ class CardAuthenticationSession final
 
  private:
   friend class detail::CardLoginMountSessionCore;
+  // Derives the contact identity and store key once per login (P5.14). Only
+  // its constructor reads root_secret_; any other use needs its own review.
+  friend class CardContactBook;
 
   security::SecureBuffer root_secret_;
   // Accessed only on the serialized native session worker. Never persisted.

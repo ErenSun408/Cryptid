@@ -1330,6 +1330,19 @@ usb_vault_configure_target(transfer_package_v1_tests)
 add_test(NAME transfer_package_v1_tests
   COMMAND transfer_package_v1_tests)
 
+add_executable(card_contact_book_tests
+  card_contact_book_tests.cpp
+)
+
+target_link_libraries(card_contact_book_tests PRIVATE
+  usb_vault_core
+)
+
+usb_vault_configure_target(card_contact_book_tests)
+
+add_test(NAME card_contact_book_tests
+  COMMAND card_contact_book_tests)
+
 add_executable(contact_store_v1_tests
   contact_store_v1_tests.cpp
 )

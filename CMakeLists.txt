@@ -165,6 +165,7 @@ endif()
 
 add_library(usb_vault_core STATIC
   src/application/card_authentication_session.cpp
+  src/application/card_contact_book.cpp
   src/application/card_login_mount_session.cpp
   src/application/container_file_visibility.cpp
   src/application/card_device_lifecycle_controller.cpp
