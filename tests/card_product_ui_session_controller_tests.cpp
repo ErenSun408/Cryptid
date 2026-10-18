@@ -1,7 +1,10 @@
 #include "usb_vault/ui/ui_close_guard.h"
 #include "usb_vault/ui/card_product_ui_session_controller.h"
 
+#include "usb_vault/application/card_contact_book.h"
 #include "usb_vault/backup/export_package_file.h"
+#include "usb_vault/contacts/contact_identity_v1.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 #include "usb_vault/backup/export_package_v1.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/card/card_record_v1.h"
@@ -816,10 +819,29 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
+  [[nodiscard]] std::wstring choose_contact_key_file() override {
+    ++key_file_calls;
+    if (during_dialog) during_dialog();
+    return key_file_path;
+  }
+
+  [[nodiscard]] std::wstring choose_contact_key_save_path() override {
+    ++key_save_calls;
+    if (during_dialog) during_dialog();
+    return key_save_path;
+  }
+
+  // What happens while a key file dialog is open.
+  std::function<void()> during_dialog;
+
   std::wstring directory_path;
   std::wstring existing_path;
+  std::wstring key_file_path;
+  std::wstring key_save_path;
   int directory_calls{};
   int existing_calls{};
+  int key_file_calls{};
+  int key_save_calls{};
 };
 
 // A save location has to exist now, so the tests need a real directory rather
@@ -2745,6 +2767,452 @@ void test_card_operations_recheck_the_authenticated_card_first() {
   require_wiped(second_confirmation, "second confirmation survived a refused recheck");
 }
 
+
+// The card region behind the contact list, shared by every storage the
+// controller makes for it, with the lease and write counts the tests check.
+struct ContactCard final {
+  std::vector<std::byte> bytes =
+      std::vector<std::byte>(usb_vault::contacts::kContactStoreV1RegionEnd);
+  bool too_small{};
+  int leases_alive{};
+  int writes{};
+  int storages_made{};
+  int storages_alive{};
+  std::vector<std::uint32_t> cards;
+  // What happens while the controller makes a storage.
+  std::function<void()> on_storage;
+};
+
+class ContactStorage final : public usb_vault::contacts::IContactStoreStorage {
+ public:
+  explicit ContactStorage(ContactCard& card) : card_(card) { ++card_.storages_alive; }
+  ~ContactStorage() noexcept override { --card_.storages_alive; }
+  std::size_t capacity() override { return card_.bytes.size(); }
+  SecureBuffer read(const std::size_t offset, const std::size_t length) override {
+    require(card_.leases_alive == 1, "the contact list was read without a lease");
+    if (card_.too_small) throw usb_vault::contacts::ContactStoreCapacityError();
+    SecureBuffer out(length);
+    std::copy_n(card_.bytes.begin() + static_cast<std::ptrdiff_t>(offset), length, out.data());
+    return out;
+  }
+  void write(const std::size_t offset, const std::span<const std::byte> data) override {
+    require(card_.leases_alive == 1, "the contact list was written without a lease");
+    if (card_.too_small) throw usb_vault::contacts::ContactStoreCapacityError();
+    ++card_.writes;
+    std::ranges::copy(data, card_.bytes.begin() + static_cast<std::ptrdiff_t>(offset));
+  }
+
+ private:
+  ContactCard& card_;
+};
+
+class ContactLease final : public usb_vault::application::ICardOperationLease {
+ public:
+  explicit ContactLease(ContactCard& card) : card_(card) { ++card_.leases_alive; }
+  ~ContactLease() noexcept override { --card_.leases_alive; }
+
+ private:
+  ContactCard& card_;
+};
+
+[[nodiscard]] usb_vault::ui::ContactBookAccess contact_access(ContactCard& card) {
+  return {.storage = [&card](const std::uint32_t identity)
+              -> std::unique_ptr<usb_vault::contacts::IContactStoreStorage> {
+            ++card.storages_made;
+            card.cards.push_back(identity);
+            if (card.on_storage) card.on_storage();
+            return std::make_unique<ContactStorage>(card);
+          },
+          .lease = [&card]() -> std::unique_ptr<usb_vault::application::ICardOperationLease> {
+            return std::make_unique<ContactLease>(card);
+          }};
+}
+
+[[nodiscard]] SecureBuffer other_root(const unsigned char fill) {
+  SecureBuffer secret(usb_vault::card::kCardRecordV1RootSecretSize);
+  for (std::size_t index = 0; index < secret.size(); ++index) {
+    secret.bytes()[index] = static_cast<std::byte>(fill + index);
+  }
+  return secret;
+}
+
+void write_text(const std::filesystem::path& path, const std::string_view text) {
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  file.write(text.data(), static_cast<std::streamsize>(text.size()));
+  require(static_cast<bool>(file), "a test file could not be written");
+}
+
+[[nodiscard]] std::string read_text(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+
+struct ContactFixture final {
+  ContactFixture()
+      : directory(L"contacts"),
+        volume(authentication),
+        controller(entry, authentication, volume, policy, chooser, nullptr, nullptr,
+                   &verifier) {
+    controller.set_contact_book_access(contact_access(card));
+  }
+
+  void log_in() {
+    entry.route = CardEntryRoute::login_required;
+    entry.identity = 0x5EC0;
+    auto input = bytes("password-1");
+    controller.submit_login(input);
+    require(controller.state() == CardProductUiState::authenticated, "the fixture did not log in");
+  }
+
+  [[nodiscard]] std::filesystem::path key_file(const unsigned char fill) const {
+    const auto identity = usb_vault::contacts::ContactIdentity::derive(other_root(fill));
+    const std::filesystem::path path =
+        std::filesystem::path(directory.wide()) / (std::to_wstring(fill) + L".uvkey");
+    write_text(path, usb_vault::contacts::encode_contact_key_file(identity.public_key()));
+    return path;
+  }
+
+  FakeEntry entry;
+  ScopedDirectory directory;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume;
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  FakeIdentityVerifier verifier;
+  ContactCard card;
+  CardProductUiSessionController controller;
+};
+
+[[nodiscard]] usb_vault::contacts::ContactPublicKey contact_key(const unsigned char fill) {
+  return usb_vault::contacts::ContactIdentity::derive(other_root(fill)).public_key();
+}
+
+void test_the_contact_list_needs_a_login_and_access() {
+  ContactFixture fixture;
+  require_throws<std::system_error>([&] { static_cast<void>(fixture.controller.contact_book()); },
+                                    "the contact list opened before login");
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.choose_contact_key_file()); },
+      "a key file was picked before login");
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.export_own_contact_key()); },
+      "the own key file was saved before login");
+  require(fixture.card.storages_made == 0 && fixture.chooser.key_file_calls == 0 &&
+              fixture.chooser.key_save_calls == 0,
+          "the card or the picker was reached before login");
+
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  CardProductUiSessionController bare(entry, authentication, volume, policy, chooser);
+  entry.route = CardEntryRoute::login_required;
+  entry.identity = 7;
+  auto input = bytes("password-1");
+  bare.submit_login(input);
+  require_throws<std::logic_error>([&] { static_cast<void>(bare.contact_book()); },
+                                   "a contact list opened without access");
+}
+
+void test_the_contact_list_opens_once_per_login_for_its_card() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const auto view = fixture.controller.contact_book();
+  const auto own = usb_vault::contacts::ContactIdentity::derive(root_secret());
+  require(view.state == usb_vault::contacts::ContactStoreState::empty && view.entries.empty() &&
+              view.own_fingerprint ==
+                  usb_vault::contacts::format_contact_fingerprint(own.public_key()),
+          "a blank card did not show an empty list with the own fingerprint");
+  require(fixture.card.storages_made == 1 &&
+              fixture.card.cards == std::vector<std::uint32_t>{0x5EC0},
+          "the list was not opened for the card the login was made with");
+  static_cast<void>(fixture.controller.contact_book());
+  static_cast<void>(fixture.controller.reload_contact_book());
+  require(fixture.card.storages_made == 1 && fixture.card.writes == 0 &&
+              fixture.verifier.expected_identities.empty(),
+          "reading the list opened it again, wrote, or rechecked the card");
+
+  // A session change drops the list; nothing of it reaches the next login.
+  fixture.authentication.clear_authentication();
+  fixture.controller.release_stale_contact_book();
+  require(fixture.card.storages_alive == 0, "the list outlived its login");
+  fixture.log_in();
+  static_cast<void>(fixture.controller.contact_book());
+  require(fixture.card.storages_made == 2 && fixture.card.storages_alive == 1,
+          "the next login did not open its own list");
+  fixture.controller.release_stale_contact_book();
+  require(fixture.card.storages_alive == 1, "a current list was dropped");
+}
+
+void test_a_picked_key_file_is_added_once_after_the_card_recheck() {
+  using usb_vault::application::ContactBookChange;
+  ContactFixture fixture;
+  fixture.log_in();
+  const auto alice = contact_key(40);
+  fixture.chooser.key_file_path = fixture.key_file(40).wstring();
+
+  const auto preview = fixture.controller.choose_contact_key_file();
+  require(preview && preview->error == usb_vault::contacts::ContactKeyFileError::none &&
+              preview->fingerprint == usb_vault::contacts::format_contact_fingerprint(alice),
+          "the picked key file was not previewed by its fingerprint");
+  require(fixture.card.storages_made == 0 && fixture.card.writes == 0,
+          "previewing a key file reached the card");
+
+  // A refused remark keeps the file for another try; nothing is written.
+  require(fixture.controller.add_chosen_contact("   ").change == ContactBookChange::empty_remark &&
+              fixture.card.writes == 0,
+          "an empty remark was not refused before writing");
+  const std::size_t rechecks = fixture.verifier.expected_identities.size();
+  require(fixture.controller.add_chosen_contact("  Alice ").change == ContactBookChange::done,
+          "the held key file was not added");
+  require(fixture.verifier.expected_identities.size() == rechecks + 1 &&
+              fixture.verifier.expected_identities.back() == 0x5EC0U && fixture.card.writes > 0,
+          "the write did not follow a recheck of the login card");
+  const auto view = fixture.controller.contact_book();
+  require(view.entries.size() == 1 && view.entries[0].remark == "Alice" &&
+              view.entries[0].public_key == alice &&
+              view.entries[0].fingerprint == usb_vault::contacts::format_contact_fingerprint(alice),
+          "the added contact was not listed under its normalized remark");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("Again")); },
+      "an added key file was held for a second add");
+
+  // Picking the same key again reports the listed contact instead of writing.
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  const int writes = fixture.card.writes;
+  const auto again = fixture.controller.add_chosen_contact("Other");
+  require(again.change == ContactBookChange::already_present && again.existing_remark == "Alice" &&
+              fixture.card.writes == writes,
+          "a listed key was added twice");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("Other")); },
+      "a key file refused as listed was still held");
+
+  require(fixture.controller.rename_contact(alice, "Alice W").change == ContactBookChange::done &&
+              fixture.controller.contact_book().entries[0].remark == "Alice W",
+          "renaming did not reach the list");
+  require(fixture.controller.rename_contact(contact_key(41), "Bob").change ==
+              ContactBookChange::not_found,
+          "an unlisted key was renamed");
+
+  // A lost card stops the write before the card is touched.
+  fixture.verifier.results = {usb_vault::application::CardIdentityRecheck::different_card};
+  const int before_lost = fixture.card.writes;
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.remove_contact(alice)); },
+      "a removal ran against a different card");
+  require(fixture.card.writes == before_lost, "a refused recheck still wrote the card");
+  require(fixture.controller.remove_contact(alice).change == ContactBookChange::done &&
+              fixture.controller.contact_book().entries.empty(),
+          "removal did not reach the list");
+}
+
+void test_a_bad_key_file_is_named_and_never_held() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const std::filesystem::path bad = std::filesystem::path(fixture.directory.wide()) / L"bad.uvkey";
+  write_text(bad, "USB-VAULT-CONTACT-KEY v1\nNOTAKEY\n");
+  fixture.chooser.key_file_path = bad.wstring();
+  const auto malformed = fixture.controller.choose_contact_key_file();
+  require(malformed && malformed->error != usb_vault::contacts::ContactKeyFileError::none &&
+              malformed->fingerprint.empty(),
+          "a malformed key file was accepted");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("X")); },
+      "a malformed key file was held");
+
+  // Read no further than a key file can be long.
+  write_text(bad, usb_vault::contacts::encode_contact_key_file(contact_key(40)) +
+                      std::string(usb_vault::contacts::kContactKeyFileMaxBytes, '\n'));
+  const auto oversized = fixture.controller.choose_contact_key_file();
+  require(oversized && oversized->error == usb_vault::contacts::ContactKeyFileError::malformed,
+          "an oversized key file was decoded");
+
+  // A good pick followed by a cancelled one holds nothing.
+  fixture.chooser.key_file_path = fixture.key_file(40).wstring();
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  fixture.chooser.key_file_path.clear();
+  require(!fixture.controller.choose_contact_key_file(), "a cancelled pick produced a preview");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("X")); },
+      "an earlier pick survived a cancelled one");
+  fixture.chooser.key_file_path = fixture.directory.wide();
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.choose_contact_key_file()); },
+      "a directory was read as a key file");
+  require(fixture.card.storages_made == 0, "a bad key file reached the card");
+}
+
+void test_a_held_key_file_belongs_to_its_login() {
+  ContactFixture fixture;
+  fixture.log_in();
+  fixture.chooser.key_file_path = fixture.key_file(40).wstring();
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  fixture.authentication.clear_authentication();
+  fixture.controller.release_stale_contact_book();
+  fixture.log_in();
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("Alice")); },
+      "a key file picked in another login was added");
+  require(fixture.card.writes == 0, "a stale key file reached the card");
+}
+
+void test_a_card_too_small_for_the_list_is_unsupported() {
+  ContactFixture fixture;
+  fixture.log_in();
+  fixture.card.too_small = true;
+  require(fixture.controller.contact_book().state ==
+              usb_vault::contacts::ContactStoreState::unavailable,
+          "a small card did not report the list unavailable");
+  fixture.chooser.key_file_path = fixture.key_file(40).wstring();
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  const auto unsupported = [&](auto&& action) {
+    try {
+      action();
+    } catch (const std::system_error& error) {
+      return error.code() ==
+             usb_vault::card::make_error_code(usb_vault::card::CardError::unsupported);
+    }
+    return false;
+  };
+  require(unsupported([&] { static_cast<void>(fixture.controller.add_chosen_contact("Alice")); }),
+          "a small card was not reported as unsupported when adding");
+  require(unsupported([&] { fixture.controller.clear_contact_book(); }),
+          "a small card was not reported as unsupported when clearing");
+  // A card that turns out small only once it is written says the same.
+  fixture.card.too_small = false;
+  static_cast<void>(fixture.controller.reload_contact_book());
+  fixture.card.too_small = true;
+  require(unsupported([&] { static_cast<void>(fixture.controller.add_chosen_contact("Alice")); }),
+          "a write refused for capacity was not reported as unsupported");
+  require(fixture.card.writes == 0, "a small card was written");
+}
+
+void test_the_own_key_file_is_saved_where_picked() {
+  ContactFixture fixture;
+  fixture.log_in();
+  require(!fixture.controller.export_own_contact_key() && fixture.chooser.key_save_calls == 1,
+          "a cancelled save wrote something");
+  const std::filesystem::path target =
+      std::filesystem::path(fixture.directory.wide()) / L"mine.uvkey";
+  write_text(target, std::string(600, 'x'));
+  fixture.chooser.key_save_path = target.wstring();
+  require(fixture.controller.export_own_contact_key(), "the own key file was not saved");
+  const auto decoded = usb_vault::contacts::decode_contact_key_file(read_text(target));
+  require(decoded.public_key &&
+              *decoded.public_key ==
+                  usb_vault::contacts::ContactIdentity::derive(root_secret()).public_key(),
+          "the saved file is not exactly this card's key file");
+  require(fixture.card.writes == 0 && fixture.card.leases_alive == 0 &&
+              fixture.verifier.expected_identities.empty(),
+          "saving the own key file touched the card");
+}
+
+void test_a_list_opened_across_a_login_change_is_not_kept() {
+  ContactFixture fixture;
+  fixture.log_in();
+  // The session changes while the list is being opened, after the session
+  // change notice has already found nothing to drop.
+  fixture.card.on_storage = [&] {
+    fixture.card.on_storage = {};
+    fixture.authentication.clear_authentication();
+    fixture.controller.release_stale_contact_book();
+    fixture.authentication.establish(other_root(90));
+  };
+  require_throws<std::system_error>([&] { static_cast<void>(fixture.controller.contact_book()); },
+                                    "a list opened across a login change was handed out");
+  require(fixture.card.storages_alive == 0, "a list opened across a login change was kept");
+}
+
+void test_nothing_of_a_list_works_after_its_login() {
+  ContactFixture fixture;
+  fixture.log_in();
+  fixture.chooser.key_file_path = fixture.key_file(40).wstring();
+  static_cast<void>(fixture.controller.choose_contact_key_file());
+  static_cast<void>(fixture.controller.contact_book());
+
+  // A new login without the session change notice: the held file and the
+  // open list both still belong to the old one.
+  fixture.authentication.clear_authentication();
+  fixture.log_in();
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("Alice")); },
+      "a key file of an earlier login was added");
+  require(fixture.card.writes == 0, "an earlier login's key file reached the card");
+
+  fixture.authentication.clear_authentication();
+  fixture.chooser.key_save_path =
+      (std::filesystem::path(fixture.directory.wide()) / L"late.uvkey").wstring();
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.reload_contact_book()); },
+      "the list was read after logout");
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.rename_contact(contact_key(40), "X")); },
+      "the list was renamed after logout");
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.export_own_contact_key()); },
+      "the own key file was saved after logout");
+  require(fixture.card.writes == 0 && fixture.chooser.key_save_calls == 0 &&
+              !std::filesystem::exists(fixture.chooser.key_save_path),
+          "a call after logout reached the card or the disk");
+}
+
+void test_a_login_that_ends_during_a_dialog_gets_nothing() {
+  ContactFixture fixture;
+  fixture.log_in();
+  const std::filesystem::path target =
+      std::filesystem::path(fixture.directory.wide()) / L"mine.uvkey";
+  fixture.chooser.key_save_path = target.wstring();
+  fixture.chooser.during_dialog = [&] { fixture.authentication.clear_authentication(); };
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.export_own_contact_key()); },
+      "the own key file was saved for a login that ended in the dialog");
+  require(!std::filesystem::exists(target), "a key file was written after the login ended");
+
+  fixture.log_in();
+  fixture.chooser.key_file_path = fixture.key_file(40).wstring();
+  fixture.chooser.during_dialog = [&] {
+    fixture.authentication.clear_authentication();
+    fixture.authentication.establish(other_root(90));
+  };
+  require_throws<std::system_error>(
+      [&] { static_cast<void>(fixture.controller.choose_contact_key_file()); },
+      "a key file picked across a login change was previewed");
+  fixture.chooser.during_dialog = {};
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(fixture.controller.add_chosen_contact("Alice")); },
+      "a key file picked across a login change was held");
+}
+
+void test_contact_writes_need_a_card_recheck_and_a_writable_list() {
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  ContactCard card;
+  ScopedDirectory directory(L"contacts-no-verifier");
+  CardProductUiSessionController controller(entry, authentication, volume, policy, chooser);
+  controller.set_contact_book_access(contact_access(card));
+  entry.route = CardEntryRoute::login_required;
+  entry.identity = 7;
+  auto input = bytes("password-1");
+  controller.submit_login(input);
+  require(controller.contact_book().state == usb_vault::contacts::ContactStoreState::empty,
+          "the list could not be read without a verifier");
+  require_throws<std::logic_error>(
+      [&] { static_cast<void>(controller.remove_contact(contact_key(40))); },
+      "the card was written without a recheck");
+  require(card.writes == 0, "a write without a recheck reached the card");
+
+  ContactFixture fixture;
+  fixture.log_in();
+  require_throws<std::logic_error>([&] { fixture.controller.clear_contact_book(); },
+                                   "an intact list was cleared");
+  require(fixture.card.writes == 0, "clearing an intact list wrote the card");
+}
+
 void test_login_reset_mount_choices() {
   for (int scenario = 0; scenario < 6; ++scenario) {
     Fixture fixture;
@@ -2830,6 +3298,17 @@ int main() {
     test_an_import_into_a_new_container_is_all_or_nothing();
     test_the_generic_import_sorts_containers_from_packages();
     test_card_operations_recheck_the_authenticated_card_first();
+    test_the_contact_list_needs_a_login_and_access();
+    test_the_contact_list_opens_once_per_login_for_its_card();
+    test_a_picked_key_file_is_added_once_after_the_card_recheck();
+    test_a_bad_key_file_is_named_and_never_held();
+    test_a_held_key_file_belongs_to_its_login();
+    test_a_card_too_small_for_the_list_is_unsupported();
+    test_the_own_key_file_is_saved_where_picked();
+    test_a_list_opened_across_a_login_change_is_not_kept();
+    test_nothing_of_a_list_works_after_its_login();
+    test_a_login_that_ends_during_a_dialog_gets_nothing();
+    test_contact_writes_need_a_card_recheck_and_a_writable_list();
     std::cout << "card_product_ui_session_controller_tests passed\n";
     return 0;
   } catch (const std::exception& error) {

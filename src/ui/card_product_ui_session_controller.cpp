@@ -15,6 +15,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -904,6 +906,236 @@ void CardProductUiSessionController::release_stale_import_state() noexcept {
   }
   if (verified_import_ && (!current || verified_import_->generation != authentication_.generation())) {
     verified_import_.reset();
+  }
+}
+
+namespace {
+
+class FileHandle final {
+ public:
+  explicit FileHandle(const HANDLE handle) noexcept : handle_(handle) {}
+  ~FileHandle() noexcept {
+    if (handle_ != INVALID_HANDLE_VALUE) static_cast<void>(::CloseHandle(handle_));
+  }
+  FileHandle(const FileHandle&) = delete;
+  FileHandle& operator=(const FileHandle&) = delete;
+  [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+
+ private:
+  HANDLE handle_;
+};
+
+[[noreturn]] void throw_last_error(const char* const operation) {
+  throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), operation);
+}
+
+// A key file is two short lines; anything longer is not one, and is read no
+// further than that. Opened once and checked on that handle, so what is read
+// is the disk file that was checked and not a pipe or device swapped in.
+// A directory does not open without backup semantics.
+[[nodiscard]] std::optional<std::string> read_contact_key_file(const std::wstring& path) {
+  const FileHandle file(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (file.get() == INVALID_HANDLE_VALUE) throw_last_error("open the picked key file");
+  if (::GetFileType(file.get()) != FILE_TYPE_DISK) {
+    throw std::system_error(std::make_error_code(std::errc::not_a_directory),
+                            "the picked key file is not a regular file");
+  }
+  LARGE_INTEGER size{};
+  if (::GetFileSizeEx(file.get(), &size) == FALSE) throw_last_error("inspect the picked key file");
+  if (size.QuadPart > static_cast<LONGLONG>(contacts::kContactKeyFileMaxBytes)) return std::nullopt;
+  std::string text(contacts::kContactKeyFileMaxBytes + 1, '\0');
+  std::size_t length = 0;
+  for (;;) {
+    DWORD read = 0;
+    if (::ReadFile(file.get(), text.data() + length, static_cast<DWORD>(text.size() - length),
+                   &read, nullptr) == FALSE) {
+      throw_last_error("read the picked key file");
+    }
+    if (read == 0) break;
+    length += read;
+    // Grown since it was measured: no longer a key file.
+    if (length > contacts::kContactKeyFileMaxBytes) return std::nullopt;
+  }
+  text.resize(length);
+  return text;
+}
+
+}  // namespace
+
+void CardProductUiSessionController::set_contact_book_access(ContactBookAccess access) {
+  contact_access_ = std::move(access);
+}
+
+std::shared_ptr<application::CardContactBook>
+CardProductUiSessionController::open_contact_book() {
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("the contact list is not available in the current UI state");
+  }
+  if (!contact_access_.storage || !contact_access_.lease || !authenticated_card_) {
+    throw std::logic_error("the contact list is unavailable");
+  }
+  const std::uint64_t generation = authentication_.generation();
+  {
+    const std::scoped_lock lock(contact_mutex_);
+    if (contact_book_ && contact_book_generation_ == generation) return contact_book_;
+  }
+  auto book = std::make_shared<application::CardContactBook>(
+      authentication_, contact_access_.storage(*authenticated_card_), contact_access_.lease);
+  std::shared_ptr<application::CardContactBook> dropped;
+  const std::scoped_lock lock(contact_mutex_);
+  // A login that ended while the book was opened keeps nothing of it: once
+  // the session change has passed, nothing else would drop it, and its keys
+  // would stay in memory until the next one.
+  if (!login_still_current(generation)) {
+    throw_wrong_route("the login changed while the contact list was opened");
+  }
+  dropped = std::move(contact_book_);
+  contact_book_ = book;
+  contact_book_generation_ = generation;
+  return book;
+}
+
+bool CardProductUiSessionController::login_still_current(
+    const std::uint64_t generation) const noexcept {
+  return state() == CardProductUiState::authenticated &&
+         authentication_.generation() == generation;
+}
+
+ContactBookUiView CardProductUiSessionController::contact_book_view(
+    const application::CardContactBook& book) const {
+  ContactBookUiView view{.state = book.state(), .own_fingerprint = book.own_fingerprint()};
+  view.entries.reserve(book.entries().size());
+  for (const contacts::ContactEntry& entry : book.entries()) {
+    view.entries.push_back({.public_key = entry.public_key,
+                            .remark = entry.remark,
+                            .fingerprint = contacts::format_contact_fingerprint(entry.public_key)});
+  }
+  return view;
+}
+
+ContactBookUiView CardProductUiSessionController::contact_book() {
+  const auto book = open_contact_book();
+  if (book->state() == contacts::ContactStoreState::unread) static_cast<void>(book->load());
+  return contact_book_view(*book);
+}
+
+ContactBookUiView CardProductUiSessionController::reload_contact_book() {
+  const auto book = open_contact_book();
+  static_cast<void>(book->load());
+  return contact_book_view(*book);
+}
+
+template <typename Write>
+decltype(auto) CardProductUiSessionController::write_contact_book(Write&& write) {
+  // Not a card error on its own; the page names it like any unsupported card.
+  const auto too_small = [] {
+    return std::system_error(card::make_error_code(card::CardError::unsupported),
+                             "the card user area is too small for the contact list");
+  };
+  const auto book = open_contact_book();
+  // The recheck skips itself without a verifier; a card write does not.
+  if (identity_verifier_ == nullptr) throw std::logic_error("the contact list cannot recheck the card");
+  require_same_card();
+  try {
+    if (book->state() == contacts::ContactStoreState::unread) static_cast<void>(book->load());
+    if (book->state() == contacts::ContactStoreState::unavailable) throw too_small();
+    return write(*book);
+  } catch (const contacts::ContactStoreCapacityError&) {
+    throw too_small();
+  }
+}
+
+std::optional<ContactKeyUiPreview> CardProductUiSessionController::choose_contact_key_file() {
+  {
+    const std::scoped_lock lock(contact_mutex_);
+    pending_contact_key_.clear();
+  }
+  if (state() != CardProductUiState::authenticated) {
+    throw_wrong_route("the contact list is not available in the current UI state");
+  }
+  // The dialog runs a message loop; a login that ends meanwhile gets nothing.
+  const std::uint64_t generation = authentication_.generation();
+  const std::wstring path = file_chooser_.choose_contact_key_file();
+  if (path.empty()) return std::nullopt;
+  if (!login_still_current(generation)) {
+    throw_wrong_route("the login changed while the key file was picked");
+  }
+  const std::optional<std::string> text = read_contact_key_file(path);
+  if (!text) return ContactKeyUiPreview{.error = contacts::ContactKeyFileError::malformed};
+  const contacts::ContactKeyFileDecoding decoded = contacts::decode_contact_key_file(*text);
+  if (!decoded.public_key) return ContactKeyUiPreview{.error = decoded.error};
+  const std::scoped_lock lock(contact_mutex_);
+  pending_contact_key_ = *text;
+  pending_contact_key_generation_ = generation;
+  return ContactKeyUiPreview{.fingerprint = contacts::format_contact_fingerprint(*decoded.public_key)};
+}
+
+application::ContactBookOutcome CardProductUiSessionController::add_chosen_contact(
+    const std::string_view remark) {
+  std::string text;
+  {
+    const std::scoped_lock lock(contact_mutex_);
+    if (pending_contact_key_.empty() ||
+        pending_contact_key_generation_ != authentication_.generation()) {
+      pending_contact_key_.clear();
+      throw std::logic_error("no key file of this login is held");
+    }
+    text = pending_contact_key_;
+  }
+  const application::ContactBookOutcome outcome =
+      write_contact_book([&](application::CardContactBook& book) { return book.add(text, remark); });
+  using application::ContactBookChange;
+  if (outcome.change != ContactBookChange::empty_remark &&
+      outcome.change != ContactBookChange::remark_too_long &&
+      outcome.change != ContactBookChange::invalid_remark) {
+    const std::scoped_lock lock(contact_mutex_);
+    if (pending_contact_key_ == text) pending_contact_key_.clear();
+  }
+  return outcome;
+}
+
+application::ContactBookOutcome CardProductUiSessionController::rename_contact(
+    const contacts::ContactPublicKey& key, const std::string_view remark) {
+  return write_contact_book(
+      [&](application::CardContactBook& book) { return book.rename(key, remark); });
+}
+
+application::ContactBookOutcome CardProductUiSessionController::remove_contact(
+    const contacts::ContactPublicKey& key) {
+  return write_contact_book([&](application::CardContactBook& book) { return book.remove(key); });
+}
+
+void CardProductUiSessionController::clear_contact_book() {
+  write_contact_book([](application::CardContactBook& book) { book.discard_and_clear(); });
+}
+
+bool CardProductUiSessionController::export_own_contact_key() {
+  const std::uint64_t generation = authentication_.generation();
+  const std::string text = open_contact_book()->own_key_file();
+  const std::wstring path = file_chooser_.choose_contact_key_save_path();
+  if (path.empty()) return false;
+  // Nothing is written for a login that ended while the dialog was open.
+  if (!login_still_current(generation)) {
+    throw_wrong_route("the login changed while the key file was being saved");
+  }
+  std::ofstream file(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
+  file.write(text.data(), static_cast<std::streamsize>(text.size()));
+  file.close();
+  if (!file) throw std::system_error(std::make_error_code(std::errc::io_error), "write the own key file");
+  return true;
+}
+
+void CardProductUiSessionController::release_stale_contact_book() noexcept {
+  std::shared_ptr<application::CardContactBook> dropped;
+  const std::scoped_lock lock(contact_mutex_);
+  const bool current = state() == CardProductUiState::authenticated;
+  if (!current || contact_book_generation_ != authentication_.generation()) {
+    dropped = std::move(contact_book_);
+    contact_book_.reset();
+  }
+  if (!current || pending_contact_key_generation_ != authentication_.generation()) {
+    pending_contact_key_.clear();
   }
 }
 

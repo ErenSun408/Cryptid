@@ -8,6 +8,7 @@
 #include <combaseapi.h>
 
 #include <iterator>
+#include <span>
 #include <string>
 #include <system_error>
 
@@ -20,6 +21,25 @@ constexpr wchar_t kExistingContainerTitle[] = L"选择要导入的安全盘文�
 // neither has a fixed extension, so every file is offered.
 constexpr COMDLG_FILTERSPEC kContainerFilter[] = {
     {L"所有文件", L"*.*"},
+};
+constexpr wchar_t kContactKeyTitle[] = L"选择联系人公钥文件";
+constexpr wchar_t kContactKeySaveTitle[] = L"保存本人公钥文件";
+constexpr wchar_t kContactKeyDefaultName[] = L"我的公钥.uvkey";
+constexpr COMDLG_FILTERSPEC kContactKeyFilter[] = {
+    {L"联系人公钥文件", L"*.uvkey"},
+    {L"所有文件", L"*.*"},
+};
+
+// What one dialog differs in. Key files are never hidden, so only the
+// container pick reveals Hidden+System items.
+struct DialogSetup final {
+  const CLSID& dialog_class;
+  FILEOPENDIALOGOPTIONS options;
+  const wchar_t* title;
+  std::span<const COMDLG_FILTERSPEC> filter;
+  bool reveal_hidden;
+  const wchar_t* file_name;
+  const wchar_t* default_extension;
 };
 
 // Neither dialog may leave a trace of the chosen location. `FOS_DONTADDTORECENT`
@@ -86,14 +106,11 @@ class CoTaskPath final {
                           message);
 }
 
-// `filter_files` is false for the folder picker, where a file type filter and
-// a default extension are meaningless and rejected.
-[[nodiscard]] std::wstring run_dialog(const HWND owner, const CLSID& dialog_class,
-                                      const FILEOPENDIALOGOPTIONS options,
-                                      const wchar_t* const title,
-                                      const bool filter_files) {
+// The folder picker has no filter, where a file type filter and a default
+// extension are meaningless and rejected.
+[[nodiscard]] std::wstring run_dialog(const HWND owner, const DialogSetup& setup) {
   ComPtr<IFileDialog> dialog;
-  HRESULT result = ::CoCreateInstance(dialog_class, nullptr,
+  HRESULT result = ::CoCreateInstance(setup.dialog_class, nullptr,
                                       CLSCTX_INPROC_SERVER,
                                       IID_PPV_ARGS(dialog.put()));
   if (FAILED(result)) {
@@ -105,11 +122,14 @@ class CoTaskPath final {
   if (FAILED(result)) {
     throw_dialog_failure(result, "container file dialog rejected a query");
   }
-  result = dialog->SetOptions(defaults | kSharedOptions | options);
-  if (SUCCEEDED(result)) result = dialog->SetTitle(title);
-  if (SUCCEEDED(result) && filter_files) {
-    result = dialog->SetFileTypes(
-        static_cast<UINT>(std::size(kContainerFilter)), kContainerFilter);
+  result = dialog->SetOptions(defaults | kSharedOptions | setup.options);
+  if (SUCCEEDED(result)) result = dialog->SetTitle(setup.title);
+  if (SUCCEEDED(result) && !setup.filter.empty()) {
+    result = dialog->SetFileTypes(static_cast<UINT>(setup.filter.size()), setup.filter.data());
+  }
+  if (SUCCEEDED(result) && setup.file_name != nullptr) result = dialog->SetFileName(setup.file_name);
+  if (SUCCEEDED(result) && setup.default_extension != nullptr) {
+    result = dialog->SetDefaultExtension(setup.default_extension);
   }
   if (FAILED(result)) {
     throw_dialog_failure(result, "container file dialog rejected its setup");
@@ -122,10 +142,12 @@ class CoTaskPath final {
     static_cast<void>(dialog->SetFolder(desktop.get()));
   }
 
-  {
+  if (setup.reveal_hidden) {
     // Hidden+System containers are only listed while Explorer shows protected
     // system files; the switches are restored as soon as the dialog closes.
     const auto reveal = ui::shell_hidden_items_revealer().reveal();
+    result = dialog->Show(owner);
+  } else {
     result = dialog->Show(owner);
   }
   if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return {};
@@ -158,13 +180,43 @@ ShellContainerFileChooser::ShellContainerFileChooser(
 // and nothing else: the file name comes from the name the user typed, so a
 // save dialog here would ask for it twice and let the two disagree.
 std::wstring ShellContainerFileChooser::choose_container_directory() {
-  return run_dialog(owner_, CLSID_FileOpenDialog, FOS_PICKFOLDERS,
-                    kContainerDirectoryTitle, false);
+  return run_dialog(owner_, {.dialog_class = CLSID_FileOpenDialog,
+                             .options = FOS_PICKFOLDERS,
+                             .title = kContainerDirectoryTitle,
+                             .filter = {},
+                             .reveal_hidden = true,
+                             .file_name = nullptr,
+                             .default_extension = nullptr});
 }
 
 std::wstring ShellContainerFileChooser::choose_existing_container() {
-  return run_dialog(owner_, CLSID_FileOpenDialog, FOS_FILEMUSTEXIST,
-                    kExistingContainerTitle, true);
+  return run_dialog(owner_, {.dialog_class = CLSID_FileOpenDialog,
+                             .options = FOS_FILEMUSTEXIST,
+                             .title = kExistingContainerTitle,
+                             .filter = kContainerFilter,
+                             .reveal_hidden = true,
+                             .file_name = nullptr,
+                             .default_extension = nullptr});
+}
+
+std::wstring ShellContainerFileChooser::choose_contact_key_file() {
+  return run_dialog(owner_, {.dialog_class = CLSID_FileOpenDialog,
+                             .options = FOS_FILEMUSTEXIST,
+                             .title = kContactKeyTitle,
+                             .filter = kContactKeyFilter,
+                             .reveal_hidden = false,
+                             .file_name = nullptr,
+                             .default_extension = nullptr});
+}
+
+std::wstring ShellContainerFileChooser::choose_contact_key_save_path() {
+  return run_dialog(owner_, {.dialog_class = CLSID_FileSaveDialog,
+                             .options = FOS_OVERWRITEPROMPT,
+                             .title = kContactKeySaveTitle,
+                             .filter = kContactKeyFilter,
+                             .reveal_hidden = false,
+                             .file_name = kContactKeyDefaultName,
+                             .default_extension = L"uvkey"});
 }
 
 }  // namespace usb_vault::platform::windows

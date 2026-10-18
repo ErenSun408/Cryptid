@@ -24,6 +24,7 @@
 #include "usb_vault/application/product_settings_v1.h"
 #include "card/vikey/vikey_development_credentials.h"
 #include "card/vikey/vikey_helper_card_enrollment.h"
+#include "card/vikey/vikey_helper_contact_store.h"
 #include "platform/windows/hid_card_device_notifications.h"
 #include "platform/windows/installation_state.h"
 #include "platform/windows/startup_log.h"
@@ -619,6 +620,15 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
   auto backup_backend = std::make_unique<usb_vault::card::vikey::VikeyHelperCardBackupBackend>(config, *credential_provider);
   auto identity_verifier = std::make_unique<usb_vault::card::vikey::VikeyHelperCardIdentityVerifier>(
       config, *credential_provider);
+  usb_vault::ui::ContactBookAccess contact_access{
+      .storage = [config, provider = credential_provider.get()](const std::uint32_t card)
+          -> std::unique_ptr<usb_vault::contacts::IContactStoreStorage> {
+        return std::make_unique<usb_vault::card::vikey::VikeyHelperContactStoreStorage>(
+            config, *provider, card);
+      },
+      .lease = []() -> std::unique_ptr<usb_vault::application::ICardOperationLease> {
+        return std::make_unique<usb_vault::card::vikey::ForegroundCardOperationLease>();
+      }};
   auto enrollment = std::make_unique<
       usb_vault::card::vikey::VikeyHelperCardEnrollment>(
           std::move(config),
@@ -645,6 +655,7 @@ void initialize_application_session([[maybe_unused]] const HWND window) {
           *entry, *authentication, *volume_session, *password_policy,
           *file_chooser, g_reset_mount_access.get(), g_activation_store.get(),
           identity_verifier.get());
+  ui_session->set_contact_book_access(std::move(contact_access));
   // Operations may run on a worker; the removal itself belongs to the window.
   ui_session->set_identity_lost_handler([window, session = authentication.get()] {
     ::PostMessageW(window, kIdentityRecheckLostMessage,
@@ -701,7 +712,6 @@ void clear_application_session() noexcept {
   // Bounded by the helper timeout; the worker must not outlive its verifier.
   if (g_identity_recheck.valid()) g_identity_recheck.wait();
   g_identity_recheck = {};
-  g_identity_verifier.reset();
   g_mount_monitor.reset(); g_mount_targets.clear(); ++g_mount_epoch;
   g_mount_notice = g_mount_notice_delivered = 0; g_mount_notice_inflight = false;
   g_mount_notice_attempt = 0;
@@ -709,6 +719,8 @@ void clear_application_session() noexcept {
   g_card_lifecycle_controller.reset();
   g_card_presence_controller.reset();
   g_ui_session.reset();
+  // After the controller, which rechecks the card through it.
+  g_identity_verifier.reset();
   g_activation_store.reset();
   g_container_file_chooser.reset();
   g_password_policy.reset();
@@ -853,7 +865,10 @@ void service_mount_monitor() noexcept {
 
 void notify_webview_session_changed() noexcept {
   // A picked or verified import package belongs to the login it was made in.
-  if (g_ui_session) g_ui_session->release_stale_import_state();
+  if (g_ui_session) {
+    g_ui_session->release_stale_import_state();
+    g_ui_session->release_stale_contact_book();
+  }
   if (!g_webview || !g_webview_startup.current(g_page_generation)) return;
   // Only the bounded numeric failure snapshot crosses this boundary. Never
   // insert an exception message, SDK payload, file path, or card identity.

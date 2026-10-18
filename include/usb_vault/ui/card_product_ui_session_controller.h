@@ -2,6 +2,7 @@
 
 #include "usb_vault/application/activation_store_v1.h"
 #include "usb_vault/application/card_authentication_session.h"
+#include "usb_vault/application/card_contact_book.h"
 #include "usb_vault/application/card_entry_context_controller.h"
 #include "usb_vault/application/card_identity_recheck.h"
 #include "usb_vault/application/card_login_mount_session.h"
@@ -116,6 +117,37 @@ struct OperationUiEvent final {
   OperationUiOutcome outcome{OperationUiOutcome::succeeded};
   std::wstring container_name;
   wchar_t drive_letter{};
+};
+
+// P5.14 contact list access for the card a login was made with. `storage`
+// is called with that card's hardware identity and must address only it;
+// `lease` serializes every read and write with other card operations.
+struct ContactBookAccess final {
+  std::function<std::unique_ptr<contacts::IContactStoreStorage>(std::uint32_t)> storage;
+  application::CardContactBook::LeaseFactory lease;
+};
+
+// One contact, projected for the page. `public_key` identifies the contact
+// for rename, removal and recipient choice; the remark is already normalized.
+struct ContactUiEntry final {
+  contacts::ContactPublicKey public_key{};
+  std::string remark;
+  std::string fingerprint;
+};
+
+struct ContactBookUiView final {
+  contacts::ContactStoreState state{contacts::ContactStoreState::unread};
+  std::vector<ContactUiEntry> entries;
+  std::string own_fingerprint;
+};
+
+// A picked key file, decoded before anything is written. The fingerprint is
+// set when `error` is none, for the user to compare with the sender's.
+// Whether the key is already listed or is this card's own is decided by
+// add_chosen_contact.
+struct ContactKeyUiPreview final {
+  contacts::ContactKeyFileError error{contacts::ContactKeyFileError::none};
+  std::string fingerprint;
 };
 
 // Native product UI boundary for P2. Mutable bridge inputs are wiped on every
@@ -382,6 +414,34 @@ class CardProductUiSessionController final {
   // the session changes, so nothing of an import outlives the login.
   void release_stale_import_state() noexcept;
 
+  // P5.14 contact list. Without access every call below refuses. The list is
+  // opened for the current login on first use and read from the card then;
+  // a login change drops it, and the identity's private keys with it, once no
+  // operation still holds it. Every card write is preceded by the P5.13 card
+  // recheck. A card user area too small for the list is reported as
+  // CardError::unsupported. Nothing here is written down anywhere.
+  void set_contact_book_access(ContactBookAccess access);
+  [[nodiscard]] ContactBookUiView contact_book();
+  // Reads the card again, for a list left unread or changed by another writer.
+  [[nodiscard]] ContactBookUiView reload_contact_book();
+  // Picks a key file natively and holds its text for this login only; the
+  // path never leaves this side. Nothing when the user cancels.
+  [[nodiscard]] std::optional<ContactKeyUiPreview> choose_contact_key_file();
+  // Adds the held key file under `remark`. The held file is kept after a
+  // refused remark so the page can ask again, and dropped otherwise.
+  application::ContactBookOutcome add_chosen_contact(std::string_view remark);
+  application::ContactBookOutcome rename_contact(const contacts::ContactPublicKey& key,
+                                                 std::string_view remark);
+  application::ContactBookOutcome remove_contact(const contacts::ContactPublicKey& key);
+  // Recovery for a damaged or inconsistent list: clears it on the card.
+  void clear_contact_book();
+  // Saves this card's own public key file where the user picks. False when
+  // the user cancels.
+  bool export_own_contact_key();
+  // Drops a list that belongs to no current login. Called when the session
+  // changes.
+  void release_stale_contact_book() noexcept;
+
   // P5.9 import into a new container. A package verified for this login,
   // held open together with a page-locked copy of its password until it is
   // taken or the login ends.
@@ -490,6 +550,14 @@ class CardProductUiSessionController final {
   // across the vault boundary, or changes a security setting. Throws, and
   // reports a lost card to the host, unless the authenticated card is present.
   void require_same_card();
+  // The current login's contact list, opened on first use but not read.
+  // Shared so a login change can drop it while an operation still runs on it.
+  [[nodiscard]] std::shared_ptr<application::CardContactBook> open_contact_book();
+  [[nodiscard]] bool login_still_current(std::uint64_t generation) const noexcept;
+  [[nodiscard]] ContactBookUiView contact_book_view(
+      const application::CardContactBook& book) const;
+  template <typename Write>
+  decltype(auto) write_contact_book(Write&& write);
 
   ILoginResetMountAccess* reset_mount_access_;
   application::IActivationGate* activation_;
@@ -514,6 +582,14 @@ class CardProductUiSessionController final {
   // Guards the pick and the verified package, which the session worker sets
   // and the window thread may release.
   mutable std::mutex import_mutex_;
+  ContactBookAccess contact_access_;
+  std::shared_ptr<application::CardContactBook> contact_book_;
+  std::uint64_t contact_book_generation_{};
+  std::string pending_contact_key_;
+  std::uint64_t pending_contact_key_generation_{};
+  // Guards the list pointer and the held key file, which the session worker
+  // sets and the window thread may release.
+  mutable std::mutex contact_mutex_;
   template <typename Create>
   std::uint32_t import_into_created(std::unique_ptr<VerifiedImport> verified,
                                     std::uint32_t mounted_mib, Create&& create,

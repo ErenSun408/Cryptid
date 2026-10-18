@@ -22,6 +22,8 @@ class ShellContainerFileChooser final : public ui::IContainerFileChooser {
 
   [[nodiscard]] std::wstring choose_container_directory() override;
   [[nodiscard]] std::wstring choose_existing_container() override;
+  [[nodiscard]] std::wstring choose_contact_key_file() override;
+  [[nodiscard]] std::wstring choose_contact_key_save_path() override;
 
  private:
   HWND owner_;

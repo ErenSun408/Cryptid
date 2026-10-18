@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdexcept>
 #include <string>
 
 namespace usb_vault::ui {
@@ -42,6 +43,16 @@ class IContainerFileChooser {
   // Returns the absolute path of an existing container file to adopt, or an
   // empty string when the user cancels. The path stays on this side.
   [[nodiscard]] virtual std::wstring choose_existing_container() = 0;
+
+  // P5.14 contact key files, under the same no-trace rule: the absolute path
+  // of an existing key file to read, or where to save this card's own key
+  // file (the dialog confirms an overwrite), or an empty string on cancel.
+  [[nodiscard]] virtual std::wstring choose_contact_key_file() {
+    throw std::logic_error("contact key files are unavailable");
+  }
+  [[nodiscard]] virtual std::wstring choose_contact_key_save_path() {
+    throw std::logic_error("contact key files are unavailable");
+  }
 
  protected:
   IContainerFileChooser() noexcept = default;
