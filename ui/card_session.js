@@ -4848,6 +4848,7 @@
     // reads a directory when the user arrives at it or moves inside it.
     if (sectionName === "files") void refreshFileManager();
     if (sectionName === "backup") renderBackupCentre();
+    if (sectionName === "contacts") void refreshContacts();
     if (sectionName === "decoy") {
       renderDecoySection();
       if (returningToMaintenance) void refreshFileManager().then(() => refreshDecoyCandidates());
@@ -5501,6 +5502,8 @@
 
   const render = (message, error = "") => {
     if (currentState !== nativeState.authenticated && partitionRows.length) discardPartitions();
+    // Nothing of a contact list outlives the login it was read in.
+    if (currentState !== nativeState.authenticated) resetContactsOnLogout();
     renderPartitions();
     appExitToggle.disabled = busy || currentState !== nativeState.authenticated;
     returnToLogin.disabled = appExitToggle.disabled;
@@ -7187,7 +7190,7 @@
       if (ticket) { try { await bridge.cancelLoginReset(ticket); } catch (pageError) { logCaughtPageError("runForgotPassword/2", pageError);} }
       forgotRunning = false; forgotAcknowledge.checked = false;
       forgotConfirm.hidden = true; forgotForce.hidden = true; forgotSkip.hidden = true;
-      forgotStatus.textContent = writing ? "无法确认重置结果。请拔出安全卡重新插入，按实际状态继续；请勿重复执行旧确认。" : "无法准备重置。请重新插入安全卡，确认凭据配置后再试。";
+      forgotStatus.textContent = writing ? "无法确认重置结果，通讯录可能已清除。请拔出安全卡重新插入，按实际状态继续；请勿重复执行旧确认。" : "无法准备重置。请重新插入安全卡，确认凭据配置后再试。";
       forgotStatus.dataset.tone = "error"; updateForgotControls(); forgotClose.focus();
       if (externalRefreshPending) { await closeForgotPassword(); void refreshAfterExternalChange(); }
     }
@@ -7252,7 +7255,7 @@
         // the card is untouched: a failure inside the write cannot promise it.
         resetStatus.textContent = activeVolumes
           ? "重新初始化未开始：仍有卷处于挂载状态，请先全部卸载后重试。"
-          : "重新初始化未能完成。请拔出安全卡重新插入后重试。";
+          : "重新初始化未能完成，通讯录可能已清除。请拔出安全卡重新插入后重试。";
         resetStatus.dataset.tone = "error";
       }
     }
@@ -7558,6 +7561,330 @@
       }
     }
   };
+
+  // P5.14 contact list. The bridge answers one packed string per call whose
+  // first field is a status; the list lives only in these variables and the
+  // table while the section is open for this login, and none of it reaches a
+  // page event, a log or storage.
+  const contactRecord = "\u001e";
+  const contactField = "\u001f";
+  const contactsBody = document.getElementById("contacts-body");
+  const contactsStatus = document.getElementById("contacts-status");
+  const contactsOwnFingerprint = document.getElementById("contacts-own-fingerprint");
+  const contactsNotice = document.getElementById("contacts-notice");
+  const contactsNoticeText = document.getElementById("contacts-notice-text");
+  const contactsClear = document.getElementById("contacts-clear");
+  const contactsAdd = document.getElementById("contacts-add");
+  const contactsExportOwn = document.getElementById("contacts-export-own");
+  const contactAddDialog = document.getElementById("contact-add-dialog");
+  const contactAddFingerprint = document.getElementById("contact-add-fingerprint");
+  const contactAddRemark = document.getElementById("contact-add-remark");
+  const contactAddStatus = document.getElementById("contact-add-status");
+  const contactAddConfirm = document.getElementById("contact-add-confirm");
+  const contactRenameDialog = document.getElementById("contact-rename-dialog");
+  const contactRenameRemark = document.getElementById("contact-rename-remark");
+  const contactRenameStatus = document.getElementById("contact-rename-status");
+  const contactRenameConfirm = document.getElementById("contact-rename-confirm");
+  const contactRemoveDialog = document.getElementById("contact-remove-dialog");
+  const contactRemoveName = document.getElementById("contact-remove-name");
+  const contactRemoveStatus = document.getElementById("contact-remove-status");
+  const contactRemoveConfirm = document.getElementById("contact-remove-confirm");
+  const contactState = {unread: 0, unavailable: 1, empty: 2, loaded: 3, damaged: 4,
+                        unsupportedVersion: 5, inconsistent: 6};
+  let contactEntries = [];
+  let contactsState = contactState.unread;
+  let contactsBusy = false;
+  let contactTarget = null;
+  // render() can run before this block has; both are hoisted for it.
+  var contactsReady = false;  // eslint-disable-line no-var
+  function resetContactsOnLogout() { if (contactsReady) clearContactsView(); }
+
+  const contactFailureMessages = {
+    1: "当前无法使用通讯录。",
+    2: "此安全卡容量不足，无法使用通讯录，其余功能不受影响。",
+    3: "安全卡上的通讯录已被其他操作更改，已重新读取，请重试。",
+    4: "安全卡已拔出。",
+    5: "无法读写安全卡，请重试。",
+    6: "无法读写公钥文件。",
+    8: "该联系人已不在列表中，请刷新后重试。",
+  };
+  const contactChangeMessages = {
+    1: "公钥文件格式不正确。",
+    2: "公钥文件版本不受支持，请让对方使用相同版本重新导出。",
+    3: "公钥文件校验失败，可能已损坏或被改动。",
+    4: "公钥无效，无法用于加密。",
+    5: "这是本卡自己的公钥，无需添加。",
+    7: "通讯录已满（最多 48 人）。",
+    8: "请填写备注。",
+    9: "备注过长：最多约 10 个汉字或 31 个英文字符。",
+    10: "备注含不允许的字符。",
+    11: "该联系人已不在列表中。",
+  };
+  const contactChangeMessage = (change, listed) => change === 6
+    ? `该联系人已在通讯录中，备注为“${listed}”。`
+    : contactChangeMessages[change] || "通讯录操作失败，请重试。";
+  // Splits an answer into its status and its records of fields; a status
+  // other than 0 carries nothing else.
+  const parseContactAnswer = (answer) => {
+    const records = String(answer).split(contactRecord);
+    const status = Number(records[0]);
+    if (!Number.isInteger(status) || status < 0) throw new Error("invalid contact answer");
+    return {status, records: records.slice(1).map(record => record.split(contactField))};
+  };
+  const contactFailure = (status) =>
+    contactFailureMessages[status] || "通讯录操作失败，请重试。";
+  const setContactsStatus = (message, tone = "") => {
+    contactsStatus.textContent = message;
+    contactsStatus.dataset.tone = tone;
+  };
+
+  const clearContactsView = () => {
+    contactEntries = [];
+    contactsState = contactState.unread;
+    contactTarget = null;
+    contactsBody.replaceChildren();
+    contactsOwnFingerprint.textContent = "";
+    contactsNotice.hidden = true;
+    setContactsStatus("");
+    contactAddDialog.hidden = true;
+    contactRenameDialog.hidden = true;
+    contactRemoveDialog.hidden = true;
+    contactAddRemark.value = "";
+    contactRenameRemark.value = "";
+  };
+
+  const updateContactsControls = () => {
+    const writable = contactsState === contactState.empty || contactsState === contactState.loaded;
+    contactsAdd.disabled = contactsBusy || !writable;
+    contactsExportOwn.disabled = contactsBusy || contactsOwnFingerprint.textContent === "";
+    contactsClear.disabled = contactsBusy;
+    contactAddConfirm.disabled = contactsBusy;
+    contactRenameConfirm.disabled = contactsBusy;
+    contactRemoveConfirm.disabled = contactsBusy;
+    for (const button of contactsBody.querySelectorAll("button")) button.disabled = contactsBusy || !writable;
+  };
+
+  const renderContacts = () => {
+    contactsBody.replaceChildren();
+    const notices = {
+      [contactState.unavailable]: "此安全卡容量不足，无法使用通讯录，其余功能不受影响。",
+      [contactState.damaged]: "通讯录已损坏，可清空后重建，联系人需重新导入。",
+      [contactState.inconsistent]: "通讯录的两份副本不一致，可清空后重建，联系人需重新导入。",
+      [contactState.unsupportedVersion]: "通讯录由更新版本写入，当前版本无法读取或修改。",
+    };
+    const notice = notices[contactsState];
+    contactsNotice.hidden = notice === undefined;
+    contactsNoticeText.textContent = notice || "";
+    contactsClear.hidden = contactsState !== contactState.damaged &&
+                           contactsState !== contactState.inconsistent;
+    if (contactEntries.length === 0) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 3;
+      cell.className = "operation-empty";
+      cell.textContent = contactsState === contactState.empty || contactsState === contactState.loaded
+        ? "尚无联系人。导入对方的公钥文件后即可指定其为接收人。" : "";
+      row.append(cell);
+      contactsBody.append(row);
+    }
+    for (const entry of contactEntries) {
+      const row = document.createElement("tr");
+      row.dataset.contactKey = entry.key;
+      const remark = document.createElement("td");
+      remark.textContent = entry.remark;
+      const fingerprint = document.createElement("td");
+      fingerprint.className = "contacts-key";
+      fingerprint.textContent = entry.fingerprint;
+      const actions = document.createElement("td");
+      actions.className = "contacts-row-actions";
+      const rename = document.createElement("button");
+      rename.type = "button"; rename.className = "shell-button"; rename.textContent = "改备注";
+      rename.dataset.contactAction = "rename";
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.className = "shell-button danger"; remove.textContent = "删除";
+      remove.dataset.contactAction = "remove";
+      actions.append(rename, remove);
+      row.append(remark, fingerprint, actions);
+      contactsBody.append(row);
+    }
+    updateContactsControls();
+  };
+
+  // Reads the list (again, when asked) and shows it. Returns whether it read.
+  const refreshContacts = async (reload = false) => {
+    if (bridge === null || currentState !== nativeState.authenticated) return false;
+    contactsBusy = true;
+    updateContactsControls();
+    try {
+      const answer = parseContactAnswer(
+        reload ? await bridge.reloadContactBook() : await bridge.getContactBook());
+      if (answer.status !== 0) {
+        clearContactsView();
+        setContactsStatus(contactFailure(answer.status), "error");
+        return false;
+      }
+      const [header, ...rows] = answer.records;
+      contactsState = Number(header[0]);
+      contactsOwnFingerprint.textContent = header[1] || "";
+      contactEntries = rows.map(([key, remark, fingerprint]) => ({key, remark, fingerprint}));
+      return true;
+    } catch (pageError) { logCaughtPageError("refreshContacts/1", pageError);
+      setContactsStatus("无法读取通讯录，请稍后重试。", "error");
+      return false;
+    } finally {
+      contactsBusy = false;
+      renderContacts();
+    }
+  };
+
+  // Runs one contact call. A failure status is shown where `status` says; a
+  // list that changed underneath is read again.
+  const runContactCall = async (call, status) => {
+    contactsBusy = true;
+    updateContactsControls();
+    try {
+      const answer = parseContactAnswer(await call());
+      if (answer.status !== 0) {
+        status.textContent = contactFailure(answer.status);
+        status.dataset.tone = "error";
+        if (answer.status === 3) await refreshContacts();
+        return null;
+      }
+      return answer.records;
+    } catch (pageError) { logCaughtPageError("runContactCall/1", pageError);
+      status.textContent = "通讯录操作失败，请重试。";
+      status.dataset.tone = "error";
+      return null;
+    } finally {
+      contactsBusy = false;
+      updateContactsControls();
+    }
+  };
+
+  contactsAdd.addEventListener("click", async () => {
+    if (contactsBusy || currentState !== nativeState.authenticated) return;
+    setContactsStatus("");
+    const records = await runContactCall(() => bridge.chooseContactKeyFile(), contactsStatus);
+    if (records === null) return;
+    const [outcome, fingerprint] = records[0];
+    if (outcome === "0") return;
+    if (outcome !== "1") {
+      setContactsStatus(contactChangeMessage(Number(outcome) - 1), "error");
+      return;
+    }
+    contactAddFingerprint.textContent = fingerprint;
+    contactAddRemark.value = "";
+    contactAddStatus.textContent = "";
+    contactAddStatus.dataset.tone = "";
+    contactAddDialog.hidden = false;
+    contactAddRemark.focus();
+  });
+  const confirmContactAdd = async () => {
+    if (contactsBusy) return;
+    const records = await runContactCall(
+      () => bridge.addChosenContact(contactAddRemark.value), contactAddStatus);
+    if (records === null) return;
+    const [change, listed] = records[0];
+    if (change !== "0") {
+      contactAddStatus.textContent = contactChangeMessage(Number(change), listed);
+      contactAddStatus.dataset.tone = "error";
+      // Only a refused remark can be retried with the same file.
+      if (!["8", "9", "10"].includes(change)) contactAddConfirm.disabled = true;
+      return;
+    }
+    contactAddDialog.hidden = true;
+    contactAddRemark.value = "";
+    await refreshContacts();
+    setContactsStatus("已添加联系人。", "success");
+  };
+  contactAddConfirm.addEventListener("click", confirmContactAdd);
+  contactAddRemark.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); void confirmContactAdd(); }
+  });
+
+  contactsBody.addEventListener("click", (event) => {
+    const button = event.target instanceof Element ? event.target.closest("[data-contact-action]") : null;
+    if (!button || contactsBusy) return;
+    const key = button.closest("tr").dataset.contactKey;
+    contactTarget = contactEntries.find(entry => entry.key === key) || null;
+    if (contactTarget === null) return;
+    if (button.dataset.contactAction === "rename") {
+      contactRenameRemark.value = contactTarget.remark;
+      contactRenameStatus.textContent = "";
+      contactRenameStatus.dataset.tone = "";
+      contactRenameDialog.hidden = false;
+      contactRenameRemark.focus();
+    } else {
+      contactRemoveName.textContent = contactTarget.remark;
+      contactRemoveStatus.textContent = "";
+      contactRemoveStatus.dataset.tone = "";
+      contactRemoveDialog.hidden = false;
+      contactRemoveConfirm.focus();
+    }
+  });
+  const confirmContactRename = async () => {
+    if (contactsBusy || contactTarget === null) return;
+    const records = await runContactCall(
+      () => bridge.renameContact(contactTarget.key, contactRenameRemark.value), contactRenameStatus);
+    if (records === null) return;
+    const [change] = records[0];
+    if (change !== "0") {
+      contactRenameStatus.textContent = contactChangeMessage(Number(change));
+      contactRenameStatus.dataset.tone = "error";
+      return;
+    }
+    contactRenameDialog.hidden = true;
+    contactTarget = null;
+    await refreshContacts();
+  };
+  contactRenameConfirm.addEventListener("click", confirmContactRename);
+  contactRenameRemark.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); void confirmContactRename(); }
+  });
+  contactRemoveConfirm.addEventListener("click", async () => {
+    if (contactsBusy || contactTarget === null) return;
+    const records = await runContactCall(
+      () => bridge.removeContact(contactTarget.key), contactRemoveStatus);
+    if (records === null) return;
+    const [change] = records[0];
+    if (change !== "0") {
+      contactRemoveStatus.textContent = contactChangeMessage(Number(change));
+      contactRemoveStatus.dataset.tone = "error";
+      return;
+    }
+    contactRemoveDialog.hidden = true;
+    contactTarget = null;
+    await refreshContacts();
+  });
+  for (const [dialog, ids] of [[contactAddDialog, ["contact-add-close", "contact-add-cancel"]],
+                               [contactRenameDialog, ["contact-rename-close", "contact-rename-cancel"]],
+                               [contactRemoveDialog, ["contact-remove-close", "contact-remove-cancel"]]]) {
+    for (const id of ids) {
+      document.getElementById(id).addEventListener("click", () => {
+        if (contactsBusy) return;
+        dialog.hidden = true;
+        contactTarget = null;
+        contactAddRemark.value = "";
+        contactRenameRemark.value = "";
+      });
+    }
+  }
+  contactsClear.addEventListener("click", async () => {
+    if (contactsBusy) return;
+    const records = await runContactCall(() => bridge.clearContactBook(), contactsStatus);
+    if (records === null) return;
+    await refreshContacts();
+    setContactsStatus("已清空通讯录，可重新导入联系人。", "success");
+  });
+  contactsReady = true;
+  contactsExportOwn.addEventListener("click", async () => {
+    if (contactsBusy) return;
+    setContactsStatus("");
+    const records = await runContactCall(() => bridge.exportOwnContactKey(), contactsStatus);
+    if (records !== null && records[0][0] === "1") {
+      setContactsStatus("已保存本人公钥文件，可发送给联系人导入。", "success");
+    }
+  });
 
   for (const item of dashboardNavigation) {
     item.addEventListener("click", () => {

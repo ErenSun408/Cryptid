@@ -245,9 +245,10 @@ void test_page_has_route_specific_password_surfaces() {
   // name of a container created by an import and the export package name.
   // The editable import package name adds one more protected text control,
   // and P5.12 the activation code twice (login surface and settings), which
-  // names the card it unlocks.
-  require(count_occurrences(page, "autocomplete=\"off\"") == 21 &&
-              count_occurrences(page, "spellcheck=\"false\"") == 21,
+  // names the card it unlocks. P5.14 adds the two contact remark fields:
+  // a remark names someone the card corresponds with.
+  require(count_occurrences(page, "autocomplete=\"off\"") == 23 &&
+              count_occurrences(page, "spellcheck=\"false\"") == 23,
           "every product text control must disable browser assistance");
   require(page.find("<form") == std::string::npos,
           "product password inputs must not use browser form submission");

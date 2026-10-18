@@ -776,6 +776,15 @@
     .section-note svg { flex: 0 0 auto; width: .9rem; height: .9rem; margin-top: .15rem; }
 
     /* ================= 操作日志 ================= */
+    .contacts-actions { display: flex; gap: .5rem; }
+    .contacts-own { margin: 0 0 .75rem; font-size: .78rem; color: var(--text-2); }
+    .contacts-fingerprint { font-family: var(--mono); color: var(--text); letter-spacing: .04em; }
+    .contacts-notice { display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+      margin: 0 0 .75rem; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: .6rem;
+      font-size: .78rem; color: var(--text-2); }
+    .contacts-table .contacts-row-actions { width: 9rem; text-align: right; }
+    .contacts-table td.contacts-row-actions button { margin-left: .4rem; }
+    .contacts-table td.contacts-key { font-family: var(--mono); color: var(--text-3); }
     .operation-card { border: 1px solid var(--line); border-radius: .75rem; background: var(--ink-850); overflow: hidden; }
     .operation-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     .operation-table th, .operation-table td { padding: .72rem .9rem; border-top: 1px solid var(--line); text-align: left; }
@@ -1484,6 +1493,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5H5v14h14v-8"></path><path d="M12 12 21 3M15 3h6v6"></path></svg>
           <span class="nav-label">导出与迁移</span>
         </button>
+        <button class="nav-item dashboard-nav" type="button" data-section="contacts">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.5"></circle><path d="M2.5 19.5c.8-3.4 3.4-5.5 6.5-5.5s5.7 2.1 6.5 5.5"></path><path d="M16 5.5a3.5 3.5 0 010 6.5M18.5 14.5c1.6.8 2.6 2.6 3 5"></path></svg>
+          <span class="nav-label">通讯录</span>
+        </button>
         <button class="nav-item dashboard-nav" type="button" data-section="decoy">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v6.5c0 3.9-3.3 7-8 8.5-4.7-1.5-8-4.6-8-8.5V7l8-4z"></path><path d="M8.5 12.5l2.5 2.5 4.5-4.5"></path></svg>
           <span class="nav-label">高级更新</span>
@@ -1721,6 +1734,32 @@
           <div id="export-migrate-pane" hidden>
             <div id="migrate-container-list" class="xlist"></div>
           </div>
+        </section>
+
+        <section id="dashboard-section-contacts" class="dashboard-section" aria-labelledby="contacts-title">
+          <div class="section-header">
+            <div><h2 id="contacts-title">通讯录</h2><p>存于安全卡，最多 48 人；用于指定接收人导出与识别发件人</p></div>
+            <div class="contacts-actions">
+              <button id="contacts-export-own" class="shell-button" type="button">导出本人公钥</button>
+              <button id="contacts-add" class="shell-button primary" type="button">导入公钥文件</button>
+            </div>
+          </div>
+          <p class="contacts-own">本人指纹：<span id="contacts-own-fingerprint" class="contacts-fingerprint"></span></p>
+          <div id="contacts-notice" class="contacts-notice" hidden>
+            <span id="contacts-notice-text"></span>
+            <button id="contacts-clear" class="shell-button danger" type="button" hidden>清空并重建</button>
+          </div>
+          <output id="contacts-status" class="creation-status" aria-live="polite"></output>
+          <div class="operation-card">
+            <table class="operation-table contacts-table">
+              <thead><tr><th>备注</th><th>指纹</th><th class="contacts-row-actions">操作</th></tr></thead>
+              <tbody id="contacts-body"></tbody>
+            </table>
+          </div>
+          <p class="section-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 11v5.5"></path><path d="M12 8h.01"></path></svg>
+            <span>导入他人公钥时请与对方当面或电话核对指纹。通讯录在所有登录密码下相同，不写入操作日志。</span>
+          </p>
         </section>
 
         <section id="dashboard-section-history" class="dashboard-section" aria-labelledby="history-title">
@@ -2174,6 +2213,68 @@
       <div class="modal-footer">
         <button id="file-name-cancel" class="modal-button" type="button">取消</button>
         <button id="file-name-confirm" class="modal-button primary" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+  <div id="contact-add-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="contact-add-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="contact-add-title">添加联系人</h3>
+        <button id="contact-add-close" class="modal-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="contacts-own">指纹：<span id="contact-add-fingerprint" class="contacts-fingerprint"></span></p>
+        <p class="section-note"><span>请先与对方核对指纹一致，再添加。</span></p>
+        <div class="creation-form">
+          <label for="contact-add-remark">备注</label>
+          <input id="contact-add-remark" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="31">
+        </div>
+        <output id="contact-add-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="contact-add-cancel" class="modal-button" type="button">取消</button>
+        <button id="contact-add-confirm" class="modal-button primary" type="button">添加</button>
+      </div>
+    </div>
+  </div>
+  <div id="contact-rename-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="contact-rename-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="contact-rename-title">修改备注</h3>
+        <button id="contact-rename-close" class="modal-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="creation-form">
+          <label for="contact-rename-remark">备注</label>
+          <input id="contact-rename-remark" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="31">
+        </div>
+        <output id="contact-rename-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="contact-rename-cancel" class="modal-button" type="button">取消</button>
+        <button id="contact-rename-confirm" class="modal-button primary" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+  <div id="contact-remove-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="contact-remove-title" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="contact-remove-title">删除联系人</h3>
+        <button id="contact-remove-close" class="modal-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p>将从通讯录删除 <strong id="contact-remove-name"></strong>，之后需重新导入其公钥文件。</p>
+        <output id="contact-remove-status" class="creation-status" aria-live="polite"></output>
+      </div>
+      <div class="modal-footer">
+        <button id="contact-remove-cancel" class="modal-button" type="button">取消</button>
+        <button id="contact-remove-confirm" class="modal-button danger" type="button">删除</button>
       </div>
     </div>
   </div>
