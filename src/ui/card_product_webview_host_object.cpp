@@ -3,6 +3,7 @@
 #include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/backup/export_package_v1.h"
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 #include "usb_vault/security/confirmed_password.h"
 #include "usb_vault/ui/page_event_report.h"
 
@@ -95,6 +96,16 @@ constexpr DISPID kActivationStatusId = 240;
 constexpr DISPID kActivationCardId = 241;
 constexpr DISPID kActivationExpiryId = 242;
 constexpr DISPID kSubmitActivationCodeId = 243;
+// Contact list (P5.14). Each answers one packed string whose first field is a
+// ContactBridgeStatus; nothing of the list is logged or kept here.
+constexpr DISPID kContactBookId = 250;
+constexpr DISPID kReloadContactBookId = 251;
+constexpr DISPID kChooseContactKeyFileId = 252;
+constexpr DISPID kAddChosenContactId = 253;
+constexpr DISPID kRenameContactId = 254;
+constexpr DISPID kRemoveContactId = 255;
+constexpr DISPID kClearContactBookId = 256;
+constexpr DISPID kExportOwnContactKeyId = 257;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -345,6 +356,129 @@ constexpr wchar_t kChooseContainerDirectoryName[] =
 constexpr wchar_t kListingRecordSeparator = L'\x1e';
 constexpr wchar_t kListingFieldSeparator = L'\x1f';
 
+// The first field of every contact list answer. Anything but ok carries no
+// further field.
+enum class ContactBridgeStatus : unsigned int {
+  ok = 0,
+  // Not logged in, no contact list, or the list's state refuses the call.
+  refused = 1,
+  // The card user area is too small for a contact list.
+  card_too_small = 2,
+  // The card no longer holds what was read; the list has been read again.
+  changed = 3,
+  // The card the session logged in with is gone.
+  card_removed = 4,
+  // The card could not be read or written.
+  card_failed = 5,
+  // The key file could not be read or written.
+  file_failed = 6,
+  failed = 7,
+  // A key the page sent is not one it was given.
+  bad_argument = 8,
+};
+
+// Call inside a catch block.
+[[nodiscard]] ContactBridgeStatus contact_failure_status() noexcept {
+  try {
+    throw;
+  } catch (const contacts::ContactStoreChangedError&) {
+    return ContactBridgeStatus::changed;
+  } catch (const std::system_error& error) {
+    if (error.code().category() != card::card_error_category()) return ContactBridgeStatus::file_failed;
+    if (error.code() == card::make_error_code(card::CardError::invalid_operation))
+      return ContactBridgeStatus::refused;
+    if (error.code() == card::make_error_code(card::CardError::unsupported))
+      return ContactBridgeStatus::card_too_small;
+    if (error.code() == card::make_error_code(card::CardError::device_not_found))
+      return ContactBridgeStatus::card_removed;
+    return ContactBridgeStatus::card_failed;
+  } catch (const std::invalid_argument&) {
+    return ContactBridgeStatus::bad_argument;
+  } catch (const std::logic_error&) {
+    return ContactBridgeStatus::refused;
+  } catch (...) {
+    return ContactBridgeStatus::failed;
+  }
+}
+
+// Remarks are validated UTF-8 with no control characters, so neither
+// separator can occur in one. Anything that does not convert is not a
+// remark this list holds.
+[[nodiscard]] std::wstring contact_text(const std::string_view utf8) {
+  if (utf8.empty()) return {};
+  const int length = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+                                           static_cast<int>(utf8.size()), nullptr, 0);
+  if (length <= 0) throw std::runtime_error("a contact remark is not UTF-8");
+  std::wstring text(static_cast<std::size_t>(length), L'\0');
+  static_cast<void>(::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+                                          static_cast<int>(utf8.size()), text.data(), length));
+  return text;
+}
+
+// A remark from the page. A lone surrogate does not convert; it is passed on
+// as a byte the remark rules refuse, so the page hears invalid_remark.
+[[nodiscard]] std::string contact_remark_utf8(const std::wstring_view text) {
+  if (text.empty()) return {};
+  const int length = ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+                                           static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  if (length <= 0) return std::string(1, '\x01');
+  std::string utf8(static_cast<std::size_t>(length), '\0');
+  static_cast<void>(::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+                                          static_cast<int>(text.size()), utf8.data(), length,
+                                          nullptr, nullptr));
+  return utf8;
+}
+
+// A contact is named to the page by its public key in 64 lowercase hex
+// digits, and only a key in exactly that form is taken back.
+[[nodiscard]] std::wstring contact_key_text(const contacts::ContactPublicKey& key) {
+  constexpr wchar_t kDigits[] = L"0123456789abcdef";
+  std::wstring text;
+  text.reserve(key.size() * 2);
+  for (const std::byte value : key) {
+    text.push_back(kDigits[std::to_integer<unsigned int>(value) >> 4]);
+    text.push_back(kDigits[std::to_integer<unsigned int>(value) & 0x0F]);
+  }
+  return text;
+}
+
+[[nodiscard]] std::optional<contacts::ContactPublicKey> parse_contact_key(
+    const std::wstring_view text) noexcept {
+  contacts::ContactPublicKey key{};
+  if (text.size() != key.size() * 2) return std::nullopt;
+  const auto digit = [](const wchar_t value) -> int {
+    if (value >= L'0' && value <= L'9') return value - L'0';
+    if (value >= L'a' && value <= L'f') return value - L'a' + 10;
+    return -1;
+  };
+  for (std::size_t index = 0; index < key.size(); ++index) {
+    const int high = digit(text[index * 2]);
+    const int low = digit(text[index * 2 + 1]);
+    if (high < 0 || low < 0) return std::nullopt;
+    key[index] = static_cast<std::byte>(high * 16 + low);
+  }
+  return key;
+}
+
+// "status␞state␟own fingerprint" and one "␞key␟remark␟fingerprint" per
+// contact.
+[[nodiscard]] std::wstring pack_contact_book(const ContactBookUiView& view) {
+  std::wstring packed = L"0";
+  packed.push_back(kListingRecordSeparator);
+  packed.append(std::to_wstring(static_cast<unsigned int>(view.state)));
+  packed.push_back(kListingFieldSeparator);
+  packed.append(contact_text(view.own_fingerprint));
+  for (const ContactUiEntry& entry : view.entries) {
+    packed.push_back(kListingRecordSeparator);
+    packed.append(contact_key_text(entry.public_key));
+    packed.push_back(kListingFieldSeparator);
+    packed.append(contact_text(entry.remark));
+    packed.push_back(kListingFieldSeparator);
+    packed.append(contact_text(entry.fingerprint));
+  }
+  return packed;
+}
+
 [[nodiscard]] std::wstring pack_directory_listing(
     const DirectoryUiListing& listing) {
   std::wstring packed;
@@ -592,6 +726,14 @@ class PasswordArgumentsWiper final {
     case kActivationCardId: return "getActivationCardNumber";
     case kActivationExpiryId: return "getActivationExpiry";
     case kSubmitActivationCodeId: return "submitActivationCode";
+    case kContactBookId: return "getContactBook";
+    case kReloadContactBookId: return "reloadContactBook";
+    case kChooseContactKeyFileId: return "chooseContactKeyFile";
+    case kAddChosenContactId: return "addChosenContact";
+    case kRenameContactId: return "renameContact";
+    case kRemoveContactId: return "removeContact";
+    case kClearContactBookId: return "clearContactBook";
+    case kExportOwnContactKeyId: return "exportOwnContactKey";
     case kBeginEncryptedExportId: return "beginEncryptedExport";
     case kEncryptedTransferStatusId: return "encryptedTransferStatus";
     case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
@@ -894,6 +1036,14 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"getActivationCardNumber")) { ids[0] = kActivationCardId; return S_OK; }
     if (matches(names[0], L"getActivationExpiry")) { ids[0] = kActivationExpiryId; return S_OK; }
     if (matches(names[0], L"submitActivationCode")) { ids[0] = kSubmitActivationCodeId; return S_OK; }
+    if (matches(names[0], L"getContactBook")) { ids[0] = kContactBookId; return S_OK; }
+    if (matches(names[0], L"reloadContactBook")) { ids[0] = kReloadContactBookId; return S_OK; }
+    if (matches(names[0], L"chooseContactKeyFile")) { ids[0] = kChooseContactKeyFileId; return S_OK; }
+    if (matches(names[0], L"addChosenContact")) { ids[0] = kAddChosenContactId; return S_OK; }
+    if (matches(names[0], L"renameContact")) { ids[0] = kRenameContactId; return S_OK; }
+    if (matches(names[0], L"removeContact")) { ids[0] = kRemoveContactId; return S_OK; }
+    if (matches(names[0], L"clearContactBook")) { ids[0] = kClearContactBookId; return S_OK; }
+    if (matches(names[0], L"exportOwnContactKey")) { ids[0] = kExportOwnContactKeyId; return S_OK; }
     if (matches(names[0], kForgetContainerName)) {
       ids[0] = kForgetContainerId;
       return S_OK;
@@ -1161,6 +1311,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       return invoke_login_reset(member, parameters, result);
     if (member >= kActivationStatusId && member <= kSubmitActivationCodeId)
       return invoke_activation(member, parameters, result);
+    if (member >= kContactBookId && member <= kExportOwnContactKeyId)
+      return invoke_contacts(member, parameters, result);
 
     // Observations may refresh the failure dialog. Any unrelated mutation
     // revokes the last cleanup target, so a stale page cannot force a new mount.
@@ -3928,6 +4080,96 @@ class CardProductWebViewHostObject final : public IDispatch {
       USB_VAULT_TRACE_FAILURE("ui/card_product_webview_host_object", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
       return E_FAIL;
     }
+  }
+
+  // P5.14 contact list. Calls that read or write the card run here, on the
+  // window, like the card reset: the busy gate above already refuses them
+  // while a worker owns the session. Answers, by member:
+  //   getContactBook, reloadContactBook: see pack_contact_book.
+  //   chooseContactKeyFile: "0␞outcome␟fingerprint", outcome 0 cancelled,
+  //     1 decoded, 2 malformed, 3 unsupported version, 4 checksum mismatch,
+  //     5 unusable key; the fingerprint only for 1.
+  //   addChosenContact(remark): "0␞change␟listed remark", change a
+  //     ContactBookChange; the listed remark only for already_present.
+  //   renameContact(key, remark), removeContact(key): "0␞change".
+  //   clearContactBook: "0".
+  //   exportOwnContactKey: "0␞saved", 0 cancelled or 1.
+  HRESULT invoke_contacts(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
+    const UINT expected = member == kAddChosenContactId || member == kRemoveContactId ? 1U
+                          : member == kRenameContactId                              ? 2U
+                                                                                    : 0U;
+    if (!parameters || parameters->cNamedArgs != 0 || parameters->cArgs != expected ||
+        (expected != 0 && !parameters->rgvarg)) {
+      return DISP_E_BADPARAMCOUNT;
+    }
+    const DispatchTextWiper text_wiper(parameters);
+    // COM delivers the arguments in reverse order.
+    std::wstring_view first;
+    std::wstring_view second;
+    if (expected >= 1 && !exact_wstring(parameters->rgvarg[expected - 1], first)) return DISP_E_TYPEMISMATCH;
+    if (expected == 2 && !exact_wstring(parameters->rgvarg[0], second)) return DISP_E_TYPEMISMATCH;
+    if (!result) return E_POINTER;
+    std::wstring packed;
+    LocationStringWiper packed_wiper(packed);
+    const auto with_change = [&](const application::ContactBookOutcome& outcome) {
+      packed = L"0";
+      packed.push_back(kListingRecordSeparator);
+      packed.append(std::to_wstring(static_cast<unsigned int>(outcome.change)));
+    };
+    try {
+      if (creation_work_->interrupted.load()) throw std::logic_error("the session is closing");
+      switch (member) {
+        case kContactBookId:
+          packed = pack_contact_book(controller_.contact_book());
+          break;
+        case kReloadContactBookId:
+          packed = pack_contact_book(controller_.reload_contact_book());
+          break;
+        case kChooseContactKeyFileId: {
+          const auto preview = controller_.choose_contact_key_file();
+          packed = L"0";
+          packed.push_back(kListingRecordSeparator);
+          packed.append(!preview ? L"0" : std::to_wstring(static_cast<unsigned int>(preview->error) + 1U));
+          packed.push_back(kListingFieldSeparator);
+          if (preview) packed.append(contact_text(preview->fingerprint));
+          break;
+        }
+        case kAddChosenContactId: {
+          const auto outcome = controller_.add_chosen_contact(contact_remark_utf8(first));
+          with_change(outcome);
+          packed.push_back(kListingFieldSeparator);
+          if (outcome.existing_remark) packed.append(contact_text(*outcome.existing_remark));
+          break;
+        }
+        case kRenameContactId:
+        case kRemoveContactId: {
+          const auto key = parse_contact_key(first);
+          if (!key) throw std::invalid_argument("not a contact key");
+          with_change(member == kRenameContactId
+                          ? controller_.rename_contact(*key, contact_remark_utf8(second))
+                          : controller_.remove_contact(*key));
+          break;
+        }
+        case kClearContactBookId:
+          controller_.clear_contact_book();
+          packed = L"0";
+          break;
+        case kExportOwnContactKeyId:
+          packed = L"0";
+          packed.push_back(kListingRecordSeparator);
+          packed.push_back(controller_.export_own_contact_key() ? L'1' : L'0');
+          break;
+        default:
+          return DISP_E_MEMBERNOTFOUND;
+      }
+    } catch (...) {
+      const ContactBridgeStatus status = contact_failure_status();
+      // Only the status: never a remark, fingerprint, key or path.
+      USB_VAULT_TRACE_FAILURE("页面桥", "通讯录操作失败", "状态 " + std::to_string(static_cast<unsigned int>(status)));
+      packed = std::to_wstring(static_cast<unsigned int>(status));
+    }
+    ::VariantInit(result);
+    return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
   }
 
   HRESULT invoke_login_reset(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {

@@ -2,6 +2,8 @@
 
 #include "usb_vault/application/activation_store_v1.h"
 #include "usb_vault/card/card_error.h"
+#include "usb_vault/contacts/contact_identity_v1.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/diagnostics/debug_log.h"
 #include "page_event_test_support.h"
@@ -902,8 +904,13 @@ class FakeFileChooser final : public usb_vault::ui::IContainerFileChooser {
     return existing_path;
   }
 
+  [[nodiscard]] std::wstring choose_contact_key_file() override { return key_file_path; }
+  [[nodiscard]] std::wstring choose_contact_key_save_path() override { return key_save_path; }
+
   std::wstring directory_path;
   std::wstring existing_path;
+  std::wstring key_file_path;
+  std::wstring key_save_path;
   int directory_calls{};
   int existing_calls{};
 };
@@ -4928,6 +4935,176 @@ void test_login_reset_bridge_lifecycle() {
   }
 }
 
+
+// P5.14 contact list over the bridge: a card region behind the list, and a
+// recheck whose answers the test sets.
+struct BridgeContactCard final {
+  std::vector<std::byte> bytes =
+      std::vector<std::byte>(usb_vault::contacts::kContactStoreV1RegionEnd);
+  bool too_small{};
+  int leases{};
+};
+
+class BridgeContactStorage final : public usb_vault::contacts::IContactStoreStorage {
+ public:
+  explicit BridgeContactStorage(BridgeContactCard& card) : card_(card) {}
+  std::size_t capacity() override { return card_.bytes.size(); }
+  SecureBuffer read(const std::size_t offset, const std::size_t length) override {
+    if (card_.too_small) throw usb_vault::contacts::ContactStoreCapacityError();
+    SecureBuffer out(length);
+    std::copy_n(card_.bytes.begin() + static_cast<std::ptrdiff_t>(offset), length, out.data());
+    return out;
+  }
+  void write(const std::size_t offset, const std::span<const std::byte> data) override {
+    if (card_.too_small) throw usb_vault::contacts::ContactStoreCapacityError();
+    std::ranges::copy(data, card_.bytes.begin() + static_cast<std::ptrdiff_t>(offset));
+  }
+
+ private:
+  BridgeContactCard& card_;
+};
+
+class BridgeContactLease final : public usb_vault::application::ICardOperationLease {};
+
+class BridgeIdentityVerifier final : public usb_vault::application::ICardIdentityVerifier {
+ public:
+  using Recheck = usb_vault::application::CardIdentityRecheck;
+  [[nodiscard]] Recheck recheck(std::uint32_t) noexcept override { return Recheck::busy; }
+  [[nodiscard]] Recheck recheck_before_operation(std::uint32_t) noexcept override {
+    return next.value_or(Recheck::same_card);
+  }
+  std::optional<Recheck> next;
+};
+
+[[nodiscard]] SecureBuffer contact_root(const unsigned char fill) {
+  SecureBuffer secret(usb_vault::card::kCardRecordV1RootSecretSize);
+  for (std::size_t index = 0; index < secret.size(); ++index) {
+    secret.bytes()[index] = static_cast<std::byte>(fill + index);
+  }
+  return secret;
+}
+
+[[nodiscard]] std::wstring hex_key(const usb_vault::contacts::ContactPublicKey& key) {
+  std::wstring text;
+  constexpr wchar_t kDigits[] = L"0123456789abcdef";
+  for (const std::byte value : key) {
+    text.push_back(kDigits[std::to_integer<unsigned int>(value) >> 4]);
+    text.push_back(kDigits[std::to_integer<unsigned int>(value) & 0x0F]);
+  }
+  return text;
+}
+
+[[nodiscard]] std::wstring widen_ascii(const std::string_view text) {
+  return {text.begin(), text.end()};
+}
+
+void test_the_contact_list_crosses_the_bridge_as_packed_strings() {
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  BridgeIdentityVerifier verifier;
+  BridgeContactCard card;
+  ScopedDirectory directory(L"bridge-contacts");
+  CardProductUiSessionController controller(entry, authentication, volume, policy, chooser,
+                                            nullptr, nullptr, &verifier);
+  controller.set_contact_book_access(
+      {.storage = [&card](std::uint32_t) -> std::unique_ptr<usb_vault::contacts::IContactStoreStorage> {
+         return std::make_unique<BridgeContactStorage>(card);
+       },
+       .lease = []() -> std::unique_ptr<usb_vault::application::ICardOperationLease> {
+         return std::make_unique<BridgeContactLease>();
+       }});
+  ComPtr<IDispatch> host = make_host(controller);
+  const auto call = [&](const wchar_t* const name, std::vector<std::wstring> texts) {
+    std::vector<VARIANTARG> values;
+    // COM order: the last argument first.
+    for (auto it = texts.rbegin(); it != texts.rend(); ++it) values.push_back(text_argument(*it));
+    VARIANT result{};
+    const HRESULT hr = invoke_named(*host.Get(), name, values.empty() ? nullptr : values.data(),
+                                    static_cast<UINT>(values.size()), &result, nullptr);
+    for (VARIANTARG& value : values) static_cast<void>(::VariantClear(&value));
+    require(hr == S_OK && result.vt == VT_BSTR, "a contact call did not answer a string");
+    std::wstring text(result.bstrVal, ::SysStringLen(result.bstrVal));
+    static_cast<void>(::VariantClear(&result));
+    return text;
+  };
+  const std::wstring rs(1, L'\x1e');
+  const std::wstring fs(1, L'\x1f');
+
+  require(call(L"getContactBook", {}) == L"1", "the list crossed before login");
+
+  entry.route = CardEntryRoute::login_required;
+  entry.identity = 0x5EC0;
+  auto password = bytes("password-1");
+  controller.submit_login(password);
+  const std::wstring own = widen_ascii(usb_vault::contacts::format_contact_fingerprint(
+      usb_vault::contacts::ContactIdentity::derive(root_secret()).public_key()));
+  require(call(L"getContactBook", {}) == L"0" + rs + L"2" + fs + own,
+          "an empty list did not cross with its state and own fingerprint");
+
+  const auto alice = usb_vault::contacts::ContactIdentity::derive(contact_root(40)).public_key();
+  const auto key_file = std::filesystem::path(directory.wide()) / L"alice.uvkey";
+  {
+    const std::string text = usb_vault::contacts::encode_contact_key_file(alice);
+    std::ofstream(key_file, std::ios::binary) << text;
+  }
+  require(call(L"chooseContactKeyFile", {}) == L"0" + rs + L"0" + fs, "a cancelled pick crossed as a key");
+  chooser.key_file_path = key_file.wstring();
+  const std::wstring alice_fp = widen_ascii(usb_vault::contacts::format_contact_fingerprint(alice));
+  require(call(L"chooseContactKeyFile", {}) == L"0" + rs + L"1" + fs + alice_fp,
+          "a picked key did not cross as its fingerprint");
+  // A lone surrogate is not text a remark can hold.
+  require(call(L"addChosenContact", {std::wstring(1, static_cast<wchar_t>(0xD800))}) ==
+              L"0" + rs + L"10" + fs,
+          "a remark that is not text was not refused as invalid");
+  require(call(L"addChosenContact", {L"  爱丽丝 "}) == L"0" + rs + L"0" + fs, "a contact was not added");
+  require(call(L"addChosenContact", {L"again"}) == L"1", "an added key file was held");
+  require(call(L"getContactBook", {}) ==
+              L"0" + rs + L"3" + fs + own + rs + hex_key(alice) + fs + L"爱丽丝" + fs + alice_fp,
+          "the listed contact did not cross by key, remark and fingerprint");
+  static_cast<void>(call(L"chooseContactKeyFile", {}));
+  require(call(L"addChosenContact", {L"other"}) == L"0" + rs + L"6" + fs + L"爱丽丝",
+          "a listed key did not cross as already present with its remark");
+
+  require(call(L"renameContact", {hex_key(alice), L"Alice"}) == L"0" + rs + L"0", "renaming did not cross");
+  std::wstring upper = hex_key(alice);
+  for (wchar_t& c : upper) {
+    if (c >= L'a' && c <= L'f') c = static_cast<wchar_t>(c - L'a' + L'A');
+  }
+  require(call(L"renameContact", {upper, L"X"}) == L"8" && call(L"removeContact", {L"zz"}) == L"8",
+          "a key not in the form the page was given was taken");
+  verifier.next = usb_vault::application::CardIdentityRecheck::different_card;
+  require(call(L"removeContact", {hex_key(alice)}) == L"4", "a removed card did not cross as removed");
+  verifier.next.reset();
+  require(call(L"removeContact", {hex_key(alice)}) == L"0" + rs + L"0" &&
+              call(L"removeContact", {hex_key(alice)}) == L"0" + rs + L"11",
+          "removal or a missing contact did not cross");
+  require(call(L"clearContactBook", {}) == L"1", "an intact list was cleared");
+
+  require(call(L"exportOwnContactKey", {}) == L"0" + rs + L"0", "a cancelled save crossed as saved");
+  chooser.key_save_path = (std::filesystem::path(directory.wide()) / L"mine.uvkey").wstring();
+  require(call(L"exportOwnContactKey", {}) == L"0" + rs + L"1" &&
+              std::filesystem::exists(chooser.key_save_path),
+          "the own key file was not saved over the bridge");
+
+  card.too_small = true;
+  static_cast<void>(call(L"chooseContactKeyFile", {}));
+  require(call(L"addChosenContact", {L"Alice"}) == L"2", "a small card did not cross as too small");
+  require(call(L"reloadContactBook", {}) == L"0" + rs + L"1" + fs + own,
+          "a small card's list did not cross as unavailable");
+
+  VARIANT result{};
+  require(invoke_named(*host.Get(), L"getContactBook", nullptr, 0, nullptr, nullptr) == E_POINTER,
+          "a contact call without a result slot was answered");
+  VARIANTARG number{};
+  number.vt = VT_I4;
+  require(invoke_named(*host.Get(), L"removeContact", &number, 1, &result, nullptr) == DISP_E_TYPEMISMATCH &&
+              invoke_named(*host.Get(), L"removeContact", nullptr, 0, &result, nullptr) == DISP_E_BADPARAMCOUNT,
+          "a contact call of the wrong shape was answered");
+}
+
 }  // namespace
 
 void test_container_alias_bridge_is_authenticated_bounded_and_exclusive() {
@@ -5031,6 +5208,7 @@ int main() {
     test_the_bridge_carries_each_file_manager_action();
     test_the_bridge_carries_both_exports();
     test_the_export_bridge_checks_its_shapes();
+    test_the_contact_list_crosses_the_bridge_as_packed_strings();
     test_the_page_names_a_drop_destination_and_reads_only_numbers();
     test_a_running_drop_answers_only_about_itself();
     std::cout << "card_product_webview_host_object_tests passed\n";
