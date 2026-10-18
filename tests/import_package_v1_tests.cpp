@@ -2,6 +2,9 @@
 
 #include "usb_vault/backup/export_package_file.h"
 #include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/backup/transfer_package_v1.h"
+
+#include "backup/transfer_package_v1_detail.h"
 
 #include "volume_test_support.h"
 
@@ -250,6 +253,162 @@ void test_a_single_file_package_restores_one_file() {
                "a renamed import must not overwrite another entry");
 }
 
+[[nodiscard]] usb_vault::contacts::ContactIdentity identity_of(const unsigned char fill) {
+  SecureBuffer secret(32);
+  for (std::size_t i = 0; i < secret.size(); ++i)
+    secret.data()[i] = static_cast<std::byte>(fill + i);
+  return usb_vault::contacts::ContactIdentity::derive(secret);
+}
+
+[[nodiscard]] std::vector<std::byte> file_bytes(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  std::vector<char> raw((std::istreambuf_iterator<char>(input)), {});
+  const auto bytes = std::as_bytes(std::span(raw));
+  return {bytes.begin(), bytes.end()};
+}
+
+// A recipient holding the file key re-encrypts edited content under the same
+// recipient block, keeping the original sender key and signature.
+void write_forgery(const std::filesystem::path& genuine, const std::filesystem::path& forged,
+                   const usb_vault::contacts::ContactIdentity& insider) {
+  using namespace usb_vault::backup;
+  const std::vector<std::byte> file = file_bytes(genuine);
+  const std::span<const std::byte> prefix(file.data(), kTransferPackageV1PrefixSize);
+  std::size_t at = 0;
+  ExportPackageReaderV1 reader(file.size(), [&](std::span<std::byte> out) {
+    std::copy_n(file.begin() + static_cast<std::ptrdiff_t>(at), out.size(), out.begin());
+    at += out.size();
+  }, kTransferPackageV1PrefixSize, [&](std::span<const std::byte> block) {
+    return detail::open_transfer_package_key(insider, block);
+  });
+  const ExportPackageV1Header header = reader.header();
+  std::vector<std::byte> stream(static_cast<std::size_t>(reader.remaining()));
+  reader.read(stream);
+  stream[stream.size() - 64 - 3] ^= std::byte{1};  // The last data byte but two.
+  std::ofstream out(forged, std::ios::binary);
+  ExportPackageWriterV1 writer(detail::open_transfer_package_key(insider, prefix), header,
+                               [&](std::span<const std::byte> bytes) {
+                                 out.write(reinterpret_cast<const char*>(bytes.data()),
+                                           static_cast<std::streamsize>(bytes.size()));
+                               });
+  writer.write(stream);
+  writer.finish();
+}
+
+void test_transfer_packages_import_only_for_recipients() {
+  using namespace usb_vault::backup;
+  using usb_vault::contacts::ContactPublicKey;
+  TemporaryDirectory temp;
+  const auto docs = temp.root() / L"Docs";
+  usb_vault_test::make_directory(docs / L"sub");
+  const std::string small = pattern(9, 'a');
+  const std::string large = pattern(kExportPackageV1ChunkSize + 77, 'K');
+  usb_vault_test::write_text_file(docs / L"a.txt", small);
+  usb_vault_test::write_text_file(docs / L"sub" / L"b.bin", large);
+  const auto alice = identity_of(1);
+  const auto bob = identity_of(2);
+  const auto carol = identity_of(3);
+  const auto dave = identity_of(4);
+  const auto package_path = temp.root() / L"pkg";
+  const std::vector<ExportSelectionSourceV1> sources{{docs.wstring(), L"Docs"}};
+  const std::vector<ContactPublicKey> to{bob.public_key(), carol.public_key()};
+  export_selection_to_file_v1(sources, package_path.wstring(), L"",
+                              ExportRecipientsV1{.sender = alice, .recipients = to});
+  const auto into = temp.root() / L"into";
+  usb_vault_test::make_directory(into);
+  const Destination destination = destination_of(into);
+
+  {
+    ImportPackageV1 package(package_path.wstring());
+    expect(!package.verify_transfer(dave, {}, {}) && !package.verified_as_transfer(),
+           "a transfer package verified for someone it is not addressed to");
+    expect_throws<std::logic_error>([&] {
+      static_cast<void>(package.write_into(dave, destination.drive, destination.relative, {}, {}));
+    }, "an unverified transfer package was written");
+    expect_throws<ExportPackageRejected>([&] {
+      static_cast<void>(package.verify(secure("any password"), {}, {}));
+    }, "a transfer package opened with a password");
+  }
+
+  ImportPackageV1 package(package_path.wstring());
+  unsigned int phase = 0;
+  expect(package.verify_transfer(bob, {}, [&](unsigned int p, auto, auto) { phase = p; }) &&
+             phase == 1 && package.transfer_sender() == alice.public_key(),
+         "a recipient could not verify the transfer package or see its sender");
+  expect(entries_in(into) == 0, "verifying a transfer package wrote something");
+  expect_throws<std::logic_error>([&] {
+    static_cast<void>(package.write_into(secure("any password"), destination.drive,
+                                         destination.relative, {}, {}));
+  }, "a verified transfer package was written with a password");
+  expect_throws<TransferPackageNotAddressed>([&] {
+    static_cast<void>(package.write_into(dave, destination.drive, destination.relative, {}, {}));
+  }, "a second pass opened for someone the package is not addressed to");
+  expect(entries_in(into) == 0, "a refused second pass left something behind");
+  expect(package.write_into(bob, destination.drive, destination.relative, {},
+                            [&](unsigned int p, auto, auto) { phase = p; }) == L"Docs" &&
+             phase == 2,
+         "a verified transfer package was not restored");
+  expect(usb_vault_test::read_text_file(into / L"Docs" / L"a.txt") == small &&
+             usb_vault_test::read_text_file(into / L"Docs" / L"sub" / L"b.bin") == large,
+         "a transfer import did not restore the exported tree");
+
+  // A recipient's forgery authenticates but its signature does not.
+  const auto forged_path = temp.root() / L"forged";
+  write_forgery(package_path, forged_path, bob);
+  ImportPackageV1 forged(forged_path.wstring());
+  expect_throws<TransferPackageForged>([&] {
+    static_cast<void>(forged.verify_transfer(carol, {}, {}));
+  }, "a forged transfer package was accepted");
+  expect(!forged.verified_as_transfer(), "a forged package stayed verified");
+  expect(entries_in(into) == 1, "a forged package wrote something");
+
+  // Damage: a recipient block that no slot opens is not addressed; a slot that
+  // opens over damaged chunks is a damaged package.
+  const auto damage = [&](const std::size_t at, const std::filesystem::path& to_path) {
+    std::vector<std::byte> bytes = file_bytes(package_path);
+    bytes[at] ^= std::byte{1};
+    std::ofstream out(to_path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
+  };
+  const auto broken_block = temp.root() / L"broken-block";
+  damage(5, broken_block);
+  {
+    ImportPackageV1 broken(broken_block.wstring());
+    expect(!broken.verify_transfer(bob, {}, {}),
+           "a package with a damaged one-time key was not 'not addressed'");
+  }
+  const auto broken_chunk = temp.root() / L"broken-chunk";
+  damage(kTransferPackageV1PrefixSize + 100, broken_chunk);
+  {
+    ImportPackageV1 broken(broken_chunk.wstring());
+    expect_throws<ExportPackageRejected>([&] {
+      static_cast<void>(broken.verify_transfer(bob, {}, {}));
+    }, "a damaged chunk behind an opening slot was not rejected");
+  }
+
+  // Mixed calls: a password verification clears the transfer state, and a
+  // password-verified state is not a transfer one.
+  ImportPackageV1 mixed(package_path.wstring());
+  expect(mixed.verify_transfer(bob, {}, {}), "the mixed-order package did not verify");
+  expect_throws<ExportPackageRejected>([&] {
+    static_cast<void>(mixed.verify(secure("any password"), {}, {}));
+  }, "a password opened the transfer package");
+  expect(!mixed.verified_as_transfer(), "a failed password pass kept the transfer state");
+  expect_throws<std::logic_error>([&] { static_cast<void>(mixed.transfer_sender()); },
+                                  "the sender stayed readable after verification was reset");
+  expect_throws<std::logic_error>([&] {
+    static_cast<void>(mixed.write_into(bob, destination.drive, destination.relative, {}, {}));
+  }, "a reset package was written as a transfer package");
+
+  // A renamed transfer import restores under the new top-level name.
+  expect(mixed.verify_transfer(bob, {}, {}), "the package did not verify again");
+  mixed.set_restored_name(L"From Alice");
+  expect(mixed.write_into(bob, destination.drive, destination.relative, {}, {}) == L"From Alice" &&
+             usb_vault_test::read_text_file(into / L"From Alice" / L"a.txt") == small,
+         "a renamed transfer import did not use the new name");
+}
+
 }  // namespace
 
 int main() {
@@ -257,6 +416,7 @@ int main() {
     test_import_restores_the_tree_after_verifying();
     test_import_failures_leave_the_destination_as_it_was();
     test_a_single_file_package_restores_one_file();
+    test_transfer_packages_import_only_for_recipients();
   } catch (const std::exception& error) {
     fail(std::string("unexpected exception: ") + error.what());
   }

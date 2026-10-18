@@ -38,6 +38,11 @@ class TransferPackageNotAddressed final : public std::runtime_error {
       : std::runtime_error("the package is not addressed to this card") {}
 };
 
+// The content authenticates but the signature does not verify: a recipient
+// holding the file key re-encrypted other content under the sender's key. The
+// package is refused like a damaged one; nothing of it is published.
+class TransferPackageForged final : public ExportPackageRejected {};
+
 [[nodiscard]] std::uint64_t transfer_package_v1_size(
     const ExportPackageV1Header& header);
 
@@ -122,12 +127,17 @@ class TransferPackageReaderV1 final {
   void read(std::span<std::byte> plaintext);
   // Call once remaining() is zero; consumes the signature.
   [[nodiscard]] bool verify_signature();
+  // The signature verify_signature() read; zero before it ran.
+  [[nodiscard]] const contacts::ContactSignature& signature() const noexcept {
+    return signature_;
+  }
 
  private:
   // Filled while reader_ is constructed, so declared before it.
   std::unique_ptr<TransferTranscriptV1> transcript_;
   ExportPackageReaderV1 reader_;
   contacts::ContactPublicKey sender_{};
+  contacts::ContactSignature signature_{};
   bool verified_{false};
 };
 

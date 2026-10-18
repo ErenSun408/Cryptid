@@ -203,6 +203,7 @@ add_executable(import_package_v1_tests
   import_package_v1_tests.cpp
 )
 
+target_include_directories(import_package_v1_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(import_package_v1_tests PRIVATE
   usb_vault_core
 )

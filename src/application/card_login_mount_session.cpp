@@ -417,6 +417,15 @@ class ProductionCardLoginMountSessionRuntime final
     return package.write_into(password_utf8, drive_letter, relative_directory, cancelled, progress);
   }
 
+  std::wstring write_transfer_import(backup::ImportPackageV1& package,
+                                     const contacts::ContactIdentity& recipient,
+                                     const wchar_t drive_letter,
+                                     const std::wstring_view relative_directory,
+                                     const std::function<bool()>& cancelled,
+                                     const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override {
+    return package.write_into(recipient, drive_letter, relative_directory, cancelled, progress);
+  }
+
   void remove_protected_directory_if_empty(const std::wstring_view path) override {
     const std::wstring directory(path);
     const DWORD attributes = ::GetFileAttributesW(directory.c_str());
@@ -999,6 +1008,18 @@ std::wstring CardLoginMountSession::import_package_into_container(
       [&] {
         return impl_->core.import_package_into_container(
             id, relative_directory, absolute_package, password_utf8, cancelled, progress);
+      });
+}
+
+std::wstring CardLoginMountSession::write_verified_transfer_import(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    backup::ImportPackageV1& package, const contacts::ContactIdentity& recipient,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  return traced_call("写入已校验的传输包", [&] { return "安全盘 #" + std::to_string(id); },
+      [&] {
+        return impl_->core.write_verified_transfer_import(id, relative_directory, package,
+                                                          recipient, cancelled, progress);
       });
 }
 
@@ -3684,6 +3705,29 @@ std::wstring CardLoginMountSessionCore::write_verified_import(
   static_cast<void>(volume::resolve_volume_entry_path(entry->drive_letter, relative_directory));
   return runtime_.write_import(package, password_utf8, entry->drive_letter, relative_directory,
                                cancelled, progress);
+}
+
+std::wstring CardLoginMountSessionCore::write_verified_transfer_import(
+    const std::uint32_t id, const std::wstring_view relative_directory,
+    backup::ImportPackageV1& package, const contacts::ContactIdentity& recipient,
+    const std::function<bool()>& cancelled,
+    const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) {
+  if (!authentication_.authenticated()) {
+    throw std::logic_error("a transfer import requires an authenticated card session");
+  }
+  if (!package.verified_as_transfer()) {
+    throw std::logic_error("the package was not verified as a transfer package");
+  }
+  const SessionContainer* const entry = find_by_id(state_, id);
+  if (entry == nullptr) {
+    throw std::invalid_argument("no container is adopted under that identifier");
+  }
+  if (!entry->mounted || entry->maintenance) {
+    throw std::logic_error("a transfer import needs a normally mounted container");
+  }
+  static_cast<void>(volume::resolve_volume_entry_path(entry->drive_letter, relative_directory));
+  return runtime_.write_transfer_import(package, recipient, entry->drive_letter,
+                                        relative_directory, cancelled, progress);
 }
 
 void CardLoginMountSessionCore::defer_operation_records() {

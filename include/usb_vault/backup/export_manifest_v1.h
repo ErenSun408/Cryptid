@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/backup/transfer_package_v1.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -90,6 +91,13 @@ using ExportProgress = std::function<void(std::uint64_t, std::uint64_t)>;
 // returns true; it is asked before every chunk.
 [[nodiscard]] ExportManifest verify_export_package_v1(
     ExportPackageReaderV1& reader, const std::function<bool()>& cancelled = {},
+    const ExportProgress& progress = {});
+
+// The same for a P5.14 transfer package. Neither checks the signature, which
+// follows the data; the import does that before publishing anything.
+[[nodiscard]] ExportManifest read_export_manifest_v1(TransferPackageReaderV1& reader);
+[[nodiscard]] ExportManifest verify_export_package_v1(
+    TransferPackageReaderV1& reader, const std::function<bool()>& cancelled = {},
     const ExportProgress& progress = {});
 
 }  // namespace usb_vault::backup

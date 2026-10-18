@@ -214,6 +214,13 @@ class CardLoginMountSessionRuntime {
                                       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
     throw std::logic_error("encrypted import is unavailable");
   }
+  // P5.14 write pass of a package already verified as a transfer package.
+  virtual std::wstring write_transfer_import(backup::ImportPackageV1&,
+      const contacts::ContactIdentity&, wchar_t, std::wstring_view,
+      const std::function<bool()>&,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("transfer import is unavailable");
+  }
   // P5.9 write pass of an already verified package.
   virtual std::wstring write_import(backup::ImportPackageV1&, const security::SecureBuffer&,
                                     wchar_t, std::wstring_view, const std::function<bool()>&,
@@ -450,6 +457,11 @@ class CardLoginMountSessionCore final {
   std::wstring import_package_into_container(
       std::uint32_t id, std::wstring_view relative_directory,
       std::wstring_view absolute_package, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
+  std::wstring write_verified_transfer_import(
+      std::uint32_t id, std::wstring_view relative_directory,
+      backup::ImportPackageV1& package, const contacts::ContactIdentity& recipient,
       const std::function<bool()>& cancelled,
       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress);
   std::wstring write_verified_import(

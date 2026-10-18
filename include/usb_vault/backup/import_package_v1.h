@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb_vault/backup/export_manifest_v1.h"
+#include "usb_vault/contacts/contact_identity_v1.h"
 #include "usb_vault/security/secure_buffer.h"
 
 #include <cstdint>
@@ -45,6 +46,22 @@ class ImportPackageV1 final {
                                const std::function<bool()>& cancelled,
                                const ImportProgress& progress);
 
+  // P5.14: the read-only pass for a transfer package addressed to
+  // `recipient`. Returns false, leaving the package unverified, when it is
+  // not addressed to this card (it may be a password package). Otherwise
+  // every chunk, the manifest and the sender's signature are checked; an
+  // invalid signature throws TransferPackageForged and a damaged package
+  // ExportPackageRejected. Afterwards transfer_sender() names the sender
+  // whose signature verified.
+  bool verify_transfer(const contacts::ContactIdentity& recipient,
+                       const std::function<bool()>& cancelled,
+                       const ImportProgress& progress);
+  [[nodiscard]] bool verified_as_transfer() const noexcept {
+    return verified_ && transfer_;
+  }
+  // Valid after verify_transfer() returned true.
+  [[nodiscard]] const contacts::ContactPublicKey& transfer_sender() const;
+
   // Room a destination with `cluster_bytes` clusters needs: every file
   // rounded up to whole clusters, plus a conservative allowance per entry for
   // file system metadata. Valid after verify().
@@ -65,10 +82,31 @@ class ImportPackageV1 final {
                           const std::function<bool()>& cancelled,
                           const ImportProgress& progress);
 
+  // The write pass of a package verified by verify_transfer(), with the same
+  // staging and errors as above. The signature is checked again after the
+  // last byte is staged and before anything is published, and must be the
+  // very signature the first pass verified; otherwise the staging entry is
+  // removed and TransferPackageForged is thrown. A `recipient` the package is
+  // not addressed to throws TransferPackageNotAddressed before anything is
+  // created.
+  std::wstring write_into(const contacts::ContactIdentity& recipient,
+                          wchar_t drive_letter, std::wstring_view relative_directory,
+                          const std::function<bool()>& cancelled,
+                          const ImportProgress& progress);
+
  private:
+  template <typename OpenReader, typename BeforePublish>
+  std::wstring write_staged(OpenReader&& open_reader, BeforePublish&& before_publish,
+                            wchar_t drive_letter, std::wstring_view relative_directory,
+                            const std::function<bool()>& cancelled,
+                            const ImportProgress& progress);
+
   void* handle_;
   std::uint64_t size_{};
   bool verified_{false};
+  bool transfer_{false};
+  contacts::ContactPublicKey sender_{};
+  contacts::ContactSignature signature_{};
   ExportManifest manifest_;
   std::wstring restored_name_;
 };

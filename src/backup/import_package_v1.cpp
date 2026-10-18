@@ -1,6 +1,7 @@
 #include "usb_vault/backup/import_package_v1.h"
 
 #include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/backup/transfer_package_v1.h"
 #include "usb_vault/volume/volume_entry_path.h"
 #include "usb_vault/volume/volume_file_operations.h"
 #include "volume/volume_containment.h"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -132,29 +134,38 @@ ImportPackageV1::~ImportPackageV1() noexcept { ::CloseHandle(handle_of(handle_))
 
 namespace {
 
-[[nodiscard]] ExportPackageReaderV1 open_reader(void* const handle, const std::uint64_t size,
-                                                const security::SecureBuffer& password) {
+// Rewinds the package and returns a source reading it from the start.
+[[nodiscard]] ExportPackageReaderV1::Source rewound_source(void* const handle) {
   LARGE_INTEGER start{};
   if (::SetFilePointerEx(handle_of(handle), start, nullptr, FILE_BEGIN) == FALSE) {
     throw_last_error("rewind the import package");
   }
-  return ExportPackageReaderV1(
-      size,
-      [handle](const std::span<std::byte> out) {
-        std::span<std::byte> rest = out;
-        while (!rest.empty()) {
-          const auto want = static_cast<DWORD>(std::min<std::size_t>(rest.size(), 1U << 30));
-          DWORD read = 0;
-          if (::ReadFile(handle_of(handle), rest.data(), want, &read, nullptr) == FALSE) {
-            throw_last_error("read the import package");
-          }
-          if (read == 0) throw std::runtime_error("the import package ended early");
-          rest = rest.subspan(read);
-        }
-      },
-      [&password](const ExportPackageV1Salt& salt) {
-        return ExportPackageKeyV1::derive(password, salt);
-      });
+  return [handle](const std::span<std::byte> out) {
+    std::span<std::byte> rest = out;
+    while (!rest.empty()) {
+      const auto want = static_cast<DWORD>(std::min<std::size_t>(rest.size(), 1U << 30));
+      DWORD read = 0;
+      if (::ReadFile(handle_of(handle), rest.data(), want, &read, nullptr) == FALSE) {
+        throw_last_error("read the import package");
+      }
+      if (read == 0) throw std::runtime_error("the import package ended early");
+      rest = rest.subspan(read);
+    }
+  };
+}
+
+[[nodiscard]] ExportPackageReaderV1 open_reader(void* const handle, const std::uint64_t size,
+                                                const security::SecureBuffer& password) {
+  return ExportPackageReaderV1(size, rewound_source(handle),
+                               [&password](const ExportPackageV1Salt& salt) {
+                                 return ExportPackageKeyV1::derive(password, salt);
+                               });
+}
+
+[[nodiscard]] TransferPackageReaderV1 open_transfer_reader(
+    void* const handle, const std::uint64_t size,
+    const contacts::ContactIdentity& recipient) {
+  return TransferPackageReaderV1(size, rewound_source(handle), recipient);
 }
 
 }  // namespace
@@ -163,6 +174,7 @@ const ExportManifest& ImportPackageV1::verify(const security::SecureBuffer& pass
                                               const std::function<bool()>& cancelled,
                                               const ImportProgress& progress) {
   verified_ = false;
+  transfer_ = false;
   check_cancelled(cancelled);
   ExportPackageReaderV1 reader = open_reader(handle_, size_, password_utf8);
   manifest_ = verify_export_package_v1(
@@ -171,6 +183,38 @@ const ExportManifest& ImportPackageV1::verify(const security::SecureBuffer& pass
       });
   verified_ = true;
   return manifest_;
+}
+
+bool ImportPackageV1::verify_transfer(const contacts::ContactIdentity& recipient,
+                                      const std::function<bool()>& cancelled,
+                                      const ImportProgress& progress) {
+  verified_ = false;
+  transfer_ = false;
+  check_cancelled(cancelled);
+  std::optional<TransferPackageReaderV1> reader;
+  try {
+    reader.emplace(size_, rewound_source(handle_), recipient);
+  } catch (const TransferPackageNotAddressed&) {
+    return false;
+  }
+  ExportManifest manifest = verify_export_package_v1(
+      *reader, cancelled, [&](const std::uint64_t done, const std::uint64_t total) {
+        if (progress) progress(1, done, total);
+      });
+  if (!reader->verify_signature()) throw TransferPackageForged();
+  manifest_ = std::move(manifest);
+  sender_ = reader->sender();
+  signature_ = reader->signature();
+  transfer_ = true;
+  verified_ = true;
+  return true;
+}
+
+const contacts::ContactPublicKey& ImportPackageV1::transfer_sender() const {
+  if (!verified_ || !transfer_) {
+    throw std::logic_error("the package was not verified as a transfer package");
+  }
+  return sender_;
 }
 
 std::uint64_t ImportPackageV1::required_bytes(const std::uint64_t cluster_bytes) const {
@@ -196,6 +240,41 @@ std::wstring ImportPackageV1::write_into(const security::SecureBuffer& password_
                                          const std::function<bool()>& cancelled,
                                          const ImportProgress& progress) {
   if (!verified_) throw std::logic_error("the import package has not been verified");
+  if (transfer_) throw std::logic_error("a transfer package is written with its recipient");
+  return write_staged([&] { return open_reader(handle_, size_, password_utf8); },
+                      [](ExportPackageReaderV1&) {}, drive_letter, relative_directory,
+                      cancelled, progress);
+}
+
+std::wstring ImportPackageV1::write_into(const contacts::ContactIdentity& recipient,
+                                         const wchar_t drive_letter,
+                                         const std::wstring_view relative_directory,
+                                         const std::function<bool()>& cancelled,
+                                         const ImportProgress& progress) {
+  if (!verified_ || !transfer_) {
+    throw std::logic_error("the package was not verified as a transfer package");
+  }
+  return write_staged(
+      [&] { return open_transfer_reader(handle_, size_, recipient); },
+      [this](TransferPackageReaderV1& reader) {
+        // The same signature, not merely the same sender: a source that
+        // returns other bytes the second time cannot swap in another
+        // package of that sender either.
+        if (!reader.verify_signature() || reader.sender() != sender_ ||
+            reader.signature() != signature_) {
+          throw TransferPackageForged();
+        }
+      },
+      drive_letter, relative_directory, cancelled, progress);
+}
+
+template <typename OpenReader, typename BeforePublish>
+std::wstring ImportPackageV1::write_staged(OpenReader&& open_package,
+                                           BeforePublish&& before_publish,
+                                           const wchar_t drive_letter,
+                                           const std::wstring_view relative_directory,
+                                           const std::function<bool()>& cancelled,
+                                           const ImportProgress& progress) {
   const std::wstring original_top = manifest_.top_level_name();
   const std::wstring top = restored_name_.empty() ? original_top : restored_name_;
   const std::wstring final_path =
@@ -234,7 +313,7 @@ std::wstring ImportPackageV1::write_into(const security::SecureBuffer& password_
   }
 
   check_cancelled(cancelled);
-  ExportPackageReaderV1 reader = open_reader(handle_, size_, password_utf8);
+  auto reader = open_package();
   // The second reading must describe exactly what the first one verified.
   if (read_export_manifest_v1(reader).entries != manifest_.entries) {
     throw ExportPackageRejected();
@@ -287,6 +366,9 @@ std::wstring ImportPackageV1::write_into(const security::SecureBuffer& password_
   }
   block.wipe();
   if (reader.remaining() != 0) throw ExportPackageRejected();
+  // Everything is staged and still hidden; a transfer package's signature is
+  // checked here, before the entry can be seen under its final name.
+  before_publish(reader);
   check_cancelled(cancelled);
 
   if (::SetFileAttributesW(staging.path().c_str(), FILE_ATTRIBUTE_NORMAL) == FALSE) {

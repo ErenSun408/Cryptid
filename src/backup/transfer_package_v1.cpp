@@ -364,10 +364,9 @@ bool TransferPackageReaderV1::verify_signature() {
     throw std::logic_error("the signature follows all manifest and data bytes");
   }
   verified_ = true;
-  contacts::ContactSignature signature{};
-  reader_.read(signature);
+  reader_.read(signature_);
   const auto digest = transcript_->finish();
-  return contacts::verify_contact_signature(sender_, digest, signature);
+  return contacts::verify_contact_signature(sender_, digest, signature_);
 }
 
 }  // namespace usb_vault::backup

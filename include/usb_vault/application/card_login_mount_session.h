@@ -590,6 +590,17 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
     throw std::logic_error("encrypted import is unavailable");
   }
+
+  // P5.14: the write pass of a transfer package already verified for
+  // `recipient`, into a directory of a normally mounted container, under the
+  // same checks as write_verified_import. The signature is checked again
+  // before the entry is published. `recipient` is borrowed for the call.
+  virtual std::wstring write_verified_transfer_import(
+      std::uint32_t, std::wstring_view, backup::ImportPackageV1&,
+      const contacts::ContactIdentity&, const std::function<bool()>&,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("transfer import is unavailable");
+  }
   // From defer to settle, what the session would add to the operation
   // history is held back; settling keeps it or drops it. A container created
   // for an import that then fails is never recorded.
@@ -795,6 +806,11 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   std::wstring write_verified_import(
       std::uint32_t id, std::wstring_view relative_directory,
       backup::ImportPackageV1& package, const security::SecureBuffer& password_utf8,
+      const std::function<bool()>& cancelled,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override;
+  std::wstring write_verified_transfer_import(
+      std::uint32_t id, std::wstring_view relative_directory,
+      backup::ImportPackageV1& package, const contacts::ContactIdentity& recipient,
       const std::function<bool()>& cancelled,
       const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override;
   void defer_operation_records() override;

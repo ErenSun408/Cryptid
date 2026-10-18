@@ -5,6 +5,7 @@
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/backup/import_package_v1.h"
+#include "usb_vault/backup/export_package_file.h"
 #include "usb_vault/application/container_index_view_v1.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/diagnostics/debug_log.h"
@@ -836,6 +837,20 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
     if (fail_copy) throw std::runtime_error("the import write failed");
     return L"Docs";
   }
+
+  std::wstring write_transfer_import(usb_vault::backup::ImportPackageV1&,
+                                     const usb_vault::contacts::ContactIdentity& recipient,
+                                     const wchar_t drive_letter,
+                                     const std::wstring_view relative_directory,
+                                     const std::function<bool()>&,
+                                     const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>&) override {
+    transfer_import_writes.push_back(std::wstring(1, drive_letter) + L"|" +
+                                     std::wstring(relative_directory));
+    transfer_import_recipient = recipient.public_key();
+    return L"Shared";
+  }
+  std::vector<std::wstring> transfer_import_writes;
+  usb_vault::contacts::ContactPublicKey transfer_import_recipient{};
 
   void delete_container_file(const std::wstring_view path) override {
     deleted_containers.emplace_back(path);
@@ -4513,6 +4528,54 @@ void test_an_encrypted_import_reaches_a_mounted_container_without_a_trace() {
   nothing_was_written("a refused encrypted import left a local trace");
 }
 
+// P5.14: a transfer package reaches the storage layer only once it has been
+// verified as one, and only into a normally mounted container.
+void test_transfer_import_requires_a_verified_transfer_package() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto id = session.create_container(L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+
+  const auto temp = std::filesystem::temp_directory_path() / L"usb-vault-p5146c-session";
+  std::filesystem::remove_all(temp);
+  std::filesystem::create_directories(temp / L"src");
+  { std::ofstream(temp / L"src" / L"a.txt", std::ios::binary) << "contents"; }
+  const auto me = usb_vault::contacts::ContactIdentity::derive(root_secret());
+  SecureBuffer other_root(32);
+  std::ranges::fill(other_root.bytes(), std::byte{0x33});
+  const auto sender = usb_vault::contacts::ContactIdentity::derive(other_root);
+  const std::vector<usb_vault::contacts::ContactPublicKey> to{me.public_key()};
+  const std::vector<usb_vault::backup::ExportSelectionSourceV1> sources{
+      {(temp / L"src" / L"a.txt").wstring(), L"a.txt"}};
+  usb_vault::backup::export_selection_to_file_v1(
+      sources, (temp / L"pkg").wstring(), L"",
+      usb_vault::backup::ExportRecipientsV1{.sender = sender, .recipients = to});
+  {
+    usb_vault::backup::ImportPackageV1 package((temp / L"pkg").wstring());
+    require_throws_plain_logic_error(
+        [&] { static_cast<void>(session.write_verified_transfer_import(id, L"", package, me, {}, {})); },
+        "an unverified transfer package reached the storage layer");
+    require(package.verify_transfer(me, {}, {}), "the session test package was not verified");
+    require(session.write_verified_transfer_import(id, L"sub", package, me, {}, {}) == L"Shared" &&
+                runtime.transfer_import_writes.size() == 1 &&
+                runtime.transfer_import_writes[0] == L"X|sub" &&
+                runtime.transfer_import_recipient == me.public_key(),
+            "a verified transfer import did not reach the container directory");
+    session.unmount_container(id);
+    require_throws_plain_logic_error(
+        [&] { static_cast<void>(session.write_verified_transfer_import(id, L"", package, me, {}, {})); },
+        "a transfer import into an unmounted container was accepted");
+    authentication.clear_authentication();
+    require_throws_plain_logic_error(
+        [&] { static_cast<void>(session.write_verified_transfer_import(id, L"", package, me, {}, {})); },
+        "a transfer import ran after the card session ended");
+    require(runtime.transfer_import_writes.size() == 1,
+            "a refused transfer import reached the storage layer");
+  }
+  std::filesystem::remove_all(temp);
+}
+
 // P5.9: a container created for an import is recorded only once the import
 // has succeeded, and one whose import fails is undone without a record.
 void test_a_container_created_for_an_import_is_recorded_only_on_success() {
@@ -5622,6 +5685,7 @@ int main() {
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();
     test_a_container_created_for_an_import_is_recorded_only_on_success();
+    test_transfer_import_requires_a_verified_transfer_package();
     test_an_export_into_a_container_is_refused_as_a_copy();
     test_an_export_location_that_is_not_one_never_reaches_the_disk();
     test_a_container_file_is_migrated_verbatim_and_nothing_else_moves();

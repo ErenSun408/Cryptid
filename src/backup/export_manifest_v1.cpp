@@ -203,7 +203,10 @@ ExportPackageV1Header export_package_v1_header(const ExportManifest& manifest,
                                .entry_count = manifest.entries.size()};
 }
 
-ExportManifest read_export_manifest_v1(ExportPackageReaderV1& reader) {
+namespace {
+
+template <typename Reader>
+ExportManifest read_manifest(Reader& reader) {
   const ExportPackageV1Header& header = reader.header();
   // Checked before the allocation: the header is authenticated, but whoever
   // knows the password chose it.
@@ -217,11 +220,11 @@ ExportManifest read_export_manifest_v1(ExportPackageReaderV1& reader) {
   return decode_export_manifest_v1(bytes.bytes(), header);
 }
 
-ExportManifest verify_export_package_v1(ExportPackageReaderV1& reader,
-                                        const std::function<bool()>& cancelled,
-                                        const ExportProgress& progress) {
+template <typename Reader>
+ExportManifest verify_package(Reader& reader, const std::function<bool()>& cancelled,
+                              const ExportProgress& progress) {
   if (cancelled && cancelled()) throw_cancelled();
-  ExportManifest manifest = read_export_manifest_v1(reader);
+  ExportManifest manifest = read_manifest(reader);
   const std::uint64_t total = manifest.data_bytes;
   WipedBytes block(static_cast<std::size_t>(std::min<std::uint64_t>(kReadBlock, total)));
   std::uint64_t done = 0;
@@ -235,6 +238,28 @@ ExportManifest verify_export_package_v1(ExportPackageReaderV1& reader,
     if (progress) progress(done, total);
   }
   return manifest;
+}
+
+}  // namespace
+
+ExportManifest read_export_manifest_v1(ExportPackageReaderV1& reader) {
+  return read_manifest(reader);
+}
+
+ExportManifest verify_export_package_v1(ExportPackageReaderV1& reader,
+                                        const std::function<bool()>& cancelled,
+                                        const ExportProgress& progress) {
+  return verify_package(reader, cancelled, progress);
+}
+
+ExportManifest read_export_manifest_v1(TransferPackageReaderV1& reader) {
+  return read_manifest(reader);
+}
+
+ExportManifest verify_export_package_v1(TransferPackageReaderV1& reader,
+                                        const std::function<bool()>& cancelled,
+                                        const ExportProgress& progress) {
+  return verify_package(reader, cancelled, progress);
 }
 
 }  // namespace usb_vault::backup
