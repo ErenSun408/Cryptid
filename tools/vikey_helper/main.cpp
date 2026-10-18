@@ -688,6 +688,17 @@ bootstrap_media_state(const CardMediaState state) {
       if (operation == Operation::contact_store_write_first) usb_vault::card::vikey::write_vikey_contact_copy(session, 0, request.record);
       else if (operation == Operation::contact_store_write_second) usb_vault::card::vikey::write_vikey_contact_copy(session, 1, request.record);
       else if (reset) usb_vault::card::vikey::reset_vikey_card_record(session, request.record);
+      else if (backup && spare_record_bytes(request.record.size()) != request.record.size()) {
+        const std::size_t record_bytes = spare_record_bytes(request.record.size());
+        if (record_bytes == 0)
+          throw std::system_error(make_error_code(CardError::invalid_configuration),
+                                  "invalid spare card payload");
+        usb_vault::security::SecureBuffer record(record_bytes);
+        usb_vault::security::SecureBuffer region(usb_vault::contacts::kContactStoreV1RegionSize);
+        std::ranges::copy(request.record.bytes().first(record_bytes), record.bytes().begin());
+        std::ranges::copy(request.record.bytes().subspan(record_bytes), region.bytes().begin());
+        usb_vault::card::vikey::write_vikey_spare_card(session, record, &region);
+      }
       else if (backup) usb_vault::card::vikey::write_vikey_spare_card(session, request.record);
       else usb_vault::card::vikey::write_vikey_card_record(session, request.record);
     } catch (const std::system_error& error) {

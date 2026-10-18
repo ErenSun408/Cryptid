@@ -93,7 +93,24 @@ enum class Operation : std::uint32_t {
   if (is_contact_store_write(op)) {
     return bytes == contacts::kContactStoreV1CopySize;
   }
-  return bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
+  const bool record =
+      bytes == kCardRecordV1Size || bytes == kCardRecordV1ThreeSlotSize;
+  if (op != Operation::card_backup_write) return record;
+  // A spare-card write may append the source's whole contact region.
+  return record ||
+         bytes == kCardRecordV1Size + contacts::kContactStoreV1RegionSize ||
+         bytes == kCardRecordV1ThreeSlotSize +
+                      contacts::kContactStoreV1RegionSize;
+}
+// Record length inside an admitted card_backup_write payload: the payload is
+// the record alone or the record followed by the whole contact region.
+// Returns 0 for a length valid_record_payload would not admit.
+[[nodiscard]] constexpr std::size_t spare_record_bytes(std::size_t payload) noexcept {
+  if (payload == kCardRecordV1Size || payload == kCardRecordV1ThreeSlotSize) return payload;
+  if (payload == kCardRecordV1Size + contacts::kContactStoreV1RegionSize) return kCardRecordV1Size;
+  if (payload == kCardRecordV1ThreeSlotSize + contacts::kContactStoreV1RegionSize)
+    return kCardRecordV1ThreeSlotSize;
+  return 0;
 }
 [[nodiscard]] constexpr bool is_record_write(Operation op) noexcept {
   return op == Operation::card_record_write || op == Operation::card_record_reset || op == Operation::card_backup_write ||

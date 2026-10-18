@@ -60,7 +60,13 @@ void reset_vikey_card_record(VikeySession& session, const security::SecureBuffer
 [[nodiscard]] security::SecureBuffer snapshot_stable_vikey_card_record(VikeySession& session);
 
 // Restricted import: initialized v1 logical record to blank/provisioned media only.
-void write_vikey_spare_card(VikeySession& session, const security::SecureBuffer& record);
+// With contact_region (the source's whole [1808, 8192) ciphertext, P5.14) the
+// region is written and verified after the target is authorized and
+// provisioned but before the record is committed, so an interrupted copy
+// leaves an uninitialized target the backup can be retried on. A target too
+// small for the region is refused before any write.
+void write_vikey_spare_card(VikeySession& session, const security::SecureBuffer& record,
+                            const security::SecureBuffer* contact_region = nullptr);
 
 // P5.14 contact list region [1808, 8192). Both operations require a card whose
 // journal selects an initialized product record, so the helper never touches

@@ -1,7 +1,9 @@
 #include "card/vikey/vikey_card_backup.h"
 #include "usb_vault/card/card_record_v1.h"
 #include "usb_vault/ui/card_backup_exchange.h"
+#include "usb_vault/contacts/contact_store_v1.h"
 #include <algorithm>
+#include <optional>
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -26,14 +28,27 @@ SecureBuffer framed(std::size_t length) {
 struct Backend : IVikeyCardBackupBackend {
   VikeyCardMediaProbe state{.hardware_id=1,.media_state=VikeyCardMediaState::product_evidence,.logical_state=CardRecordState::initialized_v1};
   SecureBuffer data=framed(292);
-  int reads=0,writes=0; bool mutate=false,fail_write=false,bad_readback=false;
+  int reads=0,writes=0,region_reads=0; bool mutate=false,fail_write=false,bad_readback=false;
+  // Source and target contact regions; nothing models a card too small for one.
+  std::optional<SecureBuffer> source_region, target_region;
+  bool mutate_region=false,bad_region_readback=false,region_written=false;
   VikeyCardMediaProbe probe() override { return state; }
   SecureBuffer snapshot(std::uint32_t id) override {
     check(id==state.hardware_id); ++reads; auto b=copy(data);
     if ((mutate && reads==2) || (bad_readback && writes)) b.bytes().back()=std::byte{0}; return b;
   }
-  void write(std::uint32_t id,const SecureBuffer& b) override {
+  std::optional<SecureBuffer> contact_region(std::uint32_t id) override {
+    ++region_reads;
+    auto& region = id==1 ? source_region : target_region;
+    if (!region) return std::nullopt;
+    auto b=copy(*region);
+    if ((id==1 && mutate_region && region_reads==2) || (id==2 && bad_region_readback)) b.bytes()[7]^=std::byte{1};
+    return b;
+  }
+  void write(std::uint32_t id,const SecureBuffer& b,const SecureBuffer* region) override {
     check(id==2); ++writes; if(fail_write) throw std::runtime_error("injected write"); data=copy(b);
+    region_written = region!=nullptr;
+    if (region) target_region=copy(*region);
   }
   void target() { state={.hardware_id=2,.media_state=VikeyCardMediaState::blank}; }
 };
@@ -154,6 +169,24 @@ void tests() {
     rejects([&]{f.complete(now);}); check(!f.pending(now)); rejects([&]{f.complete(now);}); check(b.writes==1);
   }
   { Backend b; VikeyCardBackup f(b); f.prepare(now); b.target(); b.state.media_state=VikeyCardMediaState::product_evidence; b.state.logical_state=CardRecordState::provisioned_uninitialized; f.complete(now); check(b.writes==1); }
+  // Contact regions travel with the record and are verified on the target.
+  {
+    Backend b; b.source_region=SecureBuffer(usb_vault::contacts::kContactStoreV1RegionSize);
+    for (std::size_t i=0;i<b.source_region->size();++i) b.source_region->bytes()[i]=std::byte(i*7);
+    VikeyCardBackup f(b); f.prepare(now); check(b.region_reads==2);
+    b.target(); f.complete(now);
+    check(b.region_written && b.target_region && std::ranges::equal(b.target_region->bytes(),b.source_region->bytes()));
+  }
+  { Backend b; b.source_region=SecureBuffer(usb_vault::contacts::kContactStoreV1RegionSize);
+    b.mutate_region=true; VikeyCardBackup f(b);
+    rejects([&]{f.prepare(now);}); check(!f.pending(now)&&b.writes==0); }
+  { Backend b; b.source_region=SecureBuffer(usb_vault::contacts::kContactStoreV1RegionSize);
+    VikeyCardBackup f(b); f.prepare(now); b.target(); b.bad_region_readback=true;
+    rejects([&]{f.complete(now);}); check(!f.pending(now)&&b.writes==1); }
+  { Backend b; VikeyCardBackup f(b); f.prepare(now); b.target(); f.complete(now);
+    check(!b.region_written && !b.target_region); }
+  { Backend b; b.source_region=SecureBuffer(usb_vault::contacts::kContactStoreV1RegionSize - 1);
+    VikeyCardBackup f(b); rejects([&]{f.prepare(now);}); check(b.writes==0); }
 }
 }
 int main() { try { tests(); std::cout<<"spare card workflow tests passed\n"; return 0; } catch(const std::exception& e) { std::cerr<<e.what(); return 1; } }

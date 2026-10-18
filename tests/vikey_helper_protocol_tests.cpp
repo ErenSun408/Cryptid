@@ -717,6 +717,40 @@ void test_contact_store_protocol() {
   request.payload_bytes = kCardRecordWritePayloadBytes;
   expect(!valid_request(request), "a contact write admitted a record");
 
+  // Only a spare-card write may append the whole region to its record.
+  for (const auto record_bytes : {kCardRecordV1Size, kCardRecordV1ThreeSlotSize}) {
+    request.payload_bytes = static_cast<std::uint32_t>(
+        kCardRecordReadPayloadBytes + record_bytes + kContactStoreV1RegionSize);
+    request.operation = Operation::card_backup_write;
+    expect(valid_request(request), "a spare write with contacts was rejected");
+    for (const Operation op : {Operation::card_record_write,
+                               Operation::card_record_reset,
+                               Operation::contact_store_write_first}) {
+      request.operation = op;
+      expect(!valid_request(request), "a record and region reached another op");
+    }
+  }
+  request.operation = Operation::card_backup_write;
+  request.payload_bytes = static_cast<std::uint32_t>(
+      kCardRecordReadPayloadBytes + kCardRecordV1Size +
+      kContactStoreV1RegionSize - 1);
+  expect(!valid_request(request), "a short spare contact region was accepted");
+  expect(spare_record_bytes(kCardRecordV1Size) == kCardRecordV1Size &&
+             spare_record_bytes(kCardRecordV1ThreeSlotSize) ==
+                 kCardRecordV1ThreeSlotSize &&
+             spare_record_bytes(kCardRecordV1Size + kContactStoreV1RegionSize) ==
+                 kCardRecordV1Size &&
+             spare_record_bytes(kCardRecordV1ThreeSlotSize +
+                                kContactStoreV1RegionSize) ==
+                 kCardRecordV1ThreeSlotSize,
+         "spare payloads did not split at the record length");
+  for (const auto bytes :
+       {std::size_t{0}, std::size_t{293}, kContactStoreV1RegionSize,
+        kCardRecordV1Size + kContactStoreV1RegionSize - 1,
+        kCardRecordV1ThreeSlotSize + kContactStoreV1RegionSize + 1}) {
+    expect(spare_record_bytes(bytes) == 0, "an odd spare payload was split");
+  }
+
   const auto user_sn = fixed_secret(kVikeyUserSnBytes, std::byte{'A'});
   const auto api_key = fixed_secret(kVikeyApiKeyBytes, std::byte{'B'});
   const auto user_pin = fixed_secret(kVikeyUserPinBytes, std::byte{'P'});

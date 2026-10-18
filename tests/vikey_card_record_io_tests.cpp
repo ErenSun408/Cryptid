@@ -806,6 +806,128 @@ void test_reset_clears_contact_region() {
   active_fake = nullptr;
 }
 
+void test_spare_card_copies_contact_region() {
+  using usb_vault::card::vikey::snapshot_stable_vikey_card_record;
+  using usb_vault::card::vikey::write_vikey_spare_card;
+  using usb_vault::contacts::kContactStoreV1RegionOffset;
+  using usb_vault::contacts::kContactStoreV1RegionSize;
+
+  FakeSdk state;
+  active_fake = &state;
+  SecureBuffer sn(usb_vault::card::vikey::kVikeyUserSnBytes);
+  SecureBuffer key(usb_vault::card::vikey::kVikeyApiKeyBytes);
+  SecureBuffer pin(usb_vault::card::vikey::kVikeyUserPinBytes);
+  std::ranges::fill(sn.bytes(), std::byte{'A'});
+  std::ranges::fill(key.bytes(), std::byte{'B'});
+  std::ranges::fill(pin.bytes(), std::byte{'P'});
+  VikeySession session = VikeySession::open(functions(), sn, key, pin);
+  const SecureBuffer record = framed_record();
+  SecureBuffer region(kContactStoreV1RegionSize);
+  for (std::size_t i = 0; i < region.size(); ++i) {
+    region.bytes()[i] = static_cast<std::byte>((i * 13 + 5) & 0xFF);
+  }
+  const auto region_matches = [&] {
+    return std::ranges::equal(
+        std::span(state.data).subspan(kContactStoreV1RegionOffset),
+        region.bytes());
+  };
+
+  // Blank target: provisioned, region copied, record committed last.
+  write_vikey_spare_card(session, record, &region);
+  require(same(snapshot_stable_vikey_card_record(session), record) &&
+              region_matches(),
+          "a spare card did not receive the contact region");
+
+  // A target too small for the region is refused before any write.
+  state.data.fill(std::byte{});
+  state.reported_capacity = static_cast<sdk::Length>(kVikeyTestUserDataSize - 1);
+  std::size_t writes = state.writes;
+  require_card_error([&] { write_vikey_spare_card(session, record, &region); },
+                     CardError::invalid_configuration,
+                     "a small spare accepted a contact region");
+  require(state.writes == writes, "a small spare was written");
+  state.reported_capacity = static_cast<sdk::Length>(kVikeyTestUserDataSize);
+
+  // Interrupted region copy: the target stays uninitialized and a retry works.
+  state.data.fill(std::byte{});
+  DirectStorage direct(state);
+  SecureBuffer marker = provision_uninitialized_card_record_v1();
+  provision_card_record_journal_v1(direct, marker.bytes());
+  state.fail_write_call = state.writes;
+  state.bytes_before_failure = 100;
+  bool failed = false;
+  try {
+    write_vikey_spare_card(session, record, &region);
+  } catch (const std::system_error&) {
+    failed = true;
+  }
+  state.fail_write_call = std::numeric_limits<std::size_t>::max();
+  require(failed, "an interrupted region copy reported success");
+  require(inspect_vikey_card_record_state_read_only(session) ==
+              CardRecordState::provisioned_uninitialized,
+          "an interrupted region copy committed the record");
+  write_vikey_spare_card(session, record, &region);
+  require(same(snapshot_stable_vikey_card_record(session), record) &&
+              region_matches(),
+          "a retried spare card copy did not complete");
+
+  // Every interruption point: either the copy completed or the target is
+  // still an uninitialized card the backup can be retried on, never an
+  // initialized spare missing part of the region.
+  state.data.fill(std::byte{});
+  state.writes = 0;
+  write_vikey_spare_card(session, record, &region);
+  const std::size_t total_writes = state.writes;
+  // Measured from blank media, so bootstrap writes are interrupted too.
+  state.data.fill(std::byte{});
+  state.writes = 0;
+  write_vikey_spare_card(session, record, &region);
+  const std::size_t blank_writes = state.writes;
+  require(blank_writes >= total_writes, "blank media used fewer writes");
+  for (std::size_t failure = 0; failure < blank_writes; ++failure) {
+    state.data.fill(std::byte{});
+    state.writes = 0;
+    state.fail_write_call = failure;
+    state.bytes_before_failure = 1;
+    try {
+      write_vikey_spare_card(session, record, &region);
+    } catch (const std::system_error&) {
+    }
+    state.fail_write_call = std::numeric_limits<std::size_t>::max();
+    const VikeyCardMediaState media = inspect_vikey_card_media(session);
+    if (media != VikeyCardMediaState::product_evidence) {
+      // An interrupted bootstrap can already leave blank, interrupted or
+      // foreign-looking media (existing P5.8 behaviour); this slice only
+      // requires that the region was not written before bootstrap finished.
+      require(std::ranges::all_of(
+                  std::span(state.data).subspan(kContactStoreV1RegionOffset),
+                  [](const std::byte b) { return b == std::byte{}; }),
+              "the contact region was written before bootstrap completed");
+      continue;
+    }
+    const CardRecordState after = inspect_vikey_card_record_state_read_only(session);
+    require(after == CardRecordState::provisioned_uninitialized ||
+                (after == CardRecordState::initialized_v1 && region_matches()),
+            "an interrupted spare copy left an initialized card without its region");
+    if (after == CardRecordState::provisioned_uninitialized) {
+      require(std::ranges::all_of(
+                  std::span(state.data).subspan(kContactStoreV1RegionOffset),
+                  [](const std::byte b) { return b == std::byte{}; }),
+              "an uninitialized target kept the source contact region");
+    }
+  }
+
+  SecureBuffer short_region(kContactStoreV1RegionSize - 1);
+  state.data.fill(std::byte{});
+  writes = state.writes;
+  require_card_error(
+      [&] { write_vikey_spare_card(session, record, &short_region); },
+      CardError::invalid_configuration, "a short contact region was accepted");
+  require(state.writes == writes, "a short contact region was written");
+  require(!session.close(), "spare region session did not close");
+  active_fake = nullptr;
+}
+
 }  // namespace
 
 int main() {
@@ -817,6 +939,7 @@ int main() {
     test_development_legacy_reset_is_explicit_and_recoverable();
     test_contact_region_access();
     test_reset_clears_contact_region();
+    test_spare_card_copies_contact_region();
     std::cout << "vikey card record IO tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

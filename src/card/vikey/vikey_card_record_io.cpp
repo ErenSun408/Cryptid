@@ -252,12 +252,19 @@ security::SecureBuffer snapshot_stable_vikey_card_record(VikeySession& session) 
 }
 
 void write_vikey_spare_card(VikeySession& session,
-                            const security::SecureBuffer& record) {
+                            const security::SecureBuffer& record,
+                            const security::SecureBuffer* const contact_region) {
   if (inspect_card_record(record.bytes()) != CardRecordState::initialized_v1)
     throw std::system_error(make_error_code(CardError::invalid_configuration),
                             "spare card requires an initialized v1 record");
+  if (contact_region != nullptr &&
+      contact_region->size() != contacts::kContactStoreV1RegionSize)
+    throw std::system_error(make_error_code(CardError::invalid_configuration),
+                            "spare card contact region has the wrong size");
   VikeyCardRecordStorage storage(session);
-  if (storage.capacity() < kCardRecordJournalV1ReservedSize)
+  if (storage.capacity() < kCardRecordJournalV1ReservedSize ||
+      (contact_region != nullptr &&
+       storage.capacity() < contacts::kContactStoreV1RegionEnd))
     throw std::system_error(make_error_code(CardError::invalid_configuration),
                             "spare card capacity is insufficient");
   const auto media = inspect_vikey_card_media(storage);
@@ -276,7 +283,39 @@ void write_vikey_spare_card(VikeySession& session,
   if (!std::ranges::equal(current.bytes(), expected.bytes()))
     throw std::system_error(make_error_code(CardError::invalid_operation),
                             "spare card target changed");
-  commit_card_record_journal_v1(storage, record.bytes());
+  try {
+    if (contact_region != nullptr) {
+      storage.write(contacts::kContactStoreV1RegionOffset,
+                    contact_region->bytes());
+      const auto copied = storage.read(contacts::kContactStoreV1RegionOffset,
+                                       contacts::kContactStoreV1RegionSize);
+      if (!std::ranges::equal(copied.bytes(), contact_region->bytes()))
+        throw std::system_error(make_error_code(CardError::device_failure),
+                                "spare card contact region readback mismatch");
+    }
+    commit_card_record_journal_v1(storage, record.bytes());
+  } catch (...) {
+    // Best effort: an uninitialized target should not keep the source's
+    // contact ciphertext. The original failure is reported either way, and
+    // power loss can still leave it behind until the next backup or save.
+    if (contact_region != nullptr) {
+      try {
+        if (inspect_card_record_journal_logical_state_v1_read_only(storage) ==
+            CardRecordState::provisioned_uninitialized) {
+          for (std::size_t offset = contacts::kContactStoreV1RegionOffset;
+               offset < contacts::kContactStoreV1RegionEnd;) {
+            const std::size_t length = std::min(
+                kMediaScanChunkSize, contacts::kContactStoreV1RegionEnd - offset);
+            write_verified_zeros(storage, offset, length);
+            offset += length;
+          }
+        }
+      } catch (...) {
+        USB_VAULT_TRACE_FAILURE("card/vikey/vikey_card_record_io", "异常已处理", "行 " + std::to_string(__LINE__) + "；函数 " + std::string(__func__));
+      }
+    }
+    throw;
+  }
   const auto observed = snapshot_vikey_card_record(session);
   if (!std::ranges::equal(observed.bytes(), record.bytes()))
     throw std::system_error(make_error_code(CardError::device_failure),
