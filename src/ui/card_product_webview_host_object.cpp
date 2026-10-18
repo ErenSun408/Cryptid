@@ -2,6 +2,7 @@
 #include "usb_vault/diagnostics/debug_log.h"
 #include "usb_vault/application/container_index_v1.h"
 #include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/backup/transfer_package_v1.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/contacts/contact_store_v1.h"
 #include "usb_vault/security/confirmed_password.h"
@@ -106,6 +107,11 @@ constexpr DISPID kRenameContactId = 254;
 constexpr DISPID kRemoveContactId = 255;
 constexpr DISPID kClearContactBookId = 256;
 constexpr DISPID kExportOwnContactKeyId = 257;
+constexpr DISPID kAddTransferSenderId = 258;
+constexpr DISPID kBeginRecipientExportId = 260;
+constexpr DISPID kBeginVerifyTransferImportId = 261;
+constexpr DISPID kTransferImportSenderId = 262;
+constexpr DISPID kBeginImportVerifiedId = 263;
 bool is_encrypted_transfer_query(DISPID member) noexcept {
   return member == kEncryptedTransferStatusId || member == kCancelEncryptedTransferId;
 }
@@ -734,6 +740,11 @@ class PasswordArgumentsWiper final {
     case kRemoveContactId: return "removeContact";
     case kClearContactBookId: return "clearContactBook";
     case kExportOwnContactKeyId: return "exportOwnContactKey";
+    case kAddTransferSenderId: return "addTransferSender";
+    case kBeginRecipientExportId: return "beginRecipientExport";
+    case kBeginVerifyTransferImportId: return "beginVerifyTransferImport";
+    case kTransferImportSenderId: return "transferImportSender";
+    case kBeginImportVerifiedId: return "beginImportVerified";
     case kBeginEncryptedExportId: return "beginEncryptedExport";
     case kEncryptedTransferStatusId: return "encryptedTransferStatus";
     case kCancelEncryptedTransferId: return "cancelEncryptedTransfer";
@@ -1044,6 +1055,11 @@ class CardProductWebViewHostObject final : public IDispatch {
     if (matches(names[0], L"removeContact")) { ids[0] = kRemoveContactId; return S_OK; }
     if (matches(names[0], L"clearContactBook")) { ids[0] = kClearContactBookId; return S_OK; }
     if (matches(names[0], L"exportOwnContactKey")) { ids[0] = kExportOwnContactKeyId; return S_OK; }
+    if (matches(names[0], L"addTransferSender")) { ids[0] = kAddTransferSenderId; return S_OK; }
+    if (matches(names[0], L"beginRecipientExport")) { ids[0] = kBeginRecipientExportId; return S_OK; }
+    if (matches(names[0], L"beginVerifyTransferImport")) { ids[0] = kBeginVerifyTransferImportId; return S_OK; }
+    if (matches(names[0], L"transferImportSender")) { ids[0] = kTransferImportSenderId; return S_OK; }
+    if (matches(names[0], L"beginImportVerified")) { ids[0] = kBeginImportVerifiedId; return S_OK; }
     if (matches(names[0], kForgetContainerName)) {
       ids[0] = kForgetContainerId;
       return S_OK;
@@ -1311,7 +1327,7 @@ class CardProductWebViewHostObject final : public IDispatch {
       return invoke_login_reset(member, parameters, result);
     if (member >= kActivationStatusId && member <= kSubmitActivationCodeId)
       return invoke_activation(member, parameters, result);
-    if (member >= kContactBookId && member <= kExportOwnContactKeyId)
+    if (member >= kContactBookId && member <= kAddTransferSenderId)
       return invoke_contacts(member, parameters, result);
 
     // Observations may refresh the failure dialog. Any unrelated mutation
@@ -1830,6 +1846,30 @@ class CardProductWebViewHostObject final : public IDispatch {
         return begin_encrypted_import(parameters, result, argument_error);
       case kBeginVerifyImportId:
         return begin_verify_import(parameters, result, argument_error);
+      case kBeginRecipientExportId:
+        return begin_recipient_export(parameters, result, argument_error);
+      case kBeginVerifyTransferImportId:
+        return begin_verify_transfer_import(parameters, result);
+      case kBeginImportVerifiedId:
+        return begin_import_verified(parameters, result, argument_error);
+      case kTransferImportSenderId: {
+        if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+        if (result == nullptr) return E_POINTER;
+        std::wstring packed = L"0";
+        {
+          const std::scoped_lock lock(transfer_sender_mutex_);
+          // Like a transfer's status, it belongs to the login that ran it.
+          if (transfer_sender_epoch_ == creation_work_->card_epoch.load() &&
+              !creation_work_->interrupted.load() &&
+              controller_.state() == CardProductUiState::authenticated &&
+              !transfer_sender_.empty()) {
+            packed = transfer_sender_;
+          }
+        }
+        LocationStringWiper packed_wiper(packed);
+        ::VariantInit(result);
+        return complete_string(packed.c_str(), static_cast<UINT>(packed.size()), result);
+      }
       case kVerifiedImportMinimumMibId: {
         if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
         if (result == nullptr) return E_POINTER;
@@ -2125,7 +2165,188 @@ class CardProductWebViewHostObject final : public IDispatch {
     encrypted_failure_target = 8,
     encrypted_failure_rollback = 9,
     encrypted_failure_damaged = 10,
+    // P5.14: a transfer package whose signature does not verify.
+    encrypted_failure_forged = 11,
   };
+
+  // A selection packed as "id␟directory␟name" rows separated by ␞, at most
+  // 4096 rows; a non-empty id and name in each.
+  [[nodiscard]] static bool parse_export_selection(
+      const std::wstring_view packed, std::vector<application::ExportSelectionEntry>& entries) {
+    std::size_t position = 0;
+    while (position < packed.size()) {
+      auto end = packed.find(L'\x1e', position);
+      if (end == std::wstring_view::npos) end = packed.size();
+      const auto row = packed.substr(position, end - position);
+      const auto first = row.find(L'\x1f');
+      const auto second = first == std::wstring_view::npos ? first : row.find(L'\x1f', first + 1);
+      if (first == 0 || first == std::wstring_view::npos || second == std::wstring_view::npos ||
+          second + 1 >= row.size() || row.find(L'\x1f', second + 1) != std::wstring_view::npos ||
+          entries.size() >= 4096) return false;
+      std::uint32_t id = 0;
+      for (const auto digit : row.substr(0, first)) {
+        if (digit < L'0' || digit > L'9' || id > (UINT32_MAX - static_cast<unsigned>(digit - L'0')) / 10)
+          return false;
+        id = id * 10 + static_cast<unsigned>(digit - L'0');
+      }
+      if (id == 0) return false;
+      entries.push_back({id, std::wstring(row.substr(first + 1, second - first - 1)),
+          std::wstring(row.substr(second + 1))});
+      position = end + 1;
+    }
+    return true;
+  }
+
+  // P5.14. Four arguments: packed selection, location, folder name, and the
+  // recipients as hex public keys separated by ␞, as getContactBook gave them.
+  HRESULT begin_recipient_export(DISPPARAMS* const parameters, VARIANT* const result,
+                                 UINT* const argument_error) noexcept {
+    if (!parameters || parameters->cArgs != 4 || parameters->cNamedArgs || !parameters->rgvarg)
+      return DISP_E_BADPARAMCOUNT;
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      std::wstring_view packed, destination, folder, packed_recipients;
+      if (!exact_wstring(parameters->rgvarg[3], packed) ||
+          !exact_wstring(parameters->rgvarg[2], destination) ||
+          !exact_wstring(parameters->rgvarg[1], folder) ||
+          !exact_wstring(parameters->rgvarg[0], packed_recipients) || packed.empty() ||
+          packed.size() > 1048576 || packed_recipients.empty()) {
+        if (argument_error) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      std::vector<application::ExportSelectionEntry> entries;
+      if (!parse_export_selection(packed, entries)) return E_INVALIDARG;
+      std::vector<contacts::ContactPublicKey> recipients;
+      std::size_t position = 0;
+      while (position <= packed_recipients.size()) {
+        auto end = packed_recipients.find(L'\x1e', position);
+        if (end == std::wstring_view::npos) end = packed_recipients.size();
+        const auto key = parse_contact_key(packed_recipients.substr(position, end - position));
+        if (!key || recipients.size() >= backup::kTransferPackageV1Slots) return E_INVALIDARG;
+        recipients.push_back(*key);
+        position = end + 1;
+      }
+      if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
+        return E_ACCESSDENIED;
+      return begin_encrypted_transfer([this, entries = std::move(entries),
+          destination = std::wstring(destination), folder = std::wstring(folder),
+          recipients = std::move(recipients)](
+          const std::function<bool()>& cancelled,
+          const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+        controller_.export_container_selection_for_recipients(entries, destination, folder,
+            recipients, cancelled,
+            [&](std::uint64_t done, std::uint64_t total) { progress(2, done, total); });
+      }, result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      return E_FAIL;
+    }
+  }
+
+  // P5.14. No arguments: checks the package picked through chooseImportFile
+  // as a transfer package for this card, before any password. When it
+  // finishes, transferImportSender says what was found:
+  //   "1"  not addressed to this card: ask for the password;
+  //   "2␞own␟remark␟fingerprint"  verified, own 1 for this card itself,
+  //        otherwise the remark of a listed sender or else its fingerprint;
+  //   "3"  the check could not be made (no usable contact list): ask for
+  //        the password as for "1".
+  // A forged signature fails the transfer with code 11, damage with 10.
+  HRESULT begin_verify_transfer_import(DISPPARAMS* const parameters, VARIANT* const result) noexcept {
+    if (!has_no_arguments(parameters)) return DISP_E_BADPARAMCOUNT;
+    try {
+      if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
+        return E_ACCESSDENIED;
+      std::wstring package = controller_.selected_import_package();
+      if (package.empty()) return E_ACCESSDENIED;
+      const auto epoch = creation_work_->card_epoch.load();
+      {
+        const std::scoped_lock lock(transfer_sender_mutex_);
+        transfer_sender_.clear();
+        transfer_sender_epoch_ = epoch;
+      }
+      return begin_encrypted_transfer([this, epoch, package = std::move(package)](
+          const std::function<bool()>& cancelled,
+          const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+        std::wstring packed;
+        try {
+          const auto sender = controller_.verify_transfer_import(package, cancelled, progress);
+          if (!sender) {
+            packed = L"1";
+          } else {
+            packed = L"2";
+            packed.push_back(kListingRecordSeparator);
+            packed.push_back(sender->own ? L'1' : L'0');
+            packed.push_back(kListingFieldSeparator);
+            if (sender->remark) packed.append(contact_text(*sender->remark));
+            packed.push_back(kListingFieldSeparator);
+            packed.append(contact_text(sender->fingerprint));
+          }
+        } catch (const backup::TransferPackageForged&) {
+          throw;
+        } catch (const backup::ExportPackageAuthenticationRejected&) {
+          // No password took part: a chunk that does not authenticate in a
+          // package addressed here is damage, not a wrong password.
+          throw backup::ExportPackageRejected();
+        } catch (const backup::ExportPackageRejected&) {
+          throw;
+        } catch (...) {
+          // Damage, a forgery, cancellation, a lost card or an ended login
+          // end the import; anything else only means the transfer check
+          // could not be made, and the password path stays open.
+          const bool card_lost = [] {
+            try {
+              throw;
+            } catch (const std::system_error& error) {
+              return error.code() == card::make_error_code(card::CardError::device_not_found);
+            } catch (...) {
+              return false;
+            }
+          }();
+          if (card_lost || cancelled() || controller_.state() != CardProductUiState::authenticated)
+            throw;
+          packed = L"3";
+        }
+        const std::scoped_lock lock(transfer_sender_mutex_);
+        if (transfer_sender_epoch_ == epoch) transfer_sender_ = std::move(packed);
+      }, result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      return E_FAIL;
+    }
+  }
+
+  // P5.14. Two arguments: the container and the directory shown. Imports the
+  // package verified for this login, of either kind, into that directory.
+  HRESULT begin_import_verified(DISPPARAMS* const parameters, VARIANT* const result,
+                                UINT* const argument_error) noexcept {
+    if (!parameters || parameters->cArgs != 2 || parameters->cNamedArgs || !parameters->rgvarg)
+      return DISP_E_BADPARAMCOUNT;
+    const DispatchTextWiper text_wiper(parameters);
+    try {
+      std::uint32_t id = 0;
+      std::wstring_view relative_directory;
+      if (!exact_uint32(parameters->rgvarg[1], id) ||
+          !exact_wstring(parameters->rgvarg[0], relative_directory)) {
+        if (argument_error) *argument_error = 0;
+        return DISP_E_TYPEMISMATCH;
+      }
+      if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
+        return E_ACCESSDENIED;
+      auto verified = controller_.take_verified_import();
+      if (!verified) return E_ACCESSDENIED;
+      return begin_encrypted_transfer([this, id, relative_directory = std::wstring(relative_directory),
+          verified = std::move(verified)](
+          const std::function<bool()>& cancelled,
+          const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) mutable {
+        static_cast<void>(controller_.import_verified_into_container(
+            std::move(verified), id, relative_directory, cancelled, progress));
+      }, result);
+    } catch (...) {
+      USB_VAULT_TRACE_FAILURE("页面桥", "加密传输未能开始", "");
+      return E_FAIL;
+    }
+  }
 
   // Six arguments: encrypted mode, packed selection, location, folder name,
   // and the passphrase twice. Plaintext mode supplies two empty arrays.
@@ -2148,27 +2369,7 @@ class CardProductWebViewHostObject final : public IDispatch {
         return DISP_E_TYPEMISMATCH;
       }
       std::vector<application::ExportSelectionEntry> entries;
-      std::size_t position = 0;
-      while (position < packed.size()) {
-        auto end = packed.find(L'\x1e', position);
-        if (end == std::wstring_view::npos) end = packed.size();
-        const auto row = packed.substr(position, end - position);
-        const auto first = row.find(L'\x1f');
-        const auto second = first == std::wstring_view::npos ? first : row.find(L'\x1f', first + 1);
-        if (first == 0 || first == std::wstring_view::npos || second == std::wstring_view::npos ||
-            second + 1 >= row.size() || row.find(L'\x1f', second + 1) != std::wstring_view::npos ||
-            entries.size() >= 4096) return E_INVALIDARG;
-        std::uint32_t id = 0;
-        for (const auto digit : row.substr(0, first)) {
-          if (digit < L'0' || digit > L'9' || id > (UINT32_MAX - static_cast<unsigned>(digit - L'0')) / 10)
-            return E_INVALIDARG;
-          id = id * 10 + static_cast<unsigned>(digit - L'0');
-        }
-        if (id == 0) return E_INVALIDARG;
-        entries.push_back({id, std::wstring(row.substr(first + 1, second - first - 1)),
-            std::wstring(row.substr(second + 1))});
-        position = end + 1;
-      }
+      if (!parse_export_selection(packed, entries)) return E_INVALIDARG;
       if (creation_work_->interrupted.load() || controller_.state() != CardProductUiState::authenticated)
         return E_ACCESSDENIED;
       const bool encrypted = mode.boolVal != VARIANT_FALSE;
@@ -2387,6 +2588,8 @@ class CardProductWebViewHostObject final : public IDispatch {
       std::rethrow_exception(failure);
     } catch (const backup::ExportPackageAuthenticationRejected&) {
       return encrypted_failure_rejected;
+    } catch (const backup::TransferPackageForged&) {
+      return encrypted_failure_forged;
     } catch (const backup::ExportPackageRejected&) {
       return encrypted_failure_damaged;
     } catch (const CardProductUiSessionController::ImportRollbackIncomplete&) {
@@ -4089,13 +4292,16 @@ class CardProductWebViewHostObject final : public IDispatch {
   //   chooseContactKeyFile: "0␞outcome␟fingerprint", outcome 0 cancelled,
   //     1 decoded, 2 malformed, 3 unsupported version, 4 checksum mismatch,
   //     5 unusable key; the fingerprint only for 1.
-  //   addChosenContact(remark): "0␞change␟listed remark", change a
+  //   addChosenContact(remark), addTransferSender(remark):
+  //     "0␞change␟listed remark", change a
   //     ContactBookChange; the listed remark only for already_present.
   //   renameContact(key, remark), removeContact(key): "0␞change".
   //   clearContactBook: "0".
   //   exportOwnContactKey: "0␞saved", 0 cancelled or 1.
   HRESULT invoke_contacts(DISPID member, DISPPARAMS* parameters, VARIANT* result) noexcept {
-    const UINT expected = member == kAddChosenContactId || member == kRemoveContactId ? 1U
+    const UINT expected = member == kAddChosenContactId || member == kRemoveContactId ||
+                                  member == kAddTransferSenderId
+                              ? 1U
                           : member == kRenameContactId                              ? 2U
                                                                                     : 0U;
     if (!parameters || parameters->cNamedArgs != 0 || parameters->cArgs != expected ||
@@ -4134,8 +4340,11 @@ class CardProductWebViewHostObject final : public IDispatch {
           if (preview) packed.append(contact_text(preview->fingerprint));
           break;
         }
-        case kAddChosenContactId: {
-          const auto outcome = controller_.add_chosen_contact(contact_remark_utf8(first));
+        case kAddChosenContactId:
+        case kAddTransferSenderId: {
+          const std::string remark = contact_remark_utf8(first);
+          const auto outcome = member == kAddChosenContactId ? controller_.add_chosen_contact(remark)
+                                                             : controller_.add_transfer_sender(remark);
           with_change(outcome);
           packed.push_back(kListingFieldSeparator);
           if (outcome.existing_remark) packed.append(contact_text(*outcome.existing_remark));
@@ -4476,6 +4685,11 @@ class CardProductWebViewHostObject final : public IDispatch {
   std::atomic<unsigned int> encrypted_error_{0};
   std::atomic<std::uint64_t> encrypted_epoch_{0};
   std::atomic<unsigned int> encrypted_phase_{0};  // 1 verifying, 2 writing
+  // What the last transfer import check found, packed for the page, and the
+  // card epoch it belongs to. Written by the worker, read by the window.
+  std::mutex transfer_sender_mutex_;
+  std::wstring transfer_sender_;
+  std::uint64_t transfer_sender_epoch_{};
   std::mutex survey_mutex_;
   std::vector<std::uint32_t> survey_found_;
   std::uint64_t survey_epoch_{};

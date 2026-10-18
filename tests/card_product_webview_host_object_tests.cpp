@@ -1,6 +1,7 @@
 #include "usb_vault/ui/card_product_webview_host_object.h"
 
 #include "usb_vault/application/activation_store_v1.h"
+#include "usb_vault/backup/export_package_file.h"
 #include "usb_vault/card/card_error.h"
 #include "usb_vault/contacts/contact_identity_v1.h"
 #include "usb_vault/contacts/contact_store_v1.h"
@@ -584,6 +585,26 @@ class FakeVolumeSession final : public IAuthenticatedCardVolumeSession {
   }
   std::vector<usb_vault::application::ExportSelectionEntry> selected_exports;
   std::wstring selected_folder, selected_destination;
+  void export_container_selection_for_recipients(
+      std::span<const usb_vault::application::ExportSelectionEntry>, std::wstring_view, std::wstring_view,
+      const usb_vault::contacts::ContactIdentity&,
+      const std::span<const usb_vault::contacts::ContactPublicKey> recipients,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override {
+    if (cancelled()) throw std::system_error(ERROR_CANCELLED, std::system_category());
+    progress(40, 40);
+    recipient_exports.emplace_back(recipients.begin(), recipients.end());
+  }
+  std::vector<std::vector<usb_vault::contacts::ContactPublicKey>> recipient_exports;
+  std::wstring write_verified_transfer_import(
+      const std::uint32_t id, std::wstring_view, usb_vault::backup::ImportPackageV1&,
+      const usb_vault::contacts::ContactIdentity&, const std::function<bool()>&,
+      const std::function<void(unsigned int, std::uint64_t, std::uint64_t)>& progress) override {
+    progress(2, 10, 10);
+    transfer_imports.push_back(id);
+    return L"Docs";
+  }
+  std::vector<std::uint32_t> transfer_imports;
   void export_container_entry_encrypted(
       const std::uint32_t id, const std::wstring_view relative_directory,
       const std::wstring_view name,
@@ -5105,6 +5126,176 @@ void test_the_contact_list_crosses_the_bridge_as_packed_strings() {
           "a contact call of the wrong shape was answered");
 }
 
+
+// A real transfer package of one small file, from `sender` to `recipients`.
+[[nodiscard]] std::filesystem::path bridge_transfer_package(
+    const ScopedDirectory& directory, const std::wstring& leaf,
+    const usb_vault::contacts::ContactIdentity& sender,
+    const std::vector<usb_vault::contacts::ContactPublicKey>& recipients) {
+  const std::filesystem::path folder = std::filesystem::path(directory.wide()) / leaf;
+  std::filesystem::create_directories(folder);
+  const std::filesystem::path source = folder / L"note.txt";
+  { std::ofstream(source, std::ios::binary) << "transferred content"; }
+  const std::array<usb_vault::backup::ExportSelectionSourceV1, 1> sources{
+      {{.absolute_source = source.wstring(), .output_name = L"note.txt"}}};
+  usb_vault::backup::export_selection_to_file_v1(
+      sources, (folder / L"package").wstring(), L"pack",
+      usb_vault::backup::ExportRecipientsV1{.sender = sender, .recipients = recipients});
+  return folder / L"package";
+}
+
+void test_transfers_cross_the_bridge_on_the_worker() {
+  FakeEntry entry;
+  CardAuthenticationSession authentication;
+  FakeVolumeSession volume(authentication);
+  OfflineCardPasswordPolicy policy;
+  FakeFileChooser chooser;
+  BridgeIdentityVerifier verifier;
+  BridgeContactCard card;
+  ScopedDirectory directory(L"bridge-transfers");
+  CardProductUiSessionController controller(entry, authentication, volume, policy, chooser,
+                                            nullptr, nullptr, &verifier);
+  controller.set_contact_book_access(
+      {.storage = [&card](std::uint32_t) -> std::unique_ptr<usb_vault::contacts::IContactStoreStorage> {
+         return std::make_unique<BridgeContactStorage>(card);
+       },
+       .lease = []() -> std::unique_ptr<usb_vault::application::ICardOperationLease> {
+         return std::make_unique<BridgeContactLease>();
+       }});
+  ComPtr<IDispatch> host = make_host(controller);
+  const std::wstring rs(1, L'\x1e');
+  const std::wstring fs(1, L'\x1f');
+  const auto text_call = [&](const wchar_t* const name, std::vector<std::wstring> texts) {
+    std::vector<VARIANTARG> values;
+    for (auto it = texts.rbegin(); it != texts.rend(); ++it) values.push_back(text_argument(*it));
+    VARIANT result{};
+    const HRESULT hr = invoke_named(*host.Get(), name, values.empty() ? nullptr : values.data(),
+                                    static_cast<UINT>(values.size()), &result, nullptr);
+    for (VARIANTARG& value : values) static_cast<void>(::VariantClear(&value));
+    std::wstring text = hr == S_OK && result.vt == VT_BSTR
+                            ? std::wstring(result.bstrVal, ::SysStringLen(result.bstrVal))
+                            : L"hr:" + std::to_wstring(static_cast<long>(hr));
+    static_cast<void>(::VariantClear(&result));
+    return text;
+  };
+  const auto finished = [&] {
+    std::wstring status;
+    for (int i = 0; i < 20000; ++i) {
+      VARIANT value{};
+      require(invoke_named(*host.Get(), L"encryptedTransferStatus", nullptr, 0, &value, nullptr) == S_OK,
+              "the transfer status was unavailable");
+      status.assign(value.bstrVal, ::SysStringLen(value.bstrVal));
+      static_cast<void>(::VariantClear(&value));
+      if (!status.starts_with(L"1,")) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return status;
+  };
+  const auto verify = [&](const std::filesystem::path& package) {
+    chooser.existing_path = package.wstring();
+    VARIANT picked{};
+    require(invoke_named(*host.Get(), L"chooseImportFile", nullptr, 0, &picked, nullptr) == S_OK,
+            "a transfer package could not be picked");
+    static_cast<void>(::VariantClear(&picked));
+    VARIANT started{};
+    require(invoke_named(*host.Get(), L"beginVerifyTransferImport", nullptr, 0, &started, nullptr) == S_OK,
+            "a transfer check did not start");
+    static_cast<void>(::VariantClear(&started));
+    return finished();
+  };
+
+  entry.route = CardEntryRoute::login_required;
+  entry.identity = 0x5EC0;
+  auto password = bytes("password-1");
+  controller.submit_login(password);
+  const auto own = usb_vault::contacts::ContactIdentity::derive(root_secret()).public_key();
+  const auto alice = usb_vault::contacts::ContactIdentity::derive(contact_root(40));
+  const auto bob = usb_vault::contacts::ContactIdentity::derive(contact_root(41));
+  const auto alice_file = std::filesystem::path(directory.wide()) / L"alice.uvkey";
+  { std::ofstream(alice_file, std::ios::binary) << usb_vault::contacts::encode_contact_key_file(alice.public_key()); }
+  chooser.key_file_path = alice_file.wstring();
+  static_cast<void>(controller.choose_contact_key_file());
+  require(controller.add_chosen_contact("Alice").change == usb_vault::application::ContactBookChange::done,
+          "the test contact was not added");
+
+  // Export to a listed contact; a key in any other form never starts one.
+  const auto export_to = [&](const std::wstring& recipients) {
+    std::array<VARIANTARG, 4> values{};
+    values[3] = text_argument(L"3" + fs + fs + L"q1.txt");
+    values[2] = text_argument(L"D:\\Out");
+    values[1] = text_argument(L"pack");
+    values[0] = text_argument(recipients);
+    VARIANT started{};
+    const HRESULT hr = invoke_named(*host.Get(), L"beginRecipientExport", values.data(), 4, &started, nullptr);
+    clear_arguments(values.data(), 4);
+    static_cast<void>(::VariantClear(&started));
+    return hr;
+  };
+  require(export_to(L"nothex") == E_INVALIDARG && export_to(hex_key(alice.public_key()) + rs) == E_INVALIDARG,
+          "a malformed recipient list started an export");
+  require(export_to(hex_key(alice.public_key())) == S_OK && finished().starts_with(L"2,") &&
+              volume.recipient_exports.size() == 1 &&
+              volume.recipient_exports[0] == std::vector{alice.public_key()},
+          "a recipient export did not reach the session for the chosen contact");
+  require(export_to(hex_key(bob.public_key())) == S_OK && finished().starts_with(L"3,") &&
+              volume.recipient_exports.size() == 1,
+          "an unlisted recipient was exported to");
+
+  // A listed sender, then the import into an existing container.
+  const auto from_alice = bridge_transfer_package(directory, L"alice", alice, {own});
+  require(verify(from_alice).starts_with(L"2,") &&
+              text_call(L"transferImportSender", {}) == L"2" + rs + L"0" + fs + L"Alice" + fs,
+          "a listed sender did not cross by remark");
+  std::array<VARIANTARG, 2> into{};
+  into[1] = number_argument(5);
+  into[0] = text_argument(L"in");
+  VARIANT started{};
+  require(invoke_named(*host.Get(), L"beginImportVerified", into.data(), 2, &started, nullptr) == S_OK &&
+              finished().starts_with(L"2,"),
+          "a verified transfer was not imported");
+  clear_arguments(into.data(), 2);
+  static_cast<void>(::VariantClear(&started));
+  require(volume.transfer_imports == std::vector<std::uint32_t>{5}, "the transfer import did not reach the container");
+
+  // An unlisted sender by fingerprint, and adding it.
+  const auto from_bob = bridge_transfer_package(directory, L"bob", bob, {own});
+  require(verify(from_bob).starts_with(L"2,") &&
+              text_call(L"transferImportSender", {}) ==
+                  L"2" + rs + L"0" + fs + fs +
+                      widen_ascii(usb_vault::contacts::format_contact_fingerprint(bob.public_key())),
+          "an unlisted sender did not cross by fingerprint");
+  require(text_call(L"addTransferSender", {L"Bob"}) == L"0" + rs + L"0" + fs, "a verified sender was not added");
+
+  // Not addressed here: the page asks for the password.
+  const auto elsewhere = bridge_transfer_package(directory, L"elsewhere", alice, {bob.public_key()});
+  require(verify(elsewhere).starts_with(L"2,") && text_call(L"transferImportSender", {}) == L"1",
+          "a package for another card did not fall back to the password");
+
+  // Damage fails the check; a forged signature has its own code below it.
+  const auto damaged = bridge_transfer_package(directory, L"damaged", bob, {own});
+  {
+    std::fstream file(damaged, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekp(-20, std::ios::end);
+    file.put('\x5A');
+  }
+  const std::wstring failed = verify(damaged);
+  require(failed.starts_with(L"3,") && failed.find(L",10,") != std::wstring::npos &&
+              text_call(L"transferImportSender", {}) == L"0",
+          ("a damaged transfer package was not refused as damaged: " + usb_vault::diagnostics::utf8(failed)).c_str());
+
+  // Without a usable contact list the check is not made; the password path stays.
+  controller.set_contact_book_access({});
+  controller.release_stale_contact_book();
+  authentication.clear_authentication();
+  entry.route = CardEntryRoute::login_required;
+  auto again = bytes("password-1");
+  controller.submit_login(again);
+  require(verify(from_alice).starts_with(L"2,") && text_call(L"transferImportSender", {}) == L"3",
+          "a missing contact list closed the password path");
+  authentication.clear_authentication();
+  require(text_call(L"transferImportSender", {}) == L"0", "a sender outlived its login");
+}
+
 }  // namespace
 
 void test_container_alias_bridge_is_authenticated_bounded_and_exclusive() {
@@ -5209,6 +5400,7 @@ int main() {
     test_the_bridge_carries_both_exports();
     test_the_export_bridge_checks_its_shapes();
     test_the_contact_list_crosses_the_bridge_as_packed_strings();
+    test_transfers_cross_the_bridge_on_the_worker();
     test_the_page_names_a_drop_destination_and_reads_only_numbers();
     test_a_running_drop_answers_only_about_itself();
     std::cout << "card_product_webview_host_object_tests passed\n";
