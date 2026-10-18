@@ -41,6 +41,13 @@ class TransferPackageNotAddressed final : public std::runtime_error {
 [[nodiscard]] std::uint64_t transfer_package_v1_size(
     const ExportPackageV1Header& header);
 
+// Throws std::invalid_argument for a key that is not usable, or for more than
+// 16 distinct recipients once the sender and duplicates are merged: the same
+// checks TransferPackageWriterV1 makes, for refusing before any work starts.
+void validate_transfer_recipients_v1(
+    const contacts::ContactIdentity& sender,
+    std::span<const contacts::ContactPublicKey> recipients);
+
 // Writes one package for `recipients` plus the sender itself, who can always
 // reopen what it sent. Duplicates and the sender's own key are merged; more
 // than 16 distinct recipients in all, or a key that is not usable, throw

@@ -1,6 +1,7 @@
 #include "usb_vault/backup/export_package_file.h"
 
 #include "usb_vault/backup/export_package_source.h"
+#include "usb_vault/backup/transfer_package_v1.h"
 
 #include "usb_vault/volume/volume_file_operations.h"
 #include "volume/volume_containment.h"
@@ -268,6 +269,29 @@ void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> 
     if (!published) { try { volume::delete_volume_entry(staging); } catch (...) {} }
     throw;
   }
+}
+
+void export_selection_to_file_v1(const std::span<const ExportSelectionSourceV1> sources,
+    const std::wstring_view absolute_destination, const std::wstring_view folder_name,
+    const ExportRecipientsV1& recipients, const std::function<bool()>& cancelled,
+    const ExportProgress& progress) {
+  validate_transfer_recipients_v1(recipients.sender, recipients.recipients);
+  const std::wstring destination(absolute_destination);
+  volume::require_parent_stays_on_volume(destination, volume::require_drive_absolute(destination));
+  const auto directory = parent_of(destination);
+  const auto plan = collect_export_selection_v1(sources, folder_name, cancelled);
+  const auto required = transfer_package_v1_size(export_package_v1_header(
+      plan.manifest, encode_export_manifest_v1(plan.manifest).bytes().size()));
+  ULARGE_INTEGER available{};
+  if (::GetDiskFreeSpaceExW(directory.c_str(), &available, nullptr, nullptr) == FALSE)
+    throw_last_error("measure the export destination");
+  if (available.QuadPart < required) throw_win32(ERROR_DISK_FULL, "the export does not fit");
+  if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+  TemporaryPackage temporary(temporary_name(directory));
+  write_export_selection_transfer_package_v1(plan, recipients.sender, recipients.recipients,
+      [&](const std::span<const std::byte> bytes) { temporary.write(bytes); }, cancelled, progress);
+  if (cancelled && cancelled()) throw_win32(ERROR_CANCELLED, "the export was cancelled");
+  temporary.publish_keeping_both(destination);
 }
 
 }  // namespace usb_vault::backup

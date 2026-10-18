@@ -66,8 +66,12 @@ class CardContactBook final {
     return store_.entries();
   }
 
-  // Throws std::logic_error once the login has ended.
+  // Throws std::logic_error once the login has ended. The reference is valid
+  // only while the book is; work that may outlive it uses transfer_identity().
   [[nodiscard]] const contacts::ContactIdentity& identity() const;
+  // A copy of the identity that the caller owns, for an export running on a
+  // worker after the book may already be gone. Checked against the login now.
+  [[nodiscard]] contacts::ContactIdentity transfer_identity() const;
   [[nodiscard]] std::string own_key_file() const;
   [[nodiscard]] std::string own_fingerprint() const;
 

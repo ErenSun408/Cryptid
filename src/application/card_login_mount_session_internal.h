@@ -11,6 +11,7 @@
 
 #include "usb_vault/application/card_authentication_session.h"
 #include "usb_vault/backup/import_package_v1.h"
+#include "usb_vault/backup/export_package_file.h"
 #include "usb_vault/backup/export_package_source.h"
 #include "usb_vault/application/card_login_mount_session.h"
 #include "usb_vault/application/mount_orchestrator.h"
@@ -190,6 +191,14 @@ class CardLoginMountSessionRuntime {
       const std::function<bool()>&,
       const std::function<void(std::uint64_t, std::uint64_t)>&) {
     throw std::logic_error("selection export is unavailable");
+  }
+  // P5.14 selection export as one transfer package for contacts.
+  virtual void export_selection_for_recipients(
+      std::span<const backup::ExportSelectionSourceV1>, std::wstring_view,
+      std::wstring_view, const backup::ExportRecipientsV1&,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("recipient export is unavailable");
   }
   virtual void export_encrypted_entry(std::wstring_view, std::wstring_view,
                                       const security::SecureBuffer&,
@@ -414,6 +423,19 @@ class CardLoginMountSessionCore final {
   void export_container_folder(std::uint32_t id,
                                std::wstring_view absolute_destination_directory,
                                std::wstring_view folder_name);
+  void export_container_selection_for_recipients(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, const contacts::ContactIdentity& sender,
+      std::span<const contacts::ContactPublicKey> recipients,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress);
+  struct PlannedSelectionExport {
+    std::vector<backup::ExportSelectionSourceV1> sources;
+    std::wstring destination;
+  };
+  [[nodiscard]] PlannedSelectionExport plan_selection_export(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name);
   void export_container_selection(
       std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
       std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,

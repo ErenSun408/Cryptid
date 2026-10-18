@@ -40,4 +40,23 @@ void export_selection_to_file_v1(std::span<const ExportSelectionSourceV1> source
     bool encrypted, const security::SecureBuffer& password_utf8,
     const std::function<bool()>& cancelled = {}, const ExportProgress& progress = {});
 
+// Who a P5.14 transfer package is sealed for. The sender is always included.
+// A call argument only: both members are borrowed and must stay valid, and
+// unchanged, until the export call returns; the export signs with the sender
+// at its very end.
+struct ExportRecipientsV1 final {
+  const contacts::ContactIdentity& sender;
+  std::span<const contacts::ContactPublicKey> recipients;
+};
+
+// Publishes a selection as one transfer package for `recipients`, with the
+// same planning, room check, temporary file and "keep both" publication as
+// the encrypted export above. No password takes part. Unusable keys and more
+// than 16 recipients are refused with std::invalid_argument before the
+// selection is walked or anything is created.
+void export_selection_to_file_v1(std::span<const ExportSelectionSourceV1> sources,
+    std::wstring_view absolute_destination, std::wstring_view folder_name,
+    const ExportRecipientsV1& recipients, const std::function<bool()>& cancelled = {},
+    const ExportProgress& progress = {});
+
 }  // namespace usb_vault::backup

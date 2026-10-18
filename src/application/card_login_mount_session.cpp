@@ -380,6 +380,15 @@ class ProductionCardLoginMountSessionRuntime final
     backup::export_selection_to_file_v1(sources, destination, folder_name, encrypted,
         password, cancelled, progress);
   }
+  void export_selection_for_recipients(
+      const std::span<const backup::ExportSelectionSourceV1> sources,
+      const std::wstring_view destination, const std::wstring_view folder_name,
+      const backup::ExportRecipientsV1& recipients,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override {
+    backup::export_selection_to_file_v1(sources, destination, folder_name, recipients,
+        cancelled, progress);
+  }
   void export_encrypted_entry(const std::wstring_view source,
                               const std::wstring_view destination,
                               const security::SecureBuffer& password_utf8,
@@ -949,6 +958,16 @@ void CardLoginMountSession::export_container_selection(
       const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
   impl_->core.export_container_selection(entries, destination_directory, folder_name,
       encrypted, password, cancelled, progress);
+}
+
+void CardLoginMountSession::export_container_selection_for_recipients(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, const contacts::ContactIdentity& sender,
+      std::span<const contacts::ContactPublicKey> recipients,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  impl_->core.export_container_selection_for_recipients(entries, destination_directory,
+      folder_name, sender, recipients, cancelled, progress);
 }
 
 void CardLoginMountSession::export_container_entry_encrypted(
@@ -3513,14 +3532,13 @@ void CardLoginMountSessionCore::export_container_entry(
   runtime_.copy_export_entry(source, destination);
 }
 
-void CardLoginMountSessionCore::export_container_selection(
-      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
-      std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,
-      const std::function<bool()>& cancelled,
-      const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+CardLoginMountSessionCore::PlannedSelectionExport
+CardLoginMountSessionCore::plan_selection_export(
+    const std::span<const ExportSelectionEntry> entries,
+    const std::wstring_view destination_directory, const std::wstring_view folder_name) {
   if (!authentication_.authenticated() || partition_format_active_)
     throw std::logic_error("selection export requires an idle authenticated session");
-  if (entries.empty() || entries.size() > 4096 || (encrypted && password.empty()))
+  if (entries.empty() || entries.size() > 4096)
     throw std::invalid_argument("invalid export selection");
   // An empty folder name publishes the one selected entry itself.
   if (folder_name.empty() && entries.size() != 1)
@@ -3557,7 +3575,33 @@ void CardLoginMountSessionCore::export_container_selection(
     selected.emplace_back(entry.id, std::move(relative));
     sources.push_back({source, entry.name});
   }
-  runtime_.export_selection(sources, destination, folder_name, encrypted, password, cancelled, progress);
+  return {std::move(sources), destination};
+}
+
+void CardLoginMountSessionCore::export_container_selection(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, bool encrypted, const security::SecureBuffer& password,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  auto planned = plan_selection_export(entries, destination_directory, folder_name);
+  if (encrypted && password.empty()) throw std::invalid_argument("invalid export selection");
+  runtime_.export_selection(planned.sources, planned.destination, folder_name, encrypted,
+      password, cancelled, progress);
+}
+
+void CardLoginMountSessionCore::export_container_selection_for_recipients(
+    const std::span<const ExportSelectionEntry> entries,
+    const std::wstring_view destination_directory, const std::wstring_view folder_name,
+    const contacts::ContactIdentity& sender,
+    const std::span<const contacts::ContactPublicKey> recipients,
+    const std::function<bool()>& cancelled,
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
+  auto planned = plan_selection_export(entries, destination_directory, folder_name);
+  if (recipients.empty())
+    throw std::invalid_argument("a recipient export needs at least one recipient");
+  runtime_.export_selection_for_recipients(planned.sources, planned.destination, folder_name,
+      backup::ExportRecipientsV1{.sender = sender, .recipients = recipients}, cancelled,
+      progress);
 }
 
 void CardLoginMountSessionCore::export_container_entry_encrypted(

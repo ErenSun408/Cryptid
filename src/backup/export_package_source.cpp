@@ -1,4 +1,5 @@
 #include "usb_vault/backup/export_package_source.h"
+#include "usb_vault/backup/transfer_package_v1.h"
 #include "usb_vault/volume/volume_entry_path.h"
 
 #include <Windows.h>
@@ -414,16 +415,18 @@ void write_export_package_v1(const std::wstring_view absolute_source,
   write_export_selection_package_v1(plan, std::move(key), sink, cancelled, progress);
 }
 
-void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,
-    ExportPackageKeyV1 key, const ExportPackageWriterV1::Sink& sink,
+namespace {
+
+// Streams the encoded manifest and every file of `plan` into the writer that
+// `make_writer` builds for the package header.
+template <typename MakeWriter>
+void stream_export_selection(const ExportSelectionPlanV1& plan, MakeWriter&& make_writer,
     const std::function<bool()>& cancelled, const ExportProgress& progress) {
   const auto& manifest = plan.manifest;
   if (plan.files.size() != manifest.entries.size())
     throw std::invalid_argument("the export selection plan is inconsistent");
   WipedBytes encoded = encode_export_manifest_v1(manifest);
-  ExportPackageWriterV1 writer(std::move(key),
-                               export_package_v1_header(manifest, encoded.bytes().size()),
-                               sink);
+  auto writer = make_writer(export_package_v1_header(manifest, encoded.bytes().size()));
   writer.write(encoded.bytes());
   encoded.wipe();
 
@@ -470,6 +473,26 @@ void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,
   }
   block.wipe();
   writer.finish();
+}
+
+}  // namespace
+
+void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,
+    ExportPackageKeyV1 key, const ExportPackageWriterV1::Sink& sink,
+    const std::function<bool()>& cancelled, const ExportProgress& progress) {
+  stream_export_selection(plan, [&](const ExportPackageV1Header& header) {
+    return ExportPackageWriterV1(std::move(key), header, sink);
+  }, cancelled, progress);
+}
+
+void write_export_selection_transfer_package_v1(const ExportSelectionPlanV1& plan,
+    const contacts::ContactIdentity& sender,
+    const std::span<const contacts::ContactPublicKey> recipients,
+    const ExportPackageWriterV1::Sink& sink, const std::function<bool()>& cancelled,
+    const ExportProgress& progress) {
+  stream_export_selection(plan, [&](const ExportPackageV1Header& header) {
+    return TransferPackageWriterV1(sender, recipients, header, sink);
+  }, cancelled, progress);
 }
 
 }  // namespace usb_vault::backup

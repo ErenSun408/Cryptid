@@ -151,6 +151,8 @@ void test_ended_login_refuses_every_call() {
               refused([&] { static_cast<void>(book->remark_for(key)); }) &&
               refused([&] { static_cast<void>(book->own_key_file()); }),
           "a book outlived its logout");
+  require(refused([&] { static_cast<void>(book->transfer_identity()); }),
+          "a transfer identity was handed out after logout");
   // A new login of the same card does not revive the old book either.
   session.establish(root(1));
   require(refused([&] { static_cast<void>(book->identity()); }),
@@ -185,6 +187,21 @@ void test_stale_book_and_unusable_states() {
     refused = true;
   }
   require(refused && card.writes == writes, "an unread book accepted an add");
+}
+
+void test_transfer_identity_outlives_the_book() {
+  Card card;
+  CardAuthenticationSession session;
+  session.establish(root(1));
+  auto book = open_book(session, card);
+  const ContactPublicKey expected = book->identity().public_key();
+  ContactIdentity copy = book->transfer_identity();
+  book.reset();
+  require(copy.public_key() == expected, "the transfer identity is another key");
+  const std::string message = "signed after the book";
+  const auto bytes = std::as_bytes(std::span(message.data(), message.size()));
+  require(usb_vault::contacts::verify_contact_signature(expected, bytes, copy.sign(bytes)),
+          "the transfer identity could not sign after the book was gone");
 }
 
 void test_identity_follows_the_root() {
@@ -344,6 +361,7 @@ int main() {
   try {
     test_requires_authentication();
     test_identity_follows_the_root();
+    test_transfer_identity_outlives_the_book();
     test_ended_login_refuses_every_call();
     test_stale_book_and_unusable_states();
     test_add_rename_remove();

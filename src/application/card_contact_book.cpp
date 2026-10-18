@@ -90,6 +90,11 @@ const contacts::ContactIdentity& CardContactBook::identity() const {
   return identity_;
 }
 
+contacts::ContactIdentity CardContactBook::transfer_identity() const {
+  require_current();
+  return identity_.clone();
+}
+
 contacts::ContactStoreState CardContactBook::load() {
   require_current();
   const auto lease = take_lease();

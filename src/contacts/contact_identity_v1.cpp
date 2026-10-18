@@ -262,6 +262,18 @@ ContactIdentity ContactIdentity::derive(
                          public_key, x25519_public);
 }
 
+ContactIdentity ContactIdentity::clone() const {
+  if (ed25519_secret_.empty() || x25519_secret_.empty()) {
+    throw std::logic_error("contact identity was moved from");
+  }
+  security::SecureBuffer ed25519(ed25519_secret_.size());
+  std::memcpy(ed25519.data(), ed25519_secret_.data(), ed25519.size());
+  security::SecureBuffer x25519(x25519_secret_.size());
+  std::memcpy(x25519.data(), x25519_secret_.data(), x25519.size());
+  return ContactIdentity(std::move(ed25519), std::move(x25519), public_key_,
+                         x25519_public_key_);
+}
+
 ContactSignature ContactIdentity::sign(
     std::span<const std::byte> message) const {
   if (ed25519_secret_.empty()) {

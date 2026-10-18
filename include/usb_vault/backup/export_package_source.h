@@ -2,6 +2,7 @@
 
 #include "usb_vault/backup/export_manifest_v1.h"
 #include "usb_vault/backup/export_package_v1.h"
+#include "usb_vault/contacts/contact_identity_v1.h"
 
 #include <functional>
 #include <span>
@@ -49,6 +50,14 @@ void write_export_selection_file_v1(const ExportSelectionPlanV1& plan,
 void write_export_selection_package_v1(const ExportSelectionPlanV1& plan,
     ExportPackageKeyV1 key, const ExportPackageWriterV1::Sink& sink,
     const std::function<bool()>& cancelled = {}, const ExportProgress& progress = {});
+
+// The same stream as one P5.14 transfer package from `sender` to `recipients`
+// (the sender is always included; see TransferPackageWriterV1).
+void write_export_selection_transfer_package_v1(const ExportSelectionPlanV1& plan,
+    const contacts::ContactIdentity& sender,
+    std::span<const contacts::ContactPublicKey> recipients,
+    const ExportPackageWriterV1::Sink& sink, const std::function<bool()>& cancelled = {},
+    const ExportProgress& progress = {});
 
 // Walks the file or directory about to be exported and lists it as a
 // manifest: the entry itself first, then its contents, every directory before

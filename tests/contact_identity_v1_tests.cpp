@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -314,6 +315,19 @@ void test_header_and_line_variants() {
           "an oversized file behind a BOM was accepted");
 }
 
+void test_clone_is_independent() {
+  std::optional<ContactIdentity> original = ContactIdentity::derive(secret_of(16));
+  const ContactIdentity copy = original->clone();
+  require(copy.public_key() == original->public_key() &&
+              copy.x25519_public_key() == original->x25519_public_key(),
+          "a clone has different public keys");
+  original.reset();  // The copy must not depend on the original's secrets.
+  const std::string message = "outlives the book";
+  require(verify_contact_signature(copy.public_key(), bytes_of(message),
+                                   copy.sign(bytes_of(message))),
+          "a clone could not sign after the original was destroyed");
+}
+
 void test_moved_from_identity_throws() {
   ContactIdentity identity = ContactIdentity::derive(secret_of(15));
   ContactIdentity moved = std::move(identity);
@@ -347,6 +361,7 @@ int main() {
     test_non_canonical_key_is_unusable();
     test_header_and_line_variants();
     test_moved_from_identity_throws();
+    test_clone_is_independent();
   } catch (const std::exception& error) {
     std::cerr << "contact_identity_v1_tests failed: " << error.what() << '\n';
     return 1;

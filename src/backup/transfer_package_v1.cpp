@@ -145,10 +145,10 @@ constexpr std::array<std::uint8_t, 24> kSlotNonce{};
   return ExportPackageKeyV1::transfer(key, prefix);
 }
 
-[[nodiscard]] ExportPackageKeyV1 seal_recipients(
+// Merged by X25519 key: two Ed25519 encodings differing only in the sign bit
+// share one, and two slots would then repeat a key and nonce.
+[[nodiscard]] std::vector<ContactX25519PublicKey> merged_recipients(
     const ContactIdentity& sender, std::span<const ContactPublicKey> recipients) {
-  // Merged by X25519 key: two Ed25519 encodings differing only in the sign
-  // bit share one, and two slots would then repeat a key and nonce.
   std::vector<ContactX25519PublicKey> everyone{sender.x25519_public_key()};
   for (const ContactPublicKey& recipient : recipients) {
     if (!contacts::contact_public_key_usable(recipient)) {
@@ -160,6 +160,13 @@ constexpr std::array<std::uint8_t, 24> kSlotNonce{};
   if (everyone.size() > kTransferPackageV1Slots) {
     throw std::invalid_argument("a transfer package has at most 16 recipients");
   }
+  return everyone;
+}
+
+[[nodiscard]] ExportPackageKeyV1 seal_recipients(
+    const ContactIdentity& sender, std::span<const ContactPublicKey> recipients) {
+  const std::vector<ContactX25519PublicKey> everyone =
+      merged_recipients(sender, recipients);
 
   Prefix prefix{};
   fill_random(prefix);  // Unused slots stay random.
@@ -268,6 +275,11 @@ ExportPackageKeyV1 open_transfer_package_key(const ContactIdentity& recipient,
 }
 
 }  // namespace detail
+
+void validate_transfer_recipients_v1(const ContactIdentity& sender,
+                                     std::span<const ContactPublicKey> recipients) {
+  static_cast<void>(merged_recipients(sender, recipients));
+}
 
 std::uint64_t transfer_package_v1_size(const ExportPackageV1Header& header) {
   return export_package_v1_size(header, kTransferPackageV1PrefixSize,

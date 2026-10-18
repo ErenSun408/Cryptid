@@ -3,6 +3,7 @@
 #include "usb_vault/application/active_volume_session.h"
 #include "usb_vault/application/card_login_success_consumer.h"
 #include "usb_vault/application/mount_orchestrator.h"
+#include "usb_vault/contacts/contact_identity_v1.h"
 #include "usb_vault/volume/volume_directory_listing.h"
 #include "usb_vault/volume/partition_catalog.h"
 #include "usb_vault/volume/mount_state_monitor.h"
@@ -553,6 +554,21 @@ class IAuthenticatedCardVolumeSession : public ICardLoginSuccessConsumer,
     throw std::logic_error("encrypted export is unavailable");
   }
 
+  // P5.14 selection export as one transfer package from `sender` to
+  // `recipients` (the sender is always included), under the same selection,
+  // destination and no-trace rules as export_container_selection. No password
+  // takes part, and neither the recipients nor the destination are recorded.
+  // At least one recipient is required. `sender` and `recipients` are borrowed
+  // until the call returns; a caller running the export on a worker gives it
+  // its own copies (CardContactBook::transfer_identity).
+  virtual void export_container_selection_for_recipients(
+      std::span<const ExportSelectionEntry>, std::wstring_view, std::wstring_view,
+      const contacts::ContactIdentity&, std::span<const contacts::ContactPublicKey>,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) {
+    throw std::logic_error("recipient export is unavailable");
+  }
+
   // P5.9 encrypted import into a directory of a container mounted normally
   // (not open for decoy maintenance). The whole package is authenticated
   // before anything is written; the entry is then restored under a hidden
@@ -751,6 +767,12 @@ class CardLoginMountSession final : public IAuthenticatedCardVolumeSession {
   void export_container_file(
       std::uint32_t id,
       std::wstring_view absolute_destination_directory) override;
+  void export_container_selection_for_recipients(
+      std::span<const ExportSelectionEntry> entries, std::wstring_view destination_directory,
+      std::wstring_view folder_name, const contacts::ContactIdentity& sender,
+      std::span<const contacts::ContactPublicKey> recipients,
+      const std::function<bool()>& cancelled,
+      const std::function<void(std::uint64_t, std::uint64_t)>& progress) override;
   void export_container_folder(std::uint32_t id,
                                std::wstring_view absolute_destination_directory,
                                std::wstring_view folder_name) override;

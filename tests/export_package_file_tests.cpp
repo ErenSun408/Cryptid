@@ -2,6 +2,7 @@
 
 #include "usb_vault/backup/export_package_v1.h"
 #include "usb_vault/backup/import_package_v1.h"
+#include "usb_vault/backup/transfer_package_v1.h"
 
 #include "volume_test_support.h"
 
@@ -304,6 +305,99 @@ void test_unwrapped_exports_publish_the_entry_itself() {
   } catch (const std::invalid_argument&) {}
 }
 
+void test_recipient_exports_open_only_for_recipients() {
+  using namespace usb_vault::backup;
+  using usb_vault::contacts::ContactIdentity;
+  using usb_vault::contacts::ContactPublicKey;
+  const auto identity = [](const unsigned char fill) {
+    SecureBuffer secret(32);
+    for (std::size_t i = 0; i < secret.size(); ++i)
+      secret.data()[i] = static_cast<std::byte>(fill + i);
+    return ContactIdentity::derive(secret);
+  };
+  const ContactIdentity alice = identity(1);
+  const ContactIdentity bob = identity(2);
+  const ContactIdentity carol = identity(3);
+  const TemporaryDirectory temp;
+  const auto out = temp.root() / L"out";
+  usb_vault_test::make_directory(out);
+  usb_vault_test::make_directory(temp.root() / L"A");
+  usb_vault_test::make_file(temp.root() / L"A" / L"one.txt", 13);
+  usb_vault_test::make_file(temp.root() / L"two.bin", 70000);
+  const std::vector<ExportSelectionSourceV1> sources{
+      {(temp.root() / L"A").wstring(), L"A"},
+      {(temp.root() / L"two.bin").wstring(), L"two.bin"}};
+  const std::vector<ContactPublicKey> to{bob.public_key()};
+  const auto package = out / L"For Bob";
+  export_selection_to_file_v1(sources, package.wstring(), L"Shared",
+                              ExportRecipientsV1{.sender = alice, .recipients = to});
+  export_selection_to_file_v1(sources, package.wstring(), L"Shared",
+                              ExportRecipientsV1{.sender = alice, .recipients = to});
+  expect(entries_in(out) == 2 && std::filesystem::exists(out / L"For Bob (2)"),
+         "a recipient export must publish beside an existing name, leaving no temporary");
+
+  std::ifstream input(package, std::ios::binary);
+  std::vector<char> raw((std::istreambuf_iterator<char>(input)), {});
+  const auto bytes = std::as_bytes(std::span(raw));
+  const auto open_as = [&](const ContactIdentity& me) {
+    std::size_t at = 0;
+    TransferPackageReaderV1 reader(bytes.size(), [&](std::span<std::byte> part) {
+      std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(at), part.size(), part.begin());
+      at += part.size();
+    }, me);
+    std::vector<std::byte> manifest(static_cast<std::size_t>(reader.header().manifest_bytes));
+    reader.read(manifest);
+    const ExportManifest decoded = decode_export_manifest_v1(manifest, reader.header());
+    std::vector<std::byte> data(static_cast<std::size_t>(reader.remaining()));
+    reader.read(data);
+    expect(reader.sender() == alice.public_key() && reader.verify_signature(),
+           "a recipient export must name and be signed by its sender");
+    return decoded;
+  };
+  for (const ContactIdentity* me : {&bob, &alice}) {
+    const ExportManifest manifest = open_as(*me);
+    expect(manifest.top_level_name() == L"Shared" && manifest.data_bytes == 70013,
+           "a recipient export must carry the selection");
+  }
+  try {
+    static_cast<void>(open_as(carol));
+    fail("a recipient export opened for someone else");
+  } catch (const TransferPackageNotAddressed&) {
+  }
+
+  // Refusals and cancellation leave nothing in the destination.
+  const auto before = entries_in(out);
+  ContactPublicKey neutral{};
+  neutral[0] = std::byte{1};
+  const std::vector<ContactPublicKey> bad{neutral};
+  bool walked = false;
+  try {
+    export_selection_to_file_v1(sources, (out / L"Bad").wstring(), L"Shared",
+                                ExportRecipientsV1{.sender = alice, .recipients = bad},
+                                [&] { walked = true; return false; });
+    fail("an unusable recipient was accepted");
+  } catch (const std::invalid_argument&) {
+  }
+  std::vector<ContactPublicKey> crowd;
+  for (unsigned char i = 0; i < 16; ++i) crowd.push_back(identity(50 + i).public_key());
+  try {
+    export_selection_to_file_v1(sources, (out / L"Crowd").wstring(), L"Shared",
+                                ExportRecipientsV1{.sender = alice, .recipients = crowd},
+                                [&] { walked = true; return false; });
+    fail("seventeen recipients were accepted");
+  } catch (const std::invalid_argument&) {
+  }
+  expect(!walked, "invalid recipients were refused only after walking the selection");
+  int polls = 0;
+  expect_win32([&] {
+    export_selection_to_file_v1(sources, (out / L"Stopped").wstring(), L"Shared",
+                                ExportRecipientsV1{.sender = alice, .recipients = to},
+                                [&] { return ++polls > 3; });
+  }, ERROR_CANCELLED, "a cancelled recipient export must report cancellation");
+  expect(entries_in(out) == before,
+         "a refused or cancelled recipient export left something behind");
+}
+
 }  // namespace
 
 int main() {
@@ -312,6 +406,7 @@ int main() {
     test_failures_leave_nothing_behind();
     test_grouped_exports_preserve_names_and_cleanup();
     test_unwrapped_exports_publish_the_entry_itself();
+    test_recipient_exports_open_only_for_recipients();
   } catch (const std::exception& error) {
     fail(std::string("unexpected exception: ") + error.what());
   }

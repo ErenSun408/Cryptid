@@ -783,6 +783,19 @@ class FakeRuntime final : public CardLoginMountSessionRuntime {
   std::vector<usb_vault::backup::ExportSelectionSourceV1> selected_sources;
   std::wstring selected_destination, selected_folder;
   bool selected_encrypted{};
+  void export_selection_for_recipients(
+      std::span<const usb_vault::backup::ExportSelectionSourceV1> sources,
+      std::wstring_view destination, std::wstring_view folder,
+      const usb_vault::backup::ExportRecipientsV1& recipients,
+      const std::function<bool()>&,
+      const std::function<void(std::uint64_t, std::uint64_t)>&) override {
+    selected_sources.assign(sources.begin(), sources.end());
+    selected_destination = destination; selected_folder = folder;
+    recipient_sender = recipients.sender.public_key();
+    selected_recipients.assign(recipients.recipients.begin(), recipients.recipients.end());
+  }
+  usb_vault::contacts::ContactPublicKey recipient_sender{};
+  std::vector<usb_vault::contacts::ContactPublicKey> selected_recipients;
   void export_encrypted_entry(const std::wstring_view source,
                               const std::wstring_view destination,
                               const usb_vault::security::SecureBuffer& password,
@@ -4298,6 +4311,54 @@ void test_selection_export_flattens_entries_and_guards_routes() {
   }, "an empty selection must be refused");
 }
 
+// P5.14: a recipient export takes the same selection and destination checks
+// and reaches the storage layer with the sender and the chosen recipients,
+// recording nothing.
+void test_recipient_selection_export_shares_the_selection_rules() {
+  CardAuthenticationSession authentication;
+  FakeRuntime runtime;
+  runtime.remember_paths = true;
+  CardLoginMountSessionCore session(authentication, runtime, layout());
+  session.consume_authenticated_login(root_secret(), bytes("login-password"));
+  const auto id = session.create_container(L"C:\\vault\\one.hc", 64ULL * 1024ULL * 1024ULL);
+  const auto history = session.operation_history().size();
+  const auto writes = runtime.index_writes;
+  const auto sender = usb_vault::contacts::ContactIdentity::derive(root_secret());
+  SecureBuffer other_root(32);
+  std::ranges::fill(other_root.bytes(), std::byte{0x5A});
+  const std::vector<usb_vault::contacts::ContactPublicKey> to{
+      usb_vault::contacts::ContactIdentity::derive(other_root).public_key()};
+  const std::vector<usb_vault::application::ExportSelectionEntry> selection{
+      {id, L"", L"a.txt"}, {id, L"sub", L"b.txt"}};
+  session.export_container_selection_for_recipients(selection, L"D:\\Out", L"Shared",
+      sender, to, {}, {});
+  require(runtime.selected_sources.size() == 2 &&
+      runtime.selected_destination == L"D:\\Out\\Shared" &&
+      runtime.recipient_sender == sender.public_key() && runtime.selected_recipients == to,
+      "a recipient export did not reach storage with its sender and recipients");
+  require(session.operation_history().size() == history && runtime.index_writes == writes,
+      "a recipient export recorded history or indexes");
+  const std::vector<usb_vault::application::ExportSelectionEntry> overlapping{
+      {id, L"", L"sub"}, {id, L"sub", L"b.txt"}};
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection_for_recipients(overlapping, L"D:\\Out", L"Shared",
+        sender, to, {}, {});
+  }, "a recipient export accepted an overlapping selection");
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection_for_recipients(selection, L"X:\\Out", L"Shared",
+        sender, to, {}, {});
+  }, "a recipient export accepted a destination on a mounted container");
+  require_throws<std::invalid_argument>([&] {
+    session.export_container_selection_for_recipients(selection, L"D:\\Out", L"Shared",
+        sender, {}, {}, {});
+  }, "a recipient export without recipients was accepted");
+  authentication.clear_authentication();
+  require_throws_plain_logic_error([&] {
+    session.export_container_selection_for_recipients(selection, L"D:\\Out", L"Shared",
+        sender, to, {}, {});
+  }, "a recipient export ran after the card session ended");
+}
+
 // The drive a container mounts on carries its full name in Explorer, past the
 // 11 bytes of its FAT label, and a release takes that name back.
 void test_mounts_name_their_drive_in_explorer_and_releases_take_it_back() {
@@ -5556,6 +5617,7 @@ int main() {
     test_a_move_within_one_container_renames_and_between_two_carries_bytes();
     test_an_export_leaves_the_volume_and_nothing_records_that_it_did();
     test_selection_export_flattens_entries_and_guards_routes();
+    test_recipient_selection_export_shares_the_selection_rules();
     test_mounts_name_their_drive_in_explorer_and_releases_take_it_back();
     test_an_encrypted_export_leaves_no_trace_and_refuses_containers();
     test_an_encrypted_import_reaches_a_mounted_container_without_a_trace();

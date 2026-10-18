@@ -47,6 +47,11 @@ class ContactIdentity final {
   ContactIdentity& operator=(const ContactIdentity&) = delete;
   ~ContactIdentity() = default;
 
+  // An independent copy, for work that must outlive the original holder
+  // (an export on a worker thread). Its secrets are page-locked and wiped
+  // with it, separately from this one.
+  [[nodiscard]] ContactIdentity clone() const;
+
   [[nodiscard]] const ContactPublicKey& public_key() const noexcept {
     return public_key_;
   }
