@@ -413,6 +413,19 @@
   const exportDialogError = document.getElementById("export-dialog-error");
   const exportDialogCancel = document.getElementById("export-dialog-cancel");
   const exportDialogStart = document.getElementById("export-dialog-start");
+  const exportDialogProtection = document.getElementById("export-dialog-protection");
+  const exportProtectionPassword = document.getElementById("export-protection-password");
+  const exportProtectionRecipients = document.getElementById("export-protection-recipients");
+  const exportDialogRecipientFields = document.getElementById("export-dialog-recipient-fields");
+  const exportRecipientList = document.getElementById("export-recipient-list");
+  const exportRecipientHint = document.getElementById("export-recipient-hint");
+  // P5.14: a cipher export is sealed either with a password or for chosen
+  // contacts. The choices live only while the dialog is open.
+  const kMaxExportRecipients = 15;
+  let exportProtection = "password";
+  let exportRecipientChoices = [];
+  const exportRecipients = new Set();
+  let exportRecipientsLoading = false;
   const importDialog = document.getElementById("import-dialog");
   const importKindDialog = document.getElementById("import-kind-dialog");
   const importNoticeDialog = document.getElementById("import-notice-dialog");
@@ -2963,12 +2976,12 @@
   // A merged selection publishes one folder or encrypted package holding every
   // selected entry side by side. Separate exports publish each entry on its
   // own, keep per-entry results and can retry failed selections.
-  const runExport = async ({ location, packageName = "", password = null, confirmation = null }) => {
+  const runExport = async ({ location, packageName = "", password = null, confirmation = null, recipients = null }) => {
     if (busy || currentState !== nativeState.authenticated || exportSelection.size === 0 || location === "" || !exportResultDialog.hidden) {
       wipe(password); wipe(confirmation);
       return;
     }
-    const encrypted = exportMode === "encrypted";
+    const encrypted = exportMode === "encrypted" && recipients === null;
     const requests = [...exportSelection.values()];
     const merged = mergeExport;
     const groups = merged ? [requests] : requests.map(request => [request]);
@@ -3016,7 +3029,11 @@
           const packed = group.map(request => [request.id, request.directory, request.name].join("\u001f")).join("\u001e");
           const folder = merged ? (packageName || "导出项目") : "";
           try {
-            await bridge.beginExportSelection(encrypted, packed, location, folder, first, second);
+            if (recipients !== null) {
+              await bridge.beginRecipientExport(packed, location, folder, recipients.join("\u001e"));
+            } else {
+              await bridge.beginExportSelection(encrypted, packed, location, folder, first, second);
+            }
           } finally { wipe(first); wipe(second); }
           const outcome = await awaitEncryptedTransfer(revision, null);
           if (outcome === null || !current()) return;
@@ -3072,6 +3089,7 @@
     8: "位置、名称或容量不符合要求。",
     9: "导入没有完成，新建的安全盘也未能完全撤销，请在安全盘列表中检查并手动删除。",
     10: "导出包已损坏或格式不受支持。",
+    11: "发件人签名无效，导出包可能被改动，已拒绝导入。",
   })[code] || "没有完成，请稍后重试。";
 
   // Polls one transfer to its end. Null when the session changed meanwhile.
@@ -3346,7 +3364,73 @@
   const renderExportDialog = () => {
     exportDialogLocationButton.textContent = exportDialogLocation === "" ? "选择一个位置…" : exportDialogLocation;
     exportDialogLocationButton.classList.toggle("ph", exportDialogLocation === "");
-    exportDialogStart.disabled = busy || exportDialogLocation === "";
+    const encrypted = exportMode === "encrypted";
+    const toRecipients = encrypted && exportProtection === "recipients";
+    exportDialogProtection.hidden = !encrypted;
+    exportProtectionPassword.setAttribute("aria-pressed", toRecipients ? "false" : "true");
+    exportProtectionRecipients.setAttribute("aria-pressed", toRecipients ? "true" : "false");
+    exportDialogSecretFields.hidden = !encrypted || toRecipients;
+    exportDialogRecipientFields.hidden = !toRecipients;
+    exportDialogStart.disabled = busy || exportDialogLocation === "" ||
+      (toRecipients && (exportRecipientsLoading || exportRecipients.size === 0));
+  };
+  const renderExportRecipients = () => {
+    exportRecipientList.replaceChildren();
+    for (const choice of exportRecipientChoices) {
+      const label = document.createElement("label");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.dataset.recipientKey = choice.key;
+      box.checked = exportRecipients.has(choice.key);
+      box.disabled = !box.checked && exportRecipients.size >= kMaxExportRecipients;
+      const remark = document.createElement("span");
+      remark.textContent = choice.remark;
+      const fingerprint = document.createElement("span");
+      fingerprint.className = "contacts-fingerprint";
+      fingerprint.textContent = choice.fingerprint;
+      label.append(box, remark, fingerprint);
+      exportRecipientList.append(label);
+    }
+    if (!exportRecipientsLoading && exportRecipientHint.dataset.tone !== "error") {
+      exportRecipientHint.textContent = exportRecipientChoices.length === 0
+        ? "通讯录中还没有联系人，请先在“通讯录”中导入对方的公钥文件。"
+        : `已选 ${exportRecipients.size} / ${kMaxExportRecipients} 位。`;
+    }
+    renderExportDialog();
+  };
+  const clearExportRecipients = () => {
+    exportProtection = "password";
+    exportRecipientChoices = [];
+    exportRecipients.clear();
+    exportRecipientList.replaceChildren();
+    exportRecipientHint.textContent = "";
+    exportRecipientHint.dataset.tone = "";
+  };
+  // Recipients come from the list on the card each time the choice is made.
+  const loadExportRecipients = async () => {
+    exportRecipientsLoading = true;
+    exportRecipientHint.textContent = "正在读取通讯录…";
+    exportRecipientHint.dataset.tone = "";
+    renderExportDialog();
+    try {
+      const answer = parseContactAnswer(await bridge.getContactBook());
+      if (answer.status !== 0) {
+        exportRecipientChoices = [];
+        exportRecipientHint.textContent = contactFailure(answer.status);
+        exportRecipientHint.dataset.tone = "error";
+      } else {
+        exportRecipientChoices = answer.records.slice(1)
+          .map(([key, remark, fingerprint]) => ({key, remark, fingerprint}));
+      }
+    } catch (pageError) { logCaughtPageError("loadExportRecipients/1", pageError);
+      exportRecipientChoices = [];
+      exportRecipientHint.textContent = "无法读取通讯录，请稍后重试。";
+      exportRecipientHint.dataset.tone = "error";
+    } finally {
+      exportRecipientsLoading = false;
+      exportRecipients.clear();
+      renderExportRecipients();
+    }
   };
   const clearExportDialogSecrets = () => {
     exportDialogPassphrase.value = "";
@@ -3375,7 +3459,7 @@
         ? ""
         : "已关闭合并导出，所选项目分别导出到目标位置。";
     }
-    exportDialogSecretFields.hidden = !encrypted;
+    clearExportRecipients();
     clearExportDialogSecrets();
     exportDialogLocation = exportMode === "migrate" ? migrateLocation : exportLocation;
     setExportDialogError("");
@@ -3384,6 +3468,7 @@
   };
   const closeExportDialog = () => {
     clearExportDialogSecrets();
+    clearExportRecipients();
     setExportDialogError("");
     closeModal(exportDialog);
   };
@@ -3401,6 +3486,14 @@
     let password = null;
     let confirmation = null;
     const packageName = mergeExport ? exportDialogName.value.trim() : "";
+    if (mode === "encrypted" && exportProtection === "recipients") {
+      if (exportRecipients.size === 0) { setExportDialogError("请至少选择一位接收人。"); return; }
+      const recipients = [...exportRecipients];
+      exportLocation = location;
+      closeExportDialog();
+      await runExport({ location, packageName, recipients });
+      return;
+    }
     if (mode === "encrypted") {
       const first = exportDialogPassphrase.value;
       const second = exportDialogPassphraseConfirmation.value;
@@ -8001,6 +8094,27 @@
     renderExportDialog();
   });
   exportDialogCancel.addEventListener("click", () => { closeExportDialog(); });
+  exportProtectionPassword.addEventListener("click", () => {
+    if (busy || exportRecipientsLoading) return;
+    exportProtection = "password";
+    setExportDialogError("");
+    renderExportDialog();
+  });
+  exportProtectionRecipients.addEventListener("click", async () => {
+    if (busy || exportRecipientsLoading || exportProtection === "recipients") return;
+    exportProtection = "recipients";
+    clearExportDialogSecrets();
+    setExportDialogError("");
+    await loadExportRecipients();
+  });
+  exportRecipientList.addEventListener("change", (event) => {
+    const box = event.target;
+    if (!(box instanceof HTMLInputElement) || !box.dataset.recipientKey) return;
+    if (box.checked && exportRecipients.size < kMaxExportRecipients) exportRecipients.add(box.dataset.recipientKey);
+    else exportRecipients.delete(box.dataset.recipientKey);
+    setExportDialogError("");
+    renderExportRecipients();
+  });
   exportDialogStart.addEventListener("click", async () => { await startExportFromDialog(); });
   exportDialog.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { event.preventDefault(); closeExportDialog(); }

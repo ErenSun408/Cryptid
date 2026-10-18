@@ -6433,3 +6433,10 @@
 - 验证：新增 tests/card_product_ui_contacts_dom_tests.cjs（列表、添加与备注拒绝后重试、改名、删除与取消、导出本人公钥、取消选取、文件校验失败、已存在不可重试、容量不足／损坏后清空、读取失败、卡上已变自动重读、页面事件不含联系人内容）通过；login_reset、card_backup、encrypted_transfer DOM 测试通过；p46 构建 card_product_ui_page_contract_tests 与 USB Vault.exe 通过，契约测试通过。bitlocker、file_creation_failure、partition_conversion、partition_creation、partition、navigation、page_event 七个 DOM 测试在改动前后均失败且输出一致，属既有失败，未在本片处理。jsdom 不做布局，样式未经截图或实机核对。
 - 安全与风险：按决定未做独立安全审查。读写卡在窗口线程同步执行，实卡下界面可能停顿。
 - 提交：按决定以 [P5.14] 提交；禁止推送。
+
+### 2026-10-17 — P5.14.7b / 导出弹窗选择指定接收人
+- 范围与审计：沿用 P5.9 导出弹窗与结果对话框；按决定不做独立安全审查。
+- 检查与实现：密文导出弹窗新增“加密方式”选择：“加密口令”（原流程）与“指定接收人”。选择接收人时清空已输入口令、隐藏口令栏，并从安全卡读取通讯录列出联系人（备注与指纹）供勾选，最多 15 位，本卡自动包含；未选接收人、读取中或通讯录不可用时不能开始。开始后经 beginRecipientExport 发出，合并与分别导出均适用；每次打开弹窗恢复为加密口令并清空所选。传输失败文案补充代码 11（发件人签名无效）。集成测试夹具页补齐新元素。
+- 验证：新增 tests/card_product_ui_recipient_export_dom_tests.cjs（选择后口令清空、列表按需读取、仅发给所选联系人、再次打开恢复默认、15 位上限、无联系人与容量不足提示、原生拒绝时的提示）通过；encrypted_transfer、contacts、export_results、export_tree DOM 测试通过；p46 构建页面契约测试与 USB Vault.exe 通过，契约测试通过。七个既有失败的 DOM 测试输出与改动前一致。测试首次因勾选后列表重绘而引用旧元素失败，属测试写法问题，修正后通过。jsdom 不做布局，样式未经截图或实机核对。
+- 安全与风险：按决定未做独立安全审查。接收人列表在弹窗打开期间来自一次读卡结果，期间通讯录被改动时由原生侧按公钥再次核对。
+- 提交：按决定以 [P5.14] 提交；禁止推送。

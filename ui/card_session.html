@@ -777,6 +777,12 @@
 
     /* ================= 操作日志 ================= */
     .contacts-actions { display: flex; gap: .5rem; }
+    .export-protection { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .export-protection .pick h4 { margin: 0 0 .2rem; }
+    .export-protection .pick p { margin: 0; font-size: .72rem; }
+    .export-recipient-list { max-height: 11rem; overflow-y: auto; border: 1px solid var(--line); border-radius: .5rem; }
+    .export-recipient-list label { display: flex; align-items: center; gap: .5rem; padding: .4rem .6rem; font-size: .78rem; }
+    .export-recipient-list .contacts-fingerprint { margin-left: auto; font-size: .7rem; color: var(--text-3); }
     .contacts-own { margin: 0 0 .75rem; font-size: .78rem; color: var(--text-2); }
     .contacts-fingerprint { font-family: var(--mono); color: var(--text); letter-spacing: .04em; }
     .contacts-notice { display: flex; align-items: center; justify-content: space-between; gap: .75rem;
@@ -2010,6 +2016,18 @@
             <button id="export-dialog-location" class="xinp ph" type="button">选择一个位置…</button>
             <button id="export-dialog-browse" class="shell-button" type="button">浏览</button>
           </div>
+        </div>
+        <div id="export-dialog-protection" class="xfield" hidden>
+          <label>加密方式</label>
+          <div class="export-protection" role="group" aria-label="加密方式">
+            <button id="export-protection-password" class="pick" type="button" aria-pressed="true"><h4>加密口令</h4><p>凭口令导入，任何知道口令的人都能打开。</p></button>
+            <button id="export-protection-recipients" class="pick" type="button" aria-pressed="false"><h4>指定接收人</h4><p>只有所选联系人与本卡能打开，导入时显示发件人。</p></button>
+          </div>
+        </div>
+        <div id="export-dialog-recipient-fields" class="xfield" hidden>
+          <label>接收人（最多 15 位，本卡自动包含）</label>
+          <div id="export-recipient-list" class="export-recipient-list"></div>
+          <p id="export-recipient-hint" class="creation-hint"></p>
         </div>
         <div id="export-dialog-secret-fields">
           <div class="xfield">

@@ -124,6 +124,13 @@
       <div id="export-dialog-name-field"><label id="export-dialog-name-label" for="export-dialog-name">导出包名称</label><input id="export-dialog-name" type="text"><p id="export-dialog-name-hint"></p></div>
       <button id="export-dialog-location" type="button"></button>
       <button id="export-dialog-browse" type="button">浏览</button>
+      <div id="export-dialog-protection" hidden>
+      <button id="export-protection-password" type="button" aria-pressed="true">加密口令</button>
+      <button id="export-protection-recipients" type="button" aria-pressed="false">指定接收人</button>
+      </div>
+      <div id="export-dialog-recipient-fields" hidden>
+      <div id="export-recipient-list"></div><p id="export-recipient-hint"></p>
+      </div>
       <div id="export-dialog-secret-fields">
       <input id="export-dialog-passphrase" type="password">
       <input id="export-dialog-passphrase-confirmation" type="password">
