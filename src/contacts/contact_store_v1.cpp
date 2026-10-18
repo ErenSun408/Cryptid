@@ -597,8 +597,13 @@ ContactEntriesError validate_contact_entries(
     if (!contact_public_key_usable(entries[i].public_key)) {
       return ContactEntriesError::unusable_key;
     }
+    // Keys differing only in the Ed25519 sign bit share one X25519 key and
+    // are the same recipient.
+    const ContactX25519PublicKey u =
+        contact_x25519_public_key(entries[i].public_key);
     for (std::size_t j = 0; j < i; ++j) {
-      if (entries[j].public_key == entries[i].public_key) {
+      if (entries[j].public_key == entries[i].public_key ||
+          contact_x25519_public_key(entries[j].public_key) == u) {
         return ContactEntriesError::duplicate_key;
       }
     }

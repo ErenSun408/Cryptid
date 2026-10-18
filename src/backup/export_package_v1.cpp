@@ -18,6 +18,9 @@ namespace {
 constexpr std::string_view kMasterDomain = "usb-vault:export-package-master:v1";
 constexpr std::string_view kKeyDomain = "usb-vault:export-package-key:v1";
 constexpr std::string_view kChunkDomain = "usb-vault:export-package-chunk:v1";
+// Longer than kChunkDomain; chunk_aad uses each domain at its own length.
+constexpr std::string_view kTransferChunkDomain =
+    "usb-vault:transfer-package-chunk:v1";
 
 // Inside the encryption only; a reader reaches it after the first tag has
 // already authenticated, so it guards against a format mix-up, not an attacker.
@@ -25,13 +28,16 @@ constexpr std::array<std::byte, 8> kStreamMarker{
     std::byte{'U'}, std::byte{'V'}, std::byte{'E'}, std::byte{'X'},
     std::byte{'P'}, std::byte{'K'}, std::byte{'G'}, std::byte{'1'}};
 constexpr std::uint32_t kStreamVersion = 1;
+constexpr std::uint32_t kTransferStreamVersion = 2;
 
 constexpr std::uint32_t kMemoryKib = 512U * 1024U;
 constexpr std::uint32_t kIterations = 2;
 constexpr std::uint32_t kParallelism = 1;
 constexpr std::size_t kKeySize = 32;
 constexpr std::size_t kNonceSize = 12;
-constexpr std::size_t kAadSize = kChunkDomain.size() + 8 + 1;
+// v1 AAD is exactly domain, index and final flag; the transfer domain is
+// longer, so the buffer is sized for it and only the used length is passed.
+constexpr std::size_t kAadSize = kTransferChunkDomain.size() + 8 + 1;
 constexpr std::uint64_t kSealedChunkSize =
     kExportPackageV1ChunkSize + kExportPackageV1TagSize;
 constexpr NTSTATUS kStatusAuthTagMismatch =
@@ -165,22 +171,24 @@ void write_u64(const std::span<std::byte> bytes, const std::size_t offset,
   return value;
 }
 
-// Header, manifest and data in one stream; std::nullopt when it overflows.
+// Header, manifest, data and any extra stream bytes; std::nullopt when it
+// overflows.
 [[nodiscard]] std::optional<std::uint64_t> stream_size(
-    const ExportPackageV1Header& header) noexcept {
+    const ExportPackageV1Header& header,
+    const std::size_t extra_stream_bytes = 0) noexcept {
   constexpr std::uint64_t max = std::numeric_limits<std::uint64_t>::max();
-  if (header.manifest_bytes > max - kExportPackageV1StreamHeaderSize) return {};
-  const std::uint64_t prefix =
-      kExportPackageV1StreamHeaderSize + header.manifest_bytes;
+  const std::uint64_t fixed = kExportPackageV1StreamHeaderSize + extra_stream_bytes;
+  if (header.manifest_bytes > max - fixed) return {};
+  const std::uint64_t prefix = fixed + header.manifest_bytes;
   if (header.data_bytes > max - prefix) return {};
   return prefix + header.data_bytes;
 }
 
 [[nodiscard]] std::array<std::byte, kExportPackageV1StreamHeaderSize>
-encode_header(const ExportPackageV1Header& header) {
+encode_header(const ExportPackageV1Header& header, const std::uint32_t version) {
   std::array<std::byte, kExportPackageV1StreamHeaderSize> bytes{};
   std::ranges::copy(kStreamMarker, bytes.begin());
-  write_u32(bytes, 8, kStreamVersion);
+  write_u32(bytes, 8, version);
   write_u32(bytes, 12, 0);
   write_u64(bytes, 16, header.manifest_bytes);
   write_u64(bytes, 24, header.data_bytes);
@@ -195,12 +203,21 @@ encode_header(const ExportPackageV1Header& header) {
   return nonce;
 }
 
-[[nodiscard]] std::array<std::byte, kAadSize> chunk_aad(
-    const std::uint64_t index, const bool final) noexcept {
-  std::array<std::byte, kAadSize> aad{};
-  std::ranges::copy(std::as_bytes(std::span(kChunkDomain)), aad.begin());
-  write_u64(aad, kChunkDomain.size(), index);
-  aad.back() = final ? std::byte{1} : std::byte{0};
+struct ChunkAad final {
+  std::array<std::byte, kAadSize> bytes{};
+  std::size_t size{};
+};
+
+// Domain, chunk index and final flag, at the domain's own length: password
+// packages keep their v1 bytes exactly.
+[[nodiscard]] ChunkAad chunk_aad(const std::uint64_t index, const bool final,
+                                 const bool transfer) noexcept {
+  ChunkAad aad;
+  const std::string_view domain = transfer ? kTransferChunkDomain : kChunkDomain;
+  std::ranges::copy(std::as_bytes(std::span(domain)), aad.bytes.begin());
+  write_u64(aad.bytes, domain.size(), index);
+  aad.bytes[domain.size() + 8] = final ? std::byte{1} : std::byte{0};
+  aad.size = domain.size() + 9;
   return aad;
 }
 
@@ -211,16 +228,22 @@ ExportPackageRejected::ExportPackageRejected()
           "the export password is wrong or the package is damaged") {}
 
 std::uint64_t export_package_v1_size(const ExportPackageV1Header& header) {
-  const auto stream = stream_size(header);
+  return export_package_v1_size(header, kExportPackageV1SaltSize, 0);
+}
+
+std::uint64_t export_package_v1_size(const ExportPackageV1Header& header,
+                                     const std::size_t prefix_size,
+                                     const std::size_t extra_stream_bytes) {
+  const auto stream = stream_size(header, extra_stream_bytes);
   if (!stream) throw std::length_error("export package stream is too large");
   const std::uint64_t chunks =
       (*stream + kExportPackageV1ChunkSize - 1) / kExportPackageV1ChunkSize;
   constexpr std::uint64_t max = std::numeric_limits<std::uint64_t>::max();
-  if (chunks > (max - kExportPackageV1SaltSize - *stream) /
-                   kExportPackageV1TagSize) {
+  if (*stream > max - prefix_size ||
+      chunks > (max - prefix_size - *stream) / kExportPackageV1TagSize) {
     throw std::length_error("export package is too large");
   }
-  return kExportPackageV1SaltSize + *stream + chunks * kExportPackageV1TagSize;
+  return prefix_size + *stream + chunks * kExportPackageV1TagSize;
 }
 
 ExportPackageV1Salt generate_export_package_v1_salt() {
@@ -235,6 +258,8 @@ ExportPackageV1Salt generate_export_package_v1_salt() {
 
 struct ExportPackageKeyV1::State final {
   ExportPackageV1Salt salt{};
+  std::vector<std::byte> prefix;
+  bool transfer{false};
   AlgorithmHandle algorithm;
   security::SecureBuffer key_object;
   KeyHandle key;
@@ -271,6 +296,24 @@ ExportPackageKeyV1 ExportPackageKeyV1::derive(
 
   auto state = std::make_unique<State>();
   state->salt = salt;
+  state->prefix.assign(salt.begin(), salt.end());
+  return from_state(std::move(state), key_bytes);
+}
+
+ExportPackageKeyV1 ExportPackageKeyV1::transfer(
+    const security::SecureBuffer& file_key,
+    const std::span<const std::byte> prefix) {
+  if (file_key.size() != kKeySize || prefix.empty()) {
+    throw std::invalid_argument("invalid transfer package key");
+  }
+  auto state = std::make_unique<State>();
+  state->transfer = true;
+  state->prefix.assign(prefix.begin(), prefix.end());
+  return from_state(std::move(state), file_key);
+}
+
+ExportPackageKeyV1 ExportPackageKeyV1::from_state(
+    std::unique_ptr<State> state, const security::SecureBuffer& key_bytes) {
   require_success(::BCryptOpenAlgorithmProvider(state->algorithm.put(),
                                                 BCRYPT_AES_ALGORITHM, nullptr,
                                                 0),
@@ -290,13 +333,23 @@ ExportPackageKeyV1 ExportPackageKeyV1::derive(
                       mutable_bytes(key_bytes.bytes()),
                       checked_ulong(key_bytes.size()), 0),
                   "generate AES-GCM key");
-  key_bytes.clear();
   return ExportPackageKeyV1(state.release());
 }
 
 const ExportPackageV1Salt& ExportPackageKeyV1::salt() const {
   if (state_ == nullptr) throw std::logic_error("export package key was moved");
+  if (state_->transfer) throw std::logic_error("a transfer key has no salt");
   return state_->salt;
+}
+
+std::span<const std::byte> ExportPackageKeyV1::prefix() const {
+  if (state_ == nullptr) throw std::logic_error("export package key was moved");
+  return state_->prefix;
+}
+
+bool ExportPackageKeyV1::is_transfer() const {
+  if (state_ == nullptr) throw std::logic_error("export package key was moved");
+  return state_->transfer;
 }
 
 void ExportPackageKeyV1::seal_chunk(const std::uint64_t index, const bool final,
@@ -308,14 +361,14 @@ void ExportPackageKeyV1::seal_chunk(const std::uint64_t index, const bool final,
     throw std::invalid_argument("invalid export package chunk size");
   }
   auto nonce = chunk_nonce(index);
-  auto aad = chunk_aad(index, final);
+  auto aad = chunk_aad(index, final, state_->transfer);
   const auto tag = sealed.last(kExportPackageV1TagSize);
   BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authentication{};
   BCRYPT_INIT_AUTH_MODE_INFO(authentication);
   authentication.pbNonce = reinterpret_cast<PUCHAR>(nonce.data());
   authentication.cbNonce = checked_ulong(nonce.size());
-  authentication.pbAuthData = reinterpret_cast<PUCHAR>(aad.data());
-  authentication.cbAuthData = checked_ulong(aad.size());
+  authentication.pbAuthData = reinterpret_cast<PUCHAR>(aad.bytes.data());
+  authentication.cbAuthData = checked_ulong(aad.size);
   authentication.pbTag = reinterpret_cast<PUCHAR>(tag.data());
   authentication.cbTag = checked_ulong(tag.size());
   ULONG written = 0;
@@ -339,13 +392,13 @@ bool ExportPackageKeyV1::open_chunk(const std::uint64_t index, const bool final,
     throw std::invalid_argument("invalid export package chunk size");
   }
   auto nonce = chunk_nonce(index);
-  auto aad = chunk_aad(index, final);
+  auto aad = chunk_aad(index, final, state_->transfer);
   BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authentication{};
   BCRYPT_INIT_AUTH_MODE_INFO(authentication);
   authentication.pbNonce = reinterpret_cast<PUCHAR>(nonce.data());
   authentication.cbNonce = checked_ulong(nonce.size());
-  authentication.pbAuthData = reinterpret_cast<PUCHAR>(aad.data());
-  authentication.cbAuthData = checked_ulong(aad.size());
+  authentication.pbAuthData = reinterpret_cast<PUCHAR>(aad.bytes.data());
+  authentication.cbAuthData = checked_ulong(aad.size);
   authentication.pbTag = mutable_bytes(sealed.last(kExportPackageV1TagSize));
   authentication.cbTag = checked_ulong(kExportPackageV1TagSize);
   ULONG written = 0;
@@ -385,13 +438,16 @@ ExportPackageWriterV1::ExportPackageWriterV1(ExportPackageKeyV1 key,
       sink_(std::move(sink)),
       pending_(kExportPackageV1ChunkSize),
       sealed_(static_cast<std::size_t>(kSealedChunkSize)) {
-  static_cast<void>(export_package_v1_size(header));
+  const bool transfer = key_.is_transfer();
+  const std::size_t extra = transfer ? kTransferPackageV1StreamExtraSize : 0;
+  static_cast<void>(export_package_v1_size(header, key_.prefix().size(), extra));
   if (!sink_) throw std::invalid_argument("export package writer needs a sink");
-  sink_(key_.salt());
-  const auto encoded = encode_header(header);
+  sink_(key_.prefix());
+  const auto encoded =
+      encode_header(header, transfer ? kTransferStreamVersion : kStreamVersion);
   std::ranges::copy(encoded, pending_.bytes().begin());
   pending_size_ = encoded.size();
-  remaining_ = header.manifest_bytes + header.data_bytes;
+  remaining_ = header.manifest_bytes + header.data_bytes + extra;
 }
 
 void ExportPackageWriterV1::seal_pending(const bool final) {
@@ -446,18 +502,34 @@ void ExportPackageWriterV1::finish() {
 ExportPackageReaderV1::ExportPackageReaderV1(const std::uint64_t package_size,
                                              Source source,
                                              const KeyFactory& derive_key)
+    : ExportPackageReaderV1(
+          package_size, std::move(source), kExportPackageV1SaltSize,
+          derive_key ? PrefixKeyFactory([&derive_key](std::span<const std::byte> prefix) {
+            ExportPackageV1Salt salt{};
+            std::ranges::copy(prefix, salt.begin());
+            ExportPackageKeyV1 key = derive_key(salt);
+            if (key.is_transfer()) {
+              throw std::logic_error("a password package needs a password key");
+            }
+            return key;
+          })
+                     : PrefixKeyFactory{}) {}
+
+ExportPackageReaderV1::ExportPackageReaderV1(
+    const std::uint64_t package_size, Source source,
+    const std::size_t prefix_size, const PrefixKeyFactory& key_for_prefix)
     : source_(std::move(source)),
       chunk_(kExportPackageV1ChunkSize),
       sealed_(static_cast<std::size_t>(kSealedChunkSize)) {
-  if (!source_ || !derive_key) {
+  if (!source_ || !key_for_prefix || prefix_size == 0) {
     throw std::invalid_argument("export package reader needs a source and key");
   }
   // The layout follows from the size alone: full sealed chunks, then one
   // shorter or equal final chunk holding at least one byte.
-  if (package_size <= kExportPackageV1SaltSize + kExportPackageV1TagSize) {
+  if (package_size <= prefix_size + kExportPackageV1TagSize) {
     throw ExportPackageRejected();
   }
-  const std::uint64_t body = package_size - kExportPackageV1SaltSize;
+  const std::uint64_t body = package_size - prefix_size;
   chunk_count_ = (body + kSealedChunkSize - 1) / kSealedChunkSize;
   const std::uint64_t final_sealed = body - (chunk_count_ - 1) * kSealedChunkSize;
   if (final_sealed <= kExportPackageV1TagSize) throw ExportPackageRejected();
@@ -465,12 +537,13 @@ ExportPackageReaderV1::ExportPackageReaderV1(const std::uint64_t package_size,
   const std::uint64_t stream = body - chunk_count_ * kExportPackageV1TagSize;
   if (stream < kExportPackageV1StreamHeaderSize) throw ExportPackageRejected();
 
-  ExportPackageV1Salt salt{};
-  source_(salt);
-  key_.emplace(derive_key(salt));
-  if (key_->salt() != salt) {
-    throw std::logic_error("export package key was derived from another salt");
+  std::vector<std::byte> prefix(prefix_size);
+  source_(prefix);
+  key_.emplace(key_for_prefix(prefix));
+  if (!std::ranges::equal(key_->prefix(), prefix)) {
+    throw std::logic_error("export package key belongs to another prefix");
   }
+  const bool transfer = key_->is_transfer();
   open_next_chunk();
 
   const auto header_bytes =
@@ -482,8 +555,11 @@ ExportPackageReaderV1::ExportPackageReaderV1(const std::uint64_t package_size,
   header_ = ExportPackageV1Header{.manifest_bytes = read_u64(header_bytes, 16),
                                   .data_bytes = read_u64(header_bytes, 24),
                                   .entry_count = read_u64(header_bytes, 32)};
-  const auto declared = stream_size(header_);
-  if (!marker_matches || read_u32(header_bytes, 8) != kStreamVersion ||
+  const auto declared =
+      stream_size(header_, transfer ? kTransferPackageV1StreamExtraSize : 0);
+  if (!marker_matches ||
+      read_u32(header_bytes, 8) !=
+          (transfer ? kTransferStreamVersion : kStreamVersion) ||
       read_u32(header_bytes, 12) != 0 || !reserved_clear || !declared ||
       *declared != stream) {
     chunk_.wipe();

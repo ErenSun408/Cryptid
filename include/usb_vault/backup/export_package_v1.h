@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -54,6 +55,16 @@ class ExportPackageAuthenticationRejected final : public ExportPackageRejected {
 [[nodiscard]] std::uint64_t export_package_v1_size(
     const ExportPackageV1Header& header);
 
+// Transfer streams carry the 32-byte sender key and the 64-byte signature in
+// addition to manifest and data.
+inline constexpr std::size_t kTransferPackageV1StreamExtraSize = 32 + 64;
+
+// The same for a package whose prefix is `prefix_size` bytes and whose stream
+// carries `extra_stream_bytes` beyond header, manifest and data.
+[[nodiscard]] std::uint64_t export_package_v1_size(
+    const ExportPackageV1Header& header, std::size_t prefix_size,
+    std::size_t extra_stream_bytes);
+
 // A fresh random salt for one export.
 [[nodiscard]] ExportPackageV1Salt generate_export_package_v1_salt();
 
@@ -68,7 +79,19 @@ class ExportPackageKeyV1 final {
       const security::SecureBuffer& password_utf8,
       const ExportPackageV1Salt& salt);
 
+  // P5.14 recipient transfer package key: the same chunk layout under its own
+  // chunk AAD domain and stream version 2, whose stream carries the sender
+  // key before the manifest and the signature after the data. `prefix` is the
+  // package's recipient block, written before the chunks in place of a salt.
+  [[nodiscard]] static ExportPackageKeyV1 transfer(
+      const security::SecureBuffer& file_key,
+      std::span<const std::byte> prefix);
+
+  // Password packages only; throws std::logic_error for a transfer key.
   [[nodiscard]] const ExportPackageV1Salt& salt() const;
+  // The bytes the package starts with: the salt, or the recipient block.
+  [[nodiscard]] std::span<const std::byte> prefix() const;
+  [[nodiscard]] bool is_transfer() const;
 
   ExportPackageKeyV1(ExportPackageKeyV1&&) noexcept;
   ExportPackageKeyV1& operator=(ExportPackageKeyV1&&) noexcept;
@@ -92,6 +115,8 @@ class ExportPackageKeyV1 final {
  private:
   struct State;
   explicit ExportPackageKeyV1(State* state) noexcept;
+  [[nodiscard]] static ExportPackageKeyV1 from_state(
+      std::unique_ptr<State> state, const security::SecureBuffer& key_bytes);
   State* state_{nullptr};
 };
 
@@ -154,14 +179,24 @@ class ExportPackageWriterV1 final {
 // failure to authenticate also throws ExportPackageRejected, after which the
 // reader refuses further reads. `source` must fill its whole span from the
 // package, in order, or throw.
+//
+// For a transfer key the stream after the header is sender key, manifest,
+// data and signature; remaining() and read() cover all of it, and the
+// transfer layer splits it.
 class ExportPackageReaderV1 final {
  public:
   using Source = std::function<void(std::span<std::byte>)>;
   using KeyFactory =
       std::function<ExportPackageKeyV1(const ExportPackageV1Salt&)>;
+  // Receives the package prefix; returns the key whose prefix() equals it.
+  using PrefixKeyFactory =
+      std::function<ExportPackageKeyV1(std::span<const std::byte>)>;
 
   ExportPackageReaderV1(std::uint64_t package_size, Source source,
                         const KeyFactory& derive_key);
+  ExportPackageReaderV1(std::uint64_t package_size, Source source,
+                        std::size_t prefix_size,
+                        const PrefixKeyFactory& key_for_prefix);
 
   [[nodiscard]] const ExportPackageV1Header& header() const noexcept {
     return header_;
