@@ -300,7 +300,8 @@ const openBackup = async (d, $, mode) => {
       assert.equal($('import-confirm').disabled, true);
       $('import-package-name').value = 'Renamed package';
       $('import-package-name').dispatchEvent(new w.Event('input'));
-      assert.equal(calls.filter(c => c.name === 'rename').length, 0);
+      // Only the transfer check at opening names the import (P5.14); typing does not.
+      assert.deepEqual(calls.filter(c => c.name === 'rename').map(c => c.args[0]), ['family photos']);
       const bridge = w.chrome.webview.hostObjects.nativeBridge;
       bridge.renameImportPackage = name => { calls.push({name: 'rename', args: [name]}); return 8; };
       $('import-password').value = 'export password'; $('import-confirm').click();
@@ -315,7 +316,8 @@ const openBackup = async (d, $, mode) => {
       $('import-password').value = 'correct password'; $('import-confirm').click();
       await wait(() => $('import-status').textContent === '导入成功' && $('import-cancel').textContent === '关闭');
       assert.equal($('import-dialog').hidden, false);
-      const named = calls.filter(c => c.name === 'rename');
+      // After the opening transfer check, every attempt names the import.
+      const named = calls.filter(c => c.name === 'rename').slice(1);
       assert.equal(named.length, 3, 'every attempt names the import');
       assert.ok(named.every(c => c.args[0] === 'Renamed package'));
     } finally { w.close(); }

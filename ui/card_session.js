@@ -437,6 +437,13 @@
   const importKindPackage = document.getElementById("import-kind-package");
   const importPackageName = document.getElementById("import-package-name");
   const importPassword = document.getElementById("import-password");
+  const importPasswordField = document.getElementById("import-password-field");
+  const importSender = document.getElementById("import-sender");
+  const importSenderText = document.getElementById("import-sender-text");
+  const importSenderAddFields = document.getElementById("import-sender-add-fields");
+  const importSenderRemark = document.getElementById("import-sender-remark");
+  const importSenderAdd = document.getElementById("import-sender-add");
+  const importSenderStatus = document.getElementById("import-sender-status");
   const importTargetExisting = document.getElementById("import-target-existing");
   const importTargetNew = document.getElementById("import-target-new");
   const importExistingFields = document.getElementById("import-existing-fields");
@@ -1938,6 +1945,12 @@
   // only knows the smallest size it fits into.
   let importPicked = "";
   let importTarget = "existing";
+  // P5.14: the sender of a transfer package addressed to this card, once its
+  // signature verified ({own, remark, fingerprint}); null for a password
+  // package. A refused package (forged or damaged) cannot be imported.
+  let importTransfer = null;
+  let importRefused = false;
+  let importChecking = false;
   let importContainerId = 0;
   let importMinimumMib = 0;
   let importLocation = "";
@@ -3138,6 +3151,10 @@
   // attempt is shown to the next.
   const resetImportForm = () => {
     importSucceeded = false;
+    importTransfer = null;
+    importRefused = false;
+    importSenderRemark.value = "";
+    importSenderStatus.textContent = "";
     resetImport();
     importPackageName.value = "";
     importTarget = "existing";
@@ -3187,7 +3204,17 @@
     importExistingFields.hidden = toNew;
     importNewFields.hidden = !toNew || importMinimumMib === 0;
     importNewHiddenFields.hidden = !importNewHidden.checked;
-    importPackageName.disabled = busy || importSucceeded;
+    // A transfer package is verified as it is picked, under its own name.
+    importPackageName.disabled = busy || importSucceeded || importTransfer !== null;
+    importPasswordField.hidden = importTransfer !== null || importRefused;
+    importSender.hidden = importTransfer === null;
+    if (importTransfer !== null) {
+      importSenderText.textContent = importTransfer.own ? "来自本人"
+        : importTransfer.remark !== "" ? `来自 ${importTransfer.remark}`
+        : `未知发件人 · 指纹 ${importTransfer.fingerprint}`;
+      importSenderAddFields.hidden = importTransfer.own || importTransfer.remark !== "";
+      importSenderAdd.disabled = busy;
+    }
     for (const control of [importPassword, importTargetExisting,
                            importTargetNew, importNewName, importNewLocation, importNewBrowse, importNewSize,
                            importNewHidden, importNewHiddenSize, importNewSecond, importNewSecondConfirmation,
@@ -3223,7 +3250,55 @@
             second === importNewSecondConfirmation.value && importNewAcknowledge.checked
           : size >= importMinimumMib);
     }
-    importConfirm.disabled = busy || importSucceeded || !ready || importPackageName.value.trim() === "";
+    importConfirm.disabled = busy || importSucceeded || importChecking || importRefused || !ready ||
+      importPackageName.value.trim() === "";
+  };
+
+  // Tries the picked package as a transfer package for this card before any
+  // password is asked for. Only a verified sender is ever shown.
+  const checkTransferImport = async () => {
+    const revision = batchSessionRevision;
+    const current = () => revision === batchSessionRevision && currentState === nativeState.authenticated;
+    importTransfer = null;
+    importRefused = false;
+    importChecking = true;
+    busy = true;
+    importRunning = true;
+    setImportStatus("正在识别导出包…");
+    renderBackupCentre();
+    try {
+      // The restored entry keeps the name the dialog shows.
+      if (Number(await bridge.renameImportPackage(importPackageName.value.trim())) !== 0) return;
+      await bridge.beginVerifyTransferImport();
+      const outcome = await awaitEncryptedTransfer(revision, null);
+      if (outcome === null || !current()) return;
+      if (outcome.state === 3 && (outcome.error === 10 || outcome.error === 11)) {
+        importRefused = true;
+        setImportStatus(encryptedFailureText(outcome.error), "error");
+        return;
+      }
+      if (outcome.state !== 2) { setImportStatus(""); return; }
+      const answer = String(await bridge.transferImportSender()).split("\u001e");
+      if (!current()) return;
+      if (answer[0] === "2") {
+        const [own, remark, fingerprint] = (answer[1] || "").split("\u001f");
+        importTransfer = {own: own === "1", remark: remark || "", fingerprint: fingerprint || ""};
+        importMinimumMib = Number(await bridge.getVerifiedImportMinimumMib());
+        if (!current()) return;
+        if (!(Number(importNewSize.value) >= importMinimumMib)) importNewSize.value = String(importMinimumMib);
+        setImportStatus("已核对发件人签名，无需加密口令。", "success");
+      } else {
+        setImportStatus("");
+      }
+    } catch (pageError) { logCaughtPageError("checkTransferImport/1", pageError);
+      if (current()) setImportStatus("");
+    } finally {
+      importChecking = false;
+      busy = false;
+      importRunning = false;
+      render(messageForCurrentState());
+      renderBackupCentre();
+    }
   };
 
   const runImport = async () => {
@@ -3231,8 +3306,9 @@
     const revision = batchSessionRevision;
     const current = () => revision === batchSessionRevision && currentState === nativeState.authenticated;
     const toNew = importTarget === "new";
+    const transfer = importTransfer !== null;
     const verifying = toNew && importMinimumMib === 0;
-    if ((!toNew || verifying) && importPassword.value === "") {
+    if (!transfer && (!toNew || verifying) && importPassword.value === "") {
       setImportStatus("请输入加密口令。", "error");
       return;
     }
@@ -3249,7 +3325,7 @@
       render(messageForCurrentState());
       // The field names what the import restores in the vault; the package
       // file keeps its own name.
-      {
+      if (!transfer) {
         const nameError = Number(await bridge.renameImportPackage(requestedPackageName.trim()));
         if (!current()) return;
         if (nameError !== 0) {
@@ -3258,7 +3334,9 @@
           return;
         }
       }
-      if (!toNew) {
+      if (!toNew && transfer) {
+        await bridge.beginImportVerified(importContainerId, "");
+      } else if (!toNew) {
         first = passwordArray(importPassword);
         await bridge.beginEncryptedImport(importContainerId, "", first);
       } else if (verifying) {
@@ -3299,6 +3377,13 @@
         importNewSecond.value = "";
         importNewSecondConfirmation.value = "";
         setImportStatus("导入成功", "success");
+      } else if (transfer) {
+        // The verified package went into this attempt; hold it again for a retry.
+        const failure = outcome.state === 4 ? -1 : outcome.error === 1 ? 10 : outcome.error;
+        busy = false; importRunning = false;
+        await checkTransferImport();
+        if (!current()) return;
+        if (!importRefused) setImportStatus(`${encryptedFailureText(failure)} 可重试。`, outcome.state === 4 ? "" : "error");
       } else {
         resetImportAttempt();
         setImportStatus(`${encryptedFailureText(outcome.state === 4 ? -1 : outcome.error)} 可重新输入加密口令后重试。`,
@@ -3516,6 +3601,9 @@
     setImportStatus("");
     renderImportPane();
     openModal(importDialog, importPassword);
+    void checkTransferImport().then(() => {
+      if (!importDialog.hidden && importTransfer === null && !importRefused) importPassword.focus();
+    });
   };
   const closeImportDialog = () => {
     if (importRunning) return;
@@ -8217,6 +8305,28 @@
     catch (pageError) { logCaughtPageError("exportResultCancel", pageError); }
   });
   importConfirm.addEventListener("click", async () => { await runImport(); });
+  importSenderAdd.addEventListener("click", async () => {
+    if (busy || importTransfer === null) return;
+    importSenderAdd.disabled = true;
+    try {
+      const answer = parseContactAnswer(await bridge.addTransferSender(importSenderRemark.value));
+      if (answer.status !== 0) {
+        importSenderStatus.textContent = contactFailure(answer.status);
+        return;
+      }
+      const [change, listed] = answer.records[0];
+      if (change !== "0") {
+        importSenderStatus.textContent = contactChangeMessage(Number(change), listed);
+        return;
+      }
+      importTransfer = {...importTransfer, remark: importSenderRemark.value.trim()};
+      importSenderStatus.textContent = "已加入通讯录。";
+    } catch (pageError) { logCaughtPageError("importSenderAdd/1", pageError);
+      importSenderStatus.textContent = "通讯录操作失败，请重试。";
+    } finally {
+      renderBackupCentre();
+    }
+  });
   importCancel.addEventListener("click", async () => {
     if (!importRunning) { closeImportDialog(); return; }
     if (bridge === null) return;

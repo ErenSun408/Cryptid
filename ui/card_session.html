@@ -777,6 +777,9 @@
 
     /* ================= 操作日志 ================= */
     .contacts-actions { display: flex; gap: .5rem; }
+    .import-sender { margin: 0 0 .75rem; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: .6rem; font-size: .8rem; }
+    .import-sender p { margin: 0 0 .4rem; }
+    .import-sender .line { gap: .5rem; }
     .export-protection { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
     .export-protection .pick h4 { margin: 0 0 .2rem; }
     .export-protection .pick p { margin: 0; font-size: .72rem; }
@@ -2076,7 +2079,15 @@
           <label for="import-package-name">导入名称</label>
           <div class="line"><input id="import-package-name" class="xinp" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="255"></div>
         </div>
-        <div class="xfield">
+        <div id="import-sender" class="import-sender" hidden>
+          <p id="import-sender-text"></p>
+          <div id="import-sender-add-fields" class="line" hidden>
+            <input id="import-sender-remark" class="xinp" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="31" placeholder="备注" aria-label="备注">
+            <button id="import-sender-add" class="shell-button" type="button">加入通讯录</button>
+          </div>
+          <p id="import-sender-status" class="creation-hint"></p>
+        </div>
+        <div id="import-password-field" class="xfield">
           <label for="import-password">加密口令</label>
           <div class="line"><input id="import-password" class="xinp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
         </div>

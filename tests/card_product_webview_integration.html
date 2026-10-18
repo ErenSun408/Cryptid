@@ -151,7 +151,12 @@
       </div>
       <div id="import-dialog" hidden>
       <input id="import-package-name" type="text">
-      <input id="import-password" type="password">
+      <div id="import-sender" hidden><p id="import-sender-text"></p>
+      <div id="import-sender-add-fields" hidden>
+      <input id="import-sender-remark" type="text" autocomplete="off" spellcheck="false">
+      <button id="import-sender-add" type="button">加入通讯录</button></div>
+      <p id="import-sender-status"></p></div>
+      <div id="import-password-field"><input id="import-password" type="password"></div>
       <button id="import-target-existing" type="button" aria-pressed="true">导入到已有安全盘</button>
       <button id="import-target-new" type="button" aria-pressed="false">新建安全盘并导入</button>
       <div id="import-existing-fields"><div id="import-container-list"></div></div>
